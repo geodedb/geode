@@ -412,10 +412,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
         error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
         error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
-        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
         // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
         // binding or parameter; it used to evaluate to NULL (GAP-0926).
         error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        // SONNY-2696: a NEXT-chained part computes only an aggregate call and
+        // arithmetic over aggregates; it answered any other expression over an
+        // aggregate as NULL or as one row's value.
+        error.UnsupportedAggregateExpression => .{ .code = "0A000", .message = "An aggregate inside a function call, list, map, CASE or unary operator is not supported in a NEXT-chained statement part; compute the aggregate in a WITH (WITH count(*) AS c) and use its alias" },
         // SONNY-2683: the executors of these shapes ignored a GROUP BY, HAVING
         // or WHERE after RETURN; refuse it rather than return other rows.
         // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
@@ -430,6 +434,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // graph element property (ISO/IEC 39075:2024 13.3 General Rule 7 a).
         // It answered 22G03 (invalid value type).
         error.RepeatedSetTarget => .{ .code = "22G0M", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-3046: a pattern naming a variable the incoming row binds where
+        // the join cannot constrain it is refused, not answered by binding
+        // the name again.
+        error.UnsupportedBoundVariableJoin => .{ .code = "0A000", .message = "A variable bound before this MATCH (passed on by WITH or NEXT) is named in a part with an OPTIONAL MATCH, a shortest path, a variable-length relationship, or as a path where it is a node or relationship (or the reverse); joining it there is not supported. Match the pattern with a new variable and compare it in a WHERE" },
+        error.UnsupportedOptionalMatchShape => .{ .code = "0A000", .message = "A path variable or an inline LET in a query part with an OPTIONAL MATCH is not supported; return the pattern's nodes and relationships, and compute the value in a WITH after it" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only

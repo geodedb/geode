@@ -165,12 +165,16 @@ pub const RuntimeOp = struct {
     input_rows: u64 = 0,
     rows: u64 = 0,
     time_ns: u64 = 0,
+    /// SONNY-1335: for an `IndexSeek` the executor ran, the catalog index
+    /// that served it (owned by the trace); null for every other operator.
+    index_name: ?[]const u8 = null,
 };
 
 pub const RuntimeTrace = struct {
     ops: []RuntimeOp,
 
     pub fn deinit(self: *RuntimeTrace, allocator: std.mem.Allocator) void {
+        for (self.ops) |op| if (op.index_name) |name| allocator.free(name);
         allocator.free(self.ops);
     }
 
@@ -394,7 +398,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         }
         if (q.with_clause) |with_clause| {
             try ops.append(allocator, .{
-                .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+                .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
             });
             if (with_clause.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -412,7 +416,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
 
         if (needsFinalProjection(q)) {
             try ops.append(allocator, .{
-                .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+                .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
             });
             if (q.ret.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -567,7 +571,11 @@ fn executeProfiledInScope(
     };
     errdefer trace.deinit(allocator);
     for (plan.ops, 0..) |op, idx| {
-        trace.ops[idx] = .{ .kind = op.kind };
+        // SONNY-1335: the plan's IndexSeek is what it expected; the scan
+        // operator says what ran once the start slots are collected
+        // (`recordStartAccess`). Until then it is the label scan an IndexSeek
+        // plan falls back to (only a labelled node is planned as one).
+        trace.ops[idx] = .{ .kind = if (op.kind == .IndexSeek) .LabelScan else op.kind };
     }
 
     var filter_occurrence: usize = 0;
@@ -595,7 +603,7 @@ fn executeProfiledInScope(
     }
 
     if (q.with_clause) |with_clause| {
-        const with_kind: OpKind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
+        const with_kind: OpKind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
         const with_op_index = switch (with_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -607,7 +615,7 @@ fn executeProfiledInScope(
         const start_ns = nowNs();
         // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
         // belongs to the RETURN stage below, not to this one.
-        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, execution.withStageHaving(q.*), param_names, param_values);
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.withStageGroupBy(), execution.withStageHaving(q.*), param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -655,11 +663,13 @@ fn executeProfiledInScope(
     }
 
     if (needsFinalProjection(q)) {
-        const return_group_by = if (q.with_clause == null) q.group_by else null;
         // SONNY-2667: a WHERE after RETURN (parsed as a HAVING with no GROUP BY)
         // filters the RETURN's rows, with or without a WITH before it.
-        const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
-        const return_kind: OpKind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
+        // SONNY-2698: a GROUP BY and HAVING written after the RETURN are the
+        // RETURN's, with or without a WITH before it.
+        const return_group_by = q.returnStageGroupBy();
+        const return_having = q.returnStageHaving();
+        const return_kind: OpKind = if (return_group_by != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
         const return_op_index = switch (return_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -908,6 +918,7 @@ fn executePatternQuery(
         chain.hops[0].left;
     const scan_op_index = 0;
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -918,10 +929,12 @@ fn executePatternQuery(
         param_values,
         context,
         q.where_clause,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     trace.ops[scan_op_index].rows = @intCast(start_slots.len);
     trace.ops[scan_op_index].time_ns = elapsedSince(scan_start_ns);
+    try recordStartAccess(allocator, context, &trace.ops[scan_op_index], start_pattern, start_seek);
 
     if (chain.hops.len == 0) {
         for (start_slots) |slot_id| {
@@ -1147,6 +1160,7 @@ fn executeOptionalLeftOuter(
     // point-read seed anyway). where_clause is null by gate.
     const start_pattern = if (main_chain.head) |head| head else main_chain.hops[0].left;
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -1157,11 +1171,13 @@ fn executeOptionalLeftOuter(
         param_values,
         context,
         null,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     if (trace.ops.len > 0) {
         trace.ops[0].rows = @intCast(start_slots.len);
         trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+        try recordStartAccess(allocator, context, &trace.ops[0], start_pattern, start_seek);
     }
 
     const projection_plan = try buildProjectionPlan(allocator, q, plan);
@@ -1629,6 +1645,7 @@ fn executeVarLengthEndpoint(
     // Seed the start nodes from the bound seed pattern (where_clause is null by
     // gate). The endpoint filter is applied per emitted row, not here.
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -1639,11 +1656,13 @@ fn executeVarLengthEndpoint(
         param_values,
         context,
         null,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     if (trace.ops.len > 0) {
         trace.ops[0].rows = @intCast(start_slots.len);
         trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+        try recordStartAccess(allocator, context, &trace.ops[0], hop.left, start_seek);
     }
 
     var exec = VarLenExec{
@@ -1926,6 +1945,7 @@ fn executeMultiChainHashJoin(
     for (q.match.chains, 0..) |chain, ci| {
         const root = if (chain.head) |head| head else chain.hops[0].left;
         const scan_start_ns = nowNs();
+        var start_seek: ?StartSeek = null;
         const slots = try collectStartSlots(
             allocator,
             adapter,
@@ -1936,11 +1956,13 @@ fn executeMultiChainHashJoin(
             param_values,
             context,
             null,
+            &start_seek,
         );
         all_slots_list.appendAssumeCapacity(slots);
         if (ci < trace.ops.len) {
             trace.ops[ci].rows = @intCast(slots.len);
             trace.ops[ci].time_ns = elapsedSince(scan_start_ns);
+            try recordStartAccess(allocator, context, &trace.ops[ci], root, start_seek);
         }
     }
 
@@ -2706,7 +2728,10 @@ fn collectStartSlots(
     param_values: []const Value,
     context: ExecutionContext,
     where_clause: ?ast.Expr,
+    /// SONNY-1335: set to the exact-index seek the slots came from, if any.
+    seek_out: ?*?StartSeek,
 ) ![]u64 {
+    if (seek_out) |o| o.* = null;
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
     }
@@ -2851,7 +2876,9 @@ fn collectStartSlots(
                 try verified.append(allocator, slot_id);
             }
         }
-        return try verified.toOwnedSlice(allocator);
+        const out = try verified.toOwnedSlice(allocator);
+        if (seek_out) |o| o.* = .{ .label = pattern.labels[0], .key = s.key };
+        return out;
     }
 
     const initial = if (pattern.labels.len > 0)
@@ -3652,6 +3679,58 @@ fn labelHasIndexForProp(context: ExecutionContext, label: []const u8, prop: []co
     return false;
 }
 
+// CANARY: REQ=REQ-SONNY-1335-PROFILE-ACCESS-PATH; FEATURE="PROFILE"; ASPECT=CatalogIndexForSeek; STATUS=TESTED; TEST=tests/test_sonny1335_profile_access_path.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-1335: the name of the catalog index that serves an equality seek on
+/// `label`.`prop`, duplicated into `allocator`, or null when there is none.
+/// Only a btree or hash index serves an equality (a fulltext, vector or
+/// spatial index on the same property does not). When several do, the
+/// smallest name, so the answer does not depend on hash map order. The
+/// catalog is process-wide (its rows carry no graph), so this is the index
+/// SHOW INDEXES lists for the label and property in every graph.
+fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
+    const cat = context.catalog;
+    cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+    var best: ?[]const u8 = null;
+    var iter = cat.indexes.valueIterator();
+    while (iter.next()) |info| {
+        if (!std.mem.eql(u8, info.table_name, label)) continue;
+        if (info.columns.len == 0 or !std.mem.eql(u8, info.columns[0], prop)) continue;
+        if (!std.mem.eql(u8, info.index_type, "btree") and !std.mem.eql(u8, info.index_type, "hash")) continue;
+        if (best == null or std.mem.lessThan(u8, info.name, best.?)) best = info.name;
+    }
+    const name = best orelse return null;
+    return try allocator.dupe(u8, name);
+}
+
+/// SONNY-1335: the exact-index seek `collectStartSlots` collected its start
+/// slots with. Borrowed from the pattern (or the WHERE clause) it was given.
+const StartSeek = struct {
+    label: []const u8,
+    key: []const u8,
+};
+
+/// SONNY-1335: record on a scan operator the access path its start slots were
+/// collected with. A seek is reported as `IndexSeek`, named after the catalog
+/// index that serves it, only when `collectStartSlots` seeked AND a catalog
+/// index covers the label and key; anything else is the scan it was (an
+/// equality the internal exact-property lookup answered without a declared
+/// index reports a scan, as EXPLAIN does).
+fn recordStartAccess(
+    allocator: std.mem.Allocator,
+    context: ExecutionContext,
+    op: *RuntimeOp,
+    pattern: ast.NodePattern,
+    seek: ?StartSeek,
+) !void {
+    op.kind = if (pattern.labels.len > 0) .LabelScan else .AllNodesScan;
+    const s = seek orelse return;
+    const name = (try equalityIndexName(allocator, context, s.label, s.key)) orelse return;
+    if (op.index_name) |old| allocator.free(old);
+    op.index_name = name;
+    op.kind = .IndexSeek;
+}
+
 /// Returns true if the node has an inline property that matches a catalog index,
 /// or if the WHERE clause contains an equality on an indexed property.
 fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
@@ -3923,7 +4002,7 @@ fn appendLegacyPlanOps(
 
     if (q.with_clause) |with_clause| {
         try ops.append(allocator, .{
-            .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+            .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
         });
         if (with_clause.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });
@@ -3941,7 +4020,7 @@ fn appendLegacyPlanOps(
 
     if (needsFinalProjection(q)) {
         try ops.append(allocator, .{
-            .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+            .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
         });
         if (q.ret.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });

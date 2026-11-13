@@ -58,28 +58,25 @@
 //   separate, pre-existing concern this ticket does not claim to close, and
 //   it is why the row says "H1" and not an unqualified "yes".)
 //
-// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`):
+// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`;
+// SONNY-2707 moved COUNT {}, EXISTS {} and pattern comprehensions onto one
+// walk, `PatternWalk`, which `countPatternMatches` and
+// `executePatternComprehension` share):
 //
 //   | site                                             | predicate               |
 //   |--------------------------------------------------|-------------------------|
 //   | findFirstMatchingNode (start/end node scan)      | passesTenantFilter      |
 //   | findEdgeBetween (path edge lookup)               | edgeTraversable         |
-//   | countVariableLengthPathMatches (frontier edge)   | edgeTraversable         |
-//   | countVariableLengthPathMatches (counted target)  | passesTenantFilter      |
-//   | countSingleHopMatches (hop edge)                 | edgeTraversable         |
-//   | countSingleHopMatches (counted target)           | passesTenantFilter      |
-//   | countPatternMatches (correlated outer binding)   | passesTenantFilter      |
-//   | countPatternMatches (bare node loop)             | passesTenantFilter      |
-//   | countPatternMatches (relationship arm)           | edgeTraversable         |
+//   | PatternWalk.walkChain (correlated start)         | passesTenantFilter      |
+//   | PatternWalk.walkChain (scanned start)            | passesTenantFilter      |
+//   | PatternWalk.walkSingleHop (hop edge)             | edgeTraversable         |
+//   | PatternWalk.walkSingleHop (far node)             | passesTenantFilter      |
+//   | PatternWalk.walkVariableLengthHop (every step)   | edgeTraversable         |
+//   | PatternWalk.walkVariableLengthHop (path end)     | passesTenantFilter      |
 //   | findShortestPath (env-bound start/end)           | passesTenantFilter      |
 //   | findShortestPath (start/end id gate)             | nodeIdVisible           |
 //   | findShortestPath (BFS out/in frontier)           | edgeTraversable         |
 //   | materializePath (every path node)                | passesTenantFilter      |
-//   | executePatternComprehension (node-only scan)     | passesTenantFilter      |
-//   | executePatternComprehension (env source node)    | passesTenantFilter      |
-//   | executePatternComprehension (scanned source)     | passesTenantFilter      |
-//   | executePatternComprehension (out/in edge)        | edgeTraversable         |
-//   | executePatternComprehension (target node)        | passesTenantFilter      |
 //
 // The scope itself is resolved once per evaluation by
 // `graph_algorithms.sessionScope()` -> `resolveScope` (below).
@@ -203,13 +200,15 @@
 //          path). The non-resident case is exactly what
 //          `tenantTagFallbackAllowed` now refuses on an arm.
 //
-//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race and
-//     NOT fixed here — recorded for SONNY-1562 (NOT 1332; 1332 tracks the
-//     threadlocal-propagation residual above): `countPatternMatches` scans
-//     `store.nodes.iterator()`, which is RESIDENT-ONLY. Over a cold store a
-//     bare `RETURN COUNT { (a:A)-[:R]->(b:B) }` answers 0 on the SERIAL path
-//     too, because it never sees a node to expand from. `COUNT {}` / `EXISTS {}`
-//     results are therefore residency-dependent, independent of threading.
+//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race:
+//     `countPatternMatches` scanned `store.nodes.iterator()`, which is
+//     RESIDENT-ONLY, so over a cold store a bare
+//     `RETURN COUNT { (a:A)-[:R]->(b:B) }` answered 0 on the SERIAL path too.
+//     FIXED by SONNY-1562: the expression path's uncorrelated scans read the
+//     authoritative id sets through `graph_algorithms.ScanSource` (label index
+//     or per-graph node-id index, bodies via the detached
+//     `getNodePtrForScan`), with every node still gated by the predicates
+//     above (`tests/test_sonny1562_cold_subquery_scan.zig`).
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)

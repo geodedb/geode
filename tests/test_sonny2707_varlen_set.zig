@@ -29,7 +29,8 @@
 // list or the path of a multi-hop pattern is refused too (SONNY-3045).
 //
 // Parts (2) and (3) of the ticket (COUNT {} over an unbound relationship, and
-// a variable-length COUNT {} that ignores the pattern's direction) are v0.8.24.
+// a variable-length COUNT {} that ignores the pattern's direction) are pinned
+// by tests/test_sonny2707_count_direction.zig.
 //
 // CANARY: REQ=REQ-SONNY-2707-VARLEN-WRITE; FEATURE="VariableLengthPaths"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2707_varlen_set.zig; OWNER=engine; UPDATED=2026-09-27
 

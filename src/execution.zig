@@ -72,10 +72,15 @@ pub const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // through geode.execution.fts_index_ops.
 pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
+const order_key_columns = @import("execution/order_key_columns.zig");
 // SONNY-3139: the pre-dispatch write-shape validator and its executor table.
 pub const write_shape = @import("execution/write_shape.zig");
 pub const write_walk = @import("execution/write_walk.zig");
 const value_utilities = @import("execution/value_utilities.zig");
+const result_utils = @import("execution/result_utils.zig");
+// SONNY-2696: the query's scratch arena (GAP-0755), for a lifted item's
+// hidden aggregates.
+const query_arena = @import("server/query_arena.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
 // REQ-RLS-DDL-001: rls_dispatch is exported so server/main.zig can install
 // runtime callbacks for the geode.rls.* procedure handlers without taking a
@@ -214,6 +219,8 @@ pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;
 pub const executeReturnClauseWithNodes = crud_operations.executeReturnClauseWithNodes;
 pub const executeCreate = crud_operations.executeCreate;
+/// SONNY-6295: the cluster leader's GNC2 spec builder for a CREATE chain (tests).
+pub const buildEdgeCreateSpecs = crud_operations.buildEdgeCreateSpecs;
 pub const ensureAutoIndexes = crud_operations.ensureAutoIndexes;
 pub const executeInsert = crud_operations.executeInsert;
 pub const executeMerge = crud_operations.executeMerge;
@@ -300,7 +307,6 @@ pub const executeExplainPolicy = statement_handlers.executeExplainPolicy;
 pub const getExpressionNameFromAst = aggregation_evaluation.getExpressionNameFromAst;
 pub const evaluateGroupAggregation = aggregation_evaluation.evaluateGroupAggregation;
 pub const computeBindingGroupAggregation = aggregation_evaluation.computeBindingGroupAggregation;
-pub const evaluateNodeExpression = aggregation_evaluation.evaluateNodeExpression;
 // GAP-0739 / SEC-MTI-01 (2026-04-16): removed evaluateAggregation /
 // evaluateAggregationWithLabels re-exports.  The underlying functions
 // were deleted — they iterated store.nodes with no tenant filter.  Live
@@ -1041,6 +1047,62 @@ pub fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
 
 /// A query's SKIP and LIMIT, resolved (`windowParam`).
 pub const QueryWindow = struct { start: usize, limit: ?usize };
+
+// CANARY: REQ=REQ-SONNY-6351-CALL-RETURN; FEATURE="ProcedureYield"; ASPECT=StandaloneCallReturn; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6351 item 6 (SONNY-2779 residual): a standalone procedure CALL's
+/// YIELD aliases and RETURN clause, over the rows the procedure yielded. The
+/// RETURN was ignored, so `CALL db.labels() YIELD label AS l RETURN l ORDER
+/// BY l DESC` kept the column `label`, sorted by an `l` no row had, and
+/// returned the procedure's rows as they came. Each yielded column is named
+/// by its YIELD alias; the RETURN (or, with none, the aliased columns) is
+/// projected by the shared projection, which evaluates each item, aggregates
+/// and fails on an item that fails, then DISTINCT. ORDER BY and the window
+/// follow (the caller). SONNY-6383 item 7: the projection keeps the
+/// procedure result's flags (each copied: the projection owns its memory);
+/// they were freed with the procedure's rows.
+pub fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, context: ExecutionContext) !void {
+    const yield_items: []const ast.ReturnItem = proc.yield_items orelse &.{};
+    const aliased = for (yield_items) |item| {
+        if (item.alias != null) break true;
+    } else false;
+    if (proc.return_clause == null and !aliased) return;
+    // The yielded columns as the YIELD names them.
+    const names = try allocator.alloc([]const u8, result.columns.len);
+    defer allocator.free(names);
+    @memcpy(names, result.columns);
+    for (yield_items) |item| {
+        const alias = item.alias orelse continue;
+        const source = switch (item.expr) {
+            .Ident => |id| id.orig,
+            .Member => |m| m.field,
+            else => continue,
+        };
+        for (result.columns, names) |column, *name| {
+            if (std.mem.eql(u8, column, source)) name.* = alias;
+        }
+    }
+    var view = result.*;
+    view.columns = names;
+    var identity: ?[]ast.ReturnItem = null;
+    defer if (identity) |items| allocator.free(items);
+    const items: []ast.ReturnItem = if (proc.return_clause) |rc| rc.items else blk: {
+        const own = try allocator.alloc(ast.ReturnItem, names.len);
+        for (names, own) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
+        identity = own;
+        break :blk own;
+    };
+    var projected = try executeWithClauseWithGroupByAndParams(allocator, view, .{ .items = items }, null, null, context.query_param_names, context.query_param_values);
+    errdefer projected.deinit(allocator);
+    try value_utilities.adoptProjectionRowValues(allocator, &projected, items);
+    projected.owned_graph_entities = result.owned_graph_entities;
+    result.owned_graph_entities = null;
+    if (proc.return_clause) |rc| {
+        if (rc.distinct) try result_utils.applyDistinct(allocator, &projected);
+    }
+    for (result.flags.items) |flag| try appendFlagIfMissing(allocator, &projected, flag);
+    result.deinit(allocator);
+    result.* = projected;
+}
 
 pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
     return .{
@@ -1797,10 +1859,18 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-3248: the window is resolved (and a bad value refused)
             // before the statement runs, so a refused one writes nothing.
             const window = try queryWindow(q, ctx);
+            // SONNY-2811: an ORDER BY key reading a variable the RETURN does
+            // not project is computed by a hidden RETURN item, dropped after
+            // the sort and the window (`order_key_columns`).
+            var hidden = try order_key_columns.hide(allocator, q);
+            defer if (hidden) |*h| h.deinit();
+            if (hidden) |h| q = h.query;
             var result = try executeQueryWithContext(allocator, q, ctx);
+            errdefer result.deinit(allocator);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
             try applyQueryWindow(allocator, &result, window);
+            if (hidden) |h| try order_key_columns.drop(allocator, &result, h.count);
 
             rows_returned = @intCast(result.rows.len);
             return result;
@@ -2709,36 +2779,22 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             switch (call_stmt) {
                 .Procedure => |proc| {
+                    // SONNY-2779: the window is resolved first (a bad
+                    // parameter is refused, 22G03, before the procedure
+                    // runs) and applied by `applyQueryWindow`, which frees
+                    // the rows it drops; an OFFSET past the end leaves no
+                    // row. The rows were sliced by hand: the dropped ones
+                    // leaked, an OFFSET past the end returned every row, and
+                    // a SKIP or LIMIT parameter was ignored.
+                    const window = QueryWindow{
+                        .start = proc.offset orelse try windowParam(proc.offset_param, context) orelse 0,
+                        .limit = proc.limit orelse try windowParam(proc.limit_param, context),
+                    };
                     result = try executeCallStatement(allocator, call_stmt, context);
-
-                    // Apply ORDER BY if present
-                    if (proc.order_by) |order| {
-                        try sortRows(allocator, &result, order);
-                    }
-
-                    // Apply OFFSET if present
-                    if (proc.offset) |skip_count| {
-                        if (skip_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
-                            for (result.rows[skip_count..], 0..) |row, i| {
-                                new_rows[i] = row;
-                            }
-                            allocator.free(result.rows);
-                            result.rows = new_rows;
-                        }
-                    }
-
-                    // Apply LIMIT if present
-                    if (proc.limit) |limit_count| {
-                        if (limit_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]Value, limit_count);
-                            for (result.rows[0..limit_count], 0..) |row, i| {
-                                new_rows[i] = row;
-                            }
-                            allocator.free(result.rows);
-                            result.rows = new_rows;
-                        }
-                    }
+                    errdefer result.deinit(allocator);
+                    try projectCallReturn(allocator, &result, proc, context);
+                    if (proc.order_by) |order| try sortRows(allocator, &result, order);
+                    try applyQueryWindow(allocator, &result, window);
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
@@ -3745,37 +3801,8 @@ pub fn validateGroupByResolvable(q: ast.Query) !void {
 /// unambiguously safe: no legitimate query nests aggregates.
 pub fn validateNoNestedAggregate(ret: ast.ReturnClause) !void {
     for (ret.items) |item| {
-        if (try exprHasNestedAggregate(item.expr, false)) return error.NestedAggregate;
-    }
-}
-
-fn isAggregateCall(expr: ast.Expr) bool {
-    return return_and_sorting.isAggregationExpr(expr) and expr == .Call;
-}
-
-/// SONNY-3189: every RETURN runs this. The left operand of a binary
-/// expression and a unary operand are followed with a loop, not one
-/// recursion (and one copy of the expression) per operator.
-fn exprHasNestedAggregate(root: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
-    var expr: *const ast.Expr = &root;
-    while (true) {
-        switch (expr.*) {
-            .Call => |call| {
-                const is_agg = isAggregateCall(expr.*);
-                if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
-                const now_inside = inside_aggregate or is_agg;
-                for (call.args) |arg| {
-                    if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
-                }
-                return false;
-            },
-            .Binary => |bin| {
-                if (try exprHasNestedAggregate(bin.right.*, inside_aggregate)) return true;
-                expr = bin.left;
-            },
-            .Unary => |un| expr = un.expr,
-            else => return false,
-        }
+        // SONNY-2696: wherever the outer aggregate is (`[sum(count(*))]`).
+        if (grouped_having.hasNestedAggregate(item.expr)) return error.NestedAggregate;
     }
 }
 
@@ -3880,8 +3907,10 @@ fn rowEnv(allocator: std.mem.Allocator, columns: []const []const u8, row: []cons
 /// encrypted field searched without permission, the read or write budget, a
 /// cancel), or running out of memory. These fail the query. Any
 /// other error is the row's value that cannot be computed, which the grouped
-/// path tolerates: the aggregate skips the row, a projected cell is the
-/// caller's fallback.
+/// path tolerates where a value of the group stands in for it: a grouping
+/// key, a projected cell or a HAVING is the caller's fallback. An aggregate's
+/// argument is not (SONNY-2734, `evalAggregateArgument`): every error there
+/// fails the query.
 pub fn isQueryLevelEvalError(err: anyerror) bool {
     return switch (err) {
         error.UnknownFunction,
@@ -3944,29 +3973,44 @@ fn sumAddend(val: Value) error{TypeMismatch}!?SumAddend {
     };
 }
 
-/// Adds an integer to a sum kept as an i64 while it fits; past i64 the sum
-/// continues as a double, as the GROUP BY fast path's does. (`+=` aborted the
-/// server on an i64 overflow: SONNY-2739's class.)
-fn addInt(int_sum: *i64, float_sum: *f64, has_float: *bool, n: i64) void {
-    const r = @addWithOverflow(int_sum.*, n);
-    if (r[1] == 0) {
-        int_sum.* = r[0];
-        return;
-    }
-    float_sum.* += @as(f64, @floatFromInt(int_sum.*)) + @as(f64, @floatFromInt(n));
-    int_sum.* = 0;
-    has_float.* = true;
-}
+// CANARY: REQ=REQ-SONNY-2774-EXACT-SUM; FEATURE="GroupedAggregates"; ASPECT=ExactIntegerSum; STATUS=TESTED; TEST=tests/test_sonny2774_exact_sum.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-2774: the exact integer part of a sum() or avg(), kept in an i128.
+/// Fewer than 2^63 addends of magnitude at most 2^63 stay far inside it, so
+/// adding never overflows, and a total that fits i64 is exact whatever the
+/// sums in between were. It continued as a double past i64 (the value's last
+/// digits were lost, silently).
+pub const ExactIntSum = struct {
+    total: i128 = 0,
 
-/// An aggregate's argument for one input row, or null when the row's value
-/// cannot be computed and the aggregate skips it. SONNY-2675: a query-level
-/// error (above) used to be skipped too, so `sum(n.i * $2)` without a `$2` was
-/// a sum over no rows instead of GAP-0926's MissingParameter.
-fn evalAggregateArgument(allocator: std.mem.Allocator, arg: ast.Expr, env: Env) !?Value {
-    return eval.evalExpr(allocator, arg, env) catch |err| {
-        if (isQueryLevelEvalError(err)) return err;
-        return null;
-    };
+    pub fn add(self: *ExactIntSum, n: i64) void {
+        self.total += n;
+    }
+
+    /// The sum of exact integers as an exact integer. ISO/IEC 39075:2024 20.9
+    /// <aggregate function>, General Rules: a SUM result outside the range of
+    /// its declared type (here BIGINT) raises 22003 (numeric value out of
+    /// range).
+    pub fn exact(self: ExactIntSum) error{IntegerOverflow}!i64 {
+        return std.math.cast(i64, self.total) orelse error.IntegerOverflow;
+    }
+
+    /// As an approximate number, to add to a sum of doubles or to average.
+    pub fn approximate(self: ExactIntSum) f64 {
+        return @floatFromInt(self.total);
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-2734-AGGREGATE-ARGUMENT-ERRORS; FEATURE="GroupedAggregates"; ASPECT=ArgumentErrorsEscape; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=execution; UPDATED=2026-11-11
+/// An aggregate's argument for one input row, evaluated by the general
+/// evaluator (parameters, CASE, arithmetic, function calls). SONNY-2675: a
+/// query-level error (above) used to be skipped too, so `sum(n.i * $2)`
+/// without a `$2` was a sum over no rows instead of GAP-0926's
+/// MissingParameter. SONNY-2734: so was every other error, so `sum(x + n.i)`
+/// that overflows (22003) or `count(n.i / 0)` (22012) was an aggregate over
+/// the other rows, or NULL; the same expression outside an aggregate fails
+/// the query, and now does inside one.
+fn evalAggregateArgument(allocator: std.mem.Allocator, arg: ast.Expr, env: Env) !Value {
+    return eval.evalExpr(allocator, arg, env);
 }
 
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-002; FEATURE="WithGroupByAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
@@ -4003,7 +4047,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // count(expr) - count non-null values
         var count: i64 = 0;
         for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
+            const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
                 count += 1;
@@ -4017,19 +4061,19 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     // Handle sum(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var int_sum: i64 = 0;
+        var int_sum: ExactIntSum = .{};
         var float_sum: f64 = 0.0;
         var has_float = false;
         var has_value = false;
         for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
+            const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
             // GAP-0916: non-numeric input to sum() is a type error, not a
             // silent skip (`sumAddend`).
             switch (try sumAddend(val) orelse continue) {
-                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .int => |n| int_sum.add(n),
                 .float => |f| {
                     float_sum += f;
                     has_float = true;
@@ -4038,26 +4082,26 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             has_value = true;
         }
         if (!has_value) return Value{ .Null = {} };
-        if (has_float) return Value{ .Double = float_sum + @as(f64, @floatFromInt(int_sum)) };
-        return Value{ .Int = int_sum };
+        if (has_float) return Value{ .Double = float_sum + int_sum.approximate() };
+        return Value{ .Int = try int_sum.exact() };
     }
 
     // Handle avg(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var int_sum: i64 = 0;
+        var int_sum: ExactIntSum = .{};
         var float_sum: f64 = 0.0;
         var has_float = false;
         var count: i64 = 0;
         for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
+            const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
             // GAP-0916: non-numeric input to avg() is a type error, not a
             // silent NULL (`sumAddend`).
             switch (try sumAddend(val) orelse continue) {
-                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .int => |n| int_sum.add(n),
                 .float => |f| {
                     float_sum += f;
                     has_float = true;
@@ -4070,7 +4114,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // is 1.5, not 1). Matches the Double convention of every other avg path
         // (aggregation_evaluation.zig, match_operations streaming path); pinned
         // by gql_conformance T16.
-        return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
+        return Value{ .Double = (float_sum + int_sum.approximate()) / @as(f64, @floatFromInt(count)) };
     }
 
     // Handle min(expr) and max(expr). SONNY-2675: in the value order ORDER BY
@@ -4082,7 +4126,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         if (arg_ptr == null) return Value{ .Null = {} };
         var best: ?Value = null;
         for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
+            const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
             if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
@@ -4103,7 +4147,11 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // GAP-0220 FIX: Use try for proper error propagation
         var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
         for (group_rows) |row| {
-            const val = (try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values))) orelse continue;
+            const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
+            // SONNY-3184: a set function eliminates NULLs (ISO/IEC 39075),
+            // collect too: `OPTIONAL MATCH ... RETURN collect(t.k)` listed a
+            // NULL for every record the OPTIONAL MATCH left unbound.
+            if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }
@@ -4119,12 +4167,12 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
     return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
 }
 
-/// The HAVING a WITH stage applies: the query's HAVING when it has a GROUP BY,
-/// else none. The parser produces a HAVING without a GROUP BY only from a WHERE
-/// after RETURN, which belongs to the RETURN, not to a WITH before it
-/// (SONNY-2667).
+/// The HAVING a WITH stage applies: the HAVING of the WITH's own GROUP BY,
+/// else none. A WHERE after RETURN (a HAVING with no GROUP BY, SONNY-2667)
+/// and a GROUP BY / HAVING written after the RETURN (SONNY-2698) belong to
+/// the RETURN, not to a WITH before it (`ast.Query.withStageHaving`).
 pub fn withStageHaving(q: ast.Query) ?ast.Expr {
-    return if (q.group_by != null) q.having else null;
+    return q.withStageHaving();
 }
 
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
@@ -4350,6 +4398,277 @@ const HavingFilter = struct {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-2696-LIFTED-AGGREGATES; FEATURE="SharedProjection"; ASPECT=AggregatesInsideItems; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-2696: the items of a projection over groups, each computed once per
+/// group. A bare aggregate call is computed over the group's rows
+/// (`computeGroupAggregation`); an item without an aggregate is evaluated on
+/// the group's first row (a grouping key, which every row of the group
+/// shares). An item with an aggregate inside it (`count(*) + 1`,
+/// `toString(count(*))`, `[count(*), sum(n.i)]`, a CASE over `count(*)`) is
+/// rewritten once, before any row is grouped, by the grouped HAVING's rewrite
+/// in projection mode (`grouped_having.planGrouped`): each aggregate in it is
+/// a hidden column computed by the same code over the group's rows (or the
+/// column of an item that computes the same aggregate), each grouping key or
+/// projected key a slot read from the group, and the item is evaluated once
+/// over those slots. Such an item was handed whole to the aggregate code,
+/// which computes only a call (NULL), or, when its outermost node was not an
+/// operator, evaluated against each input row (`toString(count(*))` was '1'
+/// per row). A reference to an input column that is no grouping key fails
+/// the query with error.GroupingError (42803), as `RETURN n.i, count(*)`
+/// does, and an error evaluating the item fails it too (an overflow, 22003,
+/// is no NULL).
+const GroupedItems = struct {
+    items: []const ast.ReturnItem,
+    /// Per item, the rewrite of an item with an aggregate inside it that is
+    /// not itself an aggregate call; null for every other item.
+    lifted: []?grouped_having.Plan,
+    input_columns: []const []const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+
+    /// `keys`: the GROUP BY keys, resolved through a projection alias; none
+    /// for an implicit grouping, whose keys are the items without an
+    /// aggregate.
+    fn init(
+        allocator: std.mem.Allocator,
+        items: []const ast.ReturnItem,
+        keys: []const ast.Expr,
+        input_columns: []const []const u8,
+        param_names: []const []const u8,
+        param_values: []const Value,
+    ) !GroupedItems {
+        const lifted = try allocator.alloc(?grouped_having.Plan, items.len);
+        @memset(lifted, null);
+        errdefer {
+            for (lifted) |*plan| if (plan.*) |*p| p.deinit();
+            allocator.free(lifted);
+        }
+        for (items, lifted) |item, *plan| {
+            if (!return_and_sorting.isAggregationExpr(item.expr) or return_and_sorting.isAggregateCall(item.expr)) continue;
+            plan.* = grouped_having.planGrouped(allocator, item.expr, .{
+                .items = items,
+                .output_columns = &.{},
+                .input_columns = input_columns,
+                .keys = keys,
+                .param_names = param_names,
+                .projection = true,
+            }) catch |err| return switch (err) {
+                // The grouping error a non-grouped column beside an
+                // aggregate is anywhere else (validateGroupBy).
+                error.UngroupedHavingReference => error.GroupingError,
+                else => err,
+            };
+        }
+        return .{ .items = items, .lifted = lifted, .input_columns = input_columns, .param_names = param_names, .param_values = param_values };
+    }
+
+    fn deinit(self: *GroupedItems, allocator: std.mem.Allocator) void {
+        for (self.lifted) |*plan| if (plan.*) |*p| p.deinit();
+        allocator.free(self.lifted);
+    }
+
+    /// The output row of a group. `group_rows` is empty only for the single
+    /// group of an ungrouped aggregate over no rows: an item without an
+    /// aggregate is then NULL.
+    ///
+    /// An aggregate's value (a collect() list, a lifted item's hidden
+    /// aggregates and what the item computes from them) is the query's
+    /// scratch (GAP-0755) when one is installed, as a materialized node's
+    /// interior is: the projection's rows borrow their values, and the final
+    /// projection copies them (`adoptProjectionRowValues`), so on `allocator`
+    /// the value was never freed. The scratch outlives the result's reads.
+    fn project(self: *const GroupedItems, allocator: std.mem.Allocator, group_rows: []const []const Value) ![]Value {
+        const installed = query_arena.currentScratchAllocator();
+        const scratch = installed orelse allocator;
+        const row = try allocator.alloc(Value, self.items.len);
+        errdefer allocator.free(row);
+        const first_row: []const Value = if (group_rows.len > 0) group_rows[0] else &.{};
+        const names = self.input_columns[0..@min(self.input_columns.len, first_row.len)];
+        const first_env = Env{
+            .names = names,
+            .values = first_row[0..names.len],
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = allocator,
+        };
+        for (self.items, self.lifted, row) |item, plan, *cell| {
+            if (plan != null) continue;
+            cell.* = if (return_and_sorting.isAggregateCall(item.expr))
+                try computeGroupAggregation(scratch, item.expr, group_rows, self.input_columns, self.param_names, self.param_values)
+            else if (group_rows.len == 0)
+                Value{ .Null = {} }
+            else
+                try evalGroupedExpr(allocator, item.expr, first_env, Value{ .Null = {} });
+        }
+        // After every other item: a lifted item reads their columns.
+        for (self.items, self.lifted, row) |item, plan, *cell| {
+            if (plan) |p| cell.* = try self.liftedValue(allocator, installed, item.expr, p, row, group_rows, first_env);
+        }
+        return row;
+    }
+
+    /// A lifted item's value for a group: its slots, then the item over them,
+    /// computed on the query's scratch (`installed`, else `allocator`; see
+    /// `project`). A call the final projection adopts as the result's own
+    /// (`callAlwaysAllocates`) is copied onto `allocator`.
+    fn liftedValue(
+        self: *const GroupedItems,
+        allocator: std.mem.Allocator,
+        installed: ?std.mem.Allocator,
+        expr: ast.Expr,
+        plan: grouped_having.Plan,
+        row: []const Value,
+        group_rows: []const []const Value,
+        first_env: Env,
+    ) !Value {
+        const scratch = installed orelse allocator;
+        const values = try scratch.alloc(Value, plan.slots.len);
+        defer if (installed == null) allocator.free(values);
+        var key_env = first_env;
+        key_env.allocator = scratch;
+        for (plan.slots, values) |slot, *value| value.* = switch (slot) {
+            .column => |i| row[i],
+            .aggregate => |agg| try computeGroupAggregation(scratch, agg, group_rows, self.input_columns, self.param_names, self.param_values),
+            // Every row of the group shares its key.
+            .key => |key| try evalGroupedExpr(scratch, key, key_env, Value{ .Null = {} }),
+        };
+        const env = Env{
+            .names = plan.slot_names,
+            .values = values,
+            .param_names = self.param_names,
+            .param_values = self.param_values,
+            .allocator = scratch,
+        };
+        const value = try eval.evalExpr(scratch, plan.expr, env);
+        if (expr == .Call and value_utilities.callAlwaysAllocates(expr.Call.callee.*)) return value_utilities.duplicateValue(allocator, value);
+        return value;
+    }
+};
+
+/// The output row of one group (`GroupedItems.project`), appended to `rows`
+/// when it passes the HAVING. The row is freed on every other path.
+fn appendGroupRow(
+    allocator: std.mem.Allocator,
+    rows: *std.ArrayList([]Value),
+    items: *const GroupedItems,
+    having_filter: ?*HavingFilter,
+    group_rows: []const []const Value,
+    input_columns: []const []const u8,
+) !void {
+    const row = try items.project(allocator, group_rows);
+    errdefer allocator.free(row);
+    if (having_filter) |filter| {
+        if (!try filter.passesGroup(allocator, row, group_rows, input_columns)) {
+            allocator.free(row);
+            return;
+        }
+    }
+    try rows.append(allocator, row);
+}
+
+// CANARY: REQ=REQ-SONNY-6351-WITH-ORDER-KEY-ERROR; FEATURE="WithOrderBy"; ASPECT=KeyErrorFailsStatement; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6383-WITH-ORDER-KEYS-ONCE; FEATURE="WithOrderBy"; ASPECT=KeysOncePerRow; STATUS=TESTED; TEST=tests/test_sonny6383_query_residuals.zig; OWNER=engine; UPDATED=2026-11-12
+/// Sorts a WITH stage's rows by its ORDER BY keys. SONNY-6351 (SONNY-2811
+/// residual): an error evaluating a key fails the statement, as a RETURN's
+/// ORDER BY does (`sortRowsEx`); it was sorted as NULL. The keys see the
+/// query's parameters. SONNY-6383 item 6: each key is evaluated once per row,
+/// before the sort, and what it computed is freed after it
+/// (`freeEvaluatedValue`); the comparator evaluated both rows' keys at every
+/// comparison and freed none of them, so `ORDER BY upper(z.s)` leaked a
+/// string per comparison for a caller with no scratch arena. The rows are
+/// reordered in place, stably.
+fn sortWithStageRows(
+    allocator: std.mem.Allocator,
+    keys: []const ast.OrderBy.OrderKey,
+    columns: []const []const u8,
+    rows: [][]Value,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !void {
+    const width = keys.len;
+    const key_values = try allocator.alloc(Value, rows.len * width);
+    defer allocator.free(key_values);
+    var computed: usize = 0;
+    defer for (key_values[0..computed], 0..) |value, i| value_utilities.freeEvaluatedValue(allocator, keys[i % width].expr, value);
+    for (rows) |row| {
+        const env = Env{ .names = columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        for (keys) |key| {
+            key_values[computed] = try eval.evalExpr(allocator, key.expr, env);
+            computed += 1;
+        }
+    }
+
+    const SortContext = struct {
+        keys: []const ast.OrderBy.OrderKey,
+        values: []const Value,
+        width: usize,
+
+        fn lessThan(context: @This(), a_index: usize, b_index: usize) bool {
+            for (context.keys, 0..) |key, k| {
+                const val_a = context.values[a_index * context.width + k];
+                const val_b = context.values[b_index * context.width + k];
+
+                // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
+                const cmp: i8 = blk: {
+                    // Handle NULL comparisons based on NULLS policy
+                    const a_is_null = val_a == .Null;
+                    const b_is_null = val_b == .Null;
+                    if (a_is_null and b_is_null) break :blk 0;
+                    if (a_is_null) {
+                        // NULL handling: by default NULLs sort last
+                        break :blk if (key.nulls == .first) -1 else 1;
+                    }
+                    if (b_is_null) {
+                        break :blk if (key.nulls == .first) 1 else -1;
+                    }
+
+                    // Compare non-null values
+                    if (val_a == .Int and val_b == .Int) {
+                        if (val_a.Int < val_b.Int) break :blk -1;
+                        if (val_a.Int > val_b.Int) break :blk 1;
+                        break :blk 0;
+                    }
+                    if (val_a == .Str and val_b == .Str) {
+                        const ord = std.mem.order(u8, val_a.Str, val_b.Str);
+                        break :blk switch (ord) {
+                            .lt => -1,
+                            .eq => 0,
+                            .gt => 1,
+                        };
+                    }
+                    if (val_a == .Bool and val_b == .Bool) {
+                        if (val_a.Bool == val_b.Bool) break :blk 0;
+                        break :blk if (val_a.Bool) 1 else -1;
+                    }
+                    // SONNY-2769 (round 5): numbers by exact value, as
+                    // RETURN ... ORDER BY orders them. The decimal arm
+                    // cross-multiplied by 10^scale in i128, which
+                    // overflowed and aborted the server; doubles and mixed
+                    // numbers compared as equal.
+                    if (value_order.numberOf(val_a)) |na| {
+                        if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
+                    }
+                    // For other types, treat as equal
+                    break :blk 0;
+                };
+
+                if (cmp != 0) {
+                    return if (key.desc) cmp > 0 else cmp < 0;
+                }
+            }
+            return false; // Equal on all keys
+        }
+    };
+    const order = try allocator.alloc(usize, rows.len);
+    defer allocator.free(order);
+    for (order, 0..) |*o, i| o.* = i;
+    std.mem.sort(usize, order, SortContext{ .keys = keys, .values = key_values, .width = width }, SortContext.lessThan);
+    const sorted = try allocator.alloc([]Value, rows.len);
+    defer allocator.free(sorted);
+    for (order, sorted) |i, *row| row.* = rows[i];
+    @memcpy(rows, sorted);
+}
+
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -4368,20 +4687,34 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     // GAP-0220 FIX: Use try for proper error propagation
     var new_columns = std.ArrayList([]const u8).empty;
     defer new_columns.deinit(allocator);
+    // SONNY-2696: on an error (a grouping error, an aggregate's argument
+    // that fails), nothing owns the column names yet.
+    errdefer for (new_columns.items) |column| allocator.free(column);
 
     for (with_items) |item| {
         const alias = item.alias orelse getExpressionNameFromAst(item.expr);
         // Duplicate the column name to avoid double-free
         const owned_alias = try allocator.dupe(u8, alias);
-        try new_columns.append(allocator, owned_alias);
+        new_columns.append(allocator, owned_alias) catch |err| {
+            allocator.free(owned_alias);
+            return err;
+        };
     }
+
+    // The GROUP BY keys, each resolved through a projection alias (none for
+    // an implicit grouping).
+    const raw_keys: []const ast.Expr = if (group_by) |gb| gb.keys else &.{};
+    const keys = try allocator.alloc(ast.Expr, raw_keys.len);
+    defer allocator.free(keys);
+    for (raw_keys, keys) |raw_key, *key| key.* = resolveGroupByKeyThroughAlias(raw_key, with_items, input_result.columns);
 
     // A HAVING filters the output rows: the groups of a GROUP BY (SONNY-2668)
     // and, without one, every output row (SONNY-2667). The parser produces a
     // HAVING without a GROUP BY only from a WHERE after RETURN, and callers
     // pass that only to the RETURN stage. Over groups (a GROUP BY, or an
     // aggregate item: the branches below), it computes its own aggregates
-    // for each group (SONNY-2675).
+    // for each group (SONNY-2675). SONNY-2696: an item with an aggregate
+    // anywhere inside it is an aggregate item.
     const over_groups = group_by != null or any_aggregate: {
         for (with_items) |item| {
             if (return_and_sorting.isAggregationExpr(item.expr)) break :any_aggregate true;
@@ -4389,28 +4722,31 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         break :any_aggregate false;
     };
     var having_filter: ?HavingFilter = if (having) |expr| blk: {
-        const raw_keys: []const ast.Expr = if (group_by) |gb| gb.keys else &.{};
-        const keys = try allocator.alloc(ast.Expr, raw_keys.len);
-        defer allocator.free(keys);
-        for (raw_keys, keys) |raw_key, *key| key.* = resolveGroupByKeyThroughAlias(raw_key, with_items, input_result.columns);
         const grouping: ?HavingGrouping = if (over_groups) .{ .items = with_items, .keys = keys } else null;
-        break :blk HavingFilter.init(allocator, expr, grouping, new_columns.items, input_result.columns, param_names, param_values) catch |err| {
-            // A HAVING the query may not have fails it before any row: free
-            // the column names, which nothing owns yet.
-            for (new_columns.items) |column| allocator.free(column);
-            new_columns.clearRetainingCapacity();
-            return err;
-        };
+        break :blk try HavingFilter.init(allocator, expr, grouping, new_columns.items, input_result.columns, param_names, param_values);
     } else null;
     defer if (having_filter) |*filter| filter.deinit(allocator);
+
+    // SONNY-2696: the items over groups, each aggregate inside an item
+    // lifted to a hidden aggregate before any row is grouped. Implicit
+    // grouping's keys are its items without an aggregate.
+    var grouped_items: ?GroupedItems = if (over_groups)
+        try GroupedItems.init(allocator, with_items, if (group_by != null) keys else &.{}, input_result.columns, param_names, param_values)
+    else
+        null;
+    defer if (grouped_items) |*g| g.deinit(allocator);
 
     // Transform each row according to WITH items
     // GAP-0220 FIX: Use try for proper error propagation
     var new_rows = std.ArrayList([]Value).empty;
+    errdefer {
+        for (new_rows.items) |row| allocator.free(row);
+        new_rows.deinit(allocator);
+    }
 
     // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
     // Handle GROUP BY if present - group rows and compute aggregations per group
-    if (group_by) |gb| {
+    if (group_by != null) {
         // Group input rows by the GROUP BY key(s)
         // Use a string key for grouping (serialize key values)
         var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
@@ -4444,10 +4780,10 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
             const key_writer = &key_aw.writer;
-            for (gb.keys) |raw_key_expr| {
-                // GAP-ENT-0055: follow a projection alias (`GROUP BY s`) to its
-                // underlying expression before evaluating against the input row.
-                const key_expr = resolveGroupByKeyThroughAlias(raw_key_expr, with_items, input_result.columns);
+            // GAP-ENT-0055: each key follows a projection alias (`GROUP BY
+            // s`) to its underlying expression before evaluating against the
+            // input row (`keys`, above).
+            for (keys) |key_expr| {
                 const key_val = try evalGroupedExpr(allocator, key_expr, env, Value{ .Null = {} });
                 // SONNY-2675: the key's typed canonical encoding.
                 try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
@@ -4473,55 +4809,14 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         while (group_iter.next()) |group_entry| {
             const group_rows = group_entry.value_ptr.items;
             if (group_rows.len == 0) continue;
-
-            // Use first row as the base for non-aggregated expressions
-            const first_row = group_rows[0];
-            const base_env = Env{
-                .names = input_result.columns,
-                .values = first_row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-
-            var new_row = try allocator.alloc(Value, with_items.len);
-
-            // Evaluate each WITH item
-            for (with_items, 0..) |item, i| {
-                // Check if this is an aggregation expression
-                if (return_and_sorting.isAggregationExpr(item.expr)) {
-                    // Compute aggregation over all rows in the group
-                    new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
-                } else {
-                    // Non-aggregation expression: evaluate with first row
-                    new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
-                }
-            }
-
-            // Apply HAVING filter if present, over the group's rows.
-            if (having_filter) |*filter| {
-                if (!try filter.passesGroup(allocator, new_row, group_rows, input_result.columns)) {
-                    allocator.free(new_row);
-                    continue;
-                }
-            }
-
-            try new_rows.append(allocator, new_row);
+            try appendGroupRow(allocator, &new_rows, &grouped_items.?, if (having_filter) |*f| f else null, group_rows, input_result.columns);
         }
     } else {
         // CANARY: REQ=REQ-OPTIONAL-MATCH-COUNT-001; FEATURE="OptionalMatchCount"; ASPECT=WithAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
         // No GROUP BY - check if there are aggregation expressions that need special handling
         // If any WITH item contains an aggregation (count, sum, avg, min, max),
         // we need to treat all rows as a single group instead of processing individually
-        var has_aggregation = false;
-        for (with_items) |item| {
-            if (return_and_sorting.isAggregationExpr(item.expr)) {
-                has_aggregation = true;
-                break;
-            }
-        }
-
-        if (has_aggregation) {
+        if (over_groups) {
             // CANARY: REQ=REQ-GQL-IMPLICIT-GROUPBY-001; FEATURE="ImplicitGroupBy"; ASPECT=WithAggregation; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Check if there are non-aggregated expressions that should be used for implicit grouping
             // e.g., WITH e.department AS dept, count(*) AS cnt should group by e.department
@@ -4593,79 +4888,23 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 while (group_iter.next()) |group_entry| {
                     const group_rows = group_entry.value_ptr.items;
                     if (group_rows.len == 0) continue;
-
-                    const first_row = group_rows[0];
-                    const base_env = Env{
-                        .names = input_result.columns,
-                        .values = first_row,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    var new_row = try allocator.alloc(Value, with_items.len);
-                    for (with_items, 0..) |item, i| {
-                        if (return_and_sorting.isAggregationExpr(item.expr)) {
-                            new_row[i] = try computeGroupAggregation(allocator, item.expr, group_rows, input_result.columns, param_names, param_values);
-                        } else {
-                            new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
-                        }
-                    }
-                    if (having_filter) |*filter| {
-                        if (!try filter.passesGroup(allocator, new_row, group_rows, input_result.columns)) {
-                            allocator.free(new_row);
-                            continue;
-                        }
-                    }
-                    try new_rows.append(allocator, new_row);
+                    try appendGroupRow(allocator, &new_rows, &grouped_items.?, if (having_filter) |*f| f else null, group_rows, input_result.columns);
                 }
             } else {
                 // No non-aggregated expressions or no input rows - treat all as single group
                 // This handles cases like: OPTIONAL MATCH (n)-[r]->() WITH count(r) AS cnt
-                var new_row = try allocator.alloc(Value, with_items.len);
-
-                const base_env = if (input_result.rows.len > 0) Env{
-                    .names = input_result.columns,
-                    .values = input_result.rows[0],
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                } else Env{
-                    .names = input_result.columns,
-                    .values = &.{},
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                for (with_items, 0..) |item, i| {
-                    if (return_and_sorting.isAggregationExpr(item.expr)) {
-                        new_row[i] = try computeGroupAggregation(allocator, item.expr, input_result.rows, input_result.columns, param_names, param_values);
-                    } else if (input_result.rows.len == 0) {
-                        // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
-                        // When there are no input rows, non-aggregation expressions cannot be evaluated
-                        // (e.g., MATCH (n:NonExistent) WITH n.category AS cat, count(*) AS cnt)
-                        // Return NULL for non-aggregation expressions in this case
-                        new_row[i] = Value{ .Null = {} };
-                    } else {
-                        new_row[i] = try evalGroupedExpr(allocator, item.expr, base_env, Value{ .Null = {} });
-                    }
-                }
-
-                const passes = if (having_filter) |*filter|
-                    try filter.passesGroup(allocator, new_row, input_result.rows, input_result.columns)
-                else
-                    true;
-                if (passes) {
-                    try new_rows.append(allocator, new_row);
-                } else {
-                    allocator.free(new_row);
-                }
+                // CANARY: REQ=REQ-GQL-EMPTY-MATCH-WITH-001; FEATURE="EmptyMatchWithClause"; ASPECT=NullOnNoRows; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
+                // When there are no input rows, non-aggregation expressions cannot be evaluated
+                // (e.g., MATCH (n:NonExistent) WITH n.category AS cat, count(*) AS cnt)
+                // and are NULL (`GroupedItems.project`).
+                try appendGroupRow(allocator, &new_rows, &grouped_items.?, if (having_filter) |*f| f else null, input_result.rows, input_result.columns);
             }
         } else {
             // No aggregations - transform each row individually
             for (input_result.rows) |input_row| {
                 var new_row = try allocator.alloc(Value, with_items.len);
+                // SONNY-2696: an item that fails frees the row.
+                errdefer allocator.free(new_row);
 
                 // Create environment from input row for expression evaluation
                 const env = Env{
@@ -4696,94 +4935,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_clause.order_by) |order_by| {
         const columns_slice = try new_columns.toOwnedSlice(allocator);
         const rows_slice = try new_rows.toOwnedSlice(allocator);
-
-        // Sort rows according to ORDER BY keys
-        const SortContext = struct {
-            order_keys: []ast.OrderBy.OrderKey,
-            columns: []const []const u8,
-            rows: [][]Value,
-            allocator: std.mem.Allocator,
-        };
-
-        const ctx = SortContext{
-            .order_keys = order_by.keys,
-            .columns = columns_slice,
-            .rows = rows_slice,
-            .allocator = allocator,
-        };
-
-        std.mem.sort([]Value, rows_slice, ctx, struct {
-            fn lessThan(context: SortContext, a: []Value, b: []Value) bool {
-                for (context.order_keys) |key| {
-                    // Create environment for evaluating order key expression
-                    const env_a = Env{
-                        .names = context.columns,
-                        .values = a,
-                        .allocator = context.allocator,
-                    };
-                    const env_b = Env{
-                        .names = context.columns,
-                        .values = b,
-                        .allocator = context.allocator,
-                    };
-
-                    const val_a = eval.evalExpr(context.allocator, key.expr, env_a) catch Value{ .Null = {} };
-                    const val_b = eval.evalExpr(context.allocator, key.expr, env_b) catch Value{ .Null = {} };
-
-                    // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
-                    const cmp: i8 = blk: {
-                        // Handle NULL comparisons based on NULLS policy
-                        const a_is_null = val_a == .Null;
-                        const b_is_null = val_b == .Null;
-                        if (a_is_null and b_is_null) break :blk 0;
-                        if (a_is_null) {
-                            // NULL handling: by default NULLs sort last
-                            break :blk if (key.nulls == .first) -1 else 1;
-                        }
-                        if (b_is_null) {
-                            break :blk if (key.nulls == .first) 1 else -1;
-                        }
-
-                        // Compare non-null values
-                        if (val_a == .Int and val_b == .Int) {
-                            if (val_a.Int < val_b.Int) break :blk -1;
-                            if (val_a.Int > val_b.Int) break :blk 1;
-                            break :blk 0;
-                        }
-                        if (val_a == .Str and val_b == .Str) {
-                            const ord = std.mem.order(u8, val_a.Str, val_b.Str);
-                            break :blk switch (ord) {
-                                .lt => -1,
-                                .eq => 0,
-                                .gt => 1,
-                            };
-                        }
-                        if (val_a == .Bool and val_b == .Bool) {
-                            if (val_a.Bool == val_b.Bool) break :blk 0;
-                            break :blk if (val_a.Bool) 1 else -1;
-                        }
-                        // SONNY-2769 (round 5): numbers by exact value, as
-                        // RETURN ... ORDER BY orders them. The decimal arm
-                        // cross-multiplied by 10^scale in i128, which
-                        // overflowed and aborted the server; doubles and mixed
-                        // numbers compared as equal.
-                        if (value_order.numberOf(val_a)) |na| {
-                            if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
-                        }
-                        // For other types, treat as equal
-                        break :blk 0;
-                    };
-
-                    if (cmp != 0) {
-                        return if (key.desc) cmp > 0 else cmp < 0;
-                    }
-                }
-                return false; // Equal on all keys
-            }
-        }.lessThan);
-
-        new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
-        new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
+        defer {
+            new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
+            new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
+        }
+        try sortWithStageRows(allocator, order_by.keys, columns_slice, rows_slice, param_names, param_values);
     }
 
     // SONNY-3248 (round 4b-1 review m-3): a SKIP or LIMIT parameter on the
@@ -4796,7 +4952,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_offset) |offset_val| {
         const offset_usize = @min(offset_val, new_rows.items.len);
         if (offset_usize > 0) {
-            // Remove the first offset_usize rows
+            // Remove the first offset_usize rows (SONNY-3046: and free them;
+            // they were dropped and leaked)
+            for (new_rows.items[0..offset_usize]) |row| allocator.free(row);
             const remaining = new_rows.items[offset_usize..];
             // GAP-0220 FIX: Use try for proper error propagation
             var remaining_rows = try std.ArrayList([]Value).initCapacity(allocator, remaining.len);
@@ -4810,7 +4968,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_limit) |limit_val| {
         const limit_usize = @min(limit_val, new_rows.items.len);
         if (limit_usize < new_rows.items.len) {
-            // Keep only the first limit_usize rows
+            // Keep only the first limit_usize rows (SONNY-3046: and free the
+            // rest; they were dropped and leaked)
+            for (new_rows.items[limit_usize..]) |row| allocator.free(row);
             const limited = new_rows.items[0..limit_usize];
             // GAP-0220 FIX: Use try for proper error propagation
             var limited_rows = try std.ArrayList([]Value).initCapacity(allocator, limited.len);

@@ -2774,6 +2774,351 @@
   the matched rows rather than the loop's. The FOR now runs over every row of
   the part before it. `MATCH (n) FOR x IN n.list RETURN ...` and nested
   `FOR x IN a FOR y IN x RETURN ...`, which were syntax errors, are accepted.
+- **`COUNT { }`, `EXISTS { }` and pattern comprehensions see a cold store
+  (SONNY-1562):** a subquery whose start node was not bound by the outer
+  query looked only at the nodes resident in the node cache, so after a
+  restart (or eviction) `RETURN COUNT { (a:A)-[:R]->(:B) }` answered 0,
+  `EXISTS { … }` false and `[(a:A)-[:R]->(b) | b.k]` an empty list while the
+  same `MATCH` returned every row. Their scans, and a `shortestPath()` start
+  node's, now read every node of the session's graph the way MATCH does,
+  still filtered by graph, tenant and RLS. Such a relationship pattern also
+  counted its start nodes rather than its matches, so
+  `COUNT { (a:A)-[:R]->(:B) }` was the number of `:A` nodes and
+  `EXISTS { (a:A)-[:R]->(:B {k: 1}) }` was true whenever an `:A` existed; it
+  now counts the relationship's matches.
+- **`COUNT { }`, `EXISTS { }` and pattern comprehensions match the pattern
+  the way MATCH does (SONNY-2707 parts 2 and 3):** a relationship in one of
+  them was walked along the start node's outgoing edges whatever its
+  direction, so `COUNT { (a)<-[r]-(b) }` and `COUNT { (a)-[r]-(b) }` counted
+  `(a)-[r]->(b)` and `EXISTS { (a:B)<-[:S]-(:A) }` was false when such an
+  edge existed. A relationship property map (`-[:R {w: 1}]->`) was ignored,
+  and a WHERE inside the subquery could not read the relationship variable.
+  A variable-length relationship (`<-[*1..2]-`, `-[*1..2]-`) followed
+  outgoing edges only and counted the distinct nodes it reached instead of
+  the paths, and a pattern comprehension took it for a single hop. Only the
+  first hop of a multi-hop pattern (`COUNT { (a)-[:R]->(m)-[:R]->(b) }`
+  counted `(a)-[:R]->(m)`), and only the first part of a comma pattern, was
+  matched. The three now share one walk that follows the MATCH executors'
+  rules: the pattern's direction for every hop, the relationship's types and
+  property map, every hop and every comma part, variables bound outside the
+  subquery or earlier in the pattern as constraints, and variable-length
+  hops through the MATCH executors' own path iterator (one match per path).
+  Every node and edge is still filtered by graph, tenant and RLS. A
+  self-loop matches an undirected pattern once.
+- **PROFILE reports the access path that ran and names only real indexes
+  (SONNY-1335):** the version-1 profile payload (sent for every tenant-bound
+  or RLS-evaluating session, and for a PROFILE'd data change) put a
+  `NodeIndexScan` operator first whenever the query had a WHERE or FILTER
+  equality and named it `"heuristic_index"`, with no catalog lookup, while
+  the legacy executor behind it scanned the label. It now has no index
+  operator (`NodeScan` is the scan it reports). The version-2 payload
+  (planned reads) copied the plan's `IndexSeek` whether or not the executor
+  then seeked, and never named the index. Its scan operator is now set from
+  what the executor did: `IndexSeek`, with `index_name` the catalog index
+  (the name SHOW INDEXES lists), only when the start nodes came from an
+  index seek on a label and property a btree or hash catalog index covers;
+  `LabelScan` or `AllNodesScan` otherwise, including an index on another
+  label or property, a fulltext or vector index, a dropped index, and a
+  WHERE whose equality sits under an AND (the executor seeks only on a WHERE
+  that is a single equality). No field is renamed or removed and the
+  version numbers are unchanged; see docs/EXPLAIN_PROFILE.md, "Index names
+  in the profile payload". Regression:
+  `zig build test-sonny1335-profile-access-path`.
+- **An aggregate inside an expression is computed once per group
+  (SONNY-2696):** a RETURN or WITH item with an aggregate inside it was
+  computed wrongly on every session: `count(*) + 1`, `sum(n.i) / count(*)`
+  and `count(*) > 0` were NULL; `toString(count(*))`, `[count(*), sum(n.i)]`,
+  `{c: count(*)}`, `coalesce(max(n.i), 0)` and `CASE WHEN count(*) > 5 ...`
+  were evaluated against each input row (`'1'` once per row). Every
+  aggregate inside an item is now a hidden aggregate column computed by the
+  same code as a bare aggregate item (an item that computes the same
+  aggregate is reused), and the item is evaluated once per group over those
+  columns and the group's keys, beside a GROUP BY, under ORDER BY and HAVING,
+  and in a WITH. An input column beside an aggregate that is no grouping key
+  (`RETURN n.i + count(*)`) answers 42803, as `RETURN n.i, count(*)` does; an
+  aggregate inside another's argument anywhere in an item
+  (`[sum(count(*))]`) answers 42803; arithmetic on an aggregate that
+  overflows answers 22003 instead of NULL. A NEXT-chained part computes an
+  aggregate call and arithmetic over aggregates only, and now refuses any
+  other expression over an aggregate with 0A000 instead of answering NULL.
+- **Aggregate arguments are computed by the expression evaluator on every
+  session (SONNY-2734):** the legacy executor (in-memory, tenant-scoped and
+  RLS sessions) computed ungrouped aggregates with loops that read only a
+  property or member argument: `sum(n.i * $f)` was 0,
+  `count(CASE WHEN n.i > 15 THEN 1 END)` counted every row, `avg(n.i + 1)`,
+  `max(n.i * -1)` and `max` over dates were NULL, `collect(n.i + 1)` was empty,
+  `count(DISTINCT n.i % 3)` was 0 and `count(n.v * 2)` counted NULLs. Every
+  aggregating RETURN and WITH of such a read now goes through the shared
+  projection over the rows its pattern binds, after the aggregate fast paths,
+  whatever the pattern's shape, so the arguments are evaluated per input row
+  with the query's parameters; tenant scope and row-level security still
+  decide which rows are bound. This also fixes, on those sessions,
+  `MATCH (a:P {k: 1})-[:R]->(b) RETURN count(*)`, which ignored the inline
+  property (SONNY-2688 part 1), and `MATCH (a:P), (b:Q) RETURN sum(a.k)`,
+  which answered one NULL row per binding. **Behaviour change:** an error
+  inside an aggregate's argument (22003 overflow, 22012 division by zero, a
+  type mismatch) now fails the query, as the same expression does outside an
+  aggregate; the row was skipped. Regression (four sessions, leak-checked):
+  `zig build test-sonny2696-aggregate-expressions`.
+- **A CREATE path with more than one hop creates the node between two hops
+  once (SONNY-6295):** `CREATE (:P {k: 1})-[:R]->(:Q {k: 1})-[:S]->(:T {k: 1})`
+  created two `:Q` nodes, one with the `:R` relationship and one with the
+  `:S` relationship, so the path was not connected (`MATCH (b:Q)` found two
+  nodes and `MATCH (:P)-[:R]->(:Q)-[:S]->(:T)` none). Every node between two
+  hops of a path was created once per hop when it had no variable; a named
+  one (`(q:Q)`) was created once. This held for CREATE, INSERT, MATCH ...
+  CREATE, CREATE with a SET, WITH or ORDER BY after it, FOR ... CREATE and
+  PROFILE CREATE, on every session, and the cluster leader's replicated
+  create made the same two nodes on every replica. The QUIC fast paths take
+  no path with more than one hop, and a MERGE of one is refused (0A000), so
+  neither was affected. Each hop now starts at the node the previous hop
+  ended at. MATCH ... CREATE and a CREATE followed by SET, WITH or ORDER BY
+  also stored a backward relationship (`(a)<-[:R]-(b)`) as `(a)-[:R]->(b)`;
+  it is now stored `(b)-[:R]->(a)`, as a plain CREATE already did. The
+  defect dates from the first CREATE executor (before v0.1.0) and is in
+  every released version. **Data written by the affected shapes is not
+  repaired:** each such statement left one extra node per inner node of the
+  path, with the same labels and properties, and backward relationships
+  stored forward. To find them, for each multi-hop shape your application
+  creates without naming the inner nodes, count the inner nodes that have
+  the next hop but not the previous one, for example
+  `MATCH (q:Q)-[:S]->() WHERE NOT EXISTS { ()-[:R]->(q) } RETURN count(q)`
+  for `(:P)-[:R]->(:Q)-[:S]->(:T)`; each is the second copy of a node whose
+  first copy has `:R` but no `:S`. Repair them by hand (recreate the second
+  hop's relationship from the first copy and delete the second copy) or
+  rewrite the data. Regression (in-memory, persisted warm and reloaded,
+  tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny6295-create-path-middle-node`.
+- **A variable a WITH passes on is joined in the next MATCH (SONNY-3046,
+  SONNY-3376, SONNY-3388):** a node, relationship or path variable bound
+  before a chained MATCH (after `WITH` or `NEXT`) was bound again by that
+  MATCH unless it was a hop's start node, so the next part matched every
+  element and multiplied the rows: `MATCH (q:Q) WITH q MATCH (q) RETURN
+  count(*)` counted every node once per q, `MATCH (g:G {i: 1}) WITH g MATCH
+  (g:X)` matched the X nodes, `... WITH r MATCH ()-[r]->()` and `WITH *`
+  matched every relationship, `(y)-[:R]->(q)` with q bound matched every
+  `:R`, and `MATCH p = ... WITH p MATCH p = ...` every path. Per ISO/IEC
+  39075, a variable already bound is now a join wherever the next pattern
+  names it: alone, at either end or in the middle of a hop, twice in one
+  pattern, as a relationship or as a path; labels, a property map, a
+  relationship type or a direction on it filter the bound element (no row
+  when it does not match), and a node or relationship the pattern reaches
+  from it is checked for tenant scope and row-level security like any other.
+  The walk starts at the bound node (or at a bound relationship's endpoint)
+  rather than scanning. A chain whose
+  last part aggregates now computes the aggregate over the joined rows with
+  the shared projection (any aggregate expression, GROUP BY, DISTINCT,
+  ORDER BY), where it applied a part's WITH before its MATCH and read freed
+  memory on a three-part chain; the chain no longer leaks the nodes a
+  persisted read hands it. Refused with 0A000 instead of answered wrongly: a
+  bound variable named as a variable-length relationship, a path variable
+  named as a node or relationship (or the reverse), and a part with an
+  `OPTIONAL MATCH` that names a bound variable. Writes in a
+  chained part stay refused (0A000) until SONNY-3111. Regression (in-memory,
+  persisted warm and reloaded, tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3046-with-bound-variable-join`.
+- **OPTIONAL MATCH is a left outer join, after WITH too (SONNY-6337,
+  SONNY-3184):** `MATCH (q:Q) WITH q OPTIONAL MATCH (q)-[:S]->(t)` was a
+  syntax error (42601), and a part with an OPTIONAL MATCH naming a variable a
+  WITH bound was refused (0A000). A WHERE written on an OPTIONAL MATCH
+  filtered the whole row, so `MATCH (q) OPTIONAL MATCH (q)-[:S]->(t) WHERE
+  t.k > 1` dropped every q without such a t instead of returning it with t
+  NULL; an OPTIONAL MATCH chained on another (or with a second hop) bound
+  NULL; a FILTER after one was ignored. Per ISO/IEC 39075, the MATCH and
+  OPTIONAL MATCH clauses of a part are now joined left to right, each
+  matched from the variables of the record before it (a variable a WITH
+  bound too) with its own WHERE restricting its own match: a record with no
+  surviving match is kept once with the clause's new variables NULL, and a
+  pattern starting from a NULL variable matches nothing. A FILTER or a
+  `WITH ... WHERE` after it drops records. Nodes and relationships it
+  reaches pass the session's tenant scope and row-level security as in any
+  MATCH, so a hidden one leaves the optional side NULL. `collect()` skips
+  NULLs, like every set function. An OPTIONAL MATCH may now follow a WHERE
+  with a WHERE of its own. Refused with 0A000: a path variable in a part with
+  an OPTIONAL MATCH (on the optional pattern as before,
+  `OptionalPathVariable`; on the MATCH beside it,
+  `UnsupportedOptionalMatchShape`) and an inline LET there. An error in an
+  OPTIONAL MATCH's WHERE fails the statement. Regression (in-memory,
+  persisted, tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3184-optional-match-distinct-call`.
+- **WITH DISTINCT on every session (SONNY-3167, SONNY-6296 item 1):** on
+  the in-memory, tenant-scoped and RLS sessions (the legacy executor) a WITH
+  DISTINCT after a hop or comma pattern, or projecting a value, was ignored:
+  `MATCH (q:Q),(z:Z) WITH DISTINCT q MATCH (q) RETURN count(*)` counted 32
+  instead of 4, and `MATCH (q:Q)-[:R]->(x) WITH DISTINCT q.f AS f RETURN f`
+  returned every duplicate. Such a WITH now runs in the shared WITH stage
+  the planned read uses (projection, DISTINCT with NULLs equal, ORDER BY,
+  SKIP, LIMIT), whatever the pattern. Regression (in-memory, persisted,
+  tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3184-optional-match-distinct-call`.
+- **The statement after a CALL { } is applied (SONNY-3389, SONNY-3167):**
+  `CALL { MATCH (x:X) RETURN x.k AS k } RETURN count(*)` returned the body's
+  rows; a RETURN that computed (`RETURN k + 1`), was DISTINCT or aggregated
+  was ignored the same way; `... RETURN k ORDER BY k LIMIT 2` was a syntax
+  error; and `CALL { } WITH k WHERE k > 1 RETURN count(*)` returned one 1
+  per row and leaked the WITH's rows. The WITH, its WHERE and the RETURN
+  (aggregates, GROUP BY, DISTINCT, ORDER BY, SKIP, LIMIT) are now computed
+  over the body's rows by the shared projection. Not covered by this fix
+  (follow-ups): a CALL { } after a MATCH (`MATCH (q) CALL { ... }`), the
+  variable scope clause `CALL (q) { ... }`, OPTIONAL CALL, and two CALL { }
+  in sequence. Regression (in-memory, persisted, tenant-scoped and RLS
+  sessions, leak-checked): `zig build test-sonny3184-optional-match-distinct-call`.
+- **A SKIP after CALL { } ... RETURN is applied once (SONNY-2680):**
+  `CALL { MATCH (x:X) RETURN x.k AS k } RETURN k ORDER BY k SKIP 1 LIMIT 2`
+  answered one row: the RETURN's window was applied inside the CALL { }
+  executor and again by the statement. A literal or parameter SKIP, OFFSET
+  and LIMIT now window it once. Every other window site (single query,
+  chain, UNION, OPTIONAL MATCH, write RETURN, planned and legacy reads) was
+  already applying `$p` once; the batch test pins them. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
+- **ORDER BY by a variable the RETURN does not project, and ORDER BY key
+  errors (SONNY-2811):** `MATCH (n) RETURN n.k AS k ORDER BY n.x` came back
+  unsorted on every session (the key was evaluated against the projected
+  row, where `n` is unbound, and was NULL), and `RETURN n.k AS x ORDER BY
+  n.x` sorted by the column `x`. Such a key is now computed with the
+  projection as a hidden column, sorted on, and dropped after the window
+  (a RETURN that is DISTINCT or aggregates is unchanged). **Behaviour
+  change:** an error evaluating an ORDER BY key (for example 22003 integer
+  overflow in `ORDER BY n.k + 9223372036854775807`) now fails the statement;
+  it was sorted as NULL. A WITH's ORDER BY key error is covered since
+  SONNY-6351 (below).
+  Regression: `zig build test-sonny2672-read-semantics-batch`.
+- **Implicit grouping is refused on every entry point (SONNY-2682):** a
+  RETURN mixing aggregates with plain items and no GROUP BY is refused with
+  42000 (`GroupingError`) on the in-memory, persisted, tenant-scoped and RLS
+  sessions alike. Two entry points grouped it implicitly instead: the last
+  part of a chained query (`MATCH (q) WITH q MATCH (q)-[:R]->(x) RETURN
+  q.f, count(*)`) and VALUES ... MATCH. **Behaviour change:** those two now
+  refuse it too; write the GROUP BY. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
+- **A procedure CALL's window (SONNY-2779):** `CALL p() YIELD x RETURN x
+  ... OFFSET n` past the last row returned every row (now none), LIMIT and
+  OFFSET leaked the rows they dropped, a SKIP or LIMIT parameter was
+  ignored, and `SKIP n LIMIT m` after the RETURN was a syntax error. The
+  standalone CALL's RETURN clause and MATCH ... CALL ... YIELD are covered
+  since SONNY-6351 (below). Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
+- **Read-semantics residuals (SONNY-6351):** (1) on the legacy executor
+  (in-memory, tenant-scoped and RLS sessions) an error evaluating a RETURN
+  item, or an ORDER BY key computed with the projection, leaked the column
+  names and the rows projected so far; they are freed. (4) VALUES ...
+  MATCH leaked what a VALUES row computed (`VALUES ('a' || 'b') AS (s)
+  MATCH ...`): it moves to the query's scratch arena, released after the
+  result is sent (embedded callers that install none keep the leak). (5)
+  `CREATE (n:W
+  {i: 1}) RETURN n.i AS i ORDER BY n.i` was a syntax error even with the
+  server's parse options; a CREATE ... RETURN takes ORDER BY, SKIP and
+  LIMIT (the created rows are sorted, the statement windows them). (6) an
+  error in a WITH's ORDER BY key is no longer sorted as NULL: it fails the
+  statement (22003 for an overflow), and the key sees the query's
+  parameters. A standalone procedure CALL applies its RETURN clause and its
+  YIELD aliases (`CALL db.labels() YIELD label AS l RETURN l` returns the
+  column `l`; it kept `label` and returned the procedure's rows as they
+  came). MATCH ... CALL ... YIELD runs the procedure once for each MATCH
+  row (read under the session's tenant scope, RLS policies and WHERE, every
+  chain and hop) with the row's variables bound, and its RETURN reads both
+  (a MATCH variable was NULL: the executor matched the first node of each
+  chain, ran the procedure once and leaked its rows; it also applied SKIP
+  and LIMIT a second time). **Behaviour change:** MATCH ... CALL now yields
+  one set of procedure rows per MATCH row, not one set in total. (2)
+  `CALL db.labels()` omits a label the session's RLS label policy denies (it
+  listed it; a deny entry hides every node carrying the label). (3) The
+  embedded `geode.parseGql` accepts an expression ORDER BY key by default, as
+  the server does; `GEODE_ORDER_KEYS_EXPR` set to anything but empty, `1`,
+  `true` or `on` selects the identifier-only policy, read as the server reads
+  it. **Behaviour change** (embedded callers): `ORDER BY n.prop` parses; it
+  was a syntax error unless the variable was set (to any value, `0`
+  included). Regression: `zig build test-sonny2672-read-semantics-batch`,
+  `zig build test-sonny6351-labels-parse-default`.
+- **A parsed MATCH takes the engine-direct fast paths again (SONNY-6383):**
+  since the parser records each MATCH clause of a part (SONNY-3184, unreleased),
+  the field allowlists of the engine-direct node scan stream and of the bulk
+  `MATCH ... CREATE` / `MATCH ... MERGE` edge paths refused every parsed
+  MATCH, so every simple scan, filtered count and bulk edge write went
+  through the executor (slower; the GAP-ENT-0055 O(1) filtered count was
+  lost). The clause record is accepted when it describes plain MATCH clauses
+  only; an OPTIONAL MATCH still goes to the executor. Regression:
+  `zig build test-sonny6383-scan-stream-match-clauses`,
+  `zig build test-gap0902-bounded-analytical`.
+- **Query residuals (SONNY-6383 items 2-9):** (2) `CALL { ... } WITH ...
+  RETURN ...` accepted no GROUP BY, ORDER BY, SKIP / OFFSET or LIMIT after
+  the RETURN (a syntax error); they are parsed and applied, the GROUP BY and
+  HAVING being the RETURN's. (3) A RETURN mixing aggregates and plain items
+  was accepted when the only GROUP BY was the WITH's (`WITH g, count(*) AS c
+  GROUP BY g RETURN g, sum(c)`); it is refused with 42000 like any other
+  ungrouped mix. (4) An aggregate's name inside a list comprehension's WHERE
+  or map is the scalar function evaluated per element: `RETURN [x IN [1] |
+  sum([1.5, 2])]` failed with a type error, the sum being computed over the
+  rows; the comprehension's source is still over the rows (`[x IN
+  collect(n.k) | ...]`). **Behaviour change:** an aggregate of the
+  comprehension's variable in a grouped HAVING or beside an aggregate is
+  evaluated per element; it was refused with 0A000. (5) The two legacy
+  RETURN loops reported to leak are out of reach of a parsed query (an
+  OPTIONAL MATCH part goes to the OPTIONAL MATCH executor since SONNY-3184;
+  an aggregating RETURN to the shared projection since SONNY-2734); not
+  changed. (6)
+  A WITH's ORDER BY evaluates each key once per row and frees it; the sort
+  re-evaluated both keys at every comparison and freed none (a leak for an
+  embedded caller with no scratch arena). (7) A standalone CALL's RETURN
+  keeps the procedure result's flags. (8) VALUES ... MATCH frees what its
+  rows computed when no scratch arena is installed (an embedded caller): the
+  result owns copies of its values. (9) `test-sonny2739-float-narrowing` and
+  `test-sonny3251-limit-errors` failed on this branch from items 4 and 1.
+  Regression: `zig build test-sonny6383-query-residuals`,
+  `zig build test-sonny6383-call-return-flags`.
+- **An exact integer sum stays exact; past i64 it is 22003 (SONNY-2774):**
+  `sum()` over integers continued as a DOUBLE once the running total left
+  the i64 range, on the shared projection and on the GROUP BY fast path
+  alike (a silent exact-to-approximate change). Both, and the legacy
+  aggregate loops, now sum integers in an exact 128-bit accumulator: a total
+  that fits i64 is returned exactly whatever the sums in between were
+  (`MAX + 1 - 2` is `MAX - 1`), and one that does not fails with 22003
+  (numeric value out of range, ISO/IEC 39075:2024 20.9 General Rules).
+  `avg()` divides the exact sum and stays a DOUBLE. **Behaviour change:**
+  an integer `sum()` past i64 is an error, not an approximate DOUBLE.
+  Regression: `zig build test-sonny2774-exact-sum`.
+- **A plain RETURN after MATCH ... CREATE / MERGE is one row per matched
+  row (SONNY-3025):** a RETURN that neither aggregated nor was DISTINCT was
+  evaluated once, over the last row's created or merged elements, so `MATCH
+  (n:G) CREATE (n)-[:T]->(m:Z) RETURN n, m` over 25 `:G` nodes returned one
+  row. Every RETURN is now projected over the matched rows, each extended
+  with what its CREATE created or its MERGE bound (ISO/IEC 39075:2024 14.11).
+  A relationship MERGE's RETURN (`MATCH (a), (b) MERGE (a)-[r:R]->(b) RETURN
+  r`) returned no row at all; it returns one per matched row with `r` and
+  its endpoints. **Behaviour change:** such statements return one row per
+  matched row. Regression: `zig build test-sonny3025-match-write-return-rows`.
+- **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
+  kept one GROUP BY / HAVING per query part whichever clause it followed,
+  and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2
+  RETURN z.g, count(*) GROUP BY z.g` grouped the WITH's rows to one per key
+  and counted 1 (in-memory, persisted, tenant-scoped and RLS sessions). A
+  GROUP BY, HAVING or WHERE written after the RETURN items now belongs to
+  the RETURN (ISO/IEC 39075:2024 14.11: the `<group by clause>` is part of
+  the `<return statement body>`), on the planned and legacy executors; one
+  written between the WITH and the RETURN stays the WITH's. The legacy
+  executor's own grouping (a node and a relationship copy that replaced
+  HAVING with "the group has at least two rows" and skipped the WITH stage)
+  is deleted. **Behaviour changes:** a part that groups both before and
+  after its RETURN (`WITH g, count(*) AS c GROUP BY g RETURN c, count(*)
+  GROUP BY c`, or a WITH's GROUP BY / HAVING and a WHERE after the RETURN,
+  or `RETURN ... WHERE w GROUP BY k HAVING h`) is refused at parse time
+  (`UnexpectedToken`): the second grouping used to replace the first
+  silently. A grouped
+  aggregate the shared projection does not serve is refused with 0A000
+  (`UnsupportedGroupedReturn`) instead of being answered by the deleted
+  grouping. Regression: `zig build test-sonny2672-read-semantics-batch`.
+- **Pattern predicates in a grouped HAVING (SONNY-2699):** `GROUP BY q
+  HAVING EXISTS { (q)-[:S]->() }`, `NOT EXISTS`, `COUNT { } = n`, an EXISTS
+  with its own WHERE, and a COUNT { } in an item beside an aggregate
+  (`count(*) + COUNT { (q)-[:S]->() }`) were refused with 0A000 since
+  v0.8.23. Each variable the pattern reads from outside is now bound to the
+  group's value when it is a grouping key or a projected variable, and the
+  predicate runs under the session's tenant scope and RLS policies as a
+  WHERE EXISTS does. A variable with no single value in the group (an input
+  binding that is neither), and a pattern variable named like an output
+  column that does not hold it, stay refused with 0A000; so do a
+  `shortestPath` and an IN subquery in a grouped HAVING. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
 
@@ -4506,7 +4851,7 @@ run inside an explicit transaction again.
     implies an integer SUM past i64 should raise 22003. The shared
     projection continues it as a double (the value's magnitude is kept, its
     last digits are not), matching the GROUP BY fast path, until both paths
-    converge on 22003.
+    converge on 22003. (Converged in the Unreleased section: SONNY-2774.)
 - **Group and DISTINCT keys keep their type (SONNY-2675, SONNY-2735):** a
   GROUP BY, `count(DISTINCT)`, RETURN DISTINCT and WITH DISTINCT key keeps
   its type and value. Doubles, dates, decimals, texts, UUIDs and lists group
@@ -5300,20 +5645,16 @@ run inside an explicit transaction again.
   `USE [GRAPH] g <statement>` stays one focused statement (ISO/IEC 39075
   §10.3) and needs none.
 - **Reads that are wrong on the legacy path (SONNY-3167, SONNY-3184):** a
-  read through a hop pattern ignores WITH DISTINCT on the in-memory and RLS
-  paths (X2); `CALL { }` returns the subquery's rows instead of the outer
-  RETURN; EXISTS { MATCH ... WHERE <inner variable> } is always false; an
-  OPTIONAL MATCH chained on another OPTIONAL MATCH binds null; a WHERE after
-  an OPTIONAL MATCH filters the whole row; a WHERE after `WITH ...` before
-  a FOR is not applied. Writes in these shapes are refused. v0.8.24.
-- **A chained MATCH does not join on the WITH's variables (SONNY-3046):**
-  `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counts every node for each
-  q. v0.8.24; a chained MATCH that writes is refused until then.
+  WHERE after `WITH ...` before a FOR is not applied. Writes in these shapes
+  are refused. v0.8.24. (Unreleased: EXISTS { } with an inner WHERE is
+  answered correctly since SONNY-2707; the OPTIONAL MATCH reads since
+  SONNY-3184; WITH DISTINCT on the legacy path and the RETURN after
+  `CALL { }` since SONNY-3167 / SONNY-3389.)
 - **A plain RETURN after MATCH ... CREATE is one row (SONNY-3025):** a RETURN
   that neither aggregates nor is DISTINCT is evaluated once, over the last
   row's created and matched elements; the CREATE itself runs once per
   matched row. Aggregate the RETURN, or make it DISTINCT, to see every row.
-  v0.8.24.
+  v0.8.24. (Fixed in the Unreleased section.)
 
 ---
 

@@ -146,7 +146,6 @@ const isAggregationExpr = execution.isAggregationExpr;
 const isNonConstantExpr = execution.isNonConstantExpr;
 const sortRows = execution.sortRows;
 const sortRowsEx = execution.sortRowsEx; // D05 Fix: Extended sortRows with RETURN items
-const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
 const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
 const executeWithClause = execution.executeWithClause;
@@ -154,6 +153,7 @@ const executeWithClause = execution.executeWithClause;
 // Import pattern matching helpers (extracted for modularity)
 // CANARY: REQ=REQ-REFACTOR-MATCH-008; FEATURE="MatchOperationsRefactor"; ASPECT=PatternHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 const pattern_helpers = @import("pattern_helpers.zig");
+const optional_match = @import("optional_match.zig");
 pub const PatternInfo = pattern_helpers.PatternInfo;
 pub const DispatchResult = pattern_helpers.DispatchResult;
 pub const extractPatternInfo = pattern_helpers.extractPatternInfo;
@@ -837,9 +837,11 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
         // WHERE after an OPTIONAL MATCH); the fast paths check a read's shape
         // themselves.
         // SONNY-3242: where each SET clause ends (comes only with a SET).
-         "select_projection",   "optional_where",    "set_clause_ends",
+         "select_projection",   "optional_where",    "set_clause_ends", "match_clauses",
         // SONNY-3384: a flag of `delete_items`, which declines on its own.
         "detach_delete",
+        // SONNY-2698: which stage `group_by` and `having` belong to.
+        "return_grouping",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;
@@ -1283,7 +1285,10 @@ const GroupAcc = struct {
 // int and a float path so a pure-integer input yields an Int result (matching
 // the regular aggregator) and a mixed/decimal input promotes to Double.
 const AggAcc = struct {
-    sum_int: i64 = 0,
+    /// SONNY-2774: the integer inputs' exact sum (`execution.ExactIntSum`);
+    /// past i64 it continued as a double. `sum_float` holds the float inputs
+    /// only.
+    sum_int: execution.ExactIntSum = .{},
     sum_float: f64 = 0,
     has_float: bool = false,
     count: u64 = 0,
@@ -1303,24 +1308,23 @@ const AggAcc = struct {
     fn update(self: *AggAcc, maybe_int: ?i64, f: f64) void {
         self.count += 1;
         if (maybe_int) |iv| {
-            if (!self.has_float) {
-                const r = @addWithOverflow(self.sum_int, iv);
-                if (r[1] != 0) {
-                    self.has_float = true;
-                    self.sum_float = @as(f64, @floatFromInt(self.sum_int)) + @as(f64, @floatFromInt(iv));
-                } else {
-                    self.sum_int = r[0];
-                }
-            } else {
-                self.sum_float += @as(f64, @floatFromInt(iv));
-            }
+            self.sum_int.add(iv);
         } else {
-            if (!self.has_float) {
-                self.has_float = true;
-                self.sum_float = @as(f64, @floatFromInt(self.sum_int));
-            }
+            self.has_float = true;
             self.sum_float += f;
         }
+    }
+
+    /// sum(): exact over integers (22003 past i64), else a double.
+    fn sumValue(self: AggAcc) error{IntegerOverflow}!Value {
+        if (self.has_float) return .{ .Double = self.sum_float + self.sum_int.approximate() };
+        return .{ .Int = try self.sum_int.exact() };
+    }
+
+    /// avg(): a double (a mean never integer-divides; gql_conformance T16).
+    fn avgValue(self: AggAcc) Value {
+        if (self.count == 0) return .{ .Null = {} };
+        return .{ .Double = (self.sum_float + self.sum_int.approximate()) / @as(f64, @floatFromInt(self.count)) };
     }
 
     /// Fold one value (from `minMaxValue`) into min and max; the first of
@@ -1937,15 +1941,8 @@ pub fn propertyAggregateFastPath(
 
     // --- Build result value per aggregate kind ---
     const out_val: Value = switch (kind) {
-        .sum => blk: {
-            if (acc.has_float) break :blk Value{ .Double = acc.sum_float };
-            break :blk Value{ .Int = acc.sum_int };
-        },
-        .avg => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            const total: f64 = if (acc.has_float) acc.sum_float else @as(f64, @floatFromInt(acc.sum_int));
-            break :blk Value{ .Double = total / @as(f64, @floatFromInt(acc.count)) };
-        },
+        .sum => try acc.sumValue(),
+        .avg => acc.avgValue(),
         .min => acc.minValue(),
         .max => acc.maxValue(),
     };
@@ -3260,20 +3257,10 @@ pub fn groupByAggregateFastPath(
                     };
                 },
                 .count_star, .count_prop => Value{ .Int = @intCast(group.accs[item_acc_idx[i]].count) },
-                .sum => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    break :blk if (a.has_float) Value{ .Double = a.sum_float } else Value{ .Int = a.sum_int };
-                },
-                .avg => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    // avg() is a mean: pure-integer inputs must NOT integer-divide
-                    // (avg(1,2) is 1.5). The former "legacy GROUP BY parity" Int
-                    // branch was the outlier — every other avg path emits Double;
-                    // pinned by gql_conformance T16.
-                    const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
-                    break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
-                },
+                .sum => try group.accs[item_acc_idx[i]].sumValue(),
+                // avg() is a mean: pure-integer inputs must NOT integer-divide
+                // (avg(1,2) is 1.5); pinned by gql_conformance T16.
+                .avg => group.accs[item_acc_idx[i]].avgValue(),
                 .min => group.accs[item_acc_idx[i]].minValue(),
                 .max => group.accs[item_acc_idx[i]].maxValue(),
             };
@@ -3999,11 +3986,12 @@ fn nodeMatchesProps(
 /// variable the CREATE introduces, and a MERGE beside the CREATE, are refused
 /// with 0A000.
 ///
-/// A RETURN that aggregates or is DISTINCT (`returnProjectsMatchedRows`), and
-/// any RETURN of a statement that deletes, is computed by the shared
-/// projection over the matched rows, each extended with the variables its
-/// CREATE created. Any other RETURN is evaluated once over the created
-/// entities, as before (SONNY-3025); without a RETURN the statement returns
+/// The RETURN is computed by the shared projection over the matched rows, each
+/// extended with the variables its CREATE created (ISO/IEC 39075:2024 14.11:
+/// once per record of the working table). SONNY-3025: a RETURN that neither
+/// aggregated nor was DISTINCT was evaluated once, over the last row's created
+/// and matched elements, so `MATCH (n:G) CREATE (n)-[:T]->(m:Z) RETURN n, m`
+/// over 25 :G nodes returned one row. Without a RETURN the statement returns
 /// its creation counts.
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
@@ -4012,7 +4000,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     try refuseUnappliedWrites(q, .{ .set = true, .remove = true, .create = true, .delete = true });
     const create_pattern = q.create_pattern.?;
     const deletes = q.delete_items.len != 0;
-    const project_rows = returnProjectsMatchedRows(q) or (deletes and q.ret.items.len != 0);
+    // SONNY-3025: every RETURN, plain ones too.
+    const project_rows = q.ret.items.len != 0;
     const writes_rows = q.set_clauses.len != 0 or q.remove_clauses.len != 0;
 
     var bindings = try readPatternRows(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
@@ -4134,15 +4123,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         try checkReturnBeforeDelete(allocator, q, &dry_result, param_names_arg, param_values_arg, deleted);
     }
 
-    // Track all created entities across all matched rows
-    var all_created_nodes = std.StringHashMap(u64).init(allocator);
-    defer all_created_nodes.deinit();
-    var all_created_relationships = std.StringHashMap(Value).init(allocator);
-    defer all_created_relationships.deinit();
-    // SONNY-3322: by id; resolved for the RETURN after every row's CREATE.
-    var all_created_edge_ids = std.StringHashMap(u64).init(allocator);
-    defer all_created_edge_ids.deinit();
-
     // Per-kind counters: the summary row reports nodes and relationships
     // SEPARATELY (a pure edge create used to surface as `nodes_created: 1`).
     var total_created_nodes: i64 = 0;
@@ -4161,7 +4141,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         for (match_result.columns, 0..) |col_name, i| {
             if (i < row.len and row[i] == .Node) {
                 try row_bindings.put(col_name, row[i].Node.id);
-                try all_created_nodes.put(col_name, row[i].Node.id);
             }
         }
 
@@ -4180,15 +4159,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
         total_created_nodes += result.created_nodes_count;
         total_created_relationships += result.created_relationships_count;
-
-        var node_iter = result.created_nodes.iterator();
-        while (node_iter.next()) |entry| {
-            try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
-        var rel_iter = result.created_relationships.iterator();
-        while (rel_iter.next()) |entry| {
-            if (entry.value_ptr.* == .Edge) try all_created_edge_ids.put(entry.key_ptr.*, entry.value_ptr.*.Edge.id);
-        }
 
         if (project_rows or writes_rows) {
             const out_row = try allocator.alloc(Value, columns.len);
@@ -4238,13 +4208,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 
     if (projected) |p| return p;
 
-    // A RETURN that neither aggregates nor is DISTINCT: evaluated with all
-    // created entities.
-    if (q.ret.items.len > 0) {
-        try crud_operations.resolveCreatedEdges(store, &all_created_edge_ids, &all_created_relationships);
-        return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
-    }
-
     // Default: return summary row showing how many entities were created.
     // Nodes and relationships are reported in SEPARATE columns -- collapsing
     // them under `nodes_created` mislabeled a pure edge create as a node
@@ -4285,274 +4248,113 @@ fn createAttachesEdgeTo(create_pattern: ast.GraphPattern, delete_items: []const 
 
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-SONNY-6351-MATCH-CALL; FEATURE="ProcedureYield"; ASPECT=MatchCallPerRow; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6351 item 6 (SONNY-2779 residual): MATCH ... CALL ... YIELD ...
+/// RETURN. The MATCH's rows are read as any read reads them
+/// (`readPatternRows`: the session's graph, tenant scope and RLS policies,
+/// the WHERE, every chain and hop), and the procedure runs once for each,
+/// with the row's nodes and relationships bound for its arguments
+/// (`context.bindings`). Each row it yields extends the MATCH row, its
+/// columns named by the YIELD; the RETURN is projected over those rows by
+/// the shared projection (`projectReturnOverRows`: items, aggregates,
+/// DISTINCT, ORDER BY); the statement applies the window. This executor
+/// matched the first node of each chain, ran the procedure once, evaluated
+/// the RETURN over the procedure's columns alone (a MATCH variable was
+/// NULL), applied SKIP and LIMIT a second time, and leaked the procedure's
+/// rows.
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
     // SONNY-2683: this executor neither groups nor filters the RETURN.
     try validateGroupedReturnShape(q);
-    // Per-function reusable RLS row buffer. Shared across every
-    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
-    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
-    // the per-node init/deinit pair is amortized away.
-    var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
-    defer rls_row_local.deinit();
-    const store = graph_store.getWritableGlobalStore(allocator);
-    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
-    defer if (read_session) |*session| session.deinit();
-    const read_store: *graph_store.GraphStore = if (read_session) |*session| session.store() else store;
     const call_clause = q.call_clause.?;
+    const current_graph: ?[]const u8 = if (context.session_state) |session| session.graph else null;
+    var pattern_q = q;
+    pattern_q.call_clause = null;
+    var bindings = try readPatternRows(allocator, pattern_q, context.query_param_names, context.query_param_values, q.inline_let_bindings, current_graph);
+    defer bindings.deinit(allocator);
 
-    // Get current graph from session context
-    const filter_graph = if (context.session_state) |session| (session.graph orelse "default") else "default";
-    // GAP-0279: Get tenant filter from session context
-    const filter_tenant = try getSessionTenantFilter();
+    const call_stmt = ast.CallStatement{ .Procedure = .{ .procedure = call_clause.procedure, .yield_items = call_clause.yield_items } };
+    const yield_items: []const ast.ReturnItem = call_clause.yield_items orelse &.{};
 
-    // Match each chain separately and collect bindings
-    // GAP-0220 FIX: Use try for proper error propagation
-    var chain_matches = std.ArrayList(std.StringHashMap(u64)).empty;
-    defer {
-        for (chain_matches.items) |*chain_match| {
-            chain_match.deinit();
-        }
-        chain_matches.deinit(allocator);
-    }
-
-    // Match each chain in the MATCH pattern
-    for (q.match.chains) |chain| {
-        var chain_match = std.StringHashMap(u64).init(allocator);
-
-        // Get node variable name and match criteria
-        var node_var: ?[]const u8 = null;
-        var labels: [][]const u8 = &.{};
-        var props: ?[]ast.Property = null;
-
-        if (chain.head) |head| {
-            node_var = head.name;
-            labels = head.labels;
-            props = head.props;
-        }
-
-        // Find matching node
-        var found = false;
-
-        if (labels.len > 0) {
-            // Fast path: use label index to narrow candidates instead of full node scan
-            // Also checks ALL labels (original code only checked labels[0])
-            var candidates = try read_store.getNodesByLabels(allocator, filter_graph, labels, storageTenantFilter(filter_tenant));
-            defer candidates.deinit(allocator);
-
-            for (candidates.items) |node_id| {
-                // GAP-ENT-0023 P3 (review I1): engine-fallback row sourcing —
-                // resident-only `.get` dropped evicted/cold rows silently.
-                const node = (read_store.getNodePtrForScan(node_id) orelse continue).*;
-
-                // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
-                // scan under an active hierarchy; per-row hierarchy-aware check is the
-                // fail-closed compensator so siblings/ancestors cannot leak.
-                if (!passesTenantFilter(node, filter_tenant)) continue;
-                // GAP-0510: Filter by RLS denied labels
-                if (!passesRLSFilter(&rls_row_local, node)) continue;
-
-                // Check properties
-                var matches_props = true;
-                if (props) |properties| {
-                    const empty_env = Env{
-                        .names = &.{},
-                        .values = &.{},
-                        .allocator = allocator,
-                    };
-                    for (properties) |prop| {
-                        if (node.properties.get(prop.key)) |node_prop_val| {
-                            const node_val = propertyValueToValue(node_prop_val);
-                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
-                            if (!valuesEqual(node_val, prop_val)) {
-                                matches_props = false;
-                                break;
-                            }
-                        } else {
-                            matches_props = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (matches_props) {
-                    if (node_var) |var_name| {
-                        try chain_match.put(var_name, node_id);
-                    }
-                    found = true;
-                    break;
-                }
-            }
-        } else {
-            // Fallback: no labels available, graph-scoped scan required.
-            // PERF-B (issue #811): graph-scoped iterator eliminates per-row
-            // graph_name eql — the index already narrows to nodes in
-            // `filter_graph`. Tenant + RLS filters are correctness and stay.
-            // GAP-0522: Diagnostic warning for full-scan MATCH+CALL (counter
-            // semantics unchanged so OTel dashboards keep working).
-            _ = g_full_scan_count.fetchAdd(1, .monotonic);
-            match_log.warn("MATCH+CALL graph-scoped scan: no labels specified on node pattern", .{});
-            var node_iter = read_store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node_ptr| {
-                const node_id = node_ptr.id;
-                const node = node_ptr.*;
-
-                // GAP-0279: Filter by tenant
-                if (!passesTenantFilter(node, filter_tenant)) continue;
-                // GAP-0510: Filter by RLS denied labels
-                if (!passesRLSFilter(&rls_row_local, node)) continue;
-
-                // Check properties
-                var matches_props = true;
-                if (props) |properties| {
-                    const empty_env = Env{
-                        .names = &.{},
-                        .values = &.{},
-                        .allocator = allocator,
-                    };
-                    for (properties) |prop| {
-                        if (node.properties.get(prop.key)) |node_prop_val| {
-                            const node_val = propertyValueToValue(node_prop_val);
-                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
-                            if (!valuesEqual(node_val, prop_val)) {
-                                matches_props = false;
-                                break;
-                            }
-                        } else {
-                            matches_props = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (matches_props) {
-                    if (node_var) |var_name| {
-                        try chain_match.put(var_name, node_id);
-                    }
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            // No match found for this chain - return empty result
-            return ExecutionResult{
-                .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]Value, 0),
-                .flags = std.ArrayList([]const u8).empty,
-            };
-        }
-
-        try chain_matches.append(allocator, chain_match);
-    }
-
-    // Merge all chain matches into a single binding map
-    var bindings = std.StringHashMap(Binding).init(allocator);
-    defer bindings.deinit();
-
-    for (chain_matches.items) |chain_match| {
-        var iter = chain_match.iterator();
-        while (iter.next()) |entry| {
-            try bindings.put(entry.key_ptr.*, Binding{ .node_id = entry.value_ptr.* });
-        }
-    }
-
-    // Create enriched context with bindings
-    var enriched_context = context;
-    enriched_context.bindings = &bindings;
-
-    // Convert CallClause to CallStatement for execution
-    const call_stmt = ast.CallStatement{ .Procedure = .{
-        .procedure = call_clause.procedure,
-        .yield_items = call_clause.yield_items,
-        .return_clause = if (q.ret.items.len > 0) q.ret else null,
-        .order_by = null,
-        .limit = null,
-        .offset = null,
-    } };
-
-    // Execute CALL with bindings
-    const call_result = try executeCallStatement(allocator, call_stmt, enriched_context);
-
-    // If there's a RETURN clause in the query, apply it to the CALL results
-    if (q.ret.items.len > 0 and call_clause.yield_items != null) {
-        // Apply RETURN transformations to the CALL results
-        var transformed_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
-        defer transformed_rows.deinit(allocator);
-
-        for (call_result.rows) |call_row| {
-            // Create environment from CALL result columns and values
-            const env = Env{
-                .allocator = allocator,
-                .names = call_result.columns,
-                .values = call_row,
-            };
-
-            // Evaluate each RETURN expression using the CALL result as environment
-            var return_row = try allocator.alloc(Value, q.ret.items.len);
-            for (q.ret.items, 0..) |item, i| {
-                return_row[i] = try eval.evalExpr(allocator, item.expr, env);
-            }
-
-            try transformed_rows.append(allocator, return_row);
-        }
-
-        // Get column names from RETURN clause (with disambiguation for duplicates)
-        const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
-
-        // Free original call_result columns
-        for (call_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(call_result.columns);
-        allocator.free(call_result.rows); // rows will be replaced
-
-        var result = ExecutionResult{
-            .columns = return_columns,
-            .rows = try transformed_rows.toOwnedSlice(allocator),
-            .flags = call_result.flags, // Keep the flags from CALL result
+    // The yielded columns: the YIELD's (each its alias, else the column it
+    // names), or with no YIELD every column the procedure returns.
+    var yield_names: std.ArrayList([]const u8) = .empty;
+    defer yield_names.deinit(allocator);
+    var yield_sources: std.ArrayList([]const u8) = .empty;
+    defer yield_sources.deinit(allocator);
+    for (yield_items) |item| {
+        const source = switch (item.expr) {
+            .Ident => |id| id.orig,
+            .Member => |m| m.field,
+            else => return error.Unsupported,
         };
-
-        // Apply ORDER BY if present
-        if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
-        }
-
-        // Apply OFFSET if present
-        if (q.offset) |skip_count| {
-            if (skip_count < result.rows.len) {
-                // Create new rows array without the skipped rows
-                const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
-                for (result.rows[skip_count..], 0..) |row, i| {
-                    new_rows[i] = row;
-                }
-                // Free old rows array but not the row data
-                allocator.free(result.rows);
-                result.rows = new_rows;
-            } else {
-                // Skip all rows
-                allocator.free(result.rows);
-                result.rows = try allocator.alloc([]Value, 0);
-            }
-        }
-
-        // Apply LIMIT if present (supports both literal and $param)
-        if (resolveLimitParam(q.limit, q.limit_param, context.query_param_names, context.query_param_values)) |limit_count| {
-            if (limit_count < result.rows.len) {
-                // Truncate to limit
-                const new_rows = try allocator.alloc([]Value, limit_count);
-                for (result.rows[0..limit_count], 0..) |row, i| {
-                    new_rows[i] = row;
-                }
-                allocator.free(result.rows);
-                result.rows = new_rows;
-            }
-        }
-
-        return result;
+        try yield_sources.append(allocator, source);
+        try yield_names.append(allocator, item.alias orelse source);
     }
 
-    return call_result;
+    var calls: std.ArrayList(ExecutionResult) = .empty;
+    defer {
+        for (calls.items) |*r| r.deinit(allocator);
+        calls.deinit(allocator);
+    }
+    var joined_rows: std.ArrayList([]Value) = .empty;
+    defer {
+        for (joined_rows.items) |r| allocator.free(r);
+        joined_rows.deinit(allocator);
+    }
+    const match_columns = bindings.rows.columns;
+    for (bindings.rows.rows) |row| {
+        const width = @min(match_columns.len, row.len);
+        var row_bindings = std.StringHashMap(Binding).init(allocator);
+        defer row_bindings.deinit();
+        for (match_columns[0..width], row[0..width]) |name, value| switch (value) {
+            .Node => |node| try row_bindings.put(name, .{ .node_id = node.id }),
+            .Edge => |edge| try row_bindings.put(name, .{ .edge_id = edge.id }),
+            else => {},
+        };
+        var row_context = context;
+        row_context.bindings = &row_bindings;
+        {
+            var call_result = try executeCallStatement(allocator, call_stmt, row_context);
+            calls.append(allocator, call_result) catch |err| {
+                call_result.deinit(allocator);
+                return err;
+            };
+        }
+        const call_result = calls.items[calls.items.len - 1];
+        if (yield_items.len == 0 and yield_names.items.len == 0) {
+            for (call_result.columns) |column| {
+                try yield_sources.append(allocator, column);
+                try yield_names.append(allocator, column);
+            }
+        }
+        for (call_result.rows) |call_row| {
+            const joined = try allocator.alloc(Value, match_columns.len + yield_names.items.len);
+            joined_rows.append(allocator, joined) catch |err| {
+                allocator.free(joined);
+                return err;
+            };
+            for (joined[0..match_columns.len], 0..) |*cell, i| cell.* = if (i < row.len) row[i] else .{ .Null = {} };
+            for (joined[match_columns.len..], yield_sources.items) |*cell, source| {
+                cell.* = .{ .Null = {} };
+                for (call_result.columns, 0..) |column, ci| {
+                    if (!std.mem.eql(u8, column, source)) continue;
+                    if (ci < call_row.len) cell.* = call_row[ci];
+                    break;
+                }
+            }
+        }
+    }
+
+    const names = try allocator.alloc([]const u8, match_columns.len + yield_names.items.len);
+    defer allocator.free(names);
+    @memcpy(names[0..match_columns.len], match_columns);
+    @memcpy(names[match_columns.len..], yield_names.items);
+    var joined = ExecutionResult{ .columns = names, .rows = joined_rows.items, .flags = .empty };
+    // The MATCH rows' nodes and relationships, which the result's rows point at.
+    joined.owned_graph_entities = bindings.rows.owned_graph_entities;
+    bindings.rows.owned_graph_entities = null;
+    defer if (joined.owned_graph_entities) |entities| entities.deinit();
+    return projectReturnOverRows(allocator, q, &joined, context.query_param_names, context.query_param_values);
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-011; FEATURE="MultiGraphIsolation"; ASPECT=MatchQueryWithParams; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -5258,7 +5060,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     };
 
     if (q.order_by) |order| {
-        try sortRows(allocator, &result, order);
+        sortRows(allocator, &result, order) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
     }
 
     if (q.ret.distinct) {
@@ -5728,7 +5534,12 @@ const MultiChainJoin = struct {
 
     /// One step of the join: a chain's first node pattern (the chain after
     /// it walks from there), or a hop from the node the chain reached.
-    const Step = union(enum) { start: ast.NodePattern, hop: ast.Hop };
+    /// `edge_end`: a chain's first node pattern when the hop after it names
+    /// a relationship the incoming row binds (SONNY-3376): its candidates
+    /// are that relationship's endpoints, not every node.
+    const Step = union(enum) { start: ast.NodePattern, hop: ast.Hop, edge_end: EdgeEnd };
+
+    const EdgeEnd = struct { node: ast.NodePattern, rel: []const u8, dir: ast.RelDir };
 
     /// What a step binds, one way (a node the chain reaches; the
     /// relationship, or the relationship list, it walked).
@@ -5790,6 +5601,27 @@ const MultiChainJoin = struct {
                 try out.ensureUnusedCapacity(self.allocator, start_cands.*.?.items.len);
                 for (start_cands.*.?.items) |node| out.appendAssumeCapacity(.{ .node = node });
             },
+            .edge_end => |end| {
+                if (boundAsRelationship(B, b, end.node.name)) return;
+                const edge = b.edge_vars.get(end.rel) orelse return;
+                // The node the hop starts from: the edge's source for `-[]->`,
+                // its target for `<-[]-`, either for an undirected hop.
+                var ids: [2]u64 = undefined;
+                var n: usize = 0;
+                if (end.dir == .right or end.dir == .undirected) {
+                    ids[n] = edge.from_id;
+                    n += 1;
+                }
+                if ((end.dir == .left or end.dir == .undirected) and !(n == 1 and ids[0] == edge.to_id)) {
+                    ids[n] = edge.to_id;
+                    n += 1;
+                }
+                for (ids[0..n]) |id| {
+                    const node = try self.nodes.get(id) orelse continue;
+                    if (end.node.name) |v| if (b.vars.get(v)) |bound| if (bound.id != node.id) continue;
+                    if (self.nodeFits(scratch, node, end.node)) try out.append(self.allocator, .{ .node = node });
+                }
+            },
             .hop => |hop| {
                 const left = b.vars.get(tracker) orelse return;
                 if (!matchesLabels(left, hop.left.labels)) return;
@@ -5847,6 +5679,7 @@ const MultiChainJoin = struct {
         level.undo_len = 0;
         switch (step) {
             .start => |start| if (start.name) |v| try bindNode(B, b, level, v, choice.node),
+            .edge_end => |end| if (end.node.name) |v| try bindNode(B, b, level, v, choice.node),
             .hop => |hop| {
                 if (hop.right.name) |v| try bindNode(B, b, level, v, choice.node);
                 if (hop.rel.name) |rn| {
@@ -5927,7 +5760,7 @@ const MultiChainJoin = struct {
         for (steps, 0..) |step, i| {
             const start = switch (step) {
                 .start => |p| p,
-                .hop => continue,
+                .hop, .edge_end => continue,
             };
             if (start.name) |name| if (bindsBefore(B, &seeds[0], steps[0..i], name)) continue;
             var cands: std.ArrayList(*graph_store.Node) = .empty;
@@ -5989,6 +5822,7 @@ const MultiChainJoin = struct {
         if (seed.vars.contains(name) or seed.edge_vars.contains(name) or seed.rel_list_vars.contains(name)) return true;
         for (steps) |step| switch (step) {
             .start => |p| if (p.name) |n| if (std.mem.eql(u8, n, name)) return true,
+            .edge_end => |end| if (end.node.name) |n| if (std.mem.eql(u8, n, name)) return true,
             .hop => |hop| {
                 for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
                     if (maybe) |n| if (std.mem.eql(u8, n, name)) return true;
@@ -5998,6 +5832,182 @@ const MultiChainJoin = struct {
         return false;
     }
 };
+
+// CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=BoundElement; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-3046, SONNY-3376, SONNY-3388: the element `name` is already bound
+/// to by the row this pattern reads from, or null. A chained part (after
+/// WITH or NEXT) receives the incoming row among its parameters; a node, a
+/// relationship or a path value there is an element variable bound before
+/// the pattern (ISO/IEC 39075: the pattern is joined to it), anything else
+/// (a request parameter, a WITH's value) is not.
+fn boundElement(name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) ?Value {
+    const n = name orelse return null;
+    for (param_names, param_values) |pn, pv| {
+        if (!std.mem.eql(u8, pn, n)) continue;
+        switch (pv) {
+            .Node, .Edge, .Path => return pv,
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Whether `name` is bound to a relationship list (a variable-length
+/// relationship variable the incoming row carries).
+fn boundRelationshipList(name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) bool {
+    const n = name orelse return false;
+    for (param_names, param_values) |pn, pv| {
+        if (!std.mem.eql(u8, pn, n)) continue;
+        if (pv == .List and pv.List.len > 0 and pv.List[0] == .Edge) return true;
+    }
+    return false;
+}
+
+/// SONNY-3046, SONNY-3376, SONNY-3388: whether `q`'s pattern names a node,
+/// relationship or path variable the incoming row binds. Such a pattern is
+/// joined to the bound elements (`executeMultiChainRelationshipMatch`, seeded
+/// with them); the other executors bind every name the pattern has again, so
+/// `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counted every node once
+/// per q.
+///
+/// A shortest-path chain keeps its own executor (`handleShortestPathAssignment`
+/// reads its bound endpoints from the row).
+pub fn patternJoinsBoundElement(q: ast.Query, param_names: []const []const u8, param_values: []const Value) bool {
+    if (param_names.len == 0) return false;
+    for (q.match.chains) |chain| if (chain.is_shortest) return false;
+    for (q.match.chains, 0..) |chain, ci| {
+        if (boundElement(chainPathName(q, chain, ci), param_names, param_values) != null) return true;
+        if (chain.head) |head| if (boundElement(head.name, param_names, param_values) != null) return true;
+        for (chain.hops) |hop| {
+            if (boundElement(hop.left.name, param_names, param_values) != null) return true;
+            if (boundElement(hop.rel.name, param_names, param_values) != null) return true;
+            if (boundElement(hop.right.name, param_names, param_values) != null) return true;
+            if (boundRelationshipList(hop.rel.name, param_names, param_values)) return true;
+        }
+    }
+    return false;
+}
+
+/// SONNY-3046: a pattern that names a bound variable where the join cannot
+/// constrain it is refused (0A000) rather than answered by binding the name
+/// again: a variable-length relationship variable, a path variable named as
+/// a node or a relationship (or the reverse), and any OPTIONAL MATCH in the
+/// part (the join is an inner join; it would drop the rows an OPTIONAL MATCH
+/// keeps).
+fn refuseUnjoinableBoundElement(q: ast.Query, param_names: []const []const u8, param_values: []const Value) error{UnsupportedBoundVariableJoin}!void {
+    for (q.match.chains) |chain| if (chain.is_optional) return error.UnsupportedBoundVariableJoin;
+    for (q.match.chains, 0..) |chain, ci| {
+        var names_bound = false;
+        if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
+            if (v != .Path) return error.UnsupportedBoundVariableJoin;
+            names_bound = true;
+        }
+        if (chain.head) |head| if (boundElement(head.name, param_names, param_values)) |v| {
+            if (v == .Path) return error.UnsupportedBoundVariableJoin;
+            names_bound = true;
+        };
+        for (chain.hops) |hop| {
+            for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |name| {
+                if (boundElement(name, param_names, param_values)) |v| {
+                    if (v == .Path) return error.UnsupportedBoundVariableJoin;
+                    names_bound = true;
+                }
+            }
+            const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
+            if (quantified and (boundRelationshipList(hop.rel.name, param_names, param_values) or boundElement(hop.rel.name, param_names, param_values) != null)) return error.UnsupportedBoundVariableJoin;
+        }
+        if (names_bound and chain.is_shortest) return error.UnsupportedBoundVariableJoin;
+    }
+}
+
+/// Whether two paths are the same nodes and relationships in the same order.
+fn samePath(got: Value, want: Value) bool {
+    if (got != .Path or want != .Path) return false;
+    if (got.Path.nodes.len != want.Path.nodes.len or got.Path.edges.len != want.Path.edges.len) return false;
+    for (got.Path.nodes, want.Path.nodes) |a, b| if (a.id != b.id) return false;
+    for (got.Path.edges, want.Path.edges) |a, b| if (a.id != b.id) return false;
+    return true;
+}
+
+/// SONNY-3046: a path variable the incoming row binds, and the chain the
+/// pattern binds it to again: a binding whose path differs is no match.
+const BoundPath = struct { chain: ast.Chain, want: Value };
+
+/// SONNY-3046, SONNY-3376, SONNY-3388: the join steps of `chain` when the
+/// incoming row binds some of its variables (`bound` holds every name bound
+/// so far, and gets the names these steps bind). The chain is walked from a
+/// bound node: from its first node when that is bound; otherwise, for a
+/// chain without a variable-length hop, from the first bound node along it,
+/// forward to the end and then back to its start, each hop reversed. With
+/// no bound node, a first hop whose relationship is bound starts at that
+/// relationship's endpoint (`edge_end`). Otherwise the chain starts from
+/// every node its first pattern matches, and a bound node or relationship
+/// further on filters the walk (correct, but a scan per incoming row).
+fn appendBoundChainSteps(
+    allocator: std.mem.Allocator,
+    steps: *std.ArrayList(MultiChainJoin.Step),
+    chain: ast.Chain,
+    bound: *std.StringHashMap(void),
+    edge_bound: *const std.StringHashMap(*graph_store.Edge),
+) !void {
+    if (chain.hops.len == 0) {
+        const head = chain.head orelse return;
+        try steps.append(allocator, .{ .start = head });
+        if (head.name) |n| try bound.put(n, {});
+        return;
+    }
+    const hops = chain.hops;
+    var quantified = false;
+    for (hops) |hop| {
+        if (hop.rel.min_len != null or hop.rel.max_len != null) quantified = true;
+    }
+    // The first bound node along the chain: node i is hops[0].left for
+    // i == 0, hops[i - 1].right otherwise.
+    var anchor: ?usize = null;
+    for (0..hops.len + 1) |i| {
+        const node = if (i == 0) hops[0].left else hops[i - 1].right;
+        if (node.name) |n| if (bound.contains(n)) {
+            anchor = i;
+            break;
+        };
+    }
+    const from = if (quantified) 0 else anchor orelse 0;
+    if (from == 0) {
+        const first = hops[0];
+        const first_quantified = first.rel.min_len != null or first.rel.max_len != null;
+        const via_edge = anchor == null and !first_quantified and
+            (if (first.rel.name) |rn| edge_bound.contains(rn) else false);
+        if (via_edge) {
+            try steps.append(allocator, .{ .edge_end = .{ .node = first.left, .rel = first.rel.name.?, .dir = first.rel.dir } });
+        } else {
+            try steps.append(allocator, .{ .start = first.left });
+        }
+        for (hops) |hop| try steps.append(allocator, .{ .hop = hop });
+    } else {
+        const anchor_node = hops[from - 1].right;
+        try steps.append(allocator, .{ .start = anchor_node });
+        for (hops[from..]) |hop| try steps.append(allocator, .{ .hop = hop });
+        try steps.append(allocator, .{ .start = anchor_node });
+        var i = from;
+        while (i > 0) {
+            i -= 1;
+            var reversed = hops[i];
+            reversed.left = hops[i].right;
+            reversed.right = hops[i].left;
+            reversed.rel.dir = switch (hops[i].rel.dir) {
+                .right => .left,
+                .left => .right,
+                .undirected => .undirected,
+            };
+            try steps.append(allocator, .{ .hop = reversed });
+        }
+    }
+    for (hops) |hop| {
+        for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |name| {
+            if (name) |n| try bound.put(n, {});
+        }
+    }
+}
 
 // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Handle multiple chains with relationships that share variables
@@ -6144,11 +6154,63 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=SeededJoin; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3046, SONNY-3376, SONNY-3388: a node or relationship variable the
+    // incoming row binds (a chained part's WITH or NEXT columns) is the one
+    // binding the join starts from, and every chain, the first too, is joined
+    // to it: a pattern that names the variable constrains it (labels,
+    // properties, type and direction filter it) and never binds it again. A
+    // bound path variable must be the path the chain binds (`bound_paths`).
+    // The element is looked up again by id, so it is the store's copy, and
+    // one that no longer exists matches nothing.
+    const seeded = patternJoinsBoundElement(q, param_names, param_values);
+    var bound_paths: std.ArrayList(BoundPath) = .empty;
+    defer bound_paths.deinit(allocator);
+    if (seeded) {
+        try refuseUnjoinableBoundElement(q, param_names, param_values);
+        var seed = MatchBinding.init(allocator);
+        var resolvable = true;
+        for (q.match.chains, 0..) |chain, ci| {
+            if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
+                for (path_specs.items) |spec| if (std.mem.eql(u8, spec.name, chainPathName(q, chain, ci).?)) {
+                    try bound_paths.append(allocator, .{ .chain = spec.chain, .want = v });
+                };
+            }
+            var names: std.ArrayList(?[]const u8) = .empty;
+            defer names.deinit(allocator);
+            if (chain.head) |head| try names.append(allocator, head.name);
+            for (chain.hops) |hop| try names.appendSlice(allocator, &.{ hop.left.name, hop.rel.name, hop.right.name });
+            for (names.items) |maybe| {
+                const name = maybe orelse continue;
+                switch (boundElement(name, param_names, param_values) orelse continue) {
+                    .Node => |n| {
+                        const node = try node_cache.get(n.id) orelse {
+                            resolvable = false;
+                            continue;
+                        };
+                        try seed.vars.put(name, node);
+                    },
+                    .Edge => |e| {
+                        const edge = store.getEdgePtrHydrated(e.id) orelse {
+                            resolvable = false;
+                            continue;
+                        };
+                        try seed.edge_vars.put(name, edge);
+                    },
+                    else => {},
+                }
+            }
+        }
+        if (resolvable) try bindings.append(allocator, seed) else seed.deinit();
+    }
+
     const first_chain = q.match.chains[0];
     // Synthetic key for tracking the rightmost node across hops (supports anonymous intermediates)
     const chain_last_right_key = "__chain_last_right__";
     const needs_hop_tracking = first_chain.hops.len > 1;
-    if (first_chain.hops.len > 0) {
+    if (seeded) {
+        // The seed above; every chain is a join step below.
+    } else if (first_chain.hops.len > 0) {
         // First chain has relationships
         const hop = first_chain.hops[0];
         // SONNY-3318 (round 4b-1b review I-D): `(n)-[:R*]->(n)` names one node at
@@ -6528,13 +6590,31 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     };
     var steps: std.ArrayList(MultiChainJoin.Step) = .empty;
     defer steps.deinit(allocator);
-    if (first_chain.hops.len > 1) {
-        for (first_chain.hops[1..]) |extra_hop| try steps.append(allocator, .{ .hop = extra_hop });
-    }
-    for (q.match.chains[1..]) |chain| {
-        const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse continue;
-        try steps.append(allocator, .{ .start = start });
-        for (chain.hops) |hop| try steps.append(allocator, .{ .hop = hop });
+    if (seeded) {
+        // SONNY-3046: every chain from a bound node where it has one.
+        var bound_names = std.StringHashMap(void).init(allocator);
+        defer bound_names.deinit();
+        var seed_edges = std.StringHashMap(*graph_store.Edge).init(allocator);
+        defer seed_edges.deinit();
+        if (bindings.items.len > 0) {
+            var it = bindings.items[0].vars.keyIterator();
+            while (it.next()) |k| try bound_names.put(k.*, {});
+            var eit = bindings.items[0].edge_vars.iterator();
+            while (eit.next()) |e| {
+                try bound_names.put(e.key_ptr.*, {});
+                try seed_edges.put(e.key_ptr.*, e.value_ptr.*);
+            }
+        }
+        for (q.match.chains) |chain| try appendBoundChainSteps(allocator, &steps, chain, &bound_names, &seed_edges);
+    } else {
+        if (first_chain.hops.len > 1) {
+            for (first_chain.hops[1..]) |extra_hop| try steps.append(allocator, .{ .hop = extra_hop });
+        }
+        for (q.match.chains[1..]) |chain| {
+            const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse continue;
+            try steps.append(allocator, .{ .start = start });
+            for (chain.hops) |hop| try steps.append(allocator, .{ .hop = hop });
+        }
     }
 
     // #560: env lists allocated once, reused per binding (the WHERE below and
@@ -6602,6 +6682,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             param_names: []const []const u8,
             param_values: []const Value,
             cap: ?usize,
+            /// SONNY-3046: path variables the incoming row binds; a binding
+            /// whose path is another is no match.
+            bound_paths: []const BoundPath,
             /// SONNY-3368 (round 4b-1b review I-B): what evaluating one
             /// binding's WHERE and FILTER allocates, reset for the next. It
             /// was allocated from the statement's allocator and kept to the
@@ -6613,6 +6696,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
             fn accept(self: *@This(), binding: *const MatchBinding) !bool {
                 if (self.cap) |c| if (self.out.items.len >= c) return false;
+                if (self.bound_paths.len > 0) {
+                    _ = self.scratch.reset(.retain_capacity);
+                    for (self.bound_paths) |bp| {
+                        if (!samePath(try bindPath(self.scratch.allocator(), self.store, bp.chain, binding), bp.want)) return true;
+                    }
+                }
                 if (self.where != null or self.filter != null) {
                     _ = self.scratch.reset(.retain_capacity);
                     const sa = self.scratch.allocator();
@@ -6663,6 +6752,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             .param_names = param_names,
             .param_values = param_values,
             .cap = join_cap,
+            .bound_paths = bound_paths.items,
             .scratch = std.heap.ArenaAllocator.init(allocator),
         };
         defer sink.scratch.deinit();
@@ -6832,7 +6922,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
 
     if (q.order_by) |order| {
-        try sortRows(allocator, &result, order);
+        sortRows(allocator, &result, order) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
     }
 
     if (q.ret.distinct) {
@@ -8382,7 +8476,11 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // D04 Fix: Apply ORDER BY for optional match results - was missing, causing unsorted output
     // D05 Fix: Use sortRowsEx with RETURN items to enable expression matching for aliased columns
     if (q.order_by) |order| {
-        try sortRowsEx(allocator, &final_result, order, q.ret.items);
+        sortRowsEx(allocator, &final_result, order, q.ret.items) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            final_result.deinit(allocator);
+            return err;
+        };
     }
 
     // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
@@ -8787,7 +8885,11 @@ fn executeVariableLengthPathTraversal(
         } else {
             row = try allocator.alloc(Value, items.len);
             for (items, 0..) |item, i| {
-                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-6351 item 1: an item that fails frees the row.
+                row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                    allocator.free(row);
+                    return err;
+                };
             }
         }
         // SONNY-2394, SONNY-3148: release this path's heap-bound env values
@@ -9311,7 +9413,11 @@ fn executeSingleHopEdgeTraversal(
                 // Evaluate return items directly
                 row = try allocator.alloc(Value, items.len);
                 for (items, 0..) |item, i| {
-                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    // SONNY-6351 item 1: an item that fails frees the row.
+                    row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                        allocator.free(row);
+                        return err;
+                    };
                 }
             }
             // SONNY-3148: the path's arrays were freed only when the WHERE
@@ -9326,10 +9432,20 @@ fn executeSingleHopEdgeTraversal(
     }
 }
 
-/// SONNY-3318: whether a multi-chain relationship match aggregates, in its
-/// RETURN or in the items of a WITH after its MATCH, where the shared
-/// projection can compute it.
-fn multiChainAggregates(q: ast.Query) bool {
+// CANARY: REQ=REQ-SONNY-2734-LEGACY-AGGREGATES; FEATURE="LegacyReturnProjection"; ASPECT=AggregatesThroughSharedProjection; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-3318, SONNY-2734: whether a read aggregates, in its RETURN or in the
+/// items of a WITH after its MATCH, where the shared projection can compute
+/// it. Every such read goes through the shared projection over the rows the
+/// pattern binds (`executeReturnOverBindings`), whatever the pattern's shape,
+/// after the aggregate fast paths decline. The legacy executor's own
+/// aggregate loops, one per pattern shape, read only a property or member
+/// argument (`sum(n.i * $f)` was 0, `count(CASE ...)` counted every row,
+/// `max(n.d)` over dates and `avg(n.i + 1)` were NULL), ignored an inline
+/// property map on a relationship pattern's node (SONNY-2688), evaluated a
+/// disconnected pattern's aggregates once per binding, and computed an item
+/// with an aggregate inside it (SONNY-2696) as NULL or per row; the
+/// multi-chain executor did not aggregate at all (SONNY-3318).
+fn projectionAggregates(q: ast.Query) bool {
     if (q.ret.items.len == 0 or !sharedProjectionServes(q)) return false;
     if (q.with_clause) |wc| {
         if (q.is_initial_with) return false;
@@ -9351,13 +9467,13 @@ fn multiChainWithStage(q: ast.Query) bool {
     return q.with_clause != null and !q.is_initial_with;
 }
 
-/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
-/// after a WITH belongs to the WITH, which groups in the shared projection
-/// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
+/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (one written
+/// between a WITH and the RETURN belongs to the WITH, which groups in the
+/// shared projection already; SONNY-2698: one written after the RETURN is
+/// the RETURN's, WITH or not), or a WHERE after RETURN (the parser's HAVING
+/// without a GROUP BY).
 fn returnGroupsOrFilters(q: ast.Query) bool {
-    const return_group_by = q.group_by != null and q.with_clause == null;
-    const return_where = q.having != null and q.group_by == null;
-    return return_group_by or return_where;
+    return q.returnStageGroupBy() != null or q.returnStageHaving() != null;
 }
 
 /// SONNY-2674: whether the RETURN goes through the shared projection
@@ -9409,7 +9525,15 @@ fn sharedProjectionServes(q: ast.Query) bool {
 /// shapes ignored the GROUP BY, HAVING or WHERE after RETURN, or returned
 /// rows unrelated to the matched ones.
 pub fn validateGroupedReturnShape(q: ast.Query) error{UnsupportedGroupedReturn}!void {
-    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q)) return error.UnsupportedGroupedReturn;
+    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q) and !callSubqueryProjects(q)) return error.UnsupportedGroupedReturn;
+}
+
+/// SONNY-6383 item 2: a statement-level `CALL { } [WITH ...] RETURN ...`
+/// runs its RETURN through the shared projection over the body's rows (the
+/// `.call_subquery` executor, `projectReturnOverRows`), its GROUP BY and
+/// HAVING included, so a grouped RETURN after it is not refused.
+fn callSubqueryProjects(q: ast.Query) bool {
+    return q.unwind_clause == null and write_shape.queryExecutor(q) == .call_subquery;
 }
 
 fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
@@ -9441,6 +9565,28 @@ fn executeReturnOverBindings(
     var bindings = try readPatternBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     defer bindings.deinit(allocator);
     return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
+}
+
+/// SONNY-3167, SONNY-3184: a part whose WITH runs in the shared WITH stage
+/// (`readWithStageRows`). A chained part (its RETURN is the WITH's items, the
+/// columns the next part reads) returns the stage's rows as they are; any
+/// other RETURN is projected over them (`executeReturnOverBindings`).
+fn executeWithStageOrReturn(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!ExecutionResult {
+    if (q.with_clause) |wc| {
+        if (q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len) {
+            const bindings = try readPatternBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            allocator.free(bindings.items);
+            return bindings.rows;
+        }
+    }
+    return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 }
 
 /// The rows `readPatternBindings` read: one per match. `items` is the RETURN
@@ -9621,7 +9767,7 @@ fn readWithStageRows(
         stage.offset_param = null;
     }
     if (with_clause.distinct) stage.order_by = null;
-    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.group_by, execution.withStageHaving(q), param_names, param_values);
+    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
     errdefer rows.deinit(allocator);
     // The rows point at the nodes and edges the pattern's rows hold.
     rows.owned_graph_entities = pattern.rows.owned_graph_entities;
@@ -10051,11 +10197,6 @@ fn boxEdge(allocator: std.mem.Allocator, rows: *ExecutionResult, edge: *const gr
 /// over the matched rows: it aggregates, or it is DISTINCT. Such a RETURN is
 /// one row per group, not one per match, so it cannot also be the rows the
 /// write binds.
-pub fn returnProjectsMatchedRows(q: ast.Query) bool {
-    if (q.ret.items.len == 0) return false;
-    return q.ret.distinct or returnItemsHaveAggregation(q.ret.items);
-}
-
 /// SONNY-2674, SONNY-2694: `q`'s RETURN over `rows` (one row per match), by the
 /// shared projection: the GROUP BY and HAVING of the RETURN, the aggregates,
 /// DISTINCT and ORDER BY. The result owns its values, as the planned read's
@@ -10068,12 +10209,12 @@ pub fn projectReturnOverRows(
     param_names: []const []const u8,
     param_values: []const Value,
 ) anyerror!ExecutionResult {
-    const return_group_by = if (q.with_clause == null) q.group_by else null;
-    // SONNY-3142: after a WITH, a HAVING with a GROUP BY is the WITH's
-    // (`readWithStageRows` applied it); a HAVING without one is a WHERE after
-    // RETURN (SONNY-2667), as on the planned read.
-    const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
-    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, return_group_by, return_having, param_names, param_values);
+    // SONNY-3142: after a WITH, a GROUP BY and HAVING written before the
+    // RETURN are the WITH's (`readWithStageRows` applied them); a HAVING
+    // without one is a WHERE after RETURN (SONNY-2667), and SONNY-2698: a
+    // GROUP BY and HAVING written after the RETURN are the RETURN's, as on
+    // the planned read.
+    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, q.returnStageGroupBy(), q.returnStageHaving(), param_names, param_values);
     errdefer projected.deinit(allocator);
     try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
     projected.owned_graph_entities = rows.owned_graph_entities;
@@ -10392,6 +10533,51 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
         return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
     }
+    // CANARY: REQ=REQ-SONNY-3184-OPTIONAL-MATCH; FEATURE="OptionalMatchLeftOuterJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3184, SONNY-6337: a part with an OPTIONAL MATCH clause is the
+    // left outer join of its clauses (`optional_match.readOptionalRows`),
+    // each clause joined to the record before it (a variable a WITH bound
+    // too), its own WHERE restricting its own match only. A WITH, an
+    // aggregate, grouping, DISTINCT and ORDER BY go through the shared
+    // projection over those records. A SET or REMOVE after it reads its rows
+    // here too (`executeSetRemoveStep` above, without them).
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0 and optional_match.hasOptionalClause(q)) {
+        if (q.with_clause != null and !q.is_initial_with) {
+            return executeWithStageOrReturn(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+        var rows = try optional_match.readOptionalRows(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        defer rows.deinit(allocator);
+        return projectReturnOverRows(allocator, q, &rows, param_names, param_values);
+    }
+    // CANARY: REQ=REQ-SONNY-3167-WITH-DISTINCT; FEATURE="LegacyWithDistinct"; ASPECT=SharedWithStage; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3167, SONNY-6296 item 1: a WITH DISTINCT after the MATCH runs
+    // in the shared WITH stage (`readWithStageRows`: the projection,
+    // DISTINCT, ORDER BY, SKIP and LIMIT), as the planned read runs it. The
+    // pattern executors below projected the WITH's items and dropped the
+    // DISTINCT: `MATCH (q:Q),(z:Z) WITH DISTINCT q MATCH (q) RETURN
+    // count(*)` counted 32, not 4, on the in-memory, tenant and RLS sessions.
+    if (q.with_clause) |wc| {
+        if (wc.distinct and !q.is_initial_with and q.set_clauses.len == 0 and q.remove_clauses.len == 0 and sharedProjectionServes(q)) {
+            return executeWithStageOrReturn(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+    }
+    // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3046, SONNY-3376, SONNY-3388: a pattern that names a node,
+    // relationship or path variable the incoming row binds (a chained part
+    // after WITH or NEXT) is joined to it, by the multi-chain executor seeded
+    // with the bound elements, before any fast path or one-pattern traversal
+    // below binds the name again (they read only a hop's start node from the
+    // row, if that). An aggregate, a grouping RETURN or a WITH goes through
+    // the shared projection over the rows that join binds, as for any
+    // multi-pattern read. A SET or REMOVE reads its rows through here too
+    // (`executeSetRemoveStep` above).
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0 and patternJoinsBoundElement(q, param_names, param_values)) {
+        try refuseUnjoinableBoundElement(q, param_names, param_values);
+        if (projectionAggregates(q) or returnUsesSharedProjection(q) or multiChainWithStage(q)) {
+            return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+        return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
+    }
     // The graph and tenant every read and write below is scoped to, derived
     // once, here: the session's graph (else "default") and its tenant filter
     // (GAP-0279).
@@ -10517,18 +10703,33 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const all_simple_nodes = checkAllSimpleNodes(q.match.chains);
 
     // Dispatch to appropriate multi-chain handler using helper function
+    // SONNY-2734: an aggregating read goes through the shared projection
+    // (`projectionAggregates`), here for the multi-pattern shapes and below,
+    // after the single-pattern aggregate fast paths, for the rest.
+    const aggregates = projectionAggregates(q);
     switch (dispatchToMultiChainHandler(q, all_simple_nodes)) {
-        .multi_node_match => return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .multi_node_match => {
+            if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        },
         .multi_chain_relationship_match => {
             // SONNY-3318: this executor evaluates the RETURN (or a WITH's
             // items) once per binding and never aggregates, so `MATCH
             // (g)-[:R]->(x), (q:Q) RETURN count(q)` answered one row per
             // match. An aggregate goes through the shared projection over
             // the rows this executor binds.
-            if (multiChainAggregates(q) or multiChainWithStage(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            if (aggregates or multiChainWithStage(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
             return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
         },
-        .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .match_with_optional_patterns => {
+            // SONNY-2698: and a GROUP BY or HAVING (the WITH's or the
+            // RETURN's): this executor grouped the RETURN by the query's one
+            // GROUP BY, whichever stage it was written for, and evaluated
+            // HAVING over the output row alone.
+            const grouped = q.ret.items.len != 0 and sharedProjectionServes(q) and (q.group_by != null or q.having != null);
+            if (aggregates or grouped) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        },
         .continue_processing => {},
     }
 
@@ -10589,6 +10790,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (try topKOrderedFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
+    // SONNY-2734: every aggregate the fast paths above declined.
+    if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 
     const items = q.ret.items;
 
@@ -10603,665 +10806,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const has_aggregation = returnItemsHaveAggregation(items);
 
     if (has_aggregation) {
-        // Check if we have GROUP BY
-        if (q.group_by) |group_by| {
-            // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
-            // GROUP BY with relationship patterns - need to collect bindings first, then group them
-            if (has_relationship) {
-                // Single-hop GROUP BY with relationship pattern (existing code below)
-                // Collect all matching relationship bindings and group them
-                const BindingRow = struct {
-                    env_names: [][]const u8,
-                    env_values: []Value,
-                };
-
-                var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
-                // #552: Pre-size single-hop GROUP BY map
-                try binding_groups.ensureTotalCapacity(16);
-                // GAP-0220 FIX: Use try for proper error propagation
-                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                defer {
-                    var giter = binding_groups.iterator();
-                    while (giter.next()) |entry| {
-                        for (entry.value_ptr.items) |binding| {
-                            allocator.free(binding.env_names);
-                            allocator.free(binding.env_values);
-                        }
-                        entry.value_ptr.deinit(allocator);
-                    }
-                    binding_groups.deinit();
-                    for (group_keys_list.items) |key| {
-                        allocator.free(key);
-                    }
-                    group_keys_list.deinit(allocator);
-                }
-
-                // Iterate over nodes and edges to collect bindings
-                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
-                // — `store.nodes.iterator()` visits only the RESIDENT subset
-                // (silently drops evicted/cold rows on a bounded cache).
-                var left_iter = store.iterateNodesInGraph(filter_graph);
-                while (left_iter.next()) |left_node| {
-                    // GAP (write-path OOM): abort a write-carrying scan cleanly
-                    // once the working-set budget is exceeded (no-op otherwise).
-                    try write_budget.check();
-                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
-                    // Defensive re-check (iterator is already graph-scoped).
-                    if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
-                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
-                    if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
-
-                    // Filter left node by labels if specified
-                    if (match_labels.len > 0) {
-                        var has_all_labels = true;
-                        for (match_labels) |required_label| {
-                            var found = false;
-                            for (left_node.labels) |node_label| {
-                                if (std.mem.eql(u8, required_label, node_label)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                has_all_labels = false;
-                                break;
-                            }
-                        }
-                        if (!has_all_labels) continue;
-                    }
-
-                    // Check left node property constraints
-                    if (match_props) |props| {
-                        var passes_props = true;
-                        for (props) |prop| {
-                            if (left_node.properties.get(prop.key)) |node_prop_val| {
-                                const node_val = propertyValueToValue(node_prop_val);
-                                const prop_env = eval.Env{
-                                    .names = &.{},
-                                    .values = &.{},
-                                    .param_names = param_names,
-                                    .param_values = param_values,
-                                    .allocator = allocator,
-                                };
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                    passes_props = false;
-                                    break;
-                                };
-                                if (!valuesEqual(node_val, prop_val)) {
-                                    passes_props = false;
-                                    break;
-                                }
-                            } else {
-                                passes_props = false;
-                                break;
-                            }
-                        }
-                        if (!passes_props) continue;
-                    }
-
-                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=GroupByEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
-                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edge_ids_1 = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids_1 = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-
-                    // Process outgoing edges (use to_id as target)
-                    for (outgoing_edge_ids_1) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        // Filter by relationship type
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        // Get the target node (to_id for outgoing edges)
-                        const right_node_id = edge.to_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                        // SONNY-2679: the target's graph, tenant and RLS. This
-                        // grouping loop checked none of them, so a denied or
-                        // foreign node formed its own group.
-                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                        // Filter right node by labels
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // Filter right node by properties
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .param_names = param_names,
-                                        .param_values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Build environment with matched elements
-                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
-                        // Order must match column order: left, rel, right
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Edge = edge };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                        };
-
-                        // Evaluate WHERE clause
-                        if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                else => false,
-                            };
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate GROUP BY key(s) and serialize to string
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
-                        errdefer key_aw.deinit();
-                        const key_writer = &key_aw.writer;
-                        for (group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
-                        }
-                        var key_buf = key_aw.toArrayList();
-                        const group_key = try key_buf.toOwnedSlice(allocator);
-
-                        // Add binding to its group
-                        if (binding_groups.getPtr(group_key)) |group_list| {
-                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            allocator.free(group_key);
-                        } else {
-                            // GAP-0220 FIX: Use try for proper error propagation
-                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            try binding_groups.put(group_key, new_list);
-                            try group_keys_list.append(allocator, group_key);
-                        }
-                    }
-
-                    // Process incoming edges (use from_id as target) - for undirected patterns
-                    for (incoming_edge_ids_1) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        // Filter by relationship type
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        // Get the target node (from_id for incoming edges)
-                        const right_node_id = edge.from_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                        // SONNY-2679: the target's graph, tenant and RLS. This
-                        // grouping loop checked none of them, so a denied or
-                        // foreign node formed its own group.
-                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                        // Filter right node by labels
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // Filter right node by properties
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .param_names = param_names,
-                                        .param_values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Build environment with matched elements
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Edge = edge };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                        };
-
-                        // Evaluate WHERE clause
-                        if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                else => false,
-                            };
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate GROUP BY key(s) and serialize to string
-                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
-                        errdefer key_aw.deinit();
-                        const key_writer = &key_aw.writer;
-                        for (group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
-                        }
-                        var key_buf = key_aw.toArrayList();
-                        const group_key = try key_buf.toOwnedSlice(allocator);
-
-                        // Add binding to its group
-                        if (binding_groups.getPtr(group_key)) |group_list| {
-                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            allocator.free(group_key);
-                        } else {
-                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            try binding_groups.put(group_key, new_list);
-                            try group_keys_list.append(allocator, group_key);
-                        }
-                    }
-                }
-
-                // Generate rows for each group
-                // GAP-0220 FIX: Use try for proper error propagation
-                var rows = std.ArrayList([]Value).empty;
-                var group_iter = binding_groups.iterator();
-                while (group_iter.next()) |group_entry| {
-                    const group_bindings = group_entry.value_ptr.items;
-                    if (group_bindings.len == 0) continue;
-
-                    // Apply HAVING clause if present (simplified check)
-                    if (q.having) |_| {
-                        if (group_bindings.len < 2) continue;
-                    }
-
-                    var row = try allocator.alloc(Value, items.len);
-
-                    // Use first binding as base for non-aggregated expressions
-                    const first_binding = group_bindings[0];
-                    const base_env = Env{
-                        .names = first_binding.env_names,
-                        .values = first_binding.env_values,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    for (items, 0..) |item, i| {
-                        if (isAggregationExpr(item.expr)) {
-                            // Compute aggregation over all bindings in this group
-                            row[i] = try computeBindingGroupAggregation(allocator, item.expr, group_bindings);
-                        } else {
-                            // Non-aggregation: evaluate with first binding
-                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
-                        }
-                    }
-
-                    try rows.append(allocator, row);
-                }
-
-                // Apply ORDER BY if present
-                var result = ExecutionResult{
-                    .columns = columns,
-                    .rows = try rows.toOwnedSlice(allocator),
-                    .flags = blk: {
-                        const list = std.ArrayList([]const u8).empty;
-                        break :blk list;
-                    },
-                };
-
-                if (q.order_by) |order| {
-                    try sortRows(allocator, &result, order);
-                }
-
-                // Apply DISTINCT if requested
-                if (q.ret.distinct) {
-                    try applyDistinct(allocator, &result);
-                }
-
-                return result;
-            }
-
-            // Simple node pattern GROUP BY (original code path)
-            // GROUP BY with aggregations - group rows and compute aggregations per group
-            var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
-            // GAP-0220 FIX: Use try for proper error propagation
-            var group_keys = std.ArrayList([]const u8).empty;
-            defer {
-                var iter = groups.iterator();
-                while (iter.next()) |entry| {
-                    entry.value_ptr.deinit(allocator);
-                }
-                groups.deinit();
-                for (group_keys.items) |key| {
-                    allocator.free(key);
-                }
-                group_keys.deinit(allocator);
-            }
-
-            // PERF: PHASE5_ENV_ALLOC_GROUPBY - Pre-allocate environment arrays for GROUP BY loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=BENCHED; BENCH=docs/benchmarks/phase5_allocation.md; OWNER=performance; UPDATED=2026-01-25
-            // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
-            var env_names_buf: [][]const u8 = &.{};
-            var env_values_buf: []Value = &.{};
-            if (match_variable) |_| {
-                env_names_buf = try allocator.alloc([]const u8, 1);
-                env_values_buf = try allocator.alloc(Value, 1);
-            }
-            defer {
-                if (match_variable != null) {
-                    allocator.free(env_names_buf);
-                    allocator.free(env_values_buf);
-                }
-            }
-
-            // Group nodes by grouping key values (filter by labels first)
-            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
-            // resident-only iteration dropped evicted/cold rows silently.
-            var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node| {
-                // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-                // Filter by graph - only include nodes from the current graph
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-                if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-
-                // Filter by labels if specified
-                if (match_labels.len > 0) {
-                    var has_all_labels = true;
-                    for (match_labels) |required_label| {
-                        var found = false;
-                        for (node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
-                        }
-                    }
-                    if (!has_all_labels) continue;
-                }
-
-                // Create environment with matched node for WHERE clause evaluation (reuse arrays)
-                var env_names: [][]const u8 = &.{};
-                var env_values: []Value = &.{};
-
-                if (match_variable) |var_name| {
-                    env_names = env_names_buf;
-                    env_values = env_values_buf;
-                    env_names[0] = var_name;
-                    env_values[0] = Value{ .Node = node };
-                }
-
-                const env = Env{
-                    .names = env_names,
-                    .values = env_values,
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                // Evaluate WHERE clause if present
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-002; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-                // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
-                if (q.where_clause) |where_expr| {
-                    const passes_where = if (has_with) true else blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
-                        break :blk switch (where_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            else => false,
-                        };
-                    };
-
-                    if (!passes_where) {
-                        continue;
-                    }
-                }
-
-                // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                    const passes_filter = switch (filter_result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        else => false,
-                    };
-
-                    if (!passes_filter) {
-                        continue;
-                    }
-                }
-
-                // Evaluate grouping key for this node
-                // For now, assume single grouping key that's a property access
-                if (group_by.keys.len > 0) {
-                    // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) to its
-                    // underlying `n.source` expr — a bare alias evaluates to Null
-                    // per node and collapses everything into one null group.
-                    const key_expr = resolveGroupKeyExprAlias(group_by.keys[0], items);
-                    const key_val = try evaluateNodeExpression(allocator, key_expr, node);
-
-                    // Format the key as a string for grouping
-                    var buf: [32]u8 = undefined;
-                    const group_key = if (key_val == .Str)
-                        key_val.Str
-                    else if (key_val == .Int)
-                        try std.fmt.bufPrint(&buf, "{d}", .{key_val.Int})
-                    else if (key_val == .Null)
-                        "<null>"
-                    else
-                        "";
-
-                    // Check if this group already exists
-                    var found_existing = false;
-                    var iter = groups.iterator();
-                    while (iter.next()) |grp| {
-                        if (std.mem.eql(u8, grp.key_ptr.*, group_key)) {
-                            // Found existing group with this key
-                            try grp.value_ptr.append(allocator, node);
-                            found_existing = true;
-                            break;
-                        }
-                    }
-
-                    if (!found_existing) {
-                        // Create new group with allocated key
-                        const stored_key = try allocator.dupe(u8, group_key);
-                        try group_keys.append(allocator, stored_key);
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var new_group = std.ArrayList(*graph_store.Node).empty;
-                        try new_group.append(allocator, node);
-                        try groups.put(stored_key, new_group);
-                    }
-                }
-            }
-
-            // Generate rows for each group
-            // GAP-0220 FIX: Use try for proper error propagation
-            var rows = std.ArrayList([]Value).empty;
-            var group_iter = groups.iterator();
-            while (group_iter.next()) |group_entry| {
-                _ = group_entry.key_ptr.*;
-                const group_nodes = group_entry.value_ptr.*;
-
-                // Apply HAVING clause if present
-                if (q.having) |_| {
-                    // Evaluate HAVING condition for this group
-                    // For T15, HAVING c >= 2 means count must be >= 2
-                    const group_count = group_nodes.items.len;
-                    if (group_count < 2) {
-                        continue; // Skip groups that don't meet HAVING condition
-                    }
-                }
-
-                var row = try allocator.alloc(Value, items.len);
-
-                for (items, 0..) |item, i| {
-                    if (isAggregationExpr(item.expr)) {
-                        // Compute aggregation for this group
-                        row[i] = try evaluateGroupAggregation(allocator, item.expr, group_nodes.items);
-                    } else {
-                        // For non-aggregated columns, use value from first node in group
-                        if (group_nodes.items.len > 0) {
-                            row[i] = try evaluateNodeExpression(allocator, item.expr, group_nodes.items[0]);
-                        } else {
-                            row[i] = Value{ .Null = {} };
-                        }
-                    }
-                }
-
-                try rows.append(allocator, row);
-            }
-
-            // Apply ORDER BY if present
-            var result = ExecutionResult{
-                .columns = columns,
-                .rows = try rows.toOwnedSlice(allocator),
-                .flags = blk: {
-                    const list = std.ArrayList([]const u8).empty;
-                    break :blk list;
-                },
-            };
-
-            if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
-            }
-
-            // Apply DISTINCT deduplication if requested
-            if (q.ret.distinct) {
-                try applyDistinct(allocator, &result);
-            }
-
-            return result;
+        // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=NoLegacyGrouping; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-2698: every grouped aggregate the shared projection can serve
+        // went to it above (`returnUsesSharedProjection`,
+        // `projectionAggregates`). The grouping that sat here, one copy for a
+        // relationship pattern and one for a node pattern, replaced HAVING
+        // with "the group has at least two rows" and skipped the WITH stage
+        // and its WHERE; a shape that still reaches it (one the shared
+        // projection does not serve) is refused, not answered with it.
+        if (q.group_by != null) {
+            for (columns) |col| allocator.free(col);
+            allocator.free(columns);
+            return error.UnsupportedGroupedReturn;
         } else {
             // No GROUP BY - aggregate all matching rows into single result
             // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
@@ -12062,7 +11618,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
+                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -12159,7 +11715,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-002; FEATURE="OrderByPostWithAgg"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Apply ORDER BY AFTER WITH clause transformation to sort final projected results (aggregation path)
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             // Apply DISTINCT deduplication if requested
@@ -12175,6 +11735,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         // GAP-0220 FIX: Use try for proper error propagation
         var rows = std.ArrayList([]Value).empty;
+        // CANARY: REQ=REQ-SONNY-6351-LEGACY-RETURN-ERROR; FEATURE="LegacyReturnProjection"; ASPECT=ErrorFreesRows; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-6351 item 1: until `result` owns them, an error (a RETURN
+        // item that fails to evaluate, a budget refusal) frees the rows read
+        // so far and the column names. Both leaked.
+        var rows_owned = true;
+        errdefer if (rows_owned) {
+            for (rows.items) |r| allocator.free(r);
+            rows.deinit(allocator);
+            for (columns) |col| allocator.free(col);
+            allocator.free(columns);
+        };
 
         if (has_relationship) {
             // Single-hop relationship patterns (existing code continues below)
@@ -12701,7 +12272,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     row = try allocator.alloc(Value, items.len);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment
-                        row[i] = try eval.evalExpr(allocator, item.expr, extended_env);
+                        row[i] = eval.evalExpr(allocator, item.expr, extended_env) catch |err| {
+                            allocator.free(row);
+                            if (inline_let_bindings.len > 0) {
+                                allocator.free(extended_env.names);
+                                allocator.free(extended_env.values);
+                            }
+                            return err;
+                        };
                     }
                 }
 
@@ -12737,6 +12315,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 allocator.free(col);
             }
             allocator.free(columns);
+            columns = columns[0..0];
 
             // Extract variable names from the match pattern
             // For simple node matches, we have match_variable
@@ -12777,6 +12356,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 break :blk list;
             },
         };
+        rows_owned = false;
 
         // NOTE: ORDER BY is applied AFTER WITH clause transformation below
         // to sort the final projected results, not the raw MATCH results
@@ -12785,7 +12365,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
+            // SONNY-6351: a WITH that fails (an ORDER BY key, a HAVING)
+            // frees the rows it was given.
+            var with_result = execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values) catch |err| {
+                result.deinit(allocator);
+                return err;
+            };
+            // SONNY-6351 item 1: and an error after it frees its rows, until
+            // `result` holds them (nothing below can fail after that).
+            errdefer with_result.deinit(allocator);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {
@@ -12801,9 +12389,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Apply WHERE clause filtering AFTER WITH transformation (non-aggregation path)
             // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
             if (q.where_clause) |where_expr| {
-                // GAP-0220 FIX: Use try for proper error propagation
-                var filtered_rows = std.ArrayList([]Value).empty;
-                for (with_result.rows) |row| {
+                // SONNY-6351 item 1: every row is tested before any is
+                // freed, so a WHERE that fails leaves `with_result` whole
+                // for the errdefer above.
+                const keep = try allocator.alloc(bool, with_result.rows.len);
+                defer allocator.free(keep);
+                var kept: usize = 0;
+                for (with_result.rows, keep) |row, *k| {
                     const where_env = Env{
                         .names = with_result.columns,
                         .values = row,
@@ -12812,19 +12404,25 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .allocator = allocator,
                     };
                     const where_val = try eval.evalExpr(allocator, where_expr, where_env);
-                    const passes = switch (where_val) {
+                    k.* = switch (where_val) {
                         .Bool => |b| b,
                         .Null => false,
                         else => false,
                     };
-                    if (passes) {
-                        try filtered_rows.append(allocator, row);
+                    if (k.*) kept += 1;
+                }
+                const filtered_rows = try allocator.alloc([]Value, kept);
+                var at: usize = 0;
+                for (with_result.rows, keep) |row, k| {
+                    if (k) {
+                        filtered_rows[at] = row;
+                        at += 1;
                     } else {
                         allocator.free(row);
                     }
                 }
                 allocator.free(with_result.rows);
-                with_result.rows = try filtered_rows.toOwnedSlice(allocator);
+                with_result.rows = filtered_rows;
             }
 
             // CANARY: REQ=REQ-GQL-CHAIN-FIX-001; FEATURE="QueryChainingWithLimitFix"; ASPECT=NoReturnClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
@@ -12837,11 +12435,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY(query-chaining): Evaluate RETURN expressions using WITH result
                 // Now evaluate RETURN expressions using WITH result as environment (with disambiguation for duplicates)
                 const return_columns = try generateUniqueColumnNames(allocator, q.ret.items);
+                // SONNY-6351 item 1: a RETURN item that fails frees the
+                // columns and the rows projected so far.
+                errdefer {
+                    for (return_columns) |col| allocator.free(col);
+                    allocator.free(return_columns);
+                }
 
                 // Evaluate RETURN items using WITH result as environment
                 var return_rows = try allocator.alloc([]Value, with_result.rows.len);
+                var built: usize = 0;
+                errdefer {
+                    for (return_rows[0..built]) |r| allocator.free(r);
+                    allocator.free(return_rows);
+                }
                 for (with_result.rows, 0..) |with_row, row_idx| {
                     var return_row = try allocator.alloc(Value, q.ret.items.len);
+                    errdefer allocator.free(return_row);
 
                     // Create environment from WITH result columns and this row's values
                     const env = Env{
@@ -12857,6 +12467,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
 
                     return_rows[row_idx] = return_row;
+                    built += 1;
                 }
 
                 // Clean up WITH result
@@ -12877,7 +12488,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
         }
 
-        try applyFinalOrderAndDistinct(allocator, &result, q.order_by, q.ret.items, q.ret.distinct);
+        applyFinalOrderAndDistinct(allocator, &result, q.order_by, q.ret.items, q.ret.distinct) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
 
         return result;
     }

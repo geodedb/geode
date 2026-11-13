@@ -1623,6 +1623,18 @@ pub const Parser = struct {
                             where_clause = try self.parseOrExpr();
                         }
 
+                        // CANARY: REQ=REQ-SONNY-6383-CALL-WITH-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny6383_query_residuals.zig; OWNER=parser; UPDATED=2026-11-12
+                        // SONNY-6383 item 2: the RETURN is a full
+                        // <primitive result statement> (ISO/IEC 39075:2024
+                        // 14.10: a <return statement>, its GROUP BY after
+                        // the items (14.11), then the ORDER BY and page
+                        // statement); this parsed its items only, so a GROUP
+                        // BY, ORDER BY, SKIP / OFFSET or LIMIT after it was a
+                        // syntax error. The GROUP BY and HAVING belong to the
+                        // RETURN (`return_grouping`).
+                        var group_by: ?ast.GroupBy = null;
+                        var having: ?ast.Expr = null;
+                        var page: OrderAndPage = .{ .order_by = null, .limit = null, .offset = null, .limit_param = null, .offset_param = null };
                         if (self.cur.kind == .RETURN) {
                             self.advance();
                             const distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -1635,6 +1647,22 @@ pub const Parser = struct {
                                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
                                 .distinct = distinct,
                             };
+                            if (self.cur.kind == .GROUP) {
+                                self.advance();
+                                _ = try self.expect(.BY);
+                                var keys = std.ArrayList(ast.Expr).empty;
+                                while (true) {
+                                    try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                                    if (self.cur.kind != .comma) break;
+                                    self.advance();
+                                }
+                                group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                                if (self.cur.kind == .HAVING) {
+                                    self.advance();
+                                    having = try self.parseOrExpr();
+                                }
+                            }
+                            page = try self.parseOrderAndPage(ret_clause.items.len);
                         }
 
                         // Create a Query with the CALL result as input
@@ -1644,13 +1672,34 @@ pub const Parser = struct {
                             .where_clause = where_clause,
                             .with_clause = with_clause,
                             .ret = ret_clause,
-                            .order_by = null,
-                            .limit = null,
-                            .offset = null,
+                            .group_by = group_by,
+                            .having = having,
+                            .return_grouping = group_by != null,
+                            .order_by = page.order_by,
+                            .limit = page.limit,
+                            .offset = page.offset,
+                            .limit_param = page.limit_param,
+                            .offset_param = page.offset_param,
                             .initial_call_subquery = query_ptr,
                         };
 
                         break :blk_call .{ .Query = wrapper_query };
+                    }
+
+                    // CANARY: REQ=REQ-SONNY-3389-CALL-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+                    // SONNY-3389: a RETURN after the CALL { } is the rest of
+                    // the statement, computed over the body's rows: a query
+                    // whose `initial_call_subquery` is the body, with the
+                    // RETURN's DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT.
+                    // It was kept as `return_clause`, which nothing applied
+                    // (the body's rows were the answer), and an ORDER BY or
+                    // LIMIT after it was a syntax error.
+                    if (self.cur.kind == .RETURN) {
+                        const query_ptr = try self.arena.allocator().create(ast.Query);
+                        query_ptr.* = query;
+                        var tail = try self.parseQuery();
+                        tail.initial_call_subquery = query_ptr;
+                        break :blk_call .{ .Query = tail };
                     }
 
                     // Optional RETURN clause after subquery
@@ -1744,6 +1793,14 @@ pub const Parser = struct {
                         offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
                         offset_param = off.param;
                     }
+                    // SONNY-2779: `SKIP n LIMIT m`, as after any RETURN; a
+                    // LIMIT after the SKIP was a syntax error.
+                    if (self.cur.kind == .LIMIT and limit == null and limit_param == null) {
+                        self.advance();
+                        const lim = try self.parseLimitValue();
+                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+                        limit_param = lim.param;
+                    }
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,
@@ -1824,6 +1881,103 @@ pub const Parser = struct {
             },
             else => return error.UnexpectedToken,
         };
+    }
+
+    /// The ORDER BY, LIMIT and OFFSET / SKIP after a RETURN of `return_len`
+    /// items (a parsed query's, and SONNY-6351: a CREATE ... RETURN's).
+    const OrderAndPage = struct {
+        order_by: ?ast.OrderBy,
+        limit: ?usize,
+        offset: ?usize,
+        limit_param: ?[]const u8,
+        offset_param: ?[]const u8,
+    };
+
+    fn parseOrderAndPage(self: *Parser, return_len: usize) ParserError!OrderAndPage {
+        var ord: ?ast.OrderBy = null;
+        if (self.cur.kind == .ORDER) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
+            // first expression key - allow expressions now
+            const expr1 = try self.parseOrExpr();
+            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
+            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
+            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
+                // Message string matched in diagnostics mapping path (server expects substring)
+                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
+                return error.UnexpectedToken;
+            }
+            // Check if it's an ordinal
+            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_len)) {
+                self.has_ordinal_sort_key = true;
+            }
+            const mods1 = try self.parseOrderKeyModifiers();
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
+            while (self.cur.kind == .comma) {
+                self.advance();
+                const exprk = try self.parseOrExpr();
+                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
+                    self.last_error = "function calls in ORDER BY are disabled";
+                    return error.UnexpectedToken;
+                }
+                // Check if it's an ordinal
+                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_len)) {
+                    self.has_ordinal_sort_key = true;
+                }
+                const modsk = try self.parseOrderKeyModifiers();
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
+            }
+            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+        }
+
+        var limit: ?usize = null;
+        var offset: ?usize = null;
+        var limit_param: ?[]const u8 = null;
+        var offset_param: ?[]const u8 = null;
+
+        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
+        if (ord) |ob| {
+            if (self.ident_order_only) {
+                var i_chk: usize = 0;
+                while (i_chk < ob.keys.len) : (i_chk += 1) {
+                    const ke = ob.keys[i_chk].expr;
+                    if (ke != .Ident) {
+                        if (self.containsCall(ke)) {
+                            self.last_error = "function calls in ORDER BY are disabled";
+                        } else {
+                            self.last_error = "ORDER BY key must be identifier";
+                        }
+                        return error.UnexpectedToken;
+                    }
+                }
+            }
+        }
+
+        // Parse LIMIT and OFFSET in any order
+        // First check for LIMIT
+        if (self.cur.kind == .LIMIT) {
+            self.advance();
+            const lim = try self.parseLimitValue();
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+            limit_param = lim.param;
+        }
+        // Check for OFFSET/SKIP
+        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+            self.advance();
+            const off = try self.parseLimitValue();
+            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
+            offset_param = off.param;
+        }
+        // Check for LIMIT again (in case it comes after OFFSET)
+        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
+            self.advance();
+            const lim = try self.parseLimitValue();
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+            limit_param = lim.param;
+        }
+
+        return .{ .order_by = ord, .limit = limit, .offset = offset, .limit_param = limit_param, .offset_param = offset_param };
     }
 
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
@@ -2261,8 +2415,13 @@ pub const Parser = struct {
         var with_where: ?ast.Expr = null;
         // SONNY-3184: a WHERE after an OPTIONAL MATCH.
         var optional_where = false;
+        // SONNY-3184, SONNY-6337: each MATCH / OPTIONAL MATCH clause and its
+        // own WHERE (`ast.Query.match_clauses`).
+        var match_clauses = std.ArrayList(ast.MatchClause).empty;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
+        // SONNY-2698: `group_by` / `having_expr` came after the RETURN items.
+        var return_grouping = false;
         var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             // Handle OPTIONAL { } at the start
@@ -2317,6 +2476,9 @@ pub const Parser = struct {
             for (first_gp.chains) |chain| {
                 try all_chains.append(self.arena.allocator(), chain);
             }
+            // A part that starts with OPTIONAL MATCH (after WITH, or a
+            // statement of its own) is one optional clause.
+            try match_clauses.append(self.arena.allocator(), .{ .optional = optional_match, .end = all_chains.items.len });
 
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
             // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-22
@@ -2357,6 +2519,7 @@ pub const Parser = struct {
                             _ = try self.expect(.r_brace);
                         }
                         optional_match = true;
+                        try match_clauses.append(self.arena.allocator(), .{ .optional = true, .end = all_chains.items.len });
                         continue;
                     }
                     if (self.cur.kind != .MATCH) {
@@ -2377,6 +2540,7 @@ pub const Parser = struct {
                         try all_chains.append(self.arena.allocator(), chain);
                     }
                 }
+                try match_clauses.append(self.arena.allocator(), .{ .optional = is_currently_optional, .end = all_chains.items.len });
             }
 
             var combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
@@ -2392,56 +2556,43 @@ pub const Parser = struct {
                 for (combined_gp.chains) |chain| {
                     if (chain.is_optional) optional_where = true;
                 }
+                // It is the last clause's own WHERE.
+                if (match_clauses.items.len > 0) match_clauses.items[match_clauses.items.len - 1].where = where_expr;
             }
 
-            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
-            // Check for OPTIONAL MATCH after WHERE clause
-            // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
-            if (self.cur.kind == .OPTIONAL) {
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-11-11
+            // More MATCH and OPTIONAL MATCH clauses after a WHERE, each with a
+            // WHERE of its own: `MATCH (e) WHERE e.x = 1 OPTIONAL MATCH
+            // (e)-[:R]->(m) WHERE m.y = 2 MATCH (d {k: e.k}) WHERE ...`.
+            // SONNY-3184: an OPTIONAL MATCH here took no WHERE (a syntax
+            // error) and was not followed by a MATCH.
+            if (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
                 var post_where_chains = std.ArrayList(ast.Chain).empty;
                 // First add the existing chains
                 for (combined_gp.chains) |chain| {
                     try post_where_chains.append(self.arena.allocator(), chain);
                 }
-                // Parse OPTIONAL MATCH clauses
-                while (self.cur.kind == .OPTIONAL) {
-                    self.advance(); // consume OPTIONAL
-                    if (self.cur.kind == .MATCH) {
-                        self.advance(); // consume MATCH
-                        const opt_gp = try self.parseGraphPattern();
-                        for (opt_gp.chains) |chain| {
-                            var optional_chain = chain;
-                            optional_chain.is_optional = true;
-                            try post_where_chains.append(self.arena.allocator(), optional_chain);
-                        }
-                    } else {
-                        return error.UnexpectedToken;
-                    }
-                }
-                combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
-            }
-
-            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-26
-            // Check for required MATCH after WHERE clause
-            // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
-            if (self.cur.kind == .MATCH) {
-                var post_where_chains = std.ArrayList(ast.Chain).empty;
-                // First add the existing chains
-                for (combined_gp.chains) |chain| {
-                    try post_where_chains.append(self.arena.allocator(), chain);
-                }
-                // Parse additional MATCH clauses
                 // SONNY-3181: each WHERE below is ANDed onto the WHERE so far,
                 // one link per MATCH: the conditions count as one expression
                 // (`max_expr_links`), whatever the MATCH clauses parse.
                 self.enterExpr();
                 defer self.leaveExpr();
-                while (self.cur.kind == .MATCH) {
+                while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
+                    const clause_optional = self.cur.kind == .OPTIONAL;
+                    if (clause_optional) {
+                        self.advance(); // consume OPTIONAL
+                        if (self.cur.kind != .MATCH) return error.UnexpectedToken;
+                        optional_match = true;
+                    }
                     self.advance(); // consume MATCH
                     const additional_pattern = try self.parseGraphPattern();
                     for (additional_pattern.chains) |additional_chain| {
-                        try post_where_chains.append(self.arena.allocator(), additional_chain);
+                        var chain = additional_chain;
+                        if (clause_optional) chain.is_optional = true;
+                        try post_where_chains.append(self.arena.allocator(), chain);
                     }
+                    var clause_where: ?ast.Expr = null;
                     // Check for WHERE clause after this MATCH
                     if (self.cur.kind == .WHERE) {
                         self.advance();
@@ -2451,12 +2602,14 @@ pub const Parser = struct {
                         }
                         // Combine with existing where_expr using AND
                         const new_where = try self.parseOrExpr();
+                        clause_where = new_where;
                         if (where_expr) |existing_where| {
                             where_expr = try self.makeBinary(.And, existing_where, new_where);
                         } else {
                             where_expr = new_where;
                         }
                     }
+                    try match_clauses.append(self.arena.allocator(), .{ .optional = clause_optional, .end = post_where_chains.items.len, .where = clause_where });
                 }
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
@@ -2621,7 +2774,9 @@ pub const Parser = struct {
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
             // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
-            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
+            // SONNY-6337: and OPTIONAL MATCH (`MATCH (q) WITH q OPTIONAL MATCH
+            // (q)-[:S]->(t)`), which was a syntax error.
+            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
                     next_query_ptr = try self.parseForContinuation();
@@ -2804,14 +2959,31 @@ pub const Parser = struct {
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
 
+            // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+            // SONNY-2698: a WHERE, GROUP BY or HAVING after the RETURN items
+            // is the RETURN's (ISO/IEC 39075:2024 14.11: the <group by
+            // clause> is part of the <return statement body>), recorded in
+            // `return_grouping`. A part keeps one GROUP BY and one HAVING, so
+            // one already written (between a WITH and the RETURN) is not
+            // replaced but refused: the RETURN's used to overwrite it, so
+            // `WITH g, count(*) AS c GROUP BY g RETURN c, count(*) GROUP BY c`
+            // grouped once, by c, over the pattern's rows.
+
             // Allow WHERE after RETURN items as post-projection filter
             if (self.cur.kind == .WHERE) {
+                if (having_expr != null or (with_clause != null and group_by != null)) {
+                    return self.unexpected("a WHERE after RETURN beside the GROUP BY or HAVING written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 having_expr = try self.parseOrExpr();
+                return_grouping = true;
             }
 
             // Allow GROUP BY (and optional HAVING) after RETURN as well
             if (self.cur.kind == .GROUP) {
+                if (group_by != null) {
+                    return self.unexpected("a GROUP BY after RETURN beside the GROUP BY written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 _ = try self.expect(.BY);
                 var keys_list2 = std.ArrayList(ast.Expr).empty;
@@ -2821,8 +2993,12 @@ pub const Parser = struct {
                     self.advance();
                 }
                 group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
+                return_grouping = true;
                 // Also accept WHERE after GROUP BY as post-aggregation filter
                 if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+                    if (having_expr != null) {
+                        return self.unexpected("a HAVING beside the WHERE after RETURN: one per query part");
+                    }
                     self.advance();
                     having_expr = try self.parseOrExpr();
                 }
@@ -2858,88 +3034,12 @@ pub const Parser = struct {
             unreachable;
         }
 
-        var ord: ?ast.OrderBy = null;
-        if (self.cur.kind == .ORDER) {
-            self.advance();
-            _ = try self.expect(.BY);
-            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
-            // first expression key - allow expressions now
-            const expr1 = try self.parseOrExpr();
-            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
-            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
-            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
-                // Message string matched in diagnostics mapping path (server expects substring)
-                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
-                return error.UnexpectedToken;
-            }
-            // Check if it's an ordinal
-            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_clause.items.len)) {
-                self.has_ordinal_sort_key = true;
-            }
-            const mods1 = try self.parseOrderKeyModifiers();
-            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
-            while (self.cur.kind == .comma) {
-                self.advance();
-                const exprk = try self.parseOrExpr();
-                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
-                    self.last_error = "function calls in ORDER BY are disabled";
-                    return error.UnexpectedToken;
-                }
-                // Check if it's an ordinal
-                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_clause.items.len)) {
-                    self.has_ordinal_sort_key = true;
-                }
-                const modsk = try self.parseOrderKeyModifiers();
-                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
-            }
-            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
-        }
-
-        var limit: ?usize = null;
-        var offset: ?usize = null;
-        var limit_param: ?[]const u8 = null;
-        var offset_param: ?[]const u8 = null;
-
-        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
-        if (ord) |ob| {
-            if (self.ident_order_only) {
-                var i_chk: usize = 0;
-                while (i_chk < ob.keys.len) : (i_chk += 1) {
-                    const ke = ob.keys[i_chk].expr;
-                    if (ke != .Ident) {
-                        if (self.containsCall(ke)) {
-                            self.last_error = "function calls in ORDER BY are disabled";
-                        } else {
-                            self.last_error = "ORDER BY key must be identifier";
-                        }
-                        return error.UnexpectedToken;
-                    }
-                }
-            }
-        }
-
-        // Parse LIMIT and OFFSET in any order
-        // First check for LIMIT
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
-        // Check for OFFSET/SKIP
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
-        // Check for LIMIT again (in case it comes after OFFSET)
-        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
+        const page = try self.parseOrderAndPage(return_clause.items.len);
+        const ord = page.order_by;
+        const limit = page.limit;
+        const offset = page.offset;
+        const limit_param = page.limit_param;
+        const offset_param = page.offset_param;
 
         // Keep let_bindings and inline_let_bindings separate for proper evaluation timing
         // Parameter bindings (before MATCH) are evaluated once upfront
@@ -2961,6 +3061,7 @@ pub const Parser = struct {
             .initial_where = if (select_mode) null else initial_where_expr,
             .select_projection = select_mode,
             .optional_where = optional_where,
+            .match_clauses = try match_clauses.toOwnedSlice(self.arena.allocator()),
             .pre_with_where = pre_with_where,
             .with_where = with_where,
             .split_create = split_create,
@@ -2971,6 +3072,7 @@ pub const Parser = struct {
             .detach_delete = detach_delete,
             .group_by = group_by,
             .having = having_expr,
+            .return_grouping = return_grouping,
             .ret = return_clause,
             .order_by = ord,
             .limit = limit,
@@ -5086,6 +5188,13 @@ pub const Parser = struct {
             // Check if RETURN is followed by UNION, ORDER BY, LIMIT, or OFFSET
             // If so, convert to Query and handle through handleQueryResult
             if (self.cur.kind == .UNION or self.cur.kind == .ORDER or self.cur.kind == .LIMIT or self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+                // CANARY: REQ=REQ-SONNY-6351-CREATE-RETURN-ORDER; FEATURE="CreateReturn"; ASPECT=OrderAndPage; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+                // SONNY-6351 item 5 (SONNY-3128 residual): the RETURN's ORDER
+                // BY, LIMIT and OFFSET / SKIP are the query's, parsed here as
+                // after any RETURN (`parseOrderAndPage`). `handleQueryResult`
+                // parses them only after a UNION, so `CREATE (n) RETURN n.i
+                // ORDER BY n.i` stopped at ORDER (UnexpectedToken).
+                const page = try self.parseOrderAndPage(return_clause.?.items.len);
                 // Convert CREATE ... RETURN to a Query
                 const query = ast.Query{
                     .optional_match = false,
@@ -5094,12 +5203,14 @@ pub const Parser = struct {
                     .with_clause = null,
                     .create_pattern = pattern,
                     .ret = return_clause.?,
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
+                    .order_by = page.order_by,
+                    .limit = page.limit,
+                    .offset = page.offset,
+                    .limit_param = page.limit_param,
+                    .offset_param = page.offset_param,
                     .next_query = null,
                 };
-                // handleQueryResult will parse UNION, ORDER BY, LIMIT, OFFSET
+                // handleQueryResult parses a UNION after it
                 return self.handleQueryResult(query);
             }
         }

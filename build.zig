@@ -8791,6 +8791,24 @@ pub fn build(b: *std.Build) void {
     const sonny1330_step = b.step("test-sonny1330-parallel-union", "Run SONNY-1330 regression (parallel UNION arms never mutate the shared bounded caches; a UNION with non-resident arms falls back to the serial path and returns the serial path's rows)");
     sonny1330_step.dependOn(&run_sonny1330_tests.step);
 
+    // SONNY-1562: COUNT {} / EXISTS {} / pattern comprehensions found their
+    // uncorrelated start nodes by walking the RESIDENT node cache, so on a
+    // persisted store reopened cold they answered 0 / false / [] while the
+    // equivalent MATCH returned every row. The regression reopens a real data
+    // dir with the caches pinned to 64 entries (same wiring as SONNY-1330) and
+    // pins the expression path's answers to the MATCH path's.
+    const sonny1562_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1562_cold_subquery_scan.zig"), .target = target, .optimize = optimize });
+    sonny1562_test_mod.addImport("geode", root_mod);
+    sonny1562_test_mod.addImport("logging", logging_mod);
+    const sonny1562_tests = b.addTest(.{ .root_module = sonny1562_test_mod });
+    const run_sonny1562_tests = b.addRunArtifact(sonny1562_tests);
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_ADJ_CACHE_ENTRIES", "64");
+    shardDep(test_step, &run_sonny1562_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1562_step = b.step("test-sonny1562-cold-subquery-scan", "Run SONNY-1562 regression (COUNT{}, EXISTS{} and pattern comprehensions see every node of a cold, persisted store, not just the resident cache)");
+    sonny1562_step.dependOn(&run_sonny1562_tests.step);
+
     // SONNY-1560: a pushed gRPC result must never pin the session.
     //
     // `handleExecuteStreaming` used to hold the session mutex for the ENTIRE
@@ -10421,6 +10439,21 @@ pub fn build(b: *std.Build) void {
     const sonny3135_step = b.step("test-sonny3135-profile-allowlist-failed-txn", "Run SONNY-3135 (N7a, N7b) regression (EXPLAIN and PROFILE take only a query, a data change, FOR or a read-only CALL, 0A000 otherwise; PROFILE of the self-locking backfill is refused at once; a failed request's session engine transaction is aborted, not committed)");
     sonny3135_step.dependOn(&run_sonny3135_tests.step);
 
+    // SONNY-1335: a PROFILE payload reports the access path the executor
+    // took and names only a real catalog index; never "heuristic_index".
+    const sonny1335_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1335_profile_access_path.zig"), .target = target, .optimize = optimize });
+    sonny1335_test_mod.link_libc = true;
+    sonny1335_test_mod.addImport("geode", root_mod);
+    sonny1335_test_mod.addImport("schema", schema_mod);
+    sonny1335_test_mod.addImport("protobuf", protobuf_mod);
+    sonny1335_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny1335_test_mod.addImport("logging", logging_mod);
+    const sonny1335_tests = b.addTest(.{ .root_module = sonny1335_test_mod });
+    const run_sonny1335_tests = b.addRunArtifact(sonny1335_tests);
+    shardDep(test_step, &run_sonny1335_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1335_step = b.step("test-sonny1335-profile-access-path", "Run SONNY-1335 regression (PROFILE names an index only when the executor seeked a real catalog btree/hash index, and that name is listed by SHOW INDEXES; an unindexed property, an index on another label or property, a fulltext index, a dropped index, an AND the executor scans, and a tenant-bound version-1 profile all report a scan, never \"heuristic_index\"; gRPC in process)");
+    sonny1335_step.dependOn(&run_sonny1335_tests.step);
+
     // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
     // (max_expr_links) is refused with 42000; up to it, the query analysis,
     // the printer and the evaluator walk chains with loops. gRPC in process
@@ -11316,6 +11349,18 @@ pub fn build(b: *std.Build) void {
     const sonny2675_agg_step = b.step("test-sonny2675-aggregate-semantics", "Run SONNY-2675 follow-up regression (parameters inside aggregates, typed min/max, typed group keys: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
     sonny2675_agg_step.dependOn(&run_sonny2675_agg_tests.step);
 
+    // SONNY-2696, SONNY-2734: aggregates inside projection items, and
+    // computed aggregate arguments, on every executor.
+    const sonny2696_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2696_aggregate_expressions.zig"), .target = target, .optimize = optimize });
+    sonny2696_test_mod.addImport("geode", root_mod);
+    sonny2696_test_mod.addImport("logging", logging_mod);
+    sonny2696_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2696_tests = b.addTest(.{ .root_module = sonny2696_test_mod });
+    const run_sonny2696_tests = b.addRunArtifact(sonny2696_tests);
+    shardDep(test_step, &run_sonny2696_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2696_step = b.step("test-sonny2696-aggregate-expressions", "Run SONNY-2696 / SONNY-2734 regression (an aggregate inside a RETURN or WITH item is computed once per group, and an aggregate's computed argument per input row, with grouping errors kept and hidden rows excluded: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2696_step.dependOn(&run_sonny2696_tests.step);
+
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,
     // geometry, decoders) no longer aborts the server; a value that does not
@@ -11532,6 +11577,127 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2707_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2707_step = b.step("test-sonny2707-varlen-set", "Run SONNY-2707 part (1) regression (a SET or REMOVE through a variable-length pattern writes every node an oracle over the seeded edges reaches, through and at nodes the session may read, behind no RETURN, an aggregate or DISTINCT; a write on the relationship list or the path is refused; a program writing two graphs is refused: in-memory, RLS-policy and tenant-scoped sessions)");
     sonny2707_step.dependOn(&run_sonny2707_tests.step);
+
+    const sonny2707_count_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2707_count_direction.zig"), .target = target, .optimize = optimize });
+    sonny2707_count_test_mod.addImport("geode", root_mod);
+    sonny2707_count_test_mod.addImport("logging", logging_mod);
+    sonny2707_count_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2707_count_tests = b.addTest(.{ .root_module = sonny2707_count_test_mod });
+    const run_sonny2707_count_tests = b.addRunArtifact(sonny2707_count_tests);
+    shardDep(test_step, &run_sonny2707_count_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2707_count_step = b.step("test-sonny2707-count-direction", "Run SONNY-2707 parts (2) and (3) regression (COUNT {}, EXISTS {} and pattern comprehensions over an unbound relationship, a variable-length relationship in every direction, and a multi-hop chain agree with the equivalent MATCH and a walk of the seeded edges: in-memory, persisted, tenant-scoped and RLS-policy sessions, warm and reloaded)");
+    sonny2707_count_step.dependOn(&run_sonny2707_count_tests.step);
+
+    const sonny6295_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6295_create_path_middle_node.zig"), .target = target, .optimize = optimize });
+    sonny6295_test_mod.addImport("geode", root_mod);
+    sonny6295_test_mod.addImport("logging", logging_mod);
+    sonny6295_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6295_tests = b.addTest(.{ .root_module = sonny6295_test_mod });
+    const run_sonny6295_tests = b.addRunArtifact(sonny6295_tests);
+    shardDep(test_step, &run_sonny6295_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6295_step = b.step("test-sonny6295-create-path-middle-node", "Run SONNY-6295 regression (each node of a multi-hop CREATE, INSERT, MATCH ... CREATE, MERGE, UNWIND ... CREATE and PROFILE CREATE path is created once and every hop joins it, with its direction; the fast paths decline the shape and the cluster leader's spec has one node between two hops: in-memory, persisted (warm and reloaded), tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6295_step.dependOn(&run_sonny6295_tests.step);
+
+    const sonny3046_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3046_with_bound_variable_join.zig"), .target = target, .optimize = optimize });
+    sonny3046_test_mod.addImport("geode", root_mod);
+    sonny3046_test_mod.addImport("logging", logging_mod);
+    sonny3046_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3046_tests = b.addTest(.{ .root_module = sonny3046_test_mod });
+    const run_sonny3046_tests = b.addRunArtifact(sonny3046_tests);
+    shardDep(test_step, &run_sonny3046_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3046_step = b.step("test-sonny3046-with-bound-variable-join", "Run SONNY-3046 / SONNY-3376 / SONNY-3388 regression (a node, relationship or path variable a WITH passes on is joined in the next MATCH wherever the pattern names it, its labels, properties, type and direction filtering the bound element, and a value it passes on is read by the next property map and WHERE: in-memory, persisted (warm and reloaded), tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny3046_step.dependOn(&run_sonny3046_tests.step);
+
+    const sonny3184_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3184_optional_match_distinct_call.zig"), .target = target, .optimize = optimize });
+    sonny3184_test_mod.addImport("geode", root_mod);
+    sonny3184_test_mod.addImport("logging", logging_mod);
+    sonny3184_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3184_tests = b.addTest(.{ .root_module = sonny3184_test_mod });
+    const run_sonny3184_tests = b.addRunArtifact(sonny3184_tests);
+    shardDep(test_step, &run_sonny3184_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3184_step = b.step("test-sonny3184-optional-match-distinct-call", "Run SONNY-6337 / SONNY-3184 / SONNY-3167 / SONNY-3389 regression (OPTIONAL MATCH is a left outer join whose WHERE restricts the match only, after WITH too; WITH DISTINCT and RETURN DISTINCT on every session; the RETURN after a statement-level CALL { } is computed over the body's rows: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny3184_step.dependOn(&run_sonny3184_tests.step);
+
+    // SONNY-2672 / SONNY-2680 / SONNY-2811 / SONNY-2779 / SONNY-3128 /
+    // SONNY-2695 / SONNY-2698 / SONNY-2682 / SONNY-2699 / SONNY-2688 /
+    // SONNY-3127: read and write-RETURN semantics batch.
+    const sonny2672_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2672_read_semantics_batch.zig"), .target = target, .optimize = optimize });
+    sonny2672_test_mod.addImport("geode", root_mod);
+    sonny2672_test_mod.addImport("logging", logging_mod);
+    sonny2672_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2672_tests = b.addTest(.{ .root_module = sonny2672_test_mod });
+    const run_sonny2672_tests = b.addRunArtifact(sonny2672_tests);
+    shardDep(test_step, &run_sonny2672_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2672_step = b.step("test-sonny2672-read-semantics-batch", "Run the SONNY-2672 read-semantics batch (FILTER before the read's LIMIT; SKIP / LIMIT parameters; ORDER BY key errors and unprojected keys; CALL YIELD windows; ORDER BY after a write RETURN; RETURN after SET; WITH before GROUP BY / HAVING; implicit grouping; GROUP BY a node HAVING EXISTS; multi-hop aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2672_step.dependOn(&run_sonny2672_tests.step);
+
+    // SONNY-6383 items 2-8: CALL { } WITH ... RETURN paging and grouping, the
+    // WITH's GROUP BY not grouping the RETURN, an aggregate name inside a
+    // comprehension, legacy RETURN-loop and WITH ORDER BY leaks, a CALL's
+    // RETURN keeping its flags, VALUES ... MATCH without a scratch arena.
+    const sonny6383_residuals_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6383_residuals_test_mod.addImport("geode", root_mod);
+    sonny6383_residuals_test_mod.addImport("logging", logging_mod);
+    sonny6383_residuals_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6383_residuals_tests = b.addTest(.{ .root_module = sonny6383_residuals_test_mod });
+    const run_sonny6383_residuals_tests = b.addRunArtifact(sonny6383_residuals_tests);
+    shardDep(test_step, &run_sonny6383_residuals_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_residuals_step = b.step("test-sonny6383-query-residuals", "Run SONNY-6383 items 2-8 regression (CALL { } WITH ... RETURN grouping and paging, a WITH's GROUP BY does not group the RETURN, aggregate names inside comprehensions, legacy RETURN-loop / WITH ORDER BY / VALUES ... MATCH leaks, a CALL's RETURN keeps its flags)");
+    sonny6383_residuals_step.dependOn(&run_sonny6383_residuals_tests.step);
+
+    // SONNY-6383 item 7: a standalone CALL's RETURN keeps the procedure
+    // result's flags (projectCallReturn driven directly).
+    const sonny6383_flags_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_call_return_flags.zig"), .target = target, .optimize = optimize });
+    sonny6383_flags_test_mod.addImport("geode", root_mod);
+    const sonny6383_flags_tests = b.addTest(.{ .root_module = sonny6383_flags_test_mod });
+    const run_sonny6383_flags_tests = b.addRunArtifact(sonny6383_flags_tests);
+    shardDep(test_step, &run_sonny6383_flags_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_flags_step = b.step("test-sonny6383-call-return-flags", "Run SONNY-6383 item 7 regression (a standalone CALL's RETURN keeps the procedure result's flags)");
+    sonny6383_flags_step.dependOn(&run_sonny6383_flags_tests.step);
+
+    // SONNY-6351 items 2 and 3: db.labels() omits a label the session RLS policy denies; the embedded parseGql accepts an expression ORDER BY key by default
+    const sonny6351_labels_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6351_labels_parse_default.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6351_labels_test_mod.addImport("geode", root_mod);
+    sonny6351_labels_test_mod.addImport("logging", logging_mod);
+    sonny6351_labels_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6351_labels_tests = b.addTest(.{ .root_module = sonny6351_labels_test_mod });
+    const run_sonny6351_labels_tests = b.addRunArtifact(sonny6351_labels_tests);
+    shardDep(test_step, &run_sonny6351_labels_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6351_labels_step = b.step("test-sonny6351-labels-parse-default", "SONNY-6351 items 2 and 3: db.labels() omits a label the session RLS policy denies; the embedded parseGql accepts an expression ORDER BY key by default");
+    sonny6351_labels_step.dependOn(&run_sonny6351_labels_tests.step);
+
+    // SONNY-2774: an exact integer sum is exact, and past i64 it is 22003 (shared projection and GROUP BY fast path)
+    const sonny2774_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2774_exact_sum.zig"), .target = target, .optimize = optimize });
+    sonny2774_test_mod.addImport("geode", root_mod);
+    sonny2774_test_mod.addImport("logging", logging_mod);
+    sonny2774_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2774_tests = b.addTest(.{ .root_module = sonny2774_test_mod });
+    const run_sonny2774_tests = b.addRunArtifact(sonny2774_tests);
+    shardDep(test_step, &run_sonny2774_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2774_step = b.step("test-sonny2774-exact-sum", "SONNY-2774: an exact integer sum is exact, and past i64 it is 22003 (shared projection and GROUP BY fast path)");
+    sonny2774_step.dependOn(&run_sonny2774_tests.step);
+
+    // SONNY-2812: count(DISTINCT) and collect(DISTINCT) key list values as RETURN DISTINCT and GROUP BY do
+    const sonny2812_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2812_distinct_list_keys.zig"), .target = target, .optimize = optimize });
+    sonny2812_test_mod.addImport("geode", root_mod);
+    sonny2812_test_mod.addImport("logging", logging_mod);
+    sonny2812_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2812_tests = b.addTest(.{ .root_module = sonny2812_test_mod });
+    const run_sonny2812_tests = b.addRunArtifact(sonny2812_tests);
+    shardDep(test_step, &run_sonny2812_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2812_step = b.step("test-sonny2812-distinct-list-keys", "SONNY-2812: count(DISTINCT) and collect(DISTINCT) key list values as RETURN DISTINCT and GROUP BY do");
+    sonny2812_step.dependOn(&run_sonny2812_tests.step);
+
+    // SONNY-3025: a plain RETURN after MATCH ... CREATE / MERGE is one row per matched row
+    const sonny3025_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3025_match_write_return_rows.zig"), .target = target, .optimize = optimize });
+    sonny3025_test_mod.addImport("geode", root_mod);
+    sonny3025_test_mod.addImport("logging", logging_mod);
+    sonny3025_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3025_tests = b.addTest(.{ .root_module = sonny3025_test_mod });
+    const run_sonny3025_tests = b.addRunArtifact(sonny3025_tests);
+    shardDep(test_step, &run_sonny3025_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3025_step = b.step("test-sonny3025-match-write-return-rows", "SONNY-3025: a plain RETURN after MATCH ... CREATE / MERGE is one row per matched row");
+    sonny3025_step.dependOn(&run_sonny3025_tests.step);
 
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
@@ -11821,6 +11987,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_bounded_analytical_tests.step, 1, test_shard_loads, test_shard_index);
     const bounded_analytical_step = b.step("test-gap0902-bounded-analytical", "Run GAP-0902 bounded-cache analytical reads regression (string ORDER BY correctness + no whole-graph clone for ORDER BY/DISTINCT/multi-aggregate/WHERE-count)");
     bounded_analytical_step.dependOn(&run_bounded_analytical_tests.step);
+
+    // SONNY-6383: a parsed simple MATCH is served by the engine-direct node
+    // scan stream (asserted, rows equal the executor's), shapes it cannot
+    // serve are refused, and the bulk MATCH ... CREATE / MERGE edge paths
+    // classify a parsed MATCH (the `match_clauses` field allowlist gap).
+    const sonny6383_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_scan_stream_match_clauses.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6383_test_mod.addImport("geode", root_mod);
+    const sonny6383_tests = b.addTest(.{ .root_module = sonny6383_test_mod });
+    const run_sonny6383_tests = b.addRunArtifact(sonny6383_tests);
+    shardDep(test_step, &run_sonny6383_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_step = b.step("test-sonny6383-scan-stream-match-clauses", "Run SONNY-6383 node scan stream / bulk edge fast-path match_clauses gate regression");
+    sonny6383_step.dependOn(&run_sonny6383_tests.step);
 
     // GAP-0902 concurrency regression: analytical reads (ORDER BY top-K,
     // DISTINCT, multi-aggregate, WHERE-count) under a small node cache cap +

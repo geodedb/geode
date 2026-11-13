@@ -391,11 +391,12 @@ test "SONNY-1326: COUNT{} counts only the session tenant's matches" {
 
     // Anonymous relationship shape.
     //
-    // NOTE (pre-existing engine behaviour, NOT a SONNY-1326 regression):
-    // `COUNT { ()-[:L]->() }` counts the matching PATHS (SONNY-6344 item 1;
-    // it counted the start nodes and ignored the hop, so this pinned 2, A's
-    // two nodes). Tenant A walks a1 -> a2; the A-tagged bridge a2 -> b1 ends
-    // at a node A cannot see, so it is not a match.
+    // SONNY-1562 / SONNY-6344 item 1: `COUNT { ()-[:L]->() }` counts the relationship's matches
+    // from every start node the scope admits (it used to count the start
+    // nodes themselves, which pinned 2 here). Tenant A sees exactly ONE: its
+    // own `a1 -> a2`. The tenant-A-tagged bridge `a2 -> b1` is NOT counted,
+    // because its far endpoint belongs to tenant B (`edgeTraversable`), and
+    // `b1 -> b2` is tenant B's.
     {
         var res = try h.runAs(aa, tenant_a, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);
@@ -598,9 +599,9 @@ test "SONNY-1326: non-strict deployment with no tenant scope is unchanged" {
             try testing.expectEqual(@as(i64, 1), row[1].Int);
         }
     }
-    // The anonymous shape STILL sees every tenant: its three paths (a1 -> a2,
-    // b1 -> b2 and the bridge a2 -> b1); it counted the four start nodes
-    // before SONNY-6344.
+    // The anonymous shape STILL sees every tenant: all three `:L`
+    // relationships (paths), the bridge included (see the note in test 2); it
+    // counted the four start nodes before SONNY-1562 / SONNY-6344.
     {
         var res = try h.runAs(aa, null, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);

@@ -94,6 +94,15 @@ pub const Query = struct {
     detach_delete: bool = false,
     group_by: ?GroupBy = null,
     having: ?Expr = null,
+    // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=ParserRecords; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+    // SONNY-2698: `group_by` and `having` were written after the RETURN
+    // items (a GROUP BY, or a WHERE after RETURN), so they are the RETURN's
+    // even when the part has a WITH. ISO/IEC 39075:2024 14.11: a <group by
+    // clause> is part of the <return statement body>. When false, a part
+    // with a WITH gives them to the WITH (written between the WITH and the
+    // RETURN, a Geode extension). The parser keeps one grouping per part and
+    // refuses a second (`withStageGroupBy`, `returnStageGroupBy`).
+    return_grouping: bool = false,
     ret: ReturnClause,
     order_by: ?OrderBy,
     limit: ?usize,
@@ -154,12 +163,50 @@ pub const Query = struct {
     // it joined with the MATCH's and it filters the whole row, not only the
     // optional part, so the write-shape allowlist refuses a write after one.
     optional_where: bool = false,
+    // SONNY-3184, SONNY-6337: the MATCH and OPTIONAL MATCH clauses of the
+    // part, in order: each owns `match.chains[previous end..end]` and the
+    // WHERE written after it. `where_clause` keeps them all joined by AND for
+    // every other reader; the OPTIONAL MATCH executor needs each one, since
+    // an OPTIONAL MATCH's WHERE restricts its own match only. Empty when the
+    // parser recorded none (no MATCH, or an `OPTIONAL { }` block first).
+    match_clauses: []const MatchClause = &.{},
     // SONNY-3242 (round-3 review I2): where each SET clause in `set_clauses`
     // ends, when the part has more than one (`SET a.x = 1 SET a.y = a.x` is two
     // clauses, the second reading what the first wrote); empty for one clause
     // or none. Every value of one clause is evaluated against the bindings as
     // they stood before it, then its assignments apply (`SetClauseGroups`).
     set_clause_ends: []const usize = &.{},
+
+    /// SONNY-2698: the GROUP BY the part's WITH applies, if any.
+    pub fn withStageGroupBy(self: Query) ?GroupBy {
+        if (self.with_clause == null or self.return_grouping) return null;
+        return self.group_by;
+    }
+
+    /// The HAVING the part's WITH applies: its GROUP BY's.
+    pub fn withStageHaving(self: Query) ?Expr {
+        return if (self.withStageGroupBy() != null) self.having else null;
+    }
+
+    /// SONNY-2698: the GROUP BY the part's RETURN applies, if any.
+    pub fn returnStageGroupBy(self: Query) ?GroupBy {
+        return if (self.withStageGroupBy() == null) self.group_by else null;
+    }
+
+    /// The HAVING the part's RETURN applies: its GROUP BY's, or a WHERE
+    /// after the RETURN (a HAVING with no GROUP BY, SONNY-2667).
+    pub fn returnStageHaving(self: Query) ?Expr {
+        return if (self.withStageGroupBy() == null) self.having else null;
+    }
+};
+
+/// SONNY-3184: one MATCH or OPTIONAL MATCH clause of a query part
+/// (`Query.match_clauses`): the chains up to `end` (from the previous
+/// clause's end) and its own WHERE.
+pub const MatchClause = struct {
+    optional: bool,
+    end: usize,
+    where: ?Expr = null,
 };
 
 // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=ClauseGroups; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28

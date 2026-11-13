@@ -1068,13 +1068,15 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
         }
 
         // Handle relationship creation
-        // SONNY-3245: an unnamed node between two hops of one path is ONE node
-        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
-        // system-generated variable); the parser copies it into both hops, and
-        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
-        // M nodes and the path did not exist.
+        // SONNY-3245 / SONNY-6295: an unnamed node between two hops of one path
+        // is ONE node (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed
+        // filler one system-generated variable); the parser copies it into both
+        // hops, and each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)`
+        // made two M nodes and the path did not exist. Consecutive hops share
+        // the node between them (see `executeCreate`); null after a skipped
+        // hop, whose right endpoint was not resolved.
         var prev_right_id: ?u64 = null;
-        for (chain.hops, 0..) |hop, hop_i| {
+        for (chain.hops) |hop| {
             // Resolve BOTH endpoints' skip-status BEFORE creating either node:
             // if one endpoint is a MATCH variable that failed to bind for this
             // row, the whole hop is skipped and no orphan endpoint node may be
@@ -1087,7 +1089,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             }
 
             // For batch CREATE from MATCH, nodes must already exist in bindings
-            const left_id = if (hop.left.name) |var_name| blk: {
+            const left_id = if (prev_right_id) |shared| shared else if (hop.left.name) |var_name| blk: {
                 if (created_nodes.get(var_name)) |node_id| {
                     break :blk node_id;
                 } else {
@@ -1099,7 +1101,6 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     break :blk new_id;
                 }
             } else blk: {
-                if (hop_i > 0) if (prev_right_id) |shared| break :blk shared;
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
@@ -1129,8 +1130,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
             // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-            // SONNY-3245: `<-[:R]-` points from the right node to the left one;
-            // the edge was stored left -> right whatever the arrow.
+            // SONNY-3245 / SONNY-6295: a backward hop (`<-[:R]-`) points from the
+            // right node to the left one, as `executeCreate` stores it; the edge
+            // was stored left -> right whatever the arrow.
             const edge_id = if (hop.rel.dir == .left)
                 try store.createEdgeWithGraph(right_id, left_id, edge_label, target_graph)
             else
@@ -1572,20 +1574,21 @@ pub fn executeCreateQuery(
         }
 
         // Handle relationship creation
-        // SONNY-3245: an unnamed node between two hops of one path is ONE node
-        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
-        // system-generated variable); the parser copies it into both hops, and
-        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
-        // M nodes and the path did not exist.
+        // SONNY-3245 / SONNY-6295: an unnamed node between two hops of one path
+        // is ONE node (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed
+        // filler one system-generated variable); the parser copies it into both
+        // hops, and each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)`
+        // made two M nodes and the path did not exist. Consecutive hops share
+        // the node between them (see `executeCreate`).
         var prev_right_id: ?u64 = null;
-        for (chain.hops, 0..) |hop, hop_i| {
+        for (chain.hops) |hop| {
             // GAP-0930: evaluate ALL property-value expressions (left endpoint,
             // right endpoint, and the relationship) BEFORE creating any node or
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically instead of committing partially-populated
             // endpoints with the failed property defaulted to NULL.
             const hop_env = scope.env(ca);
-            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+            const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
@@ -1603,11 +1606,12 @@ pub fn executeCreateQuery(
 
             // Check if left node exists in bindings (from MATCH), otherwise create new
             const left_id = blk: {
+                if (prev_right_id) |shared| break :blk shared;
                 if (hop.left.name) |var_name| {
                     if (created_nodes.get(var_name)) |node_id| {
                         break :blk node_id;
                     }
-                } else if (hop_i > 0) if (prev_right_id) |shared| break :blk shared;
+                }
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 total_created_count += 1;
@@ -1634,12 +1638,14 @@ pub fn executeCreateQuery(
                 }
                 break :blk new_id;
             };
-            prev_right_id = right_id;
 
-            // Set properties for left node (pre-evaluated above for atomicity)
-            if (hop.left.props) |props| {
-                for (props, left_values) |prop, value| {
-                    try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_id, prop.key, value);
+            // Set properties for left node (pre-evaluated above for atomicity);
+            // a node shared with the previous hop has them already.
+            if (prev_right_id == null) {
+                if (hop.left.props) |props| {
+                    for (props, left_values) |prop, value| {
+                        try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_id, prop.key, value);
+                    }
                 }
             }
 
@@ -1652,12 +1658,15 @@ pub fn executeCreateQuery(
 
             // Create the relationship in target graph
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
-            // SONNY-3245: `<-[:R]-` points from the right node to the left one.
+            // SONNY-3245 / SONNY-6295: a backward hop (`<-[:R]-`) points from the
+            // right node to the left one, as `executeCreate` stores it; it was
+            // stored forward.
             const edge_id = if (hop.rel.dir == .left)
                 try store.createEdgeWithGraph(right_id, left_id, rel_type, target_graph)
             else
                 try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
             total_created_count += 1;
+            prev_right_id = right_id;
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log3.logCreateEdge(edge_id, current_graph) catch |err| {
@@ -1965,9 +1974,12 @@ pub fn executeReturnClauseWithNodes(
     var rows = try allocator.alloc([]Value, 1);
     var row = try allocator.alloc(Value, items.len);
 
-    // Create environment with the nodes and relationships
+    // Create environment with the nodes and relationships (the row's values
+    // are copied out of it; it was never freed, SONNY-6295).
     var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(allocator);
     var values = std.ArrayList(Value).empty;
+    defer values.deinit(allocator);
 
     // Add nodes to environment
     var node_iter = nodes.iterator();
@@ -2242,7 +2254,8 @@ fn clusterReplicateNodeCreate(
 /// Build the ordered, deduplicated node-spec list + edge-spec list for a single
 /// CREATE chain with relationship hops, evaluating every node/edge property into
 /// a replicable scalar. Named nodes that recur across hops collapse to one
-/// positional spec; anonymous nodes always get a fresh position. Returns
+/// positional spec; an anonymous node gets a fresh position, once (the node
+/// between two hops is one node, SONNY-6295). Returns
 /// `error.ClusterWriteNotReplicable` for any shape outside the slice (a
 /// non-scalar property, a variable-length hop). Endpoints are encoded as
 /// `.position` references into the node list (all nodes here are NEW).
@@ -2250,7 +2263,7 @@ fn clusterReplicateNodeCreate(
 /// `node_specs`/`edge_specs`/their backing label & prop arrays are arena-style
 /// allocations off `allocator` (the per-statement allocator); the serializer
 /// deep-copies into the payload, so they can be freed by the caller's arena.
-fn buildEdgeCreateSpecs(
+pub fn buildEdgeCreateSpecs(
     allocator: std.mem.Allocator,
     chain: ast.Chain,
     env: Env,
@@ -2302,17 +2315,16 @@ fn buildEdgeCreateSpecs(
         }
     };
 
-    // SONNY-3245: an unnamed node between two hops is one node (see executeCreate).
+    // SONNY-3245 / SONNY-6295: consecutive hops share the node between them
+    // (see executeCreate); an anonymous node between two hops got two
+    // positions (two nodes on every replica).
     var prev_right_pos: ?u32 = null;
-    for (chain.hops, 0..) |hop, hop_i| {
+    for (chain.hops) |hop| {
         // Variable-length / quantified hops are not replicable in this slice.
         if (hop.rel.min_len != null or hop.rel.max_len != null)
             return error.ClusterWriteNotReplicable;
 
-        const left_pos = if (hop_i > 0 and hop.left.name == null and prev_right_pos != null)
-            prev_right_pos.?
-        else
-            try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
+        const left_pos = prev_right_pos orelse try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
         const right_pos = try Register.run(allocator, env, hop.right, node_specs, &name_to_pos);
         prev_right_pos = right_pos;
 
@@ -2651,20 +2663,22 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
         }
 
         // Handle chains with relationships
-        // SONNY-3245: an unnamed node between two hops of one path is ONE node
-        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
-        // system-generated variable); the parser copies it into both hops, and
-        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
-        // M nodes and the path did not exist.
+        // SONNY-3245 / SONNY-6295: an unnamed node between two hops of one path
+        // is ONE node (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed
+        // filler one system-generated variable). The parser gives every hop its
+        // own copy of its endpoints (a hop's left is a copy of the previous
+        // hop's right), so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two M nodes
+        // and the hops did not join. Consecutive hops share the node between
+        // them.
         var prev_right_id: ?u64 = null;
-        for (chain.hops, 0..) |hop, hop_i| {
+        for (chain.hops) |hop| {
             // GAP-0930: evaluate ALL property-value expressions (left endpoint,
             // right endpoint, and the relationship) BEFORE creating any node or
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically rather than committing partially-populated
             // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
             const hop_env = scope.env(ca);
-            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+            const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
@@ -2682,7 +2696,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
-            if (hop.left.name) |left_name| {
+            if (prev_right_id) |shared| {
+                left_node_id = shared;
+            } else if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
                     left_node_id = existing;
                 } else {
@@ -2695,8 +2711,6 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
-            } else if (hop_i > 0 and prev_right_id != null) {
-                left_node_id = prev_right_id.?;
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
@@ -2707,10 +2721,13 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
-            // Set properties on left node (pre-evaluated above for atomicity)
-            if (hop.left.props) |props| {
-                for (props, left_values) |prop, value| {
-                    try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
+            // Set properties on left node (pre-evaluated above for atomicity);
+            // a node shared with the previous hop has them already.
+            if (prev_right_id == null) {
+                if (hop.left.props) |props| {
+                    for (props, left_values) |prop, value| {
+                        try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
+                    }
                 }
             }
 
@@ -2738,7 +2755,6 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
-            prev_right_id = right_node_id;
 
             // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
@@ -2759,6 +2775,8 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             undo_log_merge.logCreateEdge(edge_id, current_graph) catch |err| {
                 log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
             };
+
+            prev_right_id = right_node_id;
 
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
@@ -2949,18 +2967,20 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
         }
 
         // Handle chains with relationships
-        // SONNY-3245: an unnamed node between two hops of one path is ONE node
-        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
-        // system-generated variable); the parser copies it into both hops, and
-        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
-        // M nodes and the path did not exist.
+        // SONNY-3245 / SONNY-6295: an unnamed node between two hops of one path
+        // is ONE node (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed
+        // filler one system-generated variable). The parser gives every hop its
+        // own copy of its endpoints (a hop's left is a copy of the previous
+        // hop's right), so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two M nodes
+        // and the hops did not join. Consecutive hops share the node between
+        // them.
         var prev_right_id: ?u64 = null;
-        for (chain.hops, 0..) |hop, hop_i| {
+        for (chain.hops) |hop| {
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
             const hop_env = scope.env(ca);
-            const left_values: []Value = if (hop.left.props) |props| blk_lv: {
+            const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
                 break :blk_lv buf;
@@ -2978,7 +2998,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 
             // Create left node if not already created (in target graph)
             var left_node_id: u64 = undefined;
-            if (hop.left.name) |left_name| {
+            if (prev_right_id) |shared| {
+                left_node_id = shared;
+            } else if (hop.left.name) |left_name| {
                 if (created_nodes.get(left_name)) |existing| {
                     left_node_id = existing;
                 } else {
@@ -2991,8 +3013,6 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
-            } else if (hop_i > 0 and prev_right_id != null) {
-                left_node_id = prev_right_id.?;
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
@@ -3003,10 +3023,13 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
-            // Set properties on left node (pre-evaluated above for atomicity)
-            if (hop.left.props) |props| {
-                for (props, left_values) |prop, value| {
-                    try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
+            // Set properties on left node (pre-evaluated above for atomicity);
+            // a node shared with the previous hop has them already.
+            if (prev_right_id == null) {
+                if (hop.left.props) |props| {
+                    for (props, left_values) |prop, value| {
+                        try property_mutation.setNodePropertyFromValue(allocator, store, hop.left.labels, left_node_id, prop.key, value);
+                    }
                 }
             }
 
@@ -3034,7 +3057,6 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
-            prev_right_id = right_node_id;
 
             // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
@@ -3055,6 +3077,8 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             undo_log_merge.logCreateEdge(edge_id, current_graph) catch |err| {
                 log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
             };
+
+            prev_right_id = right_node_id;
 
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
@@ -3560,7 +3584,12 @@ fn refuseHiddenMergeMatches(
             // evaluated yet (it names a node an earlier chain creates) is
             // left to `mergeRelationshipHop`, which refuses the same match.
             if (source != null and target != null) check: {
-                const rel_props = evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator)) catch break :check;
+                // An arena, as every `evaluatePatternProps` caller: the
+                // statement's allocator is no arena when MATCH ... MERGE runs
+                // this per matched row (SONNY-3025).
+                var rel_prop_arena = std.heap.ArenaAllocator.init(allocator);
+                defer rel_prop_arena.deinit();
+                const rel_props = evaluatePatternPropsIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator())) catch break :check;
                 _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, rel_props, visibility), hop.rel);
             }
         }
@@ -3714,7 +3743,12 @@ fn mergeRelationshipHop(
     // SONNY-3357: the relationship's properties are part of the pattern it
     // matches, and the values a created edge takes; evaluated once, in
     // `scope`, for both.
-    const rel_props = try evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator));
+    // In an arena, as every `evaluatePatternProps` caller: the statement's
+    // allocator is no arena when MATCH ... MERGE runs this per matched row
+    // (SONNY-3025), and the stored property is a copy.
+    var rel_prop_arena = std.heap.ArenaAllocator.init(allocator);
+    defer rel_prop_arena.deinit();
+    const rel_props = try evaluatePatternPropsIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator()));
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
@@ -3955,8 +3989,10 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     try applyMergeActions(allocator, store, m, &scope, clause_created);
 
     // Return the merged node(s) if there's a RETURN clause
+    // SONNY-3025: a relationship-only pattern (`MERGE (a)-[r:R]->(b)`) binds
+    // no merged node chain, and its RETURN was skipped: no row.
     if (m.return_clause) |ret| {
-        if (merged_nodes.items.len > 0) {
+        {
             const columns = try generateUniqueColumnNames(allocator, ret.items);
 
             var rows = try allocator.alloc([]Value, 1);
@@ -3974,7 +4010,8 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             defer env_values.deinit(allocator);
 
             try env_names.append(allocator, "created");
-            try env_values.append(allocator, Value{ .Bool = merged_nodes.items[merged_nodes.items.len - 1].created });
+            const created = if (merged_nodes.items.len > 0) merged_nodes.items[merged_nodes.items.len - 1].created else clause_created;
+            try env_values.append(allocator, Value{ .Bool = created });
             try env_names.appendSlice(allocator, scope.names.items);
             try env_values.appendSlice(allocator, scope.values.items);
 

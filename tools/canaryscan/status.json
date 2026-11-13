@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:20:10.992956618Z",
+  "generated_at": "2026-11-13T02:04:56.368771745Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -17851,25 +17851,6 @@
           "benches": [],
           "owner": "parser",
           "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-EXPR-TYPE-001",
-      "features": [
-        {
-          "feature": "ExprTypeCoverage",
-          "aspect": "Types",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_type_system.yml"
-          ],
-          "benches": [],
-          "owner": "exec",
-          "updated": "2026-01-25"
         }
       ]
     },
@@ -37761,25 +37742,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-CHAIN-MATCH-001",
-      "features": [
-        {
-          "feature": "ChainMatchExecution",
-          "aspect": "AggregationPath",
-          "status": "TESTED",
-          "files": [
-            "src/execution/query_execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-27"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-CHAIN-ORDERBY-001",
       "features": [
         {
@@ -39454,20 +39416,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "GroupByRelationshipPattern",
-          "aspect": "Execution",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -40587,7 +40535,7 @@
           ],
           "benches": [],
           "owner": "parser",
-          "updated": "2025-12-26"
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -42013,11 +41961,11 @@
             "src/gql/parser.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
           ],
           "benches": [],
           "owner": "parser",
-          "updated": "2025-12-24"
+          "updated": "2026-11-11"
         },
         {
           "feature": "OptionalMatchExecution",
@@ -44642,20 +44590,6 @@
         },
         {
           "feature": "UndirectedPatternMatch",
-          "aspect": "GroupByEdgeTraversal",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/undirected_pattern_matching.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-29"
-        },
-        {
-          "feature": "UndirectedPatternMatch",
           "aspect": "SingleHopEdgeTraversal",
           "status": "TESTED",
           "files": [
@@ -45105,11 +45039,11 @@
             "src/execution/graph_algorithms.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
+            "tests/test_sonny2707_count_direction.zig"
           ],
           "benches": [],
           "owner": "execution",
-          "updated": "2025-12-28"
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -45727,23 +45661,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-WITH-REL-VARS-001",
-      "features": [
-        {
-          "feature": "WithClauseRelationshipVars",
-          "aspect": "VariableCollection",
-          "status": "TESTED",
-          "files": [
-            "src/execution/query_execution.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-WITH-REL-VARS-002",
       "features": [
         {
@@ -45900,25 +45817,6 @@
     },
     {
       "id": "REQ-GQL-WITH-WHERE-PRE-001",
-      "features": [
-        {
-          "feature": "WithWherePreFilter",
-          "aspect": "DeferToPostWith",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WITH-WHERE-PRE-002",
       "features": [
         {
           "feature": "WithWherePreFilter",
@@ -53643,20 +53541,6 @@
           "aspect": "NodeFiltering",
           "status": "TESTED",
           "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "NodeFiltering",
-          "status": "TESTED",
-          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
@@ -55493,79 +55377,11 @@
       ]
     },
     {
-      "id": "REQ-NESTING-REFACTOR-002",
-      "features": [
-        {
-          "feature": "NestingReduction",
-          "aspect": "LabelCheck",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "refactor",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
       "id": "REQ-NESTING-REFACTOR-006",
       "features": [
         {
           "feature": "NestingReduction",
           "aspect": "ShortestPathStart",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "refactor",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
-      "id": "REQ-NESTING-REFACTOR-008",
-      "features": [
-        {
-          "feature": "NestingReduction",
-          "aspect": "PatternComprehension",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "refactor",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
-      "id": "REQ-NESTING-REFACTOR-009",
-      "features": [
-        {
-          "feature": "NestingReduction",
-          "aspect": "SourceNodeMatch",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "refactor",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
-      "id": "REQ-NESTING-REFACTOR-010",
-      "features": [
-        {
-          "feature": "NestingReduction",
-          "aspect": "TargetNodeMatch",
           "status": "TESTED",
           "files": [
             "src/execution/graph_algorithms.zig"
@@ -56643,11 +56459,11 @@
             "src/execution/aggregation_evaluation.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_functions_comprehensive.yml"
+            "tests/test_sonny2774_exact_sum.zig"
           ],
           "benches": [],
           "owner": "aggregation",
-          "updated": "2025-12-27"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56662,11 +56478,11 @@
             "src/execution/aggregation_evaluation.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_functions_comprehensive.yml"
+            "tests/test_sonny2774_exact_sum.zig"
           ],
           "benches": [],
           "owner": "aggregation",
-          "updated": "2025-12-27"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70742,6 +70558,86 @@
       ]
     },
     {
+      "id": "REQ-SONNY-1335-PROFILE-ACCESS-PATH",
+      "features": [
+        {
+          "feature": "PROFILE",
+          "aspect": "CatalogIndexForSeek",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1335_profile_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "PROFILE",
+          "aspect": "NoFabricatedIndexScan",
+          "status": "TESTED",
+          "files": [
+            "src/server/profile_payload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1335_profile_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "PROFILE",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny1335_profile_access_path.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1335_profile_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-1562-COLD-SUBQUERY-SCAN",
+      "features": [
+        {
+          "feature": "ExpressionPathColdScan",
+          "aspect": "ResidencyIndependentCounts",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny1562_cold_subquery_scan.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1562_cold_subquery_scan.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ExpressionPathColdScan",
+          "aspect": "ScanSource",
+          "status": "TESTED",
+          "files": [
+            "src/execution/graph_algorithms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1562_cold_subquery_scan.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP",
       "features": [
         {
@@ -71158,6 +71054,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-25"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2672-READ-SEMANTICS-BATCH",
+      "features": [
+        {
+          "feature": "ReadSemanticsBatch",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -72321,6 +72236,181 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2696-AGGREGATE-DETECTION",
+      "features": [
+        {
+          "feature": "AggregationDetection",
+          "aspect": "NestedAggregates",
+          "status": "TESTED",
+          "files": [
+            "src/execution/return_and_sorting.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2696-AGGREGATE-EXPRESSIONS",
+      "features": [
+        {
+          "feature": "SharedProjection",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2696-LIFTED-AGGREGATES",
+      "features": [
+        {
+          "feature": "SharedProjection",
+          "aspect": "AggregatesInsideItems",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2696-NESTED-AGGREGATE",
+      "features": [
+        {
+          "feature": "Aggregation",
+          "aspect": "NestedAggregateAnywhere",
+          "status": "TESTED",
+          "files": [
+            "src/execution/grouped_having.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2698-GROUPING-STAGE",
+      "features": [
+        {
+          "feature": "StageOwnedGrouping",
+          "aspect": "NoLegacyGrouping",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "StageOwnedGrouping",
+          "aspect": "ParserRecords",
+          "status": "TESTED",
+          "files": [
+            "src/gql/ast.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "StageOwnedGrouping",
+          "aspect": "ParserReturnTail",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2699-PATTERN-KEY-BINDER",
+      "features": [
+        {
+          "feature": "GroupedHaving",
+          "aspect": "PatternVariableKeyBinder",
+          "status": "TESTED",
+          "files": [
+            "src/execution/grouped_having.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2707-COUNT-DIRECTION",
+      "features": [
+        {
+          "feature": "PatternSubquery",
+          "aspect": "PatternWalk",
+          "status": "TESTED",
+          "files": [
+            "src/execution/graph_algorithms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2707_count_direction.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "PatternSubquery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2707_count_direction.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2707_count_direction.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2707-VARLEN-WRITE",
       "features": [
         {
@@ -72934,6 +73024,44 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-25"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2734-AGGREGATE-ARGUMENT-ERRORS",
+      "features": [
+        {
+          "feature": "GroupedAggregates",
+          "aspect": "ArgumentErrorsEscape",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2734-LEGACY-AGGREGATES",
+      "features": [
+        {
+          "feature": "LegacyReturnProjection",
+          "aspect": "AggregatesThroughSharedProjection",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2696_aggregate_expressions.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -73715,6 +73843,26 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2774-EXACT-SUM",
+      "features": [
+        {
+          "feature": "GroupedAggregates",
+          "aspect": "ExactIntegerSum",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig",
+            "tests/test_sonny2774_exact_sum.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2774_exact_sum.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
           "updated": "2026-11-12"
         }
       ]
@@ -74883,6 +75031,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2812-DISTINCT-LIST-KEYS",
+      "features": [
+        {
+          "feature": "AggregateSetQuantifier",
+          "aspect": "ListKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2812_distinct_list_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2812_distinct_list_keys.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2816-BULK-INGEST-TXN",
       "features": [
         {
@@ -75520,6 +75687,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3025-WRITE-RETURN-ROWS",
+      "features": [
+        {
+          "feature": "WriteBehindAggregate",
+          "aspect": "PlainReturnPerRow",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3025_match_write_return_rows.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3025_match_write_return_rows.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -76719,6 +76905,95 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3046-WITH-BOUND-JOIN",
+      "features": [
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "BoundElement",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "Dispatch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "FinalAggregate",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "SeededJoin",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ChainedMatchJoin",
+          "aspect": "WithStar",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3046_with_bound_variable_join.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3056-LEAN-MERGE-BACKFILL",
       "features": [
         {
@@ -77716,6 +77991,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3167-WITH-DISTINCT",
+      "features": [
+        {
+          "feature": "LegacyWithDistinct",
+          "aspect": "SharedWithStage",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3180-ID-MAPS-LOCK",
       "features": [
         {
@@ -77962,6 +78256,54 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3184-OPTIONAL-MATCH",
+      "features": [
+        {
+          "feature": "OptionalMatchLeftOuterJoin",
+          "aspect": "Dispatch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig",
+            "src/execution/optional_match.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "OptionalMatchLeftOuterJoin",
+          "aspect": "LeftOuterJoin",
+          "status": "TESTED",
+          "files": [
+            "src/execution/optional_match.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "OptionalMatchLeftOuterJoin",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -80085,6 +80427,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3389-CALL-RETURN",
+      "features": [
+        {
+          "feature": "CallSubquery",
+          "aspect": "ParserReturnTail",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "CallSubquery",
+          "aspect": "SharedProjection",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3184_optional_match_distinct_call.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED",
       "features": [
         {
@@ -80819,6 +81194,25 @@
           ],
           "benches": [],
           "owner": "catalog",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6295-CREATE-PATH-MIDDLE-NODE",
+      "features": [
+        {
+          "feature": "CreatePath",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6295_create_path_middle_node.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6295_create_path_middle_node.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-11"
         }
       ]
@@ -82376,25 +82770,6 @@
       ]
     },
     {
-      "id": "REQ-SONNY-6344-COUNT-HOP-PATHS",
-      "features": [
-        {
-          "feature": "CountSubquery",
-          "aspect": "UncorrelatedHopCountsPaths",
-          "status": "TESTED",
-          "files": [
-            "src/execution/graph_algorithms.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6344_tenant_schema_listings.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
       "id": "REQ-SONNY-6344-TENANT-LISTINGS",
       "features": [
         {
@@ -82664,6 +83039,177 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-CALL-RETURN",
+      "features": [
+        {
+          "feature": "ProcedureYield",
+          "aspect": "StandaloneCallReturn",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-CREATE-RETURN-ORDER",
+      "features": [
+        {
+          "feature": "CreateReturn",
+          "aspect": "OrderAndPage",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-DB-LABELS-RLS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "DbLabelsRLSDeny",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-LABELS-PARSE-DEFAULT",
+      "features": [
+        {
+          "feature": "ReadSemanticsBatch",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-LEGACY-RETURN-ERROR",
+      "features": [
+        {
+          "feature": "LegacyReturnProjection",
+          "aspect": "ErrorFreesRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-MATCH-CALL",
+      "features": [
+        {
+          "feature": "ProcedureYield",
+          "aspect": "MatchCallPerRow",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-PARSE-GQL-DEFAULT",
+      "features": [
+        {
+          "feature": "Pagination Legality (US001)",
+          "aspect": "EmbeddedOrderKeyDefault",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-VALUES-MATCH-STRINGS",
+      "features": [
+        {
+          "feature": "ValuesStatement",
+          "aspect": "RowValueOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6351-WITH-ORDER-KEY-ERROR",
+      "features": [
+        {
+          "feature": "WithOrderBy",
+          "aspect": "KeyErrorFailsStatement",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2672_read_semantics_batch.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -83800,6 +84346,120 @@
           ],
           "benches": [],
           "owner": "server",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-CALL-RETURN-FLAGS",
+      "features": [
+        {
+          "feature": "ProcedureYield",
+          "aspect": "FlagsKept",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6383_call_return_flags.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_call_return_flags.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-CALL-WITH-RETURN",
+      "features": [
+        {
+          "feature": "CallSubquery",
+          "aspect": "ParserReturnTail",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-PLAIN-MATCH-CLAUSES",
+      "features": [
+        {
+          "feature": "WriteShapeAllowlist",
+          "aspect": "MatchClauseRecord",
+          "status": "TESTED",
+          "files": [
+            "src/execution/write_shape.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_scan_stream_match_clauses.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "ReadSemanticsBatch",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-STREAM-MATCH-CLAUSES",
+      "features": [
+        {
+          "feature": "NodeScanStream",
+          "aspect": "MatchClauseGate",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6383_scan_stream_match_clauses.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_scan_stream_match_clauses.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-WITH-ORDER-KEYS-ONCE",
+      "features": [
+        {
+          "feature": "WithOrderBy",
+          "aspect": "KeysOncePerRow",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -92326,7 +92986,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4802
+      "TESTED": 4839
     },
     "by_aspect": {
       "2PC": 3,
@@ -92417,6 +93077,8 @@
       "AggregateFunctions": 1,
       "AggregateOverAllRows": 1,
       "AggregateStats": 1,
+      "AggregatesInsideItems": 1,
+      "AggregatesThroughSharedProjection": 1,
       "Aggregation": 7,
       "AggregationCollect": 1,
       "AggregationComputation": 3,
@@ -92424,7 +93086,6 @@
       "AggregationFiltering": 1,
       "AggregationHelpers": 1,
       "AggregationIsolation": 1,
-      "AggregationPath": 1,
       "AggregationPerformance": 1,
       "Aggregations": 1,
       "AlgoScope": 1,
@@ -92481,6 +93142,7 @@
       "ApplyUpdate": 1,
       "ArgParsing": 1,
       "ArgReachability": 1,
+      "ArgumentErrorsEscape": 1,
       "ArithmeticRounding": 1,
       "ArmLimitRelay": 1,
       "ArrayLiteralDimensionCap": 1,
@@ -92621,6 +93283,7 @@
       "BoolToInt": 1,
       "BoolType": 1,
       "Bootstrap": 2,
+      "BoundElement": 1,
       "BoundVariableConstraint": 1,
       "BoundedDetachedFirstStreams": 2,
       "BoundedDriverThreadStacks": 1,
@@ -92744,6 +93407,7 @@
       "Catalog": 3,
       "CatalogCopy": 1,
       "CatalogErrorDenyAccess": 1,
+      "CatalogIndexForSeek": 1,
       "CatalogIntegrityCheck": 1,
       "CatalogKinds": 1,
       "CatalogList": 3,
@@ -93143,6 +93807,7 @@
       "DbIndexesLocked": 1,
       "DbLabels": 1,
       "DbLabelsFilter": 1,
+      "DbLabelsRLSDeny": 1,
       "DbLabelsTenantFilter": 1,
       "DbPropertyKeys": 1,
       "DbPropertyKeysFilter": 1,
@@ -93196,7 +93861,7 @@
       "DefenseInDepth": 1,
       "DeferCleanup": 2,
       "DeferToHandler": 1,
-      "DeferToPostWith": 3,
+      "DeferToPostWith": 2,
       "DeferWhereForHops": 1,
       "DeferredBackfill": 1,
       "DeferredPostWriteFlush": 1,
@@ -93266,7 +93931,7 @@
       "DiscardGraphGrant": 1,
       "DiscoveryRows": 2,
       "DiskEncryption": 1,
-      "Dispatch": 9,
+      "Dispatch": 11,
       "DispatchArm": 1,
       "DispatchGate": 1,
       "DispatchLogic": 1,
@@ -93410,6 +94075,7 @@
       "EigenvectorVarianceEnvelope": 1,
       "ElementIdUnadvertised": 1,
       "Elimination": 1,
+      "EmbeddedOrderKeyDefault": 1,
       "EmbeddedTcpAuthGate": 1,
       "EmptyArgs": 1,
       "EmptyFileSummaryPhrase": 1,
@@ -93470,6 +94136,7 @@
       "EqualityPerItem": 1,
       "EqualityThreeValued": 1,
       "ErrorDetection": 1,
+      "ErrorFreesRows": 1,
       "ErrorHandling": 16,
       "ErrorHandlingIntegration": 1,
       "ErrorHandlingRobustness": 1,
@@ -93512,6 +94179,7 @@
       "ExactIndexCandidates": 2,
       "ExactIndexConfigStamp": 1,
       "ExactIndexLateKeyCatchUp": 1,
+      "ExactIntegerSum": 1,
       "ExactMatchRewrite": 1,
       "ExactNumberHash": 1,
       "ExactNumberKey": 1,
@@ -93538,7 +94206,7 @@
       "ExecuteRequestSchema": 1,
       "ExecuteWithGraph": 1,
       "ExecuteWithRetry": 1,
-      "Execution": 24,
+      "Execution": 23,
       "ExecutionContext": 3,
       "ExecutionContextField": 1,
       "ExecutionContextIdempotencyKey": 1,
@@ -93674,6 +94342,7 @@
       "FilterYieldColumns": 1,
       "FilteredTarget": 1,
       "Filtering": 4,
+      "FinalAggregate": 1,
       "FinalBatch": 1,
       "FinalPagination": 1,
       "FinalScoresImmutability": 1,
@@ -93696,6 +94365,7 @@
       "FirstStreamSchedulerLostWakeBuild": 1,
       "FlagParsing": 3,
       "FlaggerCompleteness": 1,
+      "FlagsKept": 1,
       "FlakePin": 1,
       "FleLeakRegression": 1,
       "FleRoleBoundToPrincipal": 1,
@@ -93884,7 +94554,6 @@
       "GreyCardinalVarianceEnvelope": 1,
       "GroupAggregation": 2,
       "GroupBy": 5,
-      "GroupByEdgeTraversal": 1,
       "GroupByHandling": 1,
       "GroupByPatterns": 1,
       "GroupByVerification": 1,
@@ -94169,6 +94838,7 @@
       "KernelSources": 1,
       "KeyDerivation": 2,
       "KeyEpochs": 1,
+      "KeyErrorFailsStatement": 1,
       "KeyEscrow": 1,
       "KeyFile": 1,
       "KeyGeneration": 1,
@@ -94183,6 +94853,7 @@
       "KeyVersionTracking": 1,
       "Keys": 1,
       "KeysFilter": 1,
+      "KeysOncePerRow": 1,
       "KeywordParsing": 1,
       "KeywordRecognition": 1,
       "KindConflict": 1,
@@ -94195,7 +94866,6 @@
       "LSPServer": 2,
       "LTrim": 1,
       "LabelChangeIndexMaintenance": 1,
-      "LabelCheck": 1,
       "LabelCountRefcountRead": 1,
       "LabelCountRefcounts": 1,
       "LabelDenySnapshot": 1,
@@ -94244,7 +94914,7 @@
       "LedgerConsistencyOnFailure": 1,
       "Left": 1,
       "LeftNodeFiltering": 1,
-      "LeftOuterJoin": 1,
+      "LeftOuterJoin": 2,
       "LeftOuterJoinImpl": 1,
       "LeftVarLookup": 1,
       "LegacyBlake2bVerify": 1,
@@ -94287,6 +94957,7 @@
       "ListGraphGrants": 1,
       "ListHead": 1,
       "ListIn": 1,
+      "ListKeys": 1,
       "ListLiteralCoercion": 2,
       "ListPropertySize": 1,
       "ListRoles": 1,
@@ -94382,7 +95053,10 @@
       "MatchBoundEndpoints": 2,
       "MatchBoundEndpointsWithInlineRelProps": 1,
       "MatchCallFiltering": 2,
+      "MatchCallPerRow": 1,
       "MatchClassifiedAsMatch": 1,
+      "MatchClauseGate": 1,
+      "MatchClauseRecord": 1,
       "MatchCreate": 2,
       "MatchCreateEdgeSummaryRow": 1,
       "MatchCreateFollowerFailClosed": 1,
@@ -94550,7 +95224,9 @@
       "NegativeAuthMatrix": 1,
       "NeighborAggregation": 1,
       "NeighborLookup": 1,
+      "NestedAggregateAnywhere": 1,
       "NestedAggregateReject": 1,
+      "NestedAggregates": 1,
       "NestedArgErrorPropagation": 1,
       "NestedDepthLimit": 1,
       "NestedMap": 2,
@@ -94578,6 +95254,7 @@
       "NoDeadRemotePath": 1,
       "NoDeadWalWrapperOrFalseTestedMarkers": 1,
       "NoEnvOverride": 1,
+      "NoFabricatedIndexScan": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
@@ -94594,6 +95271,7 @@
       "NoKeyOverExistingRecords": 1,
       "NoLeakOnInitDeinit": 1,
       "NoLegacyAlias": 1,
+      "NoLegacyGrouping": 1,
       "NoMatchAll": 1,
       "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
@@ -94626,7 +95304,7 @@
       "NodeDelete": 1,
       "NodeEdgeMapKeys": 2,
       "NodeFallbackToId": 1,
-      "NodeFiltering": 2,
+      "NodeFiltering": 1,
       "NodeGraphNameLoad": 1,
       "NodeGraphNamePersistence": 1,
       "NodeGraphTag": 2,
@@ -94736,6 +95414,7 @@
       "OptionsStruct": 1,
       "OrPredicate": 1,
       "Orchestration": 2,
+      "OrderAndPage": 1,
       "OrderByAggregation": 1,
       "OrderByAndLimit": 1,
       "OrderByEnforcement": 1,
@@ -94813,9 +95492,10 @@
       "ParserNoConflict": 1,
       "ParserProgram": 1,
       "ParserRecognition": 1,
-      "ParserRecords": 1,
+      "ParserRecords": 2,
       "ParserRenameNotCombinedWithSetEnabled": 1,
       "ParserRenameTo": 1,
+      "ParserReturnTail": 3,
       "ParserSafeOwnerStack": 1,
       "ParserSetEnabledFalse": 1,
       "ParserSetEnabledTrue": 1,
@@ -94891,7 +95571,6 @@
       "Paths": 1,
       "Pattern": 2,
       "PatternBindings": 1,
-      "PatternComprehension": 1,
       "PatternComprehensionIsolation": 1,
       "PatternExtraction": 2,
       "PatternFilter": 1,
@@ -94903,6 +95582,8 @@
       "PatternRecognition": 1,
       "PatternRefused": 1,
       "PatternVarResolution": 1,
+      "PatternVariableKeyBinder": 1,
+      "PatternWalk": 1,
       "Patterns": 2,
       "Pause": 1,
       "PeerAddress": 1,
@@ -94980,6 +95661,7 @@
       "Pipeline": 2,
       "PlainModeRun": 1,
       "PlainPrompt": 1,
+      "PlainReturnPerRow": 1,
       "PlaintextSizeLimit": 1,
       "PlanCacheEviction": 1,
       "PlanCost": 1,
@@ -95412,7 +96094,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 279,
+      "Regression": 288,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -95480,6 +96162,7 @@
       "Reseal": 1,
       "ResealRefusesUnsignedLegacy": 1,
       "ResetGuardrails": 1,
+      "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,
       "ResolvConfSearchExpansion": 1,
       "ResolveAfterInserts": 1,
@@ -95565,6 +96248,7 @@
       "RowScopeFailsClosed": 1,
       "RowScopeFreesHopScope": 1,
       "RowScopeInterface": 1,
+      "RowValueOwnership": 1,
       "RowVisibilityCombinator": 1,
       "RpcClientConnect": 1,
       "RunGqlError": 1,
@@ -95606,6 +96290,7 @@
       "ScaleConversion": 1,
       "ScanEnumeratesFullNodeSet": 1,
       "ScanRespectsSessionGraph": 1,
+      "ScanSource": 1,
       "SchedulerNonBlockingCleanup": 1,
       "SchedulerTick": 1,
       "Schema": 1,
@@ -95653,6 +96338,7 @@
       "SecurityReview": 1,
       "SecurityTests": 1,
       "SeedFilterVerified": 1,
+      "SeededJoin": 1,
       "SeededVerdict": 1,
       "SegfaultPrevention": 2,
       "SelectivityStats": 1,
@@ -95766,11 +96452,12 @@
       "SharedModule": 1,
       "SharedPlanConcurrentHits": 1,
       "SharedPredicate": 1,
-      "SharedProjection": 1,
+      "SharedProjection": 2,
       "SharedTypeAccessibility": 1,
       "SharedTypes": 1,
       "SharedUtility": 1,
       "SharedVisibilityPredicate": 2,
+      "SharedWithStage": 1,
       "ShellCompletions": 1,
       "ShortCircuit": 1,
       "ShortHeaderTimingHarness": 1,
@@ -95867,7 +96554,6 @@
       "Sorting": 1,
       "SourceAudit": 2,
       "SourceFileSpinner": 1,
-      "SourceNodeMatch": 1,
       "SourcePreserved": 1,
       "SpatialTypes": 3,
       "SpecExecution": 1,
@@ -95883,6 +96569,7 @@
       "StagedVerifiedRestore": 1,
       "StaleDetection": 1,
       "StallEvictDecision": 1,
+      "StandaloneCallReturn": 1,
       "Start": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,
@@ -96033,7 +96720,6 @@
       "TailLatencyP999Envelope": 2,
       "TamperDetection": 1,
       "TargetBuild": 1,
-      "TargetNodeMatch": 1,
       "TargetProps": 1,
       "TarjanSCC": 1,
       "Telemetry": 1,
@@ -96169,13 +96855,12 @@
       "TypeSystemIsolation": 1,
       "TypeValidation": 1,
       "TypeValidators": 1,
-      "Types": 12,
+      "Types": 11,
       "TypesIndep": 1,
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundedWithoutLimit": 1,
-      "UncorrelatedHopCountsPaths": 1,
       "UndirectedOptional": 1,
       "UndoApplication": 1,
       "UndoCheckpoint": 1,
@@ -96309,7 +96994,7 @@
       "VarReference": 1,
       "VarcharBounds": 1,
       "VariableBinding": 1,
-      "VariableCollection": 3,
+      "VariableCollection": 2,
       "VariableExtraction": 1,
       "VariableLookup": 2,
       "VariableMutability": 1,
@@ -96376,6 +97061,7 @@
       "WithStage": 1,
       "WithStageItems": 1,
       "WithStageRows": 1,
+      "WithStar": 1,
       "WithWhere": 1,
       "WkbToGeoJson": 1,
       "WordCount": 1,

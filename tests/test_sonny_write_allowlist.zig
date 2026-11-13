@@ -647,7 +647,11 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (n:G) OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = refused },
     .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET n.x = 1", .refused = refused },
     .{ .write = "WITH 1 AS one UNWIND [5, 99] AS u OPTIONAL MATCH (n:G) WHERE n.i = u SET n.x = 1", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = syntax },
+    // SONNY-6337 / SONNY-3184: an OPTIONAL MATCH's own WHERE after a MATCH's
+    // WHERE parses now (each clause keeps its WHERE; it was a syntax error),
+    // so the write gate refuses it, as it does the shape without the first
+    // WHERE (two lines up).
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = refused },
     // SONNY-3146 (reopened): a path DELETE (review d: DP1, DP2, DP4..DP7;
     // e: TN4, RL2, RL10, PS3; i: PS3, PS8, PS9, PS11; j: PS12..PS19).
     .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DETACH DELETE p", .refused = refused },
@@ -914,7 +918,13 @@ test "allowlist: the fast-path shape gate refuses any field it does not name" {
     for (probes) |p| {
         var parsed = try geode.parseGql(p.src, aa);
         defer parsed.deinit();
-        try testing.expectEqual(p.ok, ws.onlyFields(parsed.program.statements[0].Query, &.{ "match", "create_pattern" }));
+        // SONNY-6383: the parser records every MATCH clause in
+        // `match_clauses`, so the gate names it, as the bulk edge detectors
+        // do (`bulk_ingest.matchEdgeSpec`), beside `plainMatchClauses`.
+        const q = parsed.program.statements[0].Query;
+        try testing.expectEqual(p.ok, ws.onlyFields(q, &.{ "match", "match_clauses", "create_pattern" }) and ws.plainMatchClauses(q));
+        // A gate that does not name `match_clauses` serves no parsed MATCH.
+        try testing.expect(!ws.onlyFields(q, &.{ "match", "create_pattern" }));
     }
     // The bulk detectors serve only what the validator accepts.
     var sel = try geode.parseGql("WITH 1 AS one SELECT 2 AS two MATCH (a:G {i: 1}), (b:G {i: 2}) CREATE (a)-[:T]->(b)", aa);

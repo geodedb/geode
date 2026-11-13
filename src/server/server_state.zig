@@ -313,7 +313,7 @@ pub const ServerState = struct {
     allocator: std.mem.Allocator,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
-    // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).
+    // Original GQL text of the current request.
     query_text: ?[]const u8 = null,
     txn_manager: txn_mgr.Manager = undefined,
     active_txn: ?txn_mgr.Txn = null,
