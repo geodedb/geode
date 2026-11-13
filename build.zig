@@ -13036,6 +13036,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6496_leaks_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6496_leaks_step = b.step("test-sonny6496-query-leaks", "Run SONNY-6496 item 2 regression (a list literal or an inline map in a WHERE or a property map, the standalone WITH ... FOR / WITH ... RETURN path, an IN (WITH ... FOR ...) subquery, CTE bodies and a recursive CTE free what they compute: leak-checked, with and without a scratch arena, in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6496_leaks_step.dependOn(&run_sonny6496_leaks_tests.step);
+    // SONNY-6496 item 3: FOR / CALL at the start of a subquery, DELETE ... ORDER BY, MERGE ... CREATE. See tests/test_sonny6496_subquery_forms.zig.
+    const sonny6496_forms_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_subquery_forms.zig"), .target = target, .optimize = optimize });
+    sonny6496_forms_test_mod.addImport("geode", root_mod);
+    sonny6496_forms_test_mod.addImport("logging", logging_mod);
+    sonny6496_forms_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_forms_tests = b.addTest(.{ .root_module = sonny6496_forms_test_mod });
+    const run_sonny6496_forms_tests = b.addRunArtifact(sonny6496_forms_tests);
+    shardDep(test_step, &run_sonny6496_forms_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_forms_step = b.step("test-sonny6496-subquery-forms", "Run SONNY-6496 item 3 regression (a FOR at the start of an IN subquery or a CTE body runs; a CALL of a named procedure there is refused with 0A000; DELETE ... RETURN ... ORDER BY ... LIMIT runs; MERGE ... CREATE is refused with 0A000 and writes nothing: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6496_forms_step.dependOn(&run_sonny6496_forms_tests.step);
     // SONNY-6498 item 3: an expression that fails fails the statement. See tests/test_sonny6498_swallowed_errors.zig.
     const sonny6498_errors_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6498_swallowed_errors.zig"), .target = target, .optimize = optimize });
     sonny6498_errors_test_mod.addImport("geode", root_mod);

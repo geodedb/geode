@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T22:17:20.610073094Z",
+  "generated_at": "2026-11-13T22:18:53.592818374Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87495,6 +87495,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6496-SUBQUERY-FORMS",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "SubqueryStart",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_subquery_forms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_subquery_forms.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6496-WITH-SCOPE",
       "features": [
         {
@@ -95320,7 +95339,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4978
+      "TESTED": 4979
     },
     "by_aspect": {
       "2PC": 3,
@@ -99103,6 +99122,7 @@
       "SubqueryParameters": 1,
       "SubqueryParsing": 1,
       "SubqueryPatterns": 1,
+      "SubqueryStart": 1,
       "Subtraction": 1,
       "SuccessfulLogin": 1,
       "Sum": 1,
