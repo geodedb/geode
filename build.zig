@@ -12203,6 +12203,18 @@ pub fn build(b: *std.Build) void {
     const sonny2806_step = b.step("test-sonny2806-exact-property-matching", "Run SONNY-2806 regression (an inline property map and MERGE compare a stored number, duration or zoned time by its value on every session and path: the planned read, the streaming node scan, the exact index seek, MERGE's property index)");
     sonny2806_step.dependOn(&run_sonny2806_tests.step);
 
+    // SONNY-2807: `=` and the order operators compare a DOUBLE and an exact
+    // number by their exact values, as GROUP BY, DISTINCT, ORDER BY, inline
+    // maps, MERGE and the exact index seek do.
+    const sonny2807_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2807_exact_numeric_equality.zig"), .target = target, .optimize = optimize });
+    sonny2807_test_mod.addImport("geode", root_mod);
+    sonny2807_test_mod.addImport("logging", logging_mod);
+    const sonny2807_tests = b.addTest(.{ .root_module = sonny2807_test_mod });
+    const run_sonny2807_tests = b.addRunArtifact(sonny2807_tests);
+    shardDep(test_step, &run_sonny2807_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2807_step = b.step("test-sonny2807-exact-numeric-equality", "Run SONNY-2807 regression (one numeric equality rule: = and the order operators compare a DOUBLE and an exact number by exact value, agreeing with WHERE, IN, joins, GROUP BY, DISTINCT, ORDER BY, inline maps, MERGE and the WHERE seek)");
+    sonny2807_step.dependOn(&run_sonny2807_tests.step);
+
     // SONNY-2806 (round 7): MERGE matches the lowest node id among the nodes
     // holding a merge key, after a delete or a SET, on the server's bulk MERGE
     // and on a reopened store; MERGE's index keeps no number that is not an

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:06:25.702004139Z",
+  "generated_at": "2026-11-13T13:01:36.049332923Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74464,6 +74464,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY",
+      "features": [
+        {
+          "feature": "ValueOrdering",
+          "aspect": "OneNumericEqualityRule",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2807_exact_numeric_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2807_exact_numeric_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2809-DUPLICATE-CONSTRAINT",
       "features": [
         {
@@ -94141,7 +94160,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4909
+      "TESTED": 4910
     },
     "by_aspect": {
       "2PC": 3,
@@ -96566,6 +96585,7 @@
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,
+      "OneNumericEqualityRule": 1,
       "OneReadPolicyForNodesAndEdges": 1,
       "OneRequestContextForQuicAndGrpc": 1,
       "OneResolver": 1,

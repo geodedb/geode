@@ -376,8 +376,8 @@ fn checkInlineNumbers(s: *Session, f: *Failures) !void {
     }
     // WHERE agrees wherever `=` is exact.
     try expectValue(s, f, "MATCH (n:ID) WHERE n.x = 1.50 RETURN count(n) AS c", "1");
-    // DOUBLE 0.1 is not DECIMAL 0.1: an inline map is exact, as GROUP BY is
-    // (`=` compares the two in f64; SONNY-2807).
+    // DOUBLE 0.1 is not DECIMAL 0.1: an inline map is exact, as GROUP BY and
+    // `=` are (SONNY-2807).
     try expectValue(s, f, "MATCH (n:IP {x: 0.1}) RETURN count(n) AS c", "0");
     try expectRows(s, f, "MATCH (n:IP {x: $d}) RETURN count(n) AS c", &.{d01}, &.{"1"});
 }
@@ -474,14 +474,13 @@ fn checkWhereSeekPast2p53(s: *Session, f: *Failures) !void {
     defer execution.popActiveContext(prev);
     try s.double("CREATE (:B53 {x: $v})", 9007199254740992.0);
     try s.exec("CREATE (:B53 {x: 9007199254740992})", &.{});
-    // `=` compares a DOUBLE with an integer in a double: 2^53 + 1 rounds to
-    // 2^53. An integer with an integer compares exactly. The count agreed;
-    // the rows came from an exact-index seek for the integer 2^53 + 1, which
-    // found no node.
-    try expectRows(s, f, "MATCH (n:B53) RETURN n.x = 9007199254740993 AS eq", &.{}, &.{ "true", "false" });
-    try expectValue(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN count(n) AS c", "1");
-    try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN n.x AS x", &.{}, &.{"9007199254740992d"});
-    try expectRows(s, f, "MATCH (n:B53) WHERE 9007199254740993 = n.x RETURN n.x AS x", &.{}, &.{"9007199254740992d"});
+    // SONNY-2807: `=` compares a DOUBLE with an integer exactly, as GROUP BY
+    // does (ISO/IEC 39075 19.3 GR 3a: by numerical value): 2^53 + 1 is not
+    // the double 2^53. The count, the rows and the exact-index seek agree.
+    try expectRows(s, f, "MATCH (n:B53) RETURN n.x = 9007199254740993 AS eq", &.{}, &.{ "false", "false" });
+    try expectValue(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN count(n) AS c", "0");
+    try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740993 RETURN n.x AS x", &.{}, &.{});
+    try expectRows(s, f, "MATCH (n:B53) WHERE 9007199254740993 = n.x RETURN n.x AS x", &.{}, &.{});
     try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740992 RETURN n.x AS x", &.{}, &.{ "9007199254740992", "9007199254740992d" });
     try expectRows(s, f, "MATCH (n:B53) WHERE n.x = 9007199254740994 RETURN n.x AS x", &.{}, &.{});
     // An inline map compares exactly, as GROUP BY does.
@@ -489,6 +488,6 @@ fn checkWhereSeekPast2p53(s: *Session, f: *Failures) !void {
     try expectRows(s, f, "MATCH (n:B53 {x: 9007199254740992}) RETURN n.x AS x", &.{}, &.{ "9007199254740992", "9007199254740992d" });
 }
 
-test "SONNY-2807: a WHERE equality seek agrees with = past 2^53" {
+test "SONNY-2807: a WHERE equality seek agrees with an exact = past 2^53" {
     try inModes("where seek past 2^53", &eval_modes, checkWhereSeekPast2p53);
 }
