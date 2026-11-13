@@ -537,6 +537,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6484-client-hard-deadline", .reason = "intentionally red TDD reproduction (SONNY-6484 item 3: explicit test-client timeouts never fire against a live server); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
@@ -10051,6 +10052,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6301_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6301_step = b.step("test-sonny6301-test-ports-and-timeouts", "Run SONNY-6301 regression (test ports come from the kernel, not a constant: distinct, usable UDP/TCP ports and two servers at once each answering on its own; shared QUIC and gRPC test clients wait for a live server past the old reply deadline and fail at once when it exited)");
     sonny6301_step.dependOn(&run_sonny6301_tests.step);
+
+    // SONNY-6484 (3): an explicit timeout of the shared QUIC test client is a
+    // hard deadline, also against a live (stopped) server.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_client_hard_deadline.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
     // the auto TLS key lives in the data directory (exclusive, no-follow,
