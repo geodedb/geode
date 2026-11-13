@@ -2376,6 +2376,19 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **The deepest nesting the parser allows fits a gRPC connection thread
+  again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
+  WITH n FOR ...`), within the documented limit of 10, were refused with
+  42000 "nesting too deep for the parser's stack" on the 8 MiB gRPC
+  connection threads of a Debug build: one level of query nesting cost the
+  parser 0.33 MiB of stack (0.46 MiB for a FOR body). Every error exit of
+  `parseQuery`, `parseForStatement` and `parseStatement` held a copy of the
+  whole result (an `ast.Query` is 1.5 KiB, an `ast.Statement` 3 KiB) on the
+  frame; they now parse into the caller's value and return nothing. A level
+  costs 0.12 MiB (0.18 MiB for a FOR body), and the per-request
+  `parseStatement` frame went from 562 to 331 KiB. Regression: `zig build
+  test-sonny738-parser-frame-budget` (new, pins the cost per level) and
+  `zig build test-sonny-write-allowlist-r4-transport`.
 - **Breaking: one equality everywhere (SONNY-738).** After SONNY-6282 a
   pair of values could still be equal at one equality site and not at
   another. Now, as ISO/IEC 39075:2024 19.3 GR 1 and 22.12 define it, in

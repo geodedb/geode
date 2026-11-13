@@ -28,6 +28,10 @@ const stack_guard = @import("../stack_guard.zig");
 /// buys 64 Debug levels on 8 MiB (64 x 0.2 MiB is over 8 MiB), so the limit
 /// is Debug-only and documented, not tuned; the QUIC workers' 16 MiB hold
 /// about twice as many (tests/test_sonny3191_round13_items.zig pins it).
+/// SONNY-738 (item 0b): a level had grown to 0.33 MiB (0.46 MiB for a FOR
+/// body), because every error exit of `parseQuery` held a copy of its 1.5 KiB
+/// result; it is 0.12 MiB (0.18 MiB) since `parseQueryInto`, and
+/// tests/test_sonny738_parser_frame_budget.zig pins it.
 const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
 
 /// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's
@@ -1028,10 +1032,21 @@ pub const Parser = struct {
     }
 
     // CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=Parser; STATUS=TESTED; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; OWNER=engine; UPDATED=2026-04-17
+    /// SONNY-738 (item 0b): a statement, parsed into `out` by
+    /// `parseStatementInto`, whose error exits do not each hold an
+    /// `ast.Statement` (3 KiB) on its frame (see `parseQuery`). It was a
+    /// 562 KiB frame on every request's parse, and on every statement a
+    /// PROFILE, EXPLAIN or transaction body nests.
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
+        var out: ast.Statement = undefined;
+        try self.parseStatementInto(&out);
+        return out;
+    }
+
+    fn parseStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
         // SONNY-3244: at most `max_statements_per_request` statements.
         try self.countStatement();
-        return switch (self.cur.kind) {
+        out.* = try @as(ParserError!ast.Statement, switch (self.cur.kind) {
             .VALUES => self.parseValuesStatement(),
             .FOR => self.parseForStatement(),
             .LET => blk_let: {
@@ -1605,7 +1620,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .{ .StartTransaction = .{ .body = null } };
+                out.* = .{ .StartTransaction = .{ .body = null } };
+                return;
             },
             .COMMIT => {
                 self.advance();
@@ -1613,7 +1629,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .Commit;
+                out.* = .Commit;
+                return;
             },
             .ROLLBACK => {
                 self.advance();
@@ -1621,7 +1638,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .Rollback;
+                out.* = .Rollback;
+                return;
             },
             .CALL => blk_call: {
                 self.advance();
@@ -1978,7 +1996,7 @@ pub const Parser = struct {
                 break :blk_paren inner_stmt;
             },
             else => return error.UnexpectedToken,
-        };
+        });
     }
 
     /// The ORDER BY, LIMIT and OFFSET / SKIP after a RETURN of `return_len`
@@ -2188,7 +2206,21 @@ pub const Parser = struct {
         return .{ .Query = first };
     }
 
+    /// SONNY-738 (item 0b): a query, parsed into `out` by `parseQueryInto`.
+    /// In a Debug build every error exit of a function materialises its
+    /// whole return value on the frame, so `parseQuery` returning an
+    /// `ast.Query` (1.5 KiB) from about 150 error exits had a 335 KiB frame,
+    /// and every level of query nesting (a WITH chain part, CALL { }, IN
+    /// (subquery), a FOR body) paid it: nine FOR bodies no longer fitted an
+    /// 8 MiB gRPC connection thread. `parseQueryInto` returns nothing, so its
+    /// error exits cost nothing; this wrapper keeps the by-value interface.
     fn parseQuery(self: *Parser) ParserError!ast.Query {
+        var out: ast.Query = undefined;
+        try self.parseQueryInto(&out);
+        return out;
+    }
+
+    fn parseQueryInto(self: *Parser, out: *ast.Query) ParserError!void {
         // SONNY-3244: queries nest at most `max_query_nesting` deep.
         try self.enterQuery();
         defer self.query_depth -= 1;
@@ -2303,7 +2335,7 @@ pub const Parser = struct {
                 const for_ptr = try self.arena.allocator().create(ast.ForStatement);
                 for_ptr.* = for_stmt.For;
 
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} }, // Empty match pattern
                     .create_pattern = null,
@@ -2324,6 +2356,7 @@ pub const Parser = struct {
                     // that writes after one.
                     .initial_where = initial_where_expr,
                 };
+                return;
             }
 
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-003; FEATURE="ConsecutiveWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
@@ -2337,7 +2370,7 @@ pub const Parser = struct {
                 next_ptr.* = next_query;
 
                 // Return a query with initial_with_clause and next_query
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} }, // Empty match pattern
                     .create_pattern = null,
@@ -2353,6 +2386,7 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                 };
+                return;
             }
 
             // GAP #57: Handle MERGE after initial WITH clause (e.g., WITH a MERGE (b) RETURN ...)
@@ -2361,7 +2395,7 @@ pub const Parser = struct {
                 const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
                 merge_ptr.* = merge_stmt.Merge;
 
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} },
                     .create_pattern = null,
@@ -2383,6 +2417,7 @@ pub const Parser = struct {
                     .initial_with = initial_with_clause,
                     .initial_where = initial_where_expr,
                 };
+                return;
             }
         }
 
@@ -2452,7 +2487,7 @@ pub const Parser = struct {
                 // Regular procedure CALL - return empty query for now
                 // This will be handled elsewhere in the query body
                 const empty_match = ast.GraphPattern{ .chains = &.{} };
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = empty_match,
                     .create_pattern = null,
@@ -2468,6 +2503,7 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                 };
+                return;
             }
         }
 
@@ -3164,7 +3200,7 @@ pub const Parser = struct {
         // Parameter bindings (before MATCH) are evaluated once upfront
         // Inline bindings (after MATCH) are evaluated per result row with matched variables in scope
 
-        return .{
+        out.* = .{
             .let_bindings = try let_bindings.toOwnedSlice(self.arena.allocator()),
             .inline_let_bindings = try inline_let_bindings.toOwnedSlice(self.arena.allocator()),
             .optional_match = optional_match,
@@ -6632,7 +6668,17 @@ pub const Parser = struct {
         };
     }
 
+    /// SONNY-738 (item 0b): a FOR statement, parsed into `out` by
+    /// `parseForStatementInto`, whose error exits do not each hold an
+    /// `ast.Statement` (3 KiB) on its frame (see `parseQuery`): a FOR body is
+    /// a level of query nesting.
     fn parseForStatement(self: *Parser) ParserError!ast.Statement {
+        var out: ast.Statement = undefined;
+        try self.parseForStatementInto(&out);
+        return out;
+    }
+
+    fn parseForStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
         const header = try self.parseForHeader();
         const variable = header.variable;
         const collection = header.collection;
@@ -6686,7 +6732,7 @@ pub const Parser = struct {
                 body_ptr.* = try self.parseNestedQuery();
             }
 
-            return .{ .For = .{
+            out.* = .{ .For = .{
                 .variable = variable,
                 .collection = collection,
                 .ordinality_var = ordinality_var,
@@ -6694,6 +6740,7 @@ pub const Parser = struct {
                 .return_clause = null,
                 .body = body_ptr,
             } };
+            return;
         }
 
         // Expect RETURN clause
@@ -6780,7 +6827,7 @@ pub const Parser = struct {
             offset_param = off.param;
         }
 
-        return .{ .For = .{
+        out.* = .{ .For = .{
             .variable = variable,
             .collection = collection,
             .ordinality_var = ordinality_var,
@@ -6794,6 +6841,7 @@ pub const Parser = struct {
             .limit_param = limit_param,
             .offset_param = offset_param,
         } };
+        return;
     }
 
     fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
