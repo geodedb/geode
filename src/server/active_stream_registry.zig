@@ -305,7 +305,7 @@ test "GlobalStreamThrottle release wakes waiter" {
     }.run, .{ &throttle, &acquired });
 
     // Give the waiter time to enter the condvar wait.
-    std.Thread.sleep(5 * std.time.ns_per_ms);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch {};
 
     // Release our slot — this should wake the waiter.
     throttle.release();

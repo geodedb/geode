@@ -2235,6 +2235,15 @@
 
 ### Fixed
 
+- **The Prometheus exporter frees its metric names; three server files'
+  inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
+  copied each metric's name and help text and nothing freed them (20
+  allocations for the standard metric set, and the old copies when a name
+  was registered again). `zig build test-sonny6511-server-inline` (in the
+  aggregate) runs the inline tests of `active_stream_registry.zig`'s
+  `GlobalStreamThrottle` (one used the removed `std.Thread.sleep`),
+  `buffered_proto_reader_metrics.zig` and `monitoring/metrics_server.zig`,
+  whose test found the leak.
 - **LSP and MCP recommendations point at their token, and their errors
   are no longer dropped (SONNY-6511 item 4).** Every recommendation of
   `src/gql/recommendations.zig` was reported at line 0, column 0, and an
