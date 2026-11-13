@@ -9902,6 +9902,22 @@ pub fn build(b: *std.Build) void {
     const sonny2805_step = b.step("test-sonny2805-txn-sessions", "Run SONNY-2805/SONNY-2799 regression (transaction control in program order; a failed statement rolls back only its own transaction, under its graph's write lock; the undo log keys changes and savepoints by transaction and never matches all; gRPC keeps the transaction per session across threads; QUIC e2e)");
     sonny2805_step.dependOn(&run_sonny2805_tests.step);
     shardDep(test_step, &run_sonny2805_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6489 (1): data exceptions answer their class-22 GQLSTATUS on
+    // gRPC (in-process) and QUIC (the built server), not 58000.
+    const sonny6489_codes_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_data_exception_codes.zig"), .target = target, .optimize = optimize });
+    sonny6489_codes_mod.link_libc = true;
+    sonny6489_codes_mod.addImport("geode", root_mod);
+    sonny6489_codes_mod.addImport("schema", schema_mod);
+    sonny6489_codes_mod.addImport("protobuf", protobuf_mod);
+    sonny6489_codes_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6489_codes_mod.addImport("logging", logging_mod);
+    sonny6489_codes_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6489_codes_tests = b.addTest(.{ .root_module = sonny6489_codes_mod });
+    const run_sonny6489_codes_tests = b.addRunArtifact(sonny6489_codes_tests);
+    spawnsBuiltGeode(sonny6489_codes_tests);
+    b.step("test-sonny6489-data-exception-codes", "Run SONNY-6489 item 1 regression (a malformed datetime string answers 22007, a malformed duration string 22G0H, DECIMAL division by zero 22012, CHAR truncation 22001, on gRPC and QUIC; ISO/IEC 39075 23.1 Table 8)").dependOn(&run_sonny6489_codes_tests.step);
+    shardDep(test_step, &run_sonny6489_codes_tests.step, 1, test_shard_loads, test_shard_index);
     // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
     // tests) through the geode lib module, filtered, as test-quality733 does.
     const txn_undo_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "undo log", "savepoint" } });

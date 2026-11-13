@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:51:05.778583265Z",
+  "generated_at": "2026-11-13T15:53:02.190093577Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86903,6 +86903,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-DATA-EXCEPTION-CODES",
+      "features": [
+        {
+          "feature": "ErrorMapping",
+          "aspect": "DataExceptionGqlstatus",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_data_exception_codes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_data_exception_codes.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94558,7 +94577,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4932
+      "TESTED": 4933
     },
     "by_aspect": {
       "2PC": 3,
@@ -95378,6 +95397,7 @@
       "DataDirCreation": 1,
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
+      "DataExceptionGqlstatus": 1,
       "DataExport": 1,
       "DataGeneration": 1,
       "DataIngestion": 2,
