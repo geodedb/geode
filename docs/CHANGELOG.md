@@ -4,6 +4,36 @@
 
 ### Security
 
+- **BREAKING (policy outcomes, `-Dallow-rls-raw-interp=true` builds only):
+  a raw-string RLS policy admits a row only when its predicate is True
+  (SONNY-6436 item 5).** The raw-string interpreter
+  (`rls_core.ContextEvaluator`, used for a policy without compiled code
+  only in a build with `-Dallow-rls-raw-interp=true`; default builds
+  refuse such a policy, GAP-0732) now follows ISO/IEC 39075:2024 19.1 GR 2,
+  as the compiled VM already did (SONNY-2709, SONNY-2732). These
+  expressions change verdict:
+  - a bare value that is not a boolean, which admitted every row: a column
+    holding a non-zero integer, a non-empty string, a float or a timestamp
+    (`cnt`, `flag`), an integer or string literal (`1`, `'anything'`), and
+    a call that returns no boolean (`current_user()`,
+    `current_timestamp()`), also inside AND / OR (`cnt AND active`) - now
+    deny;
+  - `a = b` and `a <> b` with a null or missing side (`missing = NULL`,
+    `missing <> 'secret'`, `name <> NULL`; `NULL = NULL` admitted) or
+    with values that do not compare (`owner_id <> 'x'`, `name <> 1`,
+    `active <> 1`) or a NaN (`nan <> nan`) - `<>` admitted, now both
+    deny (UNKNOWN); write `row IS NULL OR ...` explicitly in a compiled
+    policy for the old meaning;
+  - a call followed by a comparison (`func() = x`) was evaluated as the
+    call alone: `current_user() = 999` admitted every row, and
+    `has_role('auditor') = false` denied a user without that role; it is
+    now the comparison (the latter admits that user);
+  - an empty sub-expression (`()`, `active AND ()`) admitted - now denies.
+  Unchanged: boolean columns and literals, comparisons of two values of
+  one kind, `column = current_user()`, `has_role()` / `has_permission()`,
+  AND / OR, and an empty policy (admits). The compiled VM's verdicts are
+  unchanged and pinned against the same cases. Regression:
+  `zig build test-sonny6436-rls-raw-truthiness`.
 - **The security graph never opens unaudited, and an unreadable graph
   registry refuses startup (SONNY-6430 items 5 and 7).**
   `StorageAdapter.initAuditForGraph` returned null for any failure other

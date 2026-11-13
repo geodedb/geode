@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:07:03.579802765Z",
+  "generated_at": "2026-11-13T01:09:19.46194983Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84702,6 +84702,20 @@
       "features": [
         {
           "feature": "RLSExpressionEvaluation",
+          "aspect": "OnlyTrueAdmits",
+          "status": "TESTED",
+          "files": [
+            "src/security/rls_core.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RLSExpressionEvaluation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -92402,7 +92416,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4806
+      "TESTED": 4807
     },
     "by_aspect": {
       "2PC": 3,
@@ -94787,6 +94801,7 @@
       "OneResolver": 1,
       "OneResourceRule": 1,
       "OneSetPath": 1,
+      "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,

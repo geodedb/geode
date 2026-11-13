@@ -110,6 +110,7 @@ const unchanged = [_]Case{
     .{ .expr = "owner_id = 42 AND off", .want = false },
     .{ .expr = "(owner_id = 42)", .want = true },
     .{ .expr = "", .want = true }, // no predicate at all (`evaluate`'s documented default)
+    .{ .expr = "   ", .want = true }, // a blank policy is no predicate either
 };
 
 fn testUser(allocator: std.mem.Allocator) auth.User {
