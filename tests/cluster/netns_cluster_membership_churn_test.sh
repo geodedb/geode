@@ -336,7 +336,8 @@ assert_count_steady() {
 # the k8s termination ordering so M4 actually exercises durable FileStorage
 # reload rather than a same-host two-writers race the product rightly forbids.
 kill_and_reap() {
-  local id=$1 t pat="geode serve .*--data-dir $WORK/data$id "
+  local id=$1 t
+  local pat="geode serve .*--data-dir $WORK/data$id "
   # SIGTERM first (graceful flush attempt), then give it a few seconds.
   [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
   for t in $(seq 1 5); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
@@ -405,8 +406,12 @@ reschedule_node() {
   local id=$1 oldpfx="${IPLAST[$id]:-1}" newpfx oldip o
   newpfx=2; [ "$oldpfx" = "2" ] && newpfx=1
   oldip="$SUBNET.$oldpfx$id"
-  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
-  PID[$id]=""; sleep 3
+  # SONNY-6451: reap the old process before its data dir is wiped and a new
+  # one starts on the SAME path (in k8s the new pod gets a different volume).
+  # A plain SIGTERM + `sleep 3` let a still-flushing old process recreate part
+  # of the wiped tree, and the new node then refused to start
+  # ("initializing the auth graph manager failed ... FileNotFound").
+  kill_and_reap "$id"
   for o in $NS_NODES; do
     [ "$o" = "$id" ] && continue
     $SUDO ip netns exec gt$o ip neigh replace "$oldip" lladdr 02:00:00:00:00:ee nud permanent dev vtp$o 2>/dev/null
