@@ -9611,6 +9611,23 @@ pub fn build(b: *std.Build) void {
     const sonny2978_step = b.step("test-sonny2978-overlapping-engine-txn-crash", "Run SONNY-2978 regression (a REMOVE, DELETE, label SET or REMOVE, relationship DELETE or edge-property REMOVE inside a Geode transaction, on the session engine transaction's shard, survives a SIGKILL of a real server and a restart)");
     sonny2978_step.dependOn(&run_sonny2978_tests.step);
 
+    // SONNY-6471: every relationship-property write shape (CREATE/MERGE
+    // inline on the fast paths and the executor, SET r.p, SET r = {..}, REMOVE),
+    // outside and inside a transaction, same- and cross-shard, with and
+    // without TDE, survives a SIGKILL of a real server.
+    const sonny6471_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6471_edge_prop_crash.zig"), .target = target, .optimize = optimize });
+    sonny6471_test_mod.link_libc = true;
+    sonny6471_test_mod.addImport("geode", root_mod);
+    sonny6471_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6471_test_mod.addImport("schema", schema_mod);
+    sonny6471_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6471_tests = b.addTest(.{ .root_module = sonny6471_test_mod });
+    const run_sonny6471_tests = b.addRunArtifact(sonny6471_tests);
+    spawnsBuiltGeode(sonny6471_tests);
+    shardDep(test_step, &run_sonny6471_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6471_step = b.step("test-sonny6471-edge-prop-crash", "Run SONNY-6471 regression (every relationship-property write: CREATE and MERGE with inline properties on the fast paths and the executor, SET r.p, SET r = {...}, REMOVE, outside and inside a transaction, same- and cross-shard, with and without TDE, survives a SIGKILL of a real server; read back outgoing, incoming and by an unlabeled scan)");
+    sonny6471_step.dependOn(&run_sonny6471_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
