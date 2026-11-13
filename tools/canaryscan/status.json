@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:50:50.302496716Z",
+  "generated_at": "2026-11-13T08:57:17.562597616Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85928,6 +85928,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6459-DISTRIBUTED-INLINE-TESTS",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InlineTestRoot",
+          "status": "TESTED",
+          "files": [
+            "src/distributed_inline_test_root.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6459-HYGIENE",
       "features": [
         {
@@ -93581,7 +93600,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4878
+      "TESTED": 4879
     },
     "by_aspect": {
       "2PC": 3,
@@ -95367,6 +95386,7 @@
       "InlineKey": 1,
       "InlineNodeProps": 1,
       "InlineRelProps": 1,
+      "InlineTestRoot": 1,
       "InlineValueParsing": 1,
       "InputParsing": 1,
       "InputSafety": 1,

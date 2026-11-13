@@ -2028,6 +2028,26 @@
   three-node cluster the leader now reports 12-19 ms for live peers 10 s
   after start (it reported 7186 ms) and about 8 s for a follower killed 7 s
   earlier. Regression: `zig build test-sonny6459-cluster-last-contact`.
+- **Test infrastructure: the distributed modules' inline tests run again,
+  and test-graph-store compiles again (SONNY-6459 item 7).** Zig collects
+  inline tests only from a test root's own module. The inline tests of
+  `src/distributed/raft_consensus.zig`, `cluster.zig` and
+  `cluster_auth.zig` are collected only by the unfiltered
+  `src/graph_store.zig` and `src/eval.zig` roots (`zig build
+  test-graph-store`, `test-gap0866`), and since SONNY-6456 (raft's
+  `useRealQuicInTests`) neither compiled: raft_consensus.zig needs the
+  `transport/quic` module in test builds too, and those roots did not have
+  it. They now get their own instance of it. `twophase.zig`'s 23 inline
+  tests were collected by no root; the new step `zig build
+  test-sonny6459-distributed-inline` (a src/-rooted module wired like the
+  graph_store root) runs the four files' tests, 59 in all. Fixed on the
+  way: 13 twophase tests did not compile (pre-0.16
+  `ArrayList.init`), and seven freed string literals (the 2PC send stubs
+  and the undo-log tests now hand over allocated data, as the owners
+  expect). Not run: twophase's two `TwoPCCoordinator.handleMessage` tests,
+  because that function cannot compile (protobuf 0.1.6 cannot decode the
+  union submessages of `TwoPhaseMessage`); nothing outside twophase.zig
+  uses `TwoPCCoordinator`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

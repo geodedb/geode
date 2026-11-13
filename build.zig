@@ -6111,6 +6111,46 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("rls", rls_mod);
     eval_handler_mod.addImport("rls", rls_mod);
 
+    // SONNY-6459 item 7: the inline tests of src/distributed/raft_consensus.zig,
+    // cluster.zig, twophase.zig and cluster_auth.zig, through a src/-rooted
+    // module wired like the graph_store test root above (the first three are
+    // also collected there; twophase.zig's were collected by no test root).
+    // That root's import set compiles these files without the `geode`
+    // library module, whose files would otherwise belong to two modules.
+    // The filters select those four files' tests.
+    const distributed_inline_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed_inline_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    {
+        var it = graph_store_unit_tests.root_module.import_table.iterator();
+        while (it.next()) |entry| distributed_inline_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    const distributed_inline_tests = b.addTest(.{
+        .root_module = distributed_inline_mod,
+        // twophase.zig: every test except the two that call
+        // `TwoPCCoordinator.handleMessage`, which cannot compile (protobuf
+        // 0.1.6 cannot decode TwoPhaseMessage's union submessages).
+        .filters = &.{
+            "distributed.raft_consensus.test.",
+            "distributed.cluster.test.",
+            "distributed.cluster_auth.test.",
+            "distributed.twophase.test.applyUndoOperation ",
+            "distributed.twophase.test.Transaction.",
+            "distributed.twophase.test.getClusterToken ",
+            "distributed.twophase.test.prepare message ",
+            "distributed.twophase.test.2PC nonce generation ",
+            "distributed.twophase.test.captureNodePreImage ",
+            "distributed.twophase.test.captureEdgePreImage ",
+        },
+    });
+    const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);
+    const distributed_inline_step = b.step("test-sonny6459-distributed-inline", "Run the inline tests of src/distributed/raft_consensus.zig, cluster.zig, twophase.zig and cluster_auth.zig (SONNY-6459 item 7)");
+    distributed_inline_step.dependOn(&run_distributed_inline_tests.step);
+    shardDep(test_step, &run_distributed_inline_tests.step, 1, test_shard_loads, test_shard_index);
+
     // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
     // the dead QueryRewriter, SONNY-3038).
     const rls_injection_tests = b.addTest(.{
