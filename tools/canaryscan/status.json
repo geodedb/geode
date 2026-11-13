@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T21:26:26.916711993Z",
+  "generated_at": "2026-11-13T22:31:16.095472741Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85422,6 +85422,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6491-ORDERBY-LABEL-INTERN",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6494-AUDIT-FAILCLOSED",
       "features": [
         {
@@ -93014,7 +93033,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4905
+      "TESTED": 4906
     },
     "by_aspect": {
       "2PC": 3,
@@ -96089,7 +96108,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 335,
+      "Regression": 336,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

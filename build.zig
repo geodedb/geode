@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6491-orderby-label-intern", .reason = "intentionally red TDD reproduction (SONNY-6491 follow-up, KNOWN_TEST_ISSUES): the ORDER BY auto-build names an unseen label in shard 0's dictionary only; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
@@ -10115,6 +10116,24 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6491_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6491_step = b.step("test-sonny6491-label-name-crash", "Run SONNY-6491 regression (label and relationship-type names first assigned since the last checkpoint, by CREATE with one or many new labels, the MERGE and /*+BATCH*/ bulk-MERGE fast paths, SET n:L, an explicit transaction and a new relationship type, survive a SIGKILL of a real server: counted by label and listed by db.labels() after the restart)");
     sonny6491_step.dependOn(&run_sonny6491_tests.step);
+
+    // SONNY-6491 follow-up (intentionally red, docs/KNOWN_TEST_ISSUES.md): an
+    // ORDER BY on a label no node has yet must not leave the label's name or
+    // id out of step across a restart (SIGKILL and clean shutdown; the shard
+    // dictionaries agree on every id). Not in shardDep until the fix lands;
+    // compiled by test-compile.
+    const sonny6491ob_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6491_orderby_label_intern.zig"), .target = target, .optimize = optimize });
+    sonny6491ob_test_mod.link_libc = true;
+    sonny6491ob_test_mod.addImport("geode", root_mod);
+    sonny6491ob_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6491ob_test_mod.addImport("schema", schema_mod);
+    sonny6491ob_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6491ob_tests = b.addTest(.{ .root_module = sonny6491ob_test_mod });
+    const run_sonny6491ob_tests = b.addRunArtifact(sonny6491ob_tests);
+    spawnsBuiltGeode(sonny6491ob_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6491ob_tests.step);
+    const sonny6491ob_step = b.step("test-sonny6491-orderby-label-intern", "Run SONNY-6491 follow-up regression (an ORDER BY on a label no node has yet, then CREATE: the label is counted and listed by db.labels() after a SIGKILL and after a clean shutdown of a real server, and nodes of further new labels on other shards are each found under their own label after a restart)");
+    sonny6491ob_step.dependOn(&run_sonny6491ob_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
