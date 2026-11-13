@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:45:49.249021665Z",
+  "generated_at": "2026-11-13T09:56:47.143778428Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74883,6 +74883,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "UnbatchedSpanningTxn",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93317,7 +93331,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4863
+      "TESTED": 4864
     },
     "by_aspect": {
       "2PC": 3,
@@ -97206,6 +97220,7 @@
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
+      "UnbatchedSpanningTxn": 1,
       "UnboundedWithoutLimit": 1,
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,

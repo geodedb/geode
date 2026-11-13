@@ -2018,6 +2018,25 @@
 
 ### Fixed
 
+- **DATA LOSS: a REMOVE, DELETE or relationship-property REMOVE inside a
+  transaction no longer comes back after a crash (SONNY-2978).** A
+  transaction's changes join its session's engine transaction, which
+  graph-storage batches: its WAL page images are written only when it
+  commits (GAP-0900), and recovery replays the log in written order. A
+  REMOVE of a property, a DELETE of a node and a REMOVE of a relationship
+  property committed their own engine transaction on the same shard, so
+  the transaction's older images of the same pages reached the log after
+  theirs and a crash undid them. Since SONNY-6425 put a transaction's new
+  nodes on its engine transaction's shard, this hit every node: measured
+  against a real server killed with SIGKILL, `START TRANSACTION; CREATE`
+  x64`; MATCH (n) REMOVE n.p; COMMIT` came back with `p` on 64 of 64 nodes
+  (DELETE: 64 of 64 nodes back; edge-property REMOVE: 63 of 64). The
+  statement and session engine transactions, which span many adapter
+  calls, no longer hold their shard's WAL batch; group commit's shard
+  transactions keep theirs (a worker writes only its own shard). The
+  latent engine defect (recovery replays a batched transaction's images
+  in written, not LSN, order) remains in graph-storage. Regression: `zig
+  build test-sonny2978-overlapping-engine-txn-crash`.
 - **Operator-visible: one checkpoint per persistence tick and one per clean
   shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
   persistence tick ran the light checkpoint twice (the checkpoint hook,

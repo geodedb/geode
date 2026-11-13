@@ -4804,6 +4804,7 @@ REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,BulkMergeTenantScope,TESTED
 REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,TenantScopedMergeLookup,TESTED,src/graph_store.zig,tests/test_sonny2976_merge_fast_path_tenant_scope.zig,,security,2026-11-11
 REQ-SONNY-2977-INLINE-MAP-SET,MatchSet,EveryInlineMapHolder,TESTED,tests/test_sonny2977_inline_map_set.zig,tests/test_sonny2977_inline_map_set.zig,,engine,2026-09-27
 REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,Regression,TESTED,tests/test_sonny2978_overlapping_engine_txn_crash.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
+REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,UnbatchedSpanningTxn,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
 REQ-SONNY-3025-WRITE-RETURN-ROWS,WriteBehindAggregate,PlainReturnPerRow,TESTED,tests/test_sonny3025_match_write_return_rows.zig,tests/test_sonny3025_match_write_return_rows.zig,,engine,2026-11-12
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,ExplainProfileTarget,TESTED,src/query/query_traits.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
