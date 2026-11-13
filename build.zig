@@ -15293,6 +15293,22 @@ pub fn build(b: *std.Build) void {
     const sonny6436_retry_step = b.step("test-sonny6436-quic-retry-stops", "Run the SONNY-6436 item 7 regression (geode query --file over QUIC: a statement of a rejected chunk, retried on its own, that was sent and timed out stops the run with the chunked summary; no later chunk is sent; spawns the CLI and a server)");
     sonny6436_retry_step.dependOn(&run_sonny6436_retry_tests.step);
 
+    // SONNY-6447 item 7: geode query --file over QUIC stops the run, with the
+    // summary, when the statement-by-statement retry of a rejected chunk
+    // cannot connect (or HELLO); it went on with the next chunk.
+    const sonny6447_retry_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_quic_retry_connect_stops.zig"), .target = target, .optimize = optimize });
+    sonny6447_retry_test_mod.link_libc = true;
+    sonny6447_retry_test_mod.addImport("geode", root_mod);
+    sonny6447_retry_test_mod.addImport("schema", schema_mod);
+    sonny6447_retry_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6447_retry_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6447_retry_tests = b.addTest(.{ .root_module = sonny6447_retry_test_mod });
+    const run_sonny6447_retry_tests = b.addRunArtifact(sonny6447_retry_tests);
+    spawnsBuiltGeode(sonny6447_retry_tests);
+    shardDep(test_step, &run_sonny6447_retry_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_retry_step = b.step("test-sonny6447-quic-retry-connect-stops", "Run the SONNY-6447 item 7 regression (geode query --file over QUIC: when the retry of a rejected chunk cannot connect, the run stops with the chunked summary and no later chunk is sent; spawns the CLI, a server and a UDP forwarder that drops the retry's connection)");
+    sonny6447_retry_step.dependOn(&run_sonny6447_retry_tests.step);
+
     // SONNY-6358: the offline `geode user create` / `geode user update
     // --password` store an Argon2id hash and seal the chain, so the server
     // starts and logs the user in. Spawns the CLI and a server.

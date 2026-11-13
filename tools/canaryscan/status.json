@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:20:57.233885408Z",
+  "generated_at": "2026-11-13T02:21:09.071989228Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84595,6 +84595,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-RLS-RAW-TOKENIZE",
       "features": [
         {
@@ -92275,7 +92294,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4802
+      "TESTED": 4803
     },
     "by_aspect": {
       "2PC": 3,
@@ -95356,7 +95375,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 284,
+      "Regression": 285,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
