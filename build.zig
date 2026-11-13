@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6460-unscoped-eval", .reason = "intentionally red TDD reproduction (SONNY-6460 item 4); register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -15018,6 +15019,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_filter_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_filter_step = b.step("test-sonny6460-filter-statement", "Run SONNY-6460 item 2 regression (FILTER [WHERE] <condition> after CALL ... YIELD, after MATCH ... CALL ... YIELD and after MATCH, repeated; keeps a row only when the condition is True; a WHERE after YIELD stays 42000 naming FILTER)");
     sonny6460_filter_step.dependOn(&run_sonny6460_filter_tests.step);
+    // SONNY-6460 item 4: the embedded PROFILE entry point
+    // (planned_read_runtime.executeProfiledIfSupported) runs with a statement
+    // scratch arena, so the member reads it lends are freed.
+    const sonny6460_unscoped_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_unscoped_eval.zig"), .target = target, .optimize = optimize });
+    sonny6460_unscoped_mod.link_libc = true; // setenv/unsetenv
+    sonny6460_unscoped_mod.addImport("geode", root_mod);
+    sonny6460_unscoped_mod.addImport("logging", logging_mod);
+    const sonny6460_unscoped_tests = b.addTest(.{ .root_module = sonny6460_unscoped_mod });
+    const run_sonny6460_unscoped_tests = b.addRunArtifact(sonny6460_unscoped_tests);
+    const sonny6460_unscoped_step = b.step("test-sonny6460-unscoped-eval", "Run SONNY-6460 item 4 regression (an embedded PROFILE through planned_read_runtime.executeProfiledIfSupported, with no scratch arena installed, frees the member reads it lends: a list property, an FLE field decrypted and redacted; leak-checked)");
+    sonny6460_unscoped_step.dependOn(&run_sonny6460_unscoped_tests.step);
     const sonny6460_exec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "exec.zig:", "TestCANARY_REQ_GQL_012_CountDistinctExec" } });
     const run_sonny6460_exec_inline_tests = b.addRunArtifact(sonny6460_exec_inline_tests);
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
