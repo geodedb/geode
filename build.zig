@@ -531,10 +531,9 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-grpc-shutdown-drain", .reason = "subprocess e2e (SIGTERM with an in-flight gRPC query); promotion owes a green run" },
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
+    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "flaky: the SONNY-3368 QUIC abandoned-join check (server idle within 100 s of the client leaving) failed 3 of 7 runs on a loaded host; the seed timeout is fixed (SONNY-738); KNOWN_TEST_ISSUES" },
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
-    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10332,11 +10331,10 @@ pub fn build(b: *std.Build) void {
     const sonny6430_bl_tests = b.addTest(.{ .root_module = sonny6430_bl_test_mod });
     const run_sonny6430_bl_tests = b.addRunArtifact(sonny6430_bl_tests);
     spawnsBuiltGeode(sonny6430_bl_tests);
-    // SONNY-6430 item 1: intentionally red (docs/KNOWN_TEST_ISSUES.md): the
-    // stall is in the vendored QUIC library. Not in shardDep until the
-    // library fix lands; compiled by test-compile.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6430_bl_tests.step);
-    const sonny6430_bl_step = b.step("test-sonny6430-remote-backup-large", "Run SONNY-6430 item 1 reproduction, intentionally red until the QUIC library fix (spawns a server, seeds 10 MiB of incompressible data, a backup of about 24 MB, then geode backup create --server must complete and write every announced byte; GEODE_TEST_SONNY6430_MB raises the size)");
+    // SONNY-6430 item 1: green since quic v0.1.49 (SONNY-6434), which bounds
+    // the ACK path's work per packet; the backup stalled at 11-14 MB before.
+    shardDep(test_step, &run_sonny6430_bl_tests.step, 4, test_shard_loads, test_shard_index);
+    const sonny6430_bl_step = b.step("test-sonny6430-remote-backup-large", "Run SONNY-6430 item 1 regression (spawns a server, seeds 10 MiB of incompressible data, a backup of about 24 MB, then geode backup create --server must complete and write every announced byte; GEODE_TEST_SONNY6430_MB raises the size)");
     sonny6430_bl_step.dependOn(&run_sonny6430_bl_tests.step);
     const sonny6430_mk_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_master_key_format.zig"), .target = target, .optimize = optimize });
     sonny6430_mk_test_mod.link_libc = true;
@@ -14948,6 +14946,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6425_shard_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6425_shard_step = b.step("test-sonny6425-create-one-shard-commit", "Run SONNY-6425 item 4 regression (a one-node CREATE through the executor commits exactly one storage-engine transaction: the node is allocated on the statement transaction's shard)");
     sonny6425_shard_step.dependOn(&run_sonny6425_shard_tests.step);
+
+    // SONNY-738: a query-form CREATE (CREATE ... RETURN / SET, a FOR body's
+    // CREATE) commits one engine transaction, as a CREATE statement does.
+    const sonny738_cq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_create_query_one_commit.zig"), .target = target, .optimize = optimize });
+    sonny738_cq_test_mod.link_libc = true;
+    sonny738_cq_test_mod.addImport("geode", root_mod);
+    sonny738_cq_test_mod.addImport("logging", logging_mod);
+    sonny738_cq_test_mod.addImport("rls", rls_mod);
+    sonny738_cq_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny738_cq_tests = b.addTest(.{ .root_module = sonny738_cq_test_mod });
+    const run_sonny738_cq_tests = b.addRunArtifact(sonny738_cq_tests);
+    shardDep(test_step, &run_sonny738_cq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny738_cq_step = b.step("test-sonny738-create-query-one-commit", "Run SONNY-738 regression (a query-form CREATE -- CREATE ... RETURN / SET, a FOR body's CREATE -- through the executor commits one storage-engine transaction per statement or FOR element, as a CREATE statement does)");
+    sonny738_cq_step.dependOn(&run_sonny738_cq_tests.step);
 
     // SONNY-6425 item 5: dropGraph under the caller's own read lock refuses.
     const sonny6425_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_drop_under_own_read_lock.zig"), .target = target, .optimize = optimize });

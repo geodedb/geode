@@ -5464,6 +5464,8 @@ REQ-SONNY-6459-CLUSTER-LAST-CONTACT,SHOW CLUSTER STATUS,LastContactFromRaftTraff
 REQ-SONNY-6459-CLUSTER-TRANSPORT,DistributedCluster,AcceptWithoutPoolAndPeerEndpointChange,TESTED,tests/test_sonny6459_cluster_transport.zig,tests/test_sonny6459_cluster_transport.zig,,distributed,2026-11-13
 REQ-SONNY-6459-DISTRIBUTED-INLINE-TESTS,DistributedCluster,InlineTestRoot,TESTED,src/distributed_inline_test_root.zig,tests/test_sonny6459_hygiene.zig,,distributed,2026-11-13
 REQ-SONNY-6459-HYGIENE,DistributedCluster,DeadJoinCodeAndUnrunInlineTests,TESTED,tests/test_sonny6459_hygiene.zig,tests/test_sonny6459_hygiene.zig,,distributed,2026-11-13
+REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
+REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

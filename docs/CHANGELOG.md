@@ -2111,6 +2111,39 @@
   marker (REQ-GQL-012 HavingCountDistinctFilter) moved to the end-to-end
   `HAVING count(DISTINCT n.i)` check in `zig build
   test-sonny2675-grouped-having`.
+- **Remote backups of any size complete: quic v0.1.49, geode-client-zig
+  v0.3.14, dns v0.1.28, audit v0.1.24 (SONNY-6434, SONNY-6447).** quic
+  v0.1.48 walked its whole STREAM retransmit map on every ACK frame, and
+  for each entry asked recovery for the packet's delivery state, a linear
+  scan of the sent packets; an ACK frame also reached recovery as at most
+  256 packet numbers. On a large transfer the server's QUIC poll thread fell
+  to about 80 packets/s and `geode backup create --server` of about 24 MB
+  stopped after 11-14 MB (SONNY-6430 item 1). v0.1.49 keeps the retransmit
+  entries in packet-number order, hands recovery an ACK frame's ranges
+  whole, retransmits at most two lost packets per ACK (oldest first; a
+  failed send leaves the entry tracked) and bounds the work per packet:
+  the 24 MB backup completes and `zig build
+  test-sonny6430-remote-backup-large` is in the aggregate. `--timeout`
+  still bounds the whole remote backup (default 300 s). geode-client-zig
+  v0.3.14 moves in lockstep to quic v0.1.49. dns v0.1.28 (with audit
+  v0.1.24, which pins it): the DNS resolver no longer panics at shutdown.
+  `Address.eql` sized a receive's source address by its family, and one
+  the kernel left unwritten (a peer with no address) had none; it now
+  compares by family, and the receive paths zero the address.
+  geode-client-zig still pins dns v0.1.27 until a client release moves it.
+- **A CREATE in a query (`CREATE ... SET ... RETURN`, a FOR body's CREATE)
+  commits one storage-engine transaction, as a CREATE statement does
+  (SONNY-738).** `executeCreateQuery` opened no statement transaction, so
+  each node, label, property and relationship it wrote committed on its
+  own, one WAL fsync each, on whichever shard it landed: 8 commits for
+  `CREATE (a:A)-[:E]->(b:B) SET ...`, 6 for each element of
+  `FOR i IN ... CREATE (:A {i: i})-[:E]->(:B {i: i})`. A 1,500-element FOR
+  seed against a server on an ext4 data dir took 191 s (27,567 fsync and
+  fdatasync calls); it now takes 21 s, one graph WAL fsync per element.
+  This was the cause of `test-sonny-write-allowlist-r4-transport`'s seed
+  timeout, not the QUIC transfer. A FOR still commits once per element,
+  not once per statement. Regression: `zig build
+  test-sonny738-create-query-one-commit`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so
@@ -2629,10 +2662,10 @@
   stalled failed after 30 s and one that only progressed slowly had no
   overall bound. `--timeout` (default 300 s) now bounds the server's answer
   and every byte of the file, and a timeout reports how many of the
-  announced bytes arrived. The stall itself is not fixed: a backup of about
-  24 MB still stops after 11-14 MB, in the vendored QUIC library's ACK
-  processing (`docs/KNOWN_TEST_ISSUES.md`,
-  `test-sonny6430-remote-backup-large`, intentionally red).
+  announced bytes arrived. The stall itself, a backup of about 24 MB
+  stopping after 11-14 MB in the vendored QUIC library's ACK processing,
+  is fixed by quic v0.1.49 (SONNY-6434, below):
+  `test-sonny6430-remote-backup-large` passes and is in the aggregate.
 - **BREAKING (query results): a WHERE, FILTER or HAVING keeps a row only
   when its condition is the Boolean True (SONNY-6425 item 1).** ISO/IEC
   39075:2024 19.1 `<search condition>` General Rule 2 ("satisfied if and
