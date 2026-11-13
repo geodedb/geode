@@ -12069,6 +12069,18 @@ pub fn build(b: *std.Build) void {
     const sonny2672_step = b.step("test-sonny2672-read-semantics-batch", "Run the SONNY-2672 read-semantics batch (FILTER before the read's LIMIT; SKIP / LIMIT parameters; ORDER BY key errors and unprojected keys; CALL YIELD windows; ORDER BY after a write RETURN; RETURN after SET; WITH before GROUP BY / HAVING; implicit grouping; GROUP BY a node HAVING EXISTS; multi-hop aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny2672_step.dependOn(&run_sonny2672_tests.step);
 
+    // SONNY-6264: a variable-length MATCH returns one row per path through
+    // parallel edges and a diamond. See tests/test_sonny6264_varlen_path_count.zig.
+    const sonny6264_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6264_varlen_path_count.zig"), .target = target, .optimize = optimize });
+    sonny6264_test_mod.addImport("geode", root_mod);
+    sonny6264_test_mod.addImport("logging", logging_mod);
+    sonny6264_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6264_tests = b.addTest(.{ .root_module = sonny6264_test_mod });
+    const run_sonny6264_tests = b.addRunArtifact(sonny6264_tests);
+    shardDep(test_step, &run_sonny6264_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6264_step.dependOn(&run_sonny6264_tests.step);
+
     // SONNY-6383 items 2-8: CALL { } WITH ... RETURN paging and grouping, the
     // WITH's GROUP BY not grouping the RETURN, an aggregate name inside a
     // comprehension, legacy RETURN-loop and WITH ORDER BY leaks, a CALL's
