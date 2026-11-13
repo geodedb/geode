@@ -4761,6 +4761,7 @@ REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,Regression,TESTED,tests/test
 REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,SettleThroughExactIndex,TESTED,src/graph_store.zig,tests/test_sonny2806_merge_resolve.zig,,storage,2026-09-27
 REQ-SONNY-2806-STORED-PROPERTY-EQUALITY,InlinePropertyMatch,ExactValueOnPersistedPaths,TESTED,src/execution/stored_property_equality.zig,tests/test_sonny2806_exact_property_matching.zig,,execution,2026-09-26
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
+REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny2810_snapshot_float.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
 REQ-SONNY-2812-DISTINCT-LIST-KEYS,AggregateSetQuantifier,ListKeys,TESTED,tests/test_sonny2812_distinct_list_keys.zig,tests/test_sonny2812_distinct_list_keys.zig,,execution,2026-11-12
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny2816_bulk_ingest_txn.zig,,transport,2026-09-27
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,tests/test_sonny2816_bulk_ingest_txn.zig,,,transport,2026-09-27

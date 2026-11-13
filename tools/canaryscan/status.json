@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:31:35.060214967Z",
+  "generated_at": "2026-11-13T10:38:08.166820343Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74241,6 +74241,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2810-SNAPSHOT-FLOAT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2812-DISTINCT-LIST-KEYS",
       "features": [
         {
@@ -93383,7 +93402,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4867
+      "TESTED": 4868
     },
     "by_aspect": {
       "2PC": 3,
@@ -96503,7 +96522,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 300,
+      "Regression": 301,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
