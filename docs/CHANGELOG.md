@@ -2018,6 +2018,15 @@
 
 ### Fixed
 
+- **Cluster: a raft snapshot no longer crashes on a large or tiny DOUBLE
+  property, and keeps every Float a Float (SONNY-2810).** The snapshot
+  serializer printed a Float in positional notation into a 32-byte buffer
+  and panicked when it did not fit (`1e40` needs 41 characters); an
+  integral Float (`3.0`) came back an INTEGER, and NaN or an infinity made
+  its node or relationship line invalid JSON, so the installer dropped it.
+  Floats are now written in shortest round-trip scientific form, and NaN
+  and the infinities as `{"$float":"nan"|"inf"|"-inf"}`, which the
+  installer reads back. Regression: `zig build test-sonny2810-snapshot-float`.
 - **An unlabeled scan over zeroed node pages fails instead of answering with
   the nodes missing (SONNY-2409).** graph_storage reads an all-zero page as
   a never-written one, so its node records read as empty: with every

@@ -235,6 +235,19 @@ fn jsonToPropertyValue(val: std.json.Value) ?PropertyValue {
         .float => |f| PropertyValue{ .Float = f },
         .bool => |b| PropertyValue{ .Bool = b },
         .null => PropertyValue.Null,
+        // SONNY-2810: NaN and the infinities (`GraphStore.serializeSnapshot`).
+        .object => |o| blk: {
+            if (o.count() != 1) break :blk null;
+            const tag = o.get("$float") orelse break :blk null;
+            const text = switch (tag) {
+                .string => |t| t,
+                else => break :blk null,
+            };
+            if (std.mem.eql(u8, text, "nan")) break :blk PropertyValue{ .Float = std.math.nan(f64) };
+            if (std.mem.eql(u8, text, "inf")) break :blk PropertyValue{ .Float = std.math.inf(f64) };
+            if (std.mem.eql(u8, text, "-inf")) break :blk PropertyValue{ .Float = -std.math.inf(f64) };
+            break :blk null;
+        },
         else => null,
     };
 }

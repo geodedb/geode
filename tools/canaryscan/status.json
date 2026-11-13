@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:38:08.166820343Z",
+  "generated_at": "2026-11-13T10:44:30.719723222Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74245,6 +74245,20 @@
       "features": [
         {
           "feature": "Raft Snapshot Persistence",
+          "aspect": "FloatEncoding",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93402,7 +93416,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4868
+      "TESTED": 4869
     },
     "by_aspect": {
       "2PC": 3,
@@ -94794,6 +94808,7 @@
       "FlakePin": 1,
       "FleLeakRegression": 1,
       "FleRoleBoundToPrincipal": 1,
+      "FloatEncoding": 1,
       "FloatSupport": 1,
       "FloatType": 1,
       "FloatTypes": 1,
