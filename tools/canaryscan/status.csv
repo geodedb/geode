@@ -875,9 +875,6 @@ REQ-DISTRIBUTED-INTEGRATION-003,Distributed Query Integration,FederatedOptimizat
 REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,IMPL,src/distributed/enhanced_query_transport.zig,,,distributed,2026-06-11
 REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,src/distributed/enhanced_query_transport.zig,"""dispatch: FRAGMENT_RESULT routes to handleQueryResult (GAP-0870)""",,distributed,2026-06-11
 REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,src/distributed/enhanced_query_transport.zig,"""selectShardForQuery: load balancing strategies (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DISTRIBUTED-QUERY-007,Distributed Query MVCC Integration,DistributedTransactions,TESTED,tests/test_distributed_query_mvcc_integration.zig,TestCANARY_DISTRIBUTED_QUERY_007_DistributedMVCC,,distributed,2025-10-05
-REQ-DISTRIBUTED-QUERY-008,Cross-Shard Phantom Read Prevention,DistributedIsolation,TESTED,tests/test_distributed_query_mvcc_integration.zig,TestCANARY_DISTRIBUTED_QUERY_008_CrossShardPhantomPrevention,,distributed,2025-10-05
-REQ-DISTRIBUTED-QUERY-009,Distributed Transaction Coordination,TransactionCoordination,TESTED,tests/test_distributed_query_mvcc_integration.zig,TestCANARY_DISTRIBUTED_QUERY_009_DistributedTransactionCoordination,,distributed,2025-10-05
 REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration,,distributed,2026-04-05
 REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration,,distributed,2026-04-05
 REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization,,distributed,2026-04-05
@@ -5759,12 +5756,6 @@ REQ-TS-TIMEBUCKET-001,TimeSeriesTimeBucketAvg,Aggregation,TESTED,src/timeseries/
 REQ-TS-VALUEAT-001,TimeSeriesValueAt,Query,TESTED,src/timeseries/timeseries.zig,"src/timeseries/timeseries.zig:""ts: valueAt and lastValue""",,timeseries,2026-04-01
 REQ-TS-VALUEBEFORE-001,TimeSeriesValueBefore,Query,TESTED,src/timeseries/timeseries.zig,"src/timeseries/timeseries.zig:""ts: insert/order/last/asof""",,timeseries,2026-04-01
 REQ-TXN-ISOLATION-001,EnhancedTransactionIsolation,IsolationLevels,TESTED,tests/test_gap_analysis_january_2026.zig,test_gap_analysis_january_2026.zig,,txn,2026-01-15
-REQ-TXN-PHANTOM-001,Phantom Read Prevention,PhantomReadPrevention,TESTED,src/server/txn/phantom_read_prevention.zig,TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention,,txn,2025-10-05
-REQ-TXN-PHANTOM-002,Phantom Read Prevention,PredicateLocks,TESTED,src/server/txn/phantom_read_prevention.zig,TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks,,txn,2025-10-05
-REQ-TXN-PHANTOM-003,Phantom Read Prevention,RangeQueryValidation,TESTED,src/server/txn/phantom_read_prevention.zig,TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation,,txn,2025-10-05
-REQ-TXN-PHANTOM-MVCC-001,Phantom Read MVCC Integration,SerializableIsolation,TESTED,tests/test_phantom_read_mvcc_integration.zig,TestCANARY_REQ_TXN_PHANTOM_MVCC_001_SerializableIsolation,,txn,2025-10-05
-REQ-TXN-PHANTOM-MVCC-002,Phantom Read MVCC Integration,TransactionLifecycle,TESTED,tests/test_phantom_read_mvcc_integration.zig,TestCANARY_REQ_TXN_PHANTOM_MVCC_002_TransactionLifecycle,,txn,2025-10-05
-REQ-TXN-PHANTOM-MVCC-003,Phantom Read MVCC Integration,ConflictDetection,TESTED,tests/test_phantom_read_mvcc_integration.zig,TestCANARY_REQ_TXN_PHANTOM_MVCC_003_ConflictDetection,,txn,2025-10-05
 REQ-TXN-SAVEPOINT-001,TransactionSavepoints,UndoLogSavepoint,IMPL,src/txn_undo_log.zig,,,engine,2026-04-01
 REQ-TXN-SAVEPOINT-002,TransactionSavepoints,CreateSavepoint,IMPL,src/txn_undo_log.zig,,,engine,2026-04-01
 REQ-TXN-SAVEPOINT-003,TransactionSavepoints,RollbackToSavepoint,IMPL,src/txn_undo_log.zig,,,engine,2026-04-01

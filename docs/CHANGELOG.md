@@ -5348,6 +5348,18 @@
 
 ### Removed
 
+- **Dead code: `src/server/txn/mvcc.zig` and
+  `src/server/txn/phantom_read_prevention.zig` (SONNY-6511 item 1).** An
+  MVCC manager and predicate-lock phantom prevention the server never ran
+  (see `docs/ENHANCED_TRANSACTION_ISOLATION.md`). Neither compiled on Zig
+  0.16 (`ArrayList.deinit()` with no allocator in the transaction, lock
+  and manager `deinit`, `ArrayList.init` in `PhantomReadPrevention.init`),
+  and nothing used them: a whole-repo search finds only the
+  `geode.server_mvcc` re-export, which nothing named, and two test files
+  no build step rooted (`tests/test_phantom_read_mvcc_integration.zig`,
+  `tests/test_distributed_query_mvcc_integration.zig`), which go too.
+  Their TESTED markers (REQ-TXN-PHANTOM-*, REQ-DISTRIBUTED-QUERY-007..009)
+  described only this code.
 - **Dead benchmarks: `src/benchmarks/pagination_variance.zig`,
   `src/benchmarks/pagination_execution_variance.zig` and
   `benchmarks/benchmark_pagination_order_variance.zig` (SONNY-6511

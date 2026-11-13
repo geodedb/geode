@@ -155,9 +155,6 @@ const _test_vector_index_population_integration = @import("test_vector_index_pop
 const _test_vector_documentation_validation = @import("test_vector_documentation_validation.zig");
 const _test_vector_documentation_integration = @import("test_vector_documentation_integration.zig");
 
-// Phantom Read Prevention tests (imported from within src/server/txn)
-// const _test_phantom_read_prevention = @import("../src/server/txn/phantom_read_prevention.zig");
-
 // Materialized Views tests
 const _test_materialized_views = @import("test_materialized_views.zig");
 const _test_materialized_views_integration = @import("test_materialized_views_integration.zig");

@@ -440,7 +440,8 @@ Client → Server (graph write lock / per-query read snapshot) → Executor (und
 There are no isolation levels, no SSI and no phantom-read prevention in the
 server; see [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md).
 `src/server/txn/enhanced_isolation.zig` was never compiled and was removed
-(SONNY-6298); `src/server/txn/mvcc.zig` and `src/transactions/manager.zig` are
+(SONNY-6298), and so were `src/server/txn/mvcc.zig` and
+`phantom_read_prevention.zig` (SONNY-6511); `src/transactions/manager.zig` is
 not called by any server path.
 
 **Risk**:

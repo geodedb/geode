@@ -138,7 +138,6 @@ const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
 const query_ast_cache = @import("query_ast_cache");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
-// const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
 const query_plan_cache = geode.query_plan_cache;
 

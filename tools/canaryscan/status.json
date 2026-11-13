@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:32:28.879482045Z",
+  "generated_at": "2026-11-13T18:33:48.622263303Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -14489,63 +14489,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-007",
-      "features": [
-        {
-          "feature": "Distributed Query MVCC Integration",
-          "aspect": "DistributedTransactions",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_DISTRIBUTED_QUERY_007_DistributedMVCC"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-008",
-      "features": [
-        {
-          "feature": "Cross-Shard Phantom Read Prevention",
-          "aspect": "DistributedIsolation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_DISTRIBUTED_QUERY_008_CrossShardPhantomPrevention"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-009",
-      "features": [
-        {
-          "feature": "Distributed Transaction Coordination",
-          "aspect": "TransactionCoordination",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_DISTRIBUTED_QUERY_009_DistributedTransactionCoordination"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
         }
       ]
     },
@@ -90727,120 +90670,6 @@
       ]
     },
     {
-      "id": "REQ-TXN-PHANTOM-001",
-      "features": [
-        {
-          "feature": "Phantom Read Prevention",
-          "aspect": "PhantomReadPrevention",
-          "status": "TESTED",
-          "files": [
-            "src/server/txn/phantom_read_prevention.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_001_BasicPhantomPrevention"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-PHANTOM-002",
-      "features": [
-        {
-          "feature": "Phantom Read Prevention",
-          "aspect": "PredicateLocks",
-          "status": "TESTED",
-          "files": [
-            "src/server/txn/phantom_read_prevention.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_002_PredicateLocks"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-PHANTOM-003",
-      "features": [
-        {
-          "feature": "Phantom Read Prevention",
-          "aspect": "RangeQueryValidation",
-          "status": "TESTED",
-          "files": [
-            "src/server/txn/phantom_read_prevention.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_003_RangeQueryValidation"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-PHANTOM-MVCC-001",
-      "features": [
-        {
-          "feature": "Phantom Read MVCC Integration",
-          "aspect": "SerializableIsolation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_phantom_read_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_MVCC_001_SerializableIsolation"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-PHANTOM-MVCC-002",
-      "features": [
-        {
-          "feature": "Phantom Read MVCC Integration",
-          "aspect": "TransactionLifecycle",
-          "status": "TESTED",
-          "files": [
-            "tests/test_phantom_read_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_MVCC_002_TransactionLifecycle"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-PHANTOM-MVCC-003",
-      "features": [
-        {
-          "feature": "Phantom Read MVCC Integration",
-          "aspect": "ConflictDetection",
-          "status": "TESTED",
-          "files": [
-            "tests/test_phantom_read_mvcc_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_TXN_PHANTOM_MVCC_003_ConflictDetection"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
       "id": "REQ-TXN-SAVEPOINT-001",
       "features": [
         {
@@ -93797,7 +93626,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4934
+      "TESTED": 4925
     },
     "by_aspect": {
       "2PC": 3,
@@ -94421,7 +94250,6 @@
       "ConfigureChangeStream": 1,
       "ConfigureFieldRefused": 1,
       "ConfigureFieldRestart": 1,
-      "ConflictDetection": 1,
       "ConflictRepair": 1,
       "ConflictRepairHeuristics": 1,
       "ConfusableIdentifierSqlstate42004": 1,
@@ -94761,9 +94589,7 @@
       "Distributed": 2,
       "DistributedCluster": 1,
       "DistributedIndep": 1,
-      "DistributedIsolation": 1,
       "DistributedQueries": 1,
-      "DistributedTransactions": 1,
       "DistributionStats": 1,
       "DivergentDurableStateRecovery": 1,
       "DoSGuard": 3,
@@ -96452,7 +96278,6 @@
       "PersistentStorage": 2,
       "PersistentStorageWiring": 1,
       "PersistentStreamFairness": 1,
-      "PhantomReadPrevention": 1,
       "Phase0Infra": 1,
       "Phase1Benchmark": 1,
       "Phase1Traversal": 1,
@@ -96603,7 +96428,6 @@
       "PredicateEvaluation": 1,
       "PredicateIR": 1,
       "PredicateIRAttr": 1,
-      "PredicateLocks": 1,
       "PredicatePushdown": 2,
       "PredicateRangeDetection": 2,
       "PredicateScratchArena": 1,
@@ -96834,7 +96658,6 @@
       "RangeLookupOncePerCommit": 1,
       "RangeOperatorsFailClosed": 1,
       "RangeOverlap": 1,
-      "RangeQueryValidation": 1,
       "RangeRefused": 1,
       "RangeTracker": 3,
       "RateControl": 1,
@@ -97175,7 +96998,6 @@
       "SendErrorClassify": 1,
       "SendToNode": 1,
       "SentSignal": 1,
-      "SerializableIsolation": 1,
       "Serialization": 2,
       "ServeHelpSingleSource": 1,
       "ServerAllocator": 1,
@@ -97628,10 +97450,10 @@
       "Transaction": 1,
       "TransactionBodyProjection": 1,
       "TransactionCoord": 1,
-      "TransactionCoordination": 2,
+      "TransactionCoordination": 1,
       "TransactionDetectionTests": 1,
       "TransactionIsolation": 1,
-      "TransactionLifecycle": 2,
+      "TransactionLifecycle": 1,
       "TransactionSecurity": 1,
       "Transactions": 1,
       "TransferEstimation": 1,

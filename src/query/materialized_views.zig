@@ -34,8 +34,8 @@ fn compat_microTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
-// Note: mvcc types defined as opaque to avoid circular dependency with server module
-// The actual MVCCManager is in server/txn/mvcc.zig
+// Note: geode has no MVCC manager (src/server/txn/mvcc.zig was never
+// compiled and was removed, SONNY-6511); the opaque type keeps the field.
 const TxnId = u64;
 const MVCCManager = opaque {}; // Forward declaration to avoid import conflict
 // const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");

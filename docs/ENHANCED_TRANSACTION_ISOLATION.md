@@ -46,12 +46,12 @@ together with the two uncompiled tests that exercised them
   doomed now), and a transaction's wait-for list leaked at commit and
   rollback.
 - `src/server/txn/mvcc.zig` and `src/server/txn/phantom_read_prevention.zig`
-  are named only by an export in `src/lib.zig`. Until SONNY-6487
+  were named only by an export in `src/lib.zig` that nothing used, and did
+  not compile on Zig 0.16 (`deinit` of their lock, transaction and manager
+  types, `PhantomReadPrevention.init`). Until SONNY-6487
   `src/server/server_state.zig` also carried two fields of their types
-  (`mvcc_manager`, `current_mvcc_txn`) that nothing set or read; they were
-  removed. Compile-error probes placed inside their functions do
-  not fire in `zig build`: none of their functions is compiled into the
-  server.
+  (`mvcc_manager`, `current_mvcc_txn`) that nothing set or read. Both files
+  and the two uncompiled tests that used them were removed (SONNY-6511).
 - The `geode.transaction.isolation_level` metric label
   (`otel_metrics.IsolationLevel`, six values) is recorded only by
   `src/transactions/manager.zig`, so the server never emits it.
