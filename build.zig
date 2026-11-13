@@ -16090,6 +16090,40 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_exec_inline_step = b.step("test-sonny6460-exec-inline", "Run src/exec.zig inline unit tests (grouping, HAVING, ORDER BY, set operations; SONNY-6460)");
     sonny6460_exec_inline_step.dependOn(&run_sonny6460_exec_inline_tests.step);
+    // SONNY-6494 (2): the inline tests of the geode-module files no step
+    // ran, filtered by their fully qualified names (src/lib.zig test
+    // "sonny6494-lib: inline test roots" keeps the files in discovery).
+    const sonny6494_lib_inline_tests = b.addTest(.{ .name = "sonny6494-lib-inline", .root_module = root_mod, .filters = &.{
+        "sonny6494-lib:",
+        "client.query_scope.test.",
+        "transport.connection_manager.test.",
+        "gql.confusable_check.test.",
+        "types.numeric_promotion.test.",
+        "unicode.confusables.test.",
+        "algorithms.drr.test.",
+        "algorithms.congestion_newreno.test.",
+        "algorithms.loss_recovery.test.",
+        "algorithms.timer_heap.test.",
+        "algorithms.sharding.test.",
+        "client.repl.line_text.test.",
+        "distributed.distributed_explain.test.",
+        "protocol.test.",
+        "optimizer.advanced_types_optimizer.test.",
+        "server.server_flags.test.",
+        "execution.bulk_ingest.test.",
+        "net_policy.test.",
+        "gpu.flagger.test.",
+        "admin.fle_commands.test.",
+        "planner.cost_seed.test.",
+        "planner.gpu_ops.test.",
+        "planner.calibration.test.",
+        "log.logger.test.",
+        "security.key_rotation.test.",
+        "pagination.calibration.test.",
+    } });
+    const run_sonny6494_lib_inline_tests = b.addRunArtifact(sonny6494_lib_inline_tests);
+    shardDep(test_step, &run_sonny6494_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6494-lib-inline", "Run SONNY-6494 item 2: the inline tests of 25 geode-module files no step ran (query scope, connection manager, confusables, numeric promotion, transport algorithms, line text, distributed explain, protocol, server flags, bulk ingest, planner calibration, ...)").dependOn(&run_sonny6494_lib_inline_tests.step);
     // SONNY-6494 (1): src/gql/recommendations.zig's inline tests (the MCP
     // `validate` / LSP diagnostics recommendation engine), filtered from the
     // geode lib module as test-sonny6460-exec-inline does.
