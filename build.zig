@@ -5782,6 +5782,20 @@ pub fn build(b: *std.Build) void {
     const remote_kms_step = b.step("test-remote-kms", "Run remote KMS QUIC round-trip tests (generate/attest/unwrap over real QUIC)");
     remote_kms_step.dependOn(&run_remote_kms_tests.step);
 
+    // SONNY-6480 (4): readLine allocates only for a line it returns (a real
+    // remote-KMS QUIC stream, allocations counted).
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6480_readline_alloc.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6480-readline-alloc", "Run SONNY-6480 regression (QuicClientStream.readLine / readLineWithInterrupt allocate nothing for a call that reads nothing: a real remote-KMS QUIC stream, allocations counted)").dependOn(&run_tests.step);
+    }
+
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
     const remote_kms_hardening_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms_hardening.zig"), .target = target, .optimize = optimize }) });
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
@@ -8030,6 +8044,21 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2719_tests);
     shardDep(test_step, &run_sonny2719_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny2719-starved-acceptor-survives", "Run SONNY-2719 regression (a real geode serve throttled to 5% of a CPU, its listener backlogged by datagrams it is draining, is slowed and not killed by the acceptor wedge watchdog, and answers a query afterwards)").dependOn(&run_sonny2719_tests.step);
+
+    // SONNY-6480 (1-3): the watchdog watches the bound listener (ephemeral
+    // port, IPv6) by address; the default threshold catches a one-datagram
+    // wedge. Live sockets and a real `geode serve`.
+    {
+        const aw_mod = b.createModule(.{ .root_source_file = b.path("src/server/acceptor_watchdog.zig"), .target = target, .optimize = optimize });
+        aw_mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6480_acceptor_watchdog.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("acceptor_watchdog", aw_mod);
+        tests.root_module.link_libc = true;
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6480-acceptor-watchdog", "Run SONNY-6480 regression (the acceptor watchdog watches the bound listener: --listen host:0 and IPv6 (/proc/net/udp6), rows matched by address and owning socket; the default threshold detects a one-datagram wedge and never restarts a draining acceptor)").dependOn(&run_tests.step);
+    }
 
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:53:43.001298198Z",
+  "generated_at": "2026-11-13T14:54:41.990018143Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86587,6 +86587,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6480-READLINE-NO-ALLOC",
+      "features": [
+        {
+          "feature": "QuicClient",
+          "aspect": "ReadLineAllocatesOnlyForALine",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6480_readline_alloc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6480_readline_alloc.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6480-WATCHDOG-LISTENER",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "WatchesBoundListener",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6480_acceptor_watchdog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6480_acceptor_watchdog.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94254,7 +94292,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4915
+      "TESTED": 4917
     },
     "by_aspect": {
       "2PC": 3,
@@ -97337,6 +97375,7 @@
       "ReadGateDecide": 1,
       "ReadGraphList": 2,
       "ReadHolderTracking": 1,
+      "ReadLineAllocatesOnlyForALine": 1,
       "ReadMapPartialFailure": 1,
       "ReadMutationExecuteSplit": 1,
       "ReadOnlyAllowsMatch": 1,
@@ -98350,6 +98389,7 @@
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,
+      "WatchesBoundListener": 1,
       "WebhookSink": 1,
       "WellFormed": 1,
       "WhereClause": 4,
