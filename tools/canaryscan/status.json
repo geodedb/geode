@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:12:38.440040342Z",
+  "generated_at": "2026-11-13T19:13:19.668300139Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87537,6 +87537,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-EXEC-ORDER-NFC",
+      "features": [
+        {
+          "feature": "UnicodeOrderBy",
+          "aspect": "ExecTextFallbackNfc",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
       "features": [
         {
@@ -95310,7 +95329,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4978
+      "TESTED": 4979
     },
     "by_aspect": {
       "2PC": 3,
@@ -96555,6 +96574,7 @@
       "ExclusiveEndGeodeExtension": 1,
       "ExclusiveNoFollow0600": 1,
       "ExecContextWiring": 1,
+      "ExecTextFallbackNfc": 1,
       "ExecuteCreate": 1,
       "ExecuteCreateUndoLog": 2,
       "ExecuteHandler": 1,
