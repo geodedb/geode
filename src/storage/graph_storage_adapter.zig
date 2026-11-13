@@ -7614,6 +7614,87 @@ pub const StorageAdapter = struct {
         return true;
     }
 
+    /// SONNY-6499: see `orderedIndexColumn`.
+    pub const OrderedIndexColumn = struct {
+        /// Entries in the (label, key) trees of every shard: the nodes that
+        /// carry the key, when the index is fresh.
+        entries: u64,
+        /// Every indexed string is its own NFC form (true when the column
+        /// holds no string). The trees order strings by their bytes; the full
+        /// ORDER BY by their NFC forms (SONNY-3055). The two orders agree
+        /// exactly when every string is canonical.
+        strings_canonical: bool,
+        /// Every shard's values are of one order class (INTEGER, DOUBLE or
+        /// STRING). Eligibility is decided per shard, from the shard's own
+        /// values, so INTEGERs on one shard and DOUBLEs on another were
+        /// eligible everywhere, and the merge ordered every INTEGER before
+        /// every DOUBLE (the key's type rank).
+        one_class: bool,
+    };
+
+    // CANARY: REQ=REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS; FEATURE="OrderedIndex"; ASPECT=ColumnEntriesAndNfc; STATUS=TESTED; TEST=tests/test_sonny6499_orderby_fastpath_nulls.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6499: what `orderedScanFastPath` needs beyond the gates to return
+    /// the full ORDER BY's rows from the value-ordered index: how many nodes
+    /// the trees hold (the rest of the label's nodes lack the key and sort as
+    /// NULL), and, for a STRING column, whether the trees' byte order is the
+    /// NFC order (a walk of the in-memory trees; no engine read). Null when
+    /// the graph, label or index is unknown on any shard. Locks as
+    /// `orderedIndexGate` does.
+    pub fn orderedIndexColumn(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) ?OrderedIndexColumn {
+        const ctx = (self.pinLabelScanContext(graph_name, label) catch return null) orelse
+            return null;
+        const mg = ctx.mg;
+        defer self.unpinGraph(mg);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const holds_graph_lock = threadHoldsGraphLock(mg);
+        if (!holds_graph_lock) {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+        }
+        defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+        if (mg.isDropped()) return null;
+        var column: OrderedIndexColumn = .{ .entries = 0, .strings_canonical = true, .one_class = true };
+        var class: ?gs.ordered_property_index.OrderedPropertyIndex.ValueOrderClass = null;
+        for (mg.engine.shards, 0..) |shard, i| {
+            mg.shard_locks[i].lockSharedUncancelable(io);
+            defer mg.shard_locks[i].unlockShared(io);
+            const entry = shard.ordered_property_index.find(ctx.label_id, key) orelse return null;
+            column.entries += entry.tree.len();
+            if (entry.value_class) |c| {
+                if (class != null and class.? != c) column.one_class = false;
+                class = c;
+            }
+            if (!column.strings_canonical or entry.value_class != .string) continue;
+            var cursor = shard.openOrderedCursor(ctx.label_id, key, .asc) orelse return null;
+            while (cursor.next()) |e| {
+                if (!self.orderedKeyStringCanonical(e.key)) {
+                    column.strings_canonical = false;
+                    break;
+                }
+            }
+        }
+        return column;
+    }
+
+    /// Whether the string an ordered-index key encodes is its own NFC form.
+    /// An ASCII key is; any other is decoded and checked. A key that is not a
+    /// string or cannot be decoded answers false (the caller declines).
+    fn orderedKeyStringCanonical(self: *StorageAdapter, key: []const u8) bool {
+        // Rank byte, payload, 8-byte node id.
+        if (key.len < 9 or key[0] != gs.ordered_encoding.TypeRank.string) return false;
+        for (key[1 .. key.len - 8]) |c| {
+            if (c >= 0x80) break;
+        } else return true;
+        const decoded = gs.ordered_encoding.decode(self.allocator, key) catch return false;
+        defer decoded.deinit(self.allocator);
+        return canonical_string.isCanonical(decoded.value.string);
+    }
+
     // ========================================================================
     // GAP-0064 FIX C: AUTO-BUILD the value-ordered index on a FRESH store.
     //

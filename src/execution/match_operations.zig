@@ -3415,8 +3415,9 @@ fn heapSiftDown(items: []TopKEntry, start: usize, is_desc: bool) void {
 //   - no inline pattern properties; no WHERE/FILTER/WITH/GROUP BY/HAVING
 //   - no SET clauses, no DISTINCT in RETURN
 //   - RETURN has exactly 1 item whose expression is `<var>.<key>`
-//   - ORDER BY has exactly 1 key, same `<var>.<key>` as RETURN, ASC or DESC
-//   - no NULLS policy override (parser default is ok)
+//   - ORDER BY has exactly 1 key, same `<var>.<key>` as RETURN, ASC or DESC,
+//     any null ordering (SONNY-6499: a node lacking the key, or holding NULL,
+//     is a NULL row, placed as the full sort places it)
 //   - LIMIT literal, 0 < K <= 10_000 (beyond K~10k the heap cost dominates
 //     and sort-then-trim wins — bail)
 //   - no active RLS engine with an authenticated user
@@ -3473,7 +3474,6 @@ pub fn topKOrderedFastPath(
     const order_by = q.order_by orelse return null;
     if (order_by.keys.len != 1) return null;
     const ob_key_entry = order_by.keys[0];
-    if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
     const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
     if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
     const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
@@ -3498,6 +3498,9 @@ pub fn topKOrderedFastPath(
 
     const is_desc = (dir == .desc);
     const tenant_active = filter_tenant != null;
+    // SONNY-6499: the nodes without the key or with a NULL. Each is a NULL
+    // row of the full sort; they were skipped, so the rows were missing.
+    var nulls: usize = 0;
 
     // GAP-0902: pick the candidate-read strategy by the node cache cap.
     //
@@ -3528,8 +3531,14 @@ pub fn topKOrderedFastPath(
                 try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
-                const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
-                if (pv == .Null) continue;
+                const pv = prop_store.getNodeProperty(node_id, ret_key) orelse {
+                    nulls += 1;
+                    continue;
+                };
+                if (pv == .Null) {
+                    nulls += 1;
+                    continue;
+                }
                 const entry = (try topkEntryFor(ka, node_id, pv)) orelse return null;
                 topkConsider(&heap, entry, k, is_desc);
             }
@@ -3553,12 +3562,20 @@ pub fn topKOrderedFastPath(
                 };
                 if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
             }
-            const pv = (adapter.getNodeProperty(filter_graph, slot_id, ret_key, allocator) catch continue) orelse continue;
+            // SONNY-6499: a failed read declines (the full path reports it);
+            // it dropped the row.
+            const pv = (adapter.getNodeProperty(filter_graph, slot_id, ret_key, allocator) catch return null) orelse {
+                nulls += 1;
+                continue;
+            };
             defer switch (pv) {
                 .string => |s| allocator.free(s),
                 else => {},
             };
-            if (pv == .null) continue;
+            if (pv == .null) {
+                nulls += 1;
+                continue;
+            }
             // On the topK arena: an extended value (a stored DOUBLE) decodes
             // into it.
             const stored = graph_storage_adapter.fromStorageProperty(ka, pv) catch return null;
@@ -3577,6 +3594,15 @@ pub fn topKOrderedFastPath(
     }.lt);
     if (is_desc) std.mem.reverse(TopKEntry, heap.items);
 
+    // SONNY-6499: the NULL rows go before the values or after them, in
+    // either direction, as the full sort places them
+    // (`return_and_sorting.sortRowsEx`; ISO/IEC 39075 16.17 SR 6, GR 1 g ii:
+    // Geode's default is NULLS FIRST); LIMIT then keeps the first k rows.
+    const nulls_first = ob_key_entry.nulls != .last;
+    const lead_nulls = if (nulls_first) @min(nulls, k) else 0;
+    const values = heap.items[0..@min(heap.items.len, k - lead_nulls)];
+    const trail_nulls = if (nulls_first) 0 else @min(nulls, k - values.len);
+
     // --- Build ExecutionResult ---
     // Column naming: mirror `generateUniqueColumnNames` — explicit alias,
     // else `<var>.<key>`.
@@ -3588,8 +3614,16 @@ pub fn topKOrderedFastPath(
     var columns = try allocator.alloc([]const u8, 1);
     columns[0] = col_name;
 
-    var rows = try allocator.alloc([]Value, heap.items.len);
-    for (heap.items, 0..) |entry, i| {
+    var rows = try allocator.alloc([]Value, lead_nulls + values.len + trail_nulls);
+    for (rows[0..lead_nulls]) |*r| {
+        r.* = try allocator.alloc(Value, 1);
+        r.*[0] = .{ .Null = {} };
+    }
+    for (rows[lead_nulls + values.len ..]) |*r| {
+        r.* = try allocator.alloc(Value, 1);
+        r.*[0] = .{ .Null = {} };
+    }
+    for (values, lead_nulls..) |entry, i| {
         const row = try allocator.alloc(Value, 1);
         row[0] = switch (entry.value) {
             // Dupe onto `allocator` so the value outlives `key_arena`. The
@@ -3639,9 +3673,11 @@ pub fn topKOrderedFastPath(
 // Result parity: orderedScan returns live node ids already in `dir` value order,
 // truncated to `m`; we project the SAME single order-key column, with topK's
 // exact column-naming + Value-builder idiom (Int/Double/Str). Property-less nodes
-// are not in the ordered tree (topK skips them too — `getNodeProperty` → null),
-// and the eligibility flag guarantees the column is type-uniform, so the encoded
-// value order equals topK's `entryLess` order.
+// are not in the ordered tree: they are NULL rows, counted as the label's nodes
+// minus the trees' entries and placed per the null ordering (SONNY-6499). The
+// column must be of one class on every shard and its strings in NFC
+// (`adapter.orderedIndexColumn`), so the encoded value order equals the full
+// sort's (`return_and_sorting.compareValuesWithNullsPolicy`).
 pub fn orderedScanFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -3689,7 +3725,6 @@ pub fn orderedScanFastPath(
     const order_by = q.order_by orelse return null;
     if (order_by.keys.len != 1) return null;
     const ob_key_entry = order_by.keys[0];
-    if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
     // GAP-0064 FIX C: resolve the ORDER BY key through a RETURN alias (one hop),
     // exactly as the GROUP BY fast path does (GAP-ENT-0055). The canonical shape
     // `RETURN n.<k> AS a ORDER BY a LIMIT m` leaves `ORDER BY a` as a bare Ident,
@@ -3733,61 +3768,84 @@ pub fn orderedScanFastPath(
     //     the heap (correct, slower). Strictly narrows the gate (one more AND). ---
     if (!adapter.isOrderedIndexFresh(filter_graph, label, ret_key)) return null;
 
-    // --- Index-ordered walk: k live node ids in global value order, dir-aware,
-    //     LIMIT already applied by orderedScan. ---
-    const scan_dir: graph_storage_adapter.OrderedScanDir = if (dir == .desc) .desc else .asc;
-    const ids = adapter.orderedScan(filter_graph, label, ret_key, scan_dir, k, allocator) catch return null;
-    defer allocator.free(ids);
+    // --- SONNY-6499: the column as a whole. The trees hold only the nodes
+    //     that carry the key; every other node of the label is a NULL row of
+    //     the full sort (they were dropped). Strings are ordered by their
+    //     bytes in the trees and by their NFC forms in the full sort
+    //     (SONNY-3055): served only when every string is canonical, where
+    //     the two orders agree. Eligibility is per shard: a column of one
+    //     class on every shard but not the same class on all is declined. ---
+    const column = adapter.orderedIndexColumn(filter_graph, label, ret_key) orelse return null;
+    if (!column.strings_canonical or !column.one_class) return null;
+    const label_nodes: u64 = graph_store.getGlobalStore(allocator).countNodesByLabel(filter_graph, label, null);
+    if (label_nodes < column.entries) return null; // counts disagree: let the heap count
+    const nulls: usize = std.math.cast(usize, label_nodes - column.entries) orelse return null;
+    // NULL rows before or after the values in either direction, as the full
+    // sort places them (ISO/IEC 39075 16.17 SR 6, GR 1 g ii; Geode's
+    // default is NULLS FIRST); LIMIT keeps the first k rows.
+    const nulls_first = ob_key_entry.nulls != .last;
+    const lead_nulls = if (nulls_first) @min(nulls, k) else 0;
 
-    // --- Build ExecutionResult (mirror topK's column naming + Value builder) ---
+    // --- Index-ordered walk: the values after the leading NULLs, in global
+    //     value order, dir-aware, LIMIT already applied by orderedScan. ---
+    const scan_dir: graph_storage_adapter.OrderedScanDir = if (dir == .desc) .desc else .asc;
+    const ids = adapter.orderedScan(filter_graph, label, ret_key, scan_dir, k - lead_nulls, allocator) catch return null;
+    defer allocator.free(ids);
+    const trail_nulls = if (nulls_first) 0 else @min(nulls, k - ids.len);
+
+    // --- Project the order key of each id (topK's Value builder). A node
+    //     that lost the key, or holds a kind the index does not order,
+    //     between the gates and this read declines: the full path serves
+    //     the query (it was dropped). ---
+    var values: std.ArrayList(Value) = .empty;
+    defer {
+        for (values.items) |v| switch (v) {
+            .Str => |str| allocator.free(str),
+            else => {},
+        };
+        values.deinit(allocator);
+    }
+    try values.ensureTotalCapacity(allocator, ids.len);
+    for (ids) |node_id| {
+        // Read engine-direct (no cache mutation).
+        const pv = (adapter.getNodeProperty(filter_graph, node_id, ret_key, allocator) catch return null) orelse return null;
+        defer switch (pv) {
+            .string => |str| allocator.free(str),
+            else => {},
+        };
+        values.appendAssumeCapacity(switch (pv) {
+            .int => |iv| Value{ .Int = iv },
+            .float => |fv| Value{ .Double = fv },
+            .string => |str| Value{ .Str = try allocator.dupe(u8, str) },
+            else => return null,
+        });
+    }
+
+    // --- Build ExecutionResult (mirror topK's column naming) ---
     const col_name: []const u8 = if (ret_item.alias) |a|
         try allocator.dupe(u8, a)
     else
         try std.fmt.allocPrint(allocator, "{s}.{s}", .{ match_var, ret_key });
+    errdefer allocator.free(col_name);
 
-    var columns = try allocator.alloc([]const u8, 1);
+    const columns = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(columns);
     columns[0] = col_name;
 
-    var rows = try allocator.alloc([]Value, ids.len);
+    const rows = try allocator.alloc([]Value, lead_nulls + values.items.len + trail_nulls);
     var built: usize = 0;
     errdefer {
-        for (rows[0..built]) |r| {
-            switch (r[0]) {
-                .Str => |s| allocator.free(s),
-                else => {},
-            }
-            allocator.free(r);
-        }
+        for (rows[0..built]) |r| allocator.free(r);
         allocator.free(rows);
-        allocator.free(columns[0]);
-        allocator.free(columns);
     }
-    for (ids) |node_id| {
-        // Read the projected order key engine-direct (no cache mutation). A node
-        // that lost the property between the index walk and this read is skipped
-        // — exactly as topK's `getNodeProperty orelse continue`.
-        const pv = (adapter.getNodeProperty(filter_graph, node_id, ret_key, allocator) catch continue) orelse continue;
-        defer switch (pv) {
-            .string => |s| allocator.free(s),
-            else => {},
-        };
-        const v: Value = switch (pv) {
-            .int => |iv| Value{ .Int = iv },
-            .float => |fv| Value{ .Double = fv },
-            // SONNY-6489: a DECIMAL stays a DECIMAL, as the full path projects it.
-            .decimal => |d| pattern_helpers.propertyValueToValue(.{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } }),
-            .string => |s| Value{ .Str = try allocator.dupe(u8, s) },
-            else => continue,
-        };
-        const row = try allocator.alloc(Value, 1);
-        row[0] = v;
-        rows[built] = row;
+    for (rows) |*r| {
+        r.* = try allocator.alloc(Value, 1);
+        r.*[0] = .{ .Null = {} };
         built += 1;
     }
-    // Some ids may have been skipped (property lost mid-flight); shrink to fit.
-    if (built != rows.len) {
-        rows = try allocator.realloc(rows, built);
-    }
+    // The rows own the strings from here.
+    for (values.items, rows[lead_nulls..][0..values.items.len]) |v, r| r[0] = v;
+    values.clearRetainingCapacity();
 
     _ = g_ordered_scan_fastpath_hits.fetchAdd(1, .monotonic);
 

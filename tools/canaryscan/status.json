@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:34:46.21680353Z",
+  "generated_at": "2026-11-13T18:43:42.258499127Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87521,6 +87521,20 @@
       "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
       "features": [
         {
+          "feature": "OrderedIndex",
+          "aspect": "ColumnEntriesAndNfc",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
           "feature": "TopKOrderedFastPath",
           "aspect": "FastPathsReturnFullSortPrefix",
           "status": "TESTED",
@@ -95258,7 +95272,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4975
+      "TESTED": 4976
     },
     "by_aspect": {
       "2PC": 3,
@@ -95824,6 +95838,7 @@
       "CollectionFunctions": 2,
       "CollectionParsing": 1,
       "Collections": 1,
+      "ColumnEntriesAndNfc": 1,
       "ColumnIndexLookup": 1,
       "ColumnOrder": 1,
       "ColumnSchema": 1,

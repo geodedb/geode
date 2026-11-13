@@ -2235,6 +2235,27 @@
 
 ### Fixed
 
+- **`ORDER BY ... LIMIT k` fast paths return the NULL rows, honour NULLS
+  FIRST / LAST, and never serve a mis-ordered index (SONNY-6499 item 1).**
+  Both fast paths for `MATCH (n:L) RETURN n.k ORDER BY n.k LIMIT k` (the
+  value-ordered index, `orderedScanFastPath`, and the top-K heap,
+  `topKOrderedFastPath`) skipped every node lacking the key (and the heap
+  every stored NULL), so the NULL rows the full sort returns first were
+  missing; both declined an explicit NULLS FIRST / NULLS LAST. They now
+  place the NULL rows as the full sort does (ISO/IEC 39075 16.17 SR 6 and
+  GR 1 g ii; Geode's default is NULLS FIRST in either direction) and serve
+  NULLS FIRST / LAST. The value-ordered index (graph-storage) orders
+  strings by their bytes, not by NFC (SONNY-3055), and decides eligibility
+  per shard, so a column with INTEGERs on one shard and DOUBLEs on another
+  was served with every INTEGER first: it is now served only when every
+  indexed string is in NFC (a walk of the in-memory trees,
+  `StorageAdapter.orderedIndexColumn`) and every shard holds one value
+  class; otherwise the heap serves it. A node that loses the key between
+  the index walk and the read, or a value of a kind the index does not
+  order, declines the fast path instead of dropping the row. **Behaviour
+  change:** those queries return their NULL rows; a non-NFC string column
+  is no longer index-served (slower, correct). Regression:
+  `zig build test-sonny6499-orderby-fastpath-nulls`.
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a
