@@ -2474,7 +2474,12 @@ fn analyzeLeafForProjection(
                 if (failed.*) return;
             }
         },
-        .List => |items| {
+        // CANARY: REQ=REQ-SONNY-3126-LIST-PROJECTION-LEAKS; FEATURE="PlannedReadProjection"; ASPECT=BracketListLiteralKeys; STATUS=TESTED; TEST=tests/test_sonny3126_list_projection_leaks.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-3126: a bracket list literal parses as `.ArrayLit`, whose
+        // elements are expressions; it was taken for a pure literal, so the
+        // keys its elements read were never fetched for a projected node
+        // and `RETURN [a.s, b.s]` over a relationship answered [null, null].
+        .List, .ArrayLit => |items| {
             for (items) |item| {
                 analyzeExprForProjection(allocator, item.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
@@ -2532,7 +2537,6 @@ fn analyzeLeafForProjection(
         .DomainLit,
         .UuidLit,
         .EnumLit,
-        .ArrayLit,
         .BitLit,
         .VarBitLit,
         .Date,

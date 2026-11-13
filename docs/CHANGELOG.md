@@ -2161,6 +2161,14 @@
 
 ### Fixed
 
+- **A list literal over a relationship pattern reads its members on the
+  planned read (SONNY-3126).** `MATCH (a:P)-[:R]->(b:Q) RETURN [a.s, b.s]`
+  answered `[null, null]` on a persisted session: a bracket list literal
+  parses as an array literal, which the planned read's projection analysis
+  took for a constant, so the properties its elements read were not
+  fetched for the projected nodes. Regression: `zig build
+  test-sonny3126-list-projection-leaks` (keys(), collect() and list literals
+  on every session, leak-checked).
 - **A MERGE's or CREATE's RETURN map is freed with the result
   (SONNY-3378).** A write step's RETURN items (and a CREATE's WITH items)
   were evaluated on the result's allocator while the result borrows its

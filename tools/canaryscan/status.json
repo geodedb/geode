@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:43:31.241389679Z",
+  "generated_at": "2026-11-13T15:44:24.687546128Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76775,6 +76775,20 @@
       "id": "REQ-SONNY-3126-LIST-PROJECTION-LEAKS",
       "features": [
         {
+          "feature": "PlannedReadProjection",
+          "aspect": "BracketListLiteralKeys",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3126_list_projection_leaks.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
           "feature": "SharedProjection",
           "aspect": "Regression",
           "status": "TESTED",
@@ -94619,7 +94633,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4936
+      "TESTED": 4937
     },
     "by_aspect": {
       "2PC": 3,
@@ -94938,6 +94952,7 @@
       "BoundsChecking": 2,
       "BowtieRejection": 1,
       "BoxedEdges": 1,
+      "BracketListLiteralKeys": 1,
       "BridgeAndDrainReady": 1,
       "BridgeContract": 1,
       "BridgeLeverage": 2,
