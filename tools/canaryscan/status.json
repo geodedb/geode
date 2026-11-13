@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:58:10.387474738Z",
+  "generated_at": "2026-11-13T19:58:25.136890503Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87622,6 +87622,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6498-EVAL-ERRORS-RAISE",
+      "features": [
+        {
+          "feature": "ExpressionEvaluation",
+          "aspect": "ErrorsFailStatement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6498_swallowed_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6498_swallowed_errors.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95343,7 +95362,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4980
+      "TESTED": 4981
     },
     "by_aspect": {
       "2PC": 3,
@@ -96536,6 +96555,7 @@
       "ErrorReporting": 1,
       "ErrorTesting": 1,
       "ErrorTypeReexport": 1,
+      "ErrorsFailStatement": 1,
       "EscalationPrevention": 1,
       "EstimatorApi": 1,
       "EstimatorPrimitives": 2,

@@ -13036,6 +13036,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6496_leaks_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6496_leaks_step = b.step("test-sonny6496-query-leaks", "Run SONNY-6496 item 2 regression (a list literal or an inline map in a WHERE or a property map, the standalone WITH ... FOR / WITH ... RETURN path, an IN (WITH ... FOR ...) subquery, CTE bodies and a recursive CTE free what they compute: leak-checked, with and without a scratch arena, in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6496_leaks_step.dependOn(&run_sonny6496_leaks_tests.step);
+    // SONNY-6498 item 3: an expression that fails fails the statement. See tests/test_sonny6498_swallowed_errors.zig.
+    const sonny6498_errors_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6498_swallowed_errors.zig"), .target = target, .optimize = optimize });
+    sonny6498_errors_test_mod.addImport("geode", root_mod);
+    sonny6498_errors_test_mod.addImport("logging", logging_mod);
+    sonny6498_errors_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6498_errors_tests = b.addTest(.{ .root_module = sonny6498_errors_test_mod });
+    const run_sonny6498_errors_tests = b.addRunArtifact(sonny6498_errors_tests);
+    shardDep(test_step, &run_sonny6498_errors_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6498_errors_step = b.step("test-sonny6498-swallowed-errors", "Run SONNY-6498 item 3 regression (division by zero, integer overflow and a type error in a function argument fail the statement through every executor path that swallowed them: inline property maps, hop and variable-length WHEREs, comma-pattern aggregates and grouping keys, chained aggregates, OPTIONAL MATCH, shortestPath: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6498_errors_step.dependOn(&run_sonny6498_errors_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });
