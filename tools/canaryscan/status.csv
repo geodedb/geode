@@ -4897,6 +4897,7 @@ REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,PerLabelBackfillFromPostings
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,Regression,TESTED,tests/test_sonny3056_lean_merge_evicted_holder.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3059-UNDO-ALL-CHANGES,TransactionUndoLog,AdoptStatementRecord,TESTED,src/txn_undo_log.zig,tests/test_sonny3348_statement_undo.zig,,engine,2026-09-29
 REQ-SONNY-3109-MERGE-LABEL-CHANGE,MergeIdempotency,LabelChangeIndexMaintenance,TESTED,tests/test_sonny3109_merge_label_change.zig,tests/test_sonny3109_merge_label_change.zig,,storage,2026-09-27
+REQ-SONNY-3111-WRITE-SHAPE-MATRIX,WriteShapeAllowlist,Triage,TESTED,tests/test_sonny3111_write_shape_matrix.zig,tests/test_sonny3111_write_shape_matrix.zig,,engine,2026-11-13
 REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,PinnedBulkLookup,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny3121_direct_bulk_pin.zig,,storage,2026-11-13
 REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3121_direct_bulk_pin.zig,tests/test_sonny3121_direct_bulk_pin.zig,,storage,2026-11-13
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,MaterializeKnownOnly,TESTED,src/graph_store.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12

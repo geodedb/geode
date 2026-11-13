@@ -12600,6 +12600,17 @@ pub fn build(b: *std.Build) void {
     const sonny6343_step = b.step("test-sonny6343-next-and-call", "Run SONNY-6343 regression (ISO NEXT: the result table of the statement before it continues as the next statement's working table, with ORDER BY, LIMIT, aggregates, DISTINCT and a YIELD clause; NEXT with no result table or after a UNION, and every inline CALL { } form other than a statement-level CALL { } followed by WITH, WHERE or RETURN, is refused with 0A000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6343_step.dependOn(&run_sonny6343_tests.step);
 
+    // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
+    const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });
+    sonny3111_test_mod.addImport("geode", root_mod);
+    sonny3111_test_mod.addImport("logging", logging_mod);
+    sonny3111_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3111_tests = b.addTest(.{ .root_module = sonny3111_test_mod });
+    const run_sonny3111_tests = b.addRunArtifact(sonny3111_tests);
+    shardDep(test_step, &run_sonny3111_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3111_step = b.step("test-sonny3111-write-shape-matrix", "Run SONNY-3111 triage (every write shape the ticket lists is refused with 0A000 before anything is written, or accepted and written right; none is accepted and written wrongly: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny3111_step.dependOn(&run_sonny3111_tests.step);
+
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });
     sonny6266_q_test_mod.addImport("geode", root_mod);
