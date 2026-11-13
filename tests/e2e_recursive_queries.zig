@@ -232,6 +232,24 @@ test "GAP-0859 (d): UNION (distinct) dedups and terminates a cycle at {1,2}" {
     try testing.expect(containsInt(ns, 2));
 }
 
+// SONNY-738: UNION drops a row that is not distinct from one it has
+// (ISO/IEC 39075:2024 22.12): 1.0 is not distinct from 1. The dedup compared
+// representations, so 1.0 never matched the anchor's 1 (nor, a decimal, its
+// own earlier copy) and the recursion ran to the cap: 101 rows.
+test "SONNY-738: UNION dedups numbers by value (1.0 is a duplicate of 1)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const list = try h.cteList(
+        \\WITH RECURSIVE c AS (
+        \\  RETURN 1 AS n
+        \\  UNION
+        \\  UNWIND c AS prev RETURN 1.0 AS n
+        \\) RETURN c
+    );
+    try testing.expectEqual(@as(usize, 1), list.len);
+}
+
 // UNION ALL keeps duplicate-valued rows from converging steps; UNION would
 // collapse them. Anchor 1, increment-while-<3 step yields {1,2,3} with UNION
 // ALL (no duplicates produced here, but the path keeps every emitted row).

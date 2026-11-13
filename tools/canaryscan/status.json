@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:40:35.17230227Z",
+  "generated_at": "2026-11-13T14:23:56.666171497Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86806,6 +86806,20 @@
           "benches": [],
           "owner": "eval",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "ListsRecordsUniversal",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -94444,7 +94458,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4926
+      "TESTED": 4927
     },
     "by_aspect": {
       "2PC": 3,
@@ -96452,6 +96466,7 @@
       "ListUnwind": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
+      "ListsRecordsUniversal": 1,
       "LiteralParsing": 2,
       "LiteralTrue": 1,
       "Literals": 1,

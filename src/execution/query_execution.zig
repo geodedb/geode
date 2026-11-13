@@ -1609,20 +1609,14 @@ fn rowsEqual(a: []const Value, b: []const Value) bool {
     return true;
 }
 
-/// Compare two Values for equality (used by CTE UNION dedup).
+/// Whether two values are not distinct (CTE UNION dedup).
+/// SONNY-738: UNION drops a row that is not distinct from one it has
+/// (ISO/IEC 39075:2024 22.12): numbers by value, lists by their elements,
+/// two nulls not distinct. Values of different types were always distinct
+/// here and a decimal never equalled itself, so `1.0` repeated a recursive
+/// UNION until its iteration cap.
 fn valuesEqual(a: Value, b: Value) bool {
-    if (@intFromEnum(a) != @intFromEnum(b)) return false;
-    return switch (a) {
-        .Null => true,
-        .Int => |v| v == b.Int,
-        .Bool => |v| v == b.Bool,
-        .Str => |v| std.mem.eql(u8, v, b.Str),
-        .Double => |v| v == b.Double,
-        .Real => |v| v == b.Real,
-        .SmallInt => |v| v == b.SmallInt,
-        .BigInt => |v| v == b.BigInt,
-        else => false, // Complex types: treat as non-equal for safety
-    };
+    return execution.valuesEqual(a, b);
 }
 
 // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=LetShadowsRequest; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29

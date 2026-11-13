@@ -2291,6 +2291,32 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **Breaking: one equality everywhere (SONNY-738).** After SONNY-6282 a
+  pair of values could still be equal at one equality site and not at
+  another. Now, as ISO/IEC 39075:2024 19.3 GR 1 and 22.12 define it, in
+  every session:
+  - values of types that are not comparable with each other (a number and a
+    Boolean, a string and a Boolean, a date and a string, a number and a
+    list, a node and a relationship, ...) are never equal: `=` is false and
+    `<>` true, as for an integer and a string. `RETURN 1 = true` raised a
+    type mismatch, which `WHERE` turned into an error on one path and a
+    dropped row on another (so `WHERE n.k <> true` also dropped a node whose
+    `k` is `1`). `<`, `<=`, `>` and `>=` between them stay refused;
+  - lists compare element by element and records field by field, each pair
+    as `=` compares it: `[1] = [1.0]` and `{v: 1} = {v: 1.0}` are true
+    (were false); `[1, NULL] = [1, NULL]` is unknown (was true); a stored
+    list property now equals a list value with a decimal in it in `WHERE`
+    (`WHERE n.k = [1.0, 2]` missed a stored `[1, 2]`);
+  - a simple `CASE x WHEN y` takes a WHEN only when `x = y` is true (20.7):
+    `CASE 1 WHEN 1.0` takes it (took the ELSE), `CASE NULL WHEN NULL` does
+    not (took it);
+  - a TEXT, VARCHAR or CHAR value equals a string with the same characters
+    (raised a type mismatch);
+  - a recursive CTE's `UNION` drops `1.0` as a duplicate of `1`, and a
+    decimal as a duplicate of itself (it ran to the iteration cap).
+  `IN` follows `=`, so `1 IN [true]` is false (raised) and `42 IN ['42']`
+  false. Regression: `zig build test-sonny738-equality-consistency` (new),
+  and `zig build test-recursive-cte`.
 - **Persisted sessions: a relationship walked from its target keeps its
   properties (SONNY-6266).** `MATCH (a)<-[{w: 2}]-(b)` answered 0, and an
   undirected hop with a relationship property map or a WHERE on the
