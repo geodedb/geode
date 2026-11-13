@@ -254,10 +254,19 @@ pub const ReplLoop = struct {
             try stdout_file.writeStreamingAll(replIo(), prompt);
 
             // Read line
+            // CANARY: REQ=REQ-SHELL-PLAIN-EOF-001; FEATURE="ShellPlainMode"; ASPECT=ExitAtEndOfInput; STATUS=TESTED; TEST=tests/test_sonny3060_shell_plain_eof.zig; OWNER=cli; UPDATED=2026-11-13
+            // SONNY-3060: end of input (a piped file or here-doc) ends the
+            // session. Zig 0.16 reports EOF as error.EndOfStream, not as a
+            // zero-length read; it used to only break this byte loop, so the
+            // shell printed prompts forever. A last line without a newline
+            // still runs before the shell exits.
             var pos: usize = 0;
             while (pos < line_buf.len - 1) {
                 var byte: [1]u8 = undefined;
-                const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch break;
+                const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch |err| switch (err) {
+                    error.EndOfStream => 0,
+                    else => return err,
+                };
                 if (n == 0) {
                     state.quit_requested = true;
                     break;
@@ -290,8 +299,10 @@ pub const ReplLoop = struct {
                 }
             }
 
-            if (state.quit_requested) break;
-            if (pos == 0) continue;
+            if (pos == 0) {
+                if (state.quit_requested) break;
+                continue;
+            }
 
             const line = line_buf[0..pos];
 

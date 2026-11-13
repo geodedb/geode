@@ -213,6 +213,6 @@ pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, va
 }
 
 // SONNY-6453: the inline tests that lived here could run in no step (this
-// file's import closure pulls in external_kms_client.zig's Vault tests, which
-// do not compile under Zig 0.16); they are in tests/test_kms_provider.zig
-// (`zig build test-kms-provider`).
+// file's import closure pulled in external_kms_client.zig's Vault code, which
+// did not compile under Zig 0.16 until SONNY-6457); they are in
+// tests/test_kms_provider.zig (`zig build test-kms-provider`).

@@ -536,6 +536,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -5691,9 +5692,6 @@ pub fn build(b: *std.Build) void {
     // Create and add index_selectivity module for server
     const index_selectivity_mod = b.createModule(.{ .root_source_file = b.path("src/index/selectivity.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("index_selectivity", index_selectivity_mod);
-    // Create and add text_formatter module for server
-    const text_formatter_mod = b.createModule(.{ .root_source_file = b.path("src/util/text_formatter.zig"), .target = target, .optimize = optimize });
-    geode_exe.root_module.addImport("text_formatter", text_formatter_mod);
 
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
@@ -5833,6 +5831,140 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6453-mtls-client-ca", "Run SONNY-6453 item 1 regression (GEODE_MTLS_REQUIRED accepts a client certificate that chains to GEODE_MTLS_CLIENT_CA and rejects one from another CA, a self-signed or expired one, none, and one sent without CertificateVerify; refuses to start with no usable client CA or with a gRPC listener; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6457 (1): QuicClient.connectEx presents its client certificate
+    // (it used to turn the endpoint into a server); spawns the built geode
+    // with GEODE_MTLS_REQUIRED and dials it over real QUIC.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_connectex_client_cert.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6457-connectex-client-cert", "Run SONNY-6457 item 1 regression (QuicClient.connectEx presents a client certificate in GEODE_MTLS_CLIENT_CA and is accepted by an mTLS-required geode, one not in the bundle or none is rejected, and a certificate without its key, a key without its certificate or an unreadable file is refused before dialling; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6457 (2): the real `geode query --client-cert --client-key`
+    // binary presents its certificate to an mTLS-required geode. The CLI
+    // dials through geode-client-zig, so this stays intentionally red
+    // (docs/KNOWN_TEST_ISSUES.md) until the client library fix is pinned;
+    // compiled by test-compile.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_cli_client_cert.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6457-cli-client-cert", "Run SONNY-6457 item 2 reproduction, intentionally red until the geode-client-zig fix is pinned (the real geode query binary with --ca-cert and --client-cert/--client-key in GEODE_MTLS_CLIENT_CA is accepted by an mTLS-required geode; a certificate not in the bundle or none is rejected)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6457 (5): every geode mtls subcommand is refused as unsupported
+    // (certificate-to-user mapping is SONNY-6458) and writes no state file.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_mtls_cli_unsupported.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6457-mtls-cli-unsupported", "Run SONNY-6457 item 5 regression (geode mtls map create/list/delete, config and status are refused as unsupported, SONNY-6458, exit non-zero, name GEODE_MTLS_REQUIRED and write no geode_mtls_state.db; mtls --help says so)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-3060: `geode shell --plain` exits 0 at end of input (piped file,
+    // here-doc) instead of printing prompts forever.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3060_shell_plain_eof.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3060-shell-plain-eof", "Run SONNY-3060 regression (the real geode shell --plain against a real server exits 0 when its piped stdin reaches EOF: empty input, newline-terminated statements, and a last line without a newline, which still runs)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-1336: `geode serve --listen-grpc <addr:port>` binds <addr> (read
+    // back from the kernel socket table), and refuses an address grpc-zig
+    // cannot bind instead of silently listening on loopback.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1336_grpc_bind_address.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny1336-grpc-bind-address", "Run SONNY-1336 regression (the real geode serve listens for gRPC on the --listen-grpc address per /proc/net/tcp and answers HELLO there: 127.0.0.2, 0.0.0.0, a port alone takes the QUIC listener's address or 0.0.0.0; the banner names the bound address; IPv6, a host name or a bad port is refused with exit 2)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-3390: a QUIC client disconnect stops the read it left running
+    // promptly, not at the 60 s per-connection stall watchdog.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3390_quic_disconnect_cancels_read.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3390-quic-disconnect-cancels-read", "Run SONNY-3390 regression (a real geode serve: a client that closes its QUIC connection (CONNECTION_CLOSE) 1 s into a comma join whose WHERE keeps nothing leaves the server idle within 20 s, well before the 60 s stall watchdog, and the server answers a new connection)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6463 (5): source files outside src/distributed whose inline tests
+    // no step ran. Each file is its own test root (its inline tests only).
+    {
+        const sonny6463_step = b.step("test-sonny6463-inline", "Run SONNY-6463 item 5: the inline tests of live source files outside src/distributed that no build step ran (std-only and crypto_backend-only files; each file is its own test root)");
+        for ([_][]const u8{
+            "src/transactions/mvcc_adv/conflict_repair_heuristics.zig",
+            "src/transactions/mvcc_adv/early_detect.zig",
+            "src/transactions/mvcc_adv/partial_rollback.zig",
+            "src/transactions/mvcc_adv/predictive_skew_filter.zig",
+            "src/transport/stream_scheduler.zig",
+            "src/index/selectivity.zig",
+            "src/mcp/prompts.zig",
+            "src/tools/bulk_loader.zig",
+            "src/cli/tenant_cli.zig",
+            "src/transactions/range_tracker.zig",
+        }) |path| {
+            const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463_step.dependOn(&run_tests.step);
+        }
+        for ([_][]const u8{
+            "src/cli/security/session_storage.zig",
+            "src/cli/geode_audit_verify.zig",
+        }) |path| {
+            const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
+            mod.addImport("crypto_backend", crypto_backend_mod);
+            mod.link_libc = true;
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463_step.dependOn(&run_tests.step);
+        }
     }
 
     // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
@@ -9160,6 +9292,30 @@ pub fn build(b: *std.Build) void {
     const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
     sonny1221_step.dependOn(&run_sonny1221_tests.step);
 
+    // SONNY-2465: gRPC streaming /Execute pushes node-scan fast-path rows
+    // (pushResultPages served only executor results: schema, then zero rows).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2465_grpc_stream_node_scan.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        if (enable_openssl) {
+            mod.linkSystemLibrary("ssl", .{});
+            mod.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+            mod.linkSystemLibrary("dl", .{});
+        }
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2465-grpc-stream-node-scan", "Run SONNY-2465 regression (gRPC streaming Execute's push drain, pushResultPages, delivers every row of a statement the node-scan fast path served, ends with a final page and releases the stream; in process through the real handleExecute)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2472: a string property projected twice by the node-scan fast path
     // (`RETURN n.s, n.s AS t`) was one allocation in two cells, and page
     // teardown freed it once per cell. Each cell must hold its own copy.
@@ -9911,6 +10067,7 @@ pub fn build(b: *std.Build) void {
     sonny2441_kms_mod.addImport("json", json_mod);
     sonny2441_kms_mod.addImport("transport/quic", transport_quic_mod);
     sonny2441_kms_mod.addImport("feature_flags", runtime_flags_mod);
+    sonny2441_kms_mod.addImport("s3_sigv4", s3_sigv4_mod);
     {
         const opts = b.addOptions();
         opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
@@ -10097,12 +10254,43 @@ pub fn build(b: *std.Build) void {
         ext_kms_mod.addImport("crypto_backend", crypto_backend_mod);
         ext_kms_mod.addImport("logging", logging_mod);
         ext_kms_mod.addImport("json", json_mod);
+        ext_kms_mod.addImport("s3_sigv4", s3_sigv4_mod);
+        // The inline integration tests read the environment (std.c.getenv).
+        ext_kms_mod.link_libc = true;
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_external_kms_provider.zig"), .target = target, .optimize = optimize });
         mod.addImport("external_kms_client", ext_kms_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
+
+        // SONNY-6457 item 4: every network entry point of the Vault and AWS
+        // KMS clients is analysed, so they cannot stop compiling unnoticed.
+        {
+            const ekc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_external_kms_compile.zig"), .target = target, .optimize = optimize });
+            ekc_mod.addImport("external_kms_client", ext_kms_mod);
+            const ekc_tests = b.addTest(.{ .root_module = ekc_mod });
+            const run_ekc_tests = b.addRunArtifact(ekc_tests);
+            shardDep(test_step, &run_ekc_tests.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6457-external-kms-compile", "Run SONNY-6457 item 4 regression (the Vault Transit and AWS KMS clients compile: every network entry point is analysed; an incomplete configuration is refused before any request; Vault Transit URLs, request body and headers, and Vault / AWS KMS responses in their documented JSON shapes; no network call)").dependOn(&run_ekc_tests.step);
+        }
+
+        // SONNY-6465: the Vault / AWS KMS clients sign AWS requests (SigV4),
+        // honour or refuse the TLS options, unwrap from the envelope; and
+        // the client file's own inline tests run.
+        {
+            const s6465_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6465_external_kms.zig"), .target = target, .optimize = optimize });
+            s6465_mod.addImport("external_kms_client", ext_kms_mod);
+            const s6465_tests = b.addTest(.{ .root_module = s6465_mod });
+            const run_s6465_tests = b.addRunArtifact(s6465_tests);
+            shardDep(test_step, &run_s6465_tests.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6465-external-kms", "Run SONNY-6465 regression (AWS KMS requests are SigV4-signed for service kms: signing key per the AWS example, signature per an independent computation; static credentials required; tls_ca_cert is the only trust anchor and tls_skip_verify is refused; Vault and AWS envelopes carry their KMS ciphertext and a fresh client builds the decrypt request from it; a missing or swapped ciphertext is refused; AWS rotateKey refuses; no network call)").dependOn(&run_s6465_tests.step);
+
+            const inline_tests = b.addTest(.{ .root_module = ext_kms_mod });
+            const run_inline = b.addRunArtifact(inline_tests);
+            shardDep(test_step, &run_inline.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6465-external-kms-inline", "Run SONNY-6465 item 4: src/security/external_kms_client.zig's inline tests (simulated AEAD round trip and tamper, provider factory, configuration refusals; the live Vault / AWS KMS tests run only when VAULT_ADDR / AWS_KMS_ENDPOINT and credentials are set, else skip)").dependOn(&run_inline.step);
+        }
 
         // SONNY-6386 item 5: no uncompiled KeyRegistry persistence or
         // simulated-KMS rotation, no marker or doc claiming them, and the
@@ -11629,6 +11817,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
+
+    // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the
+    // 16 MiB maximum is answered 54000 and its connection closed, so the
+    // client fails fast (it used to block until its 60 s writer deadline).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_request_size.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
+    }
 
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from

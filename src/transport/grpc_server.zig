@@ -1252,8 +1252,12 @@ pub const GeodeGrpcServer = struct {
     /// GAP-0518: Heap-allocated random session key (freed in deinit).
     grpc_session_key: ?[]u8 = null,
 
+    /// SONNY-1336: `bind_address` is the IPv4 address to listen on
+    /// (`cli_args.resolveGrpcBind`); it is passed to grpc-zig's
+    /// `initWithBind`, so GRPC_ZIG_BIND_ADDR no longer decides the bind.
     pub fn init(
         allocator: std.mem.Allocator,
+        bind_address: []const u8,
         port: u16,
         cert_path: ?[]const u8,
         key_path: ?[]const u8,
@@ -1267,7 +1271,7 @@ pub const GeodeGrpcServer = struct {
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);
-        var server = try GrpcServer.init(allocator, std.Io.Threaded.global_single_threaded.io(), port, grpc_session_key);
+        var server = try GrpcServer.initWithBind(allocator, std.Io.Threaded.global_single_threaded.io(), bind_address, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         if (allow_plaintext_fallback) {
@@ -1325,6 +1329,12 @@ pub const GeodeGrpcServer = struct {
 
         try self.registerHandlers();
         return self;
+    }
+
+    /// The TCP port the listener is bound to (the requested one, or the
+    /// kernel's choice for port 0).
+    pub fn boundPort(self: *const GeodeGrpcServer) u16 {
+        return self.server.server.socket.address.getPort();
     }
 
     pub fn deinit(self: *GeodeGrpcServer) void {
@@ -1497,75 +1507,21 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
 const PageResult = struct { bytes: []u8, is_final: bool };
 const grpc_stream_page_size: usize = query_runner.default_page_size;
 
-fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !PageResult {
-    const store = getSessionStore() orelse {
-        var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-
-    const entry = store.acquire(session_id) orelse {
-        throttleInvalidSessionProbe();
-        var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-    // SONNY-3032: held for the request; the reaper closes only an unheld session.
-    defer store.release(entry);
-
-    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    const state = entry.state;
-    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
-    // are this thread's for the request, whichever worker thread serves it.
-    const txn_scope = state.enterSessionTxn();
-    defer state.leaveSessionTxn(txn_scope);
-    // SONNY-6334: the session's request context (tenant, FLE role,
-    // decrypt_field gate) on this thread for the request, as QUIC does.
-    state.installRequestThreadState();
-    defer server_state.ServerState.clearRequestThreadState();
-
-    const result_ptr = if (state.active_result_values) |*res| res else {
-        var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-
-    const start = state.result_page_index;
-
-    // Arena allocator for data page serialization (Issue #446):
-    // Per-value string dups become bump allocations; arena bulk-frees after encode.
-    var page_arena = std.heap.ArenaAllocator.init(allocator);
-    defer page_arena.deinit();
-    const pa = page_arena.allocator();
-
-    const page = try proto_util.buildDataPage(pa, result_ptr, start, grpc_stream_page_size, state.result_ordered, state.result_order_keys);
-    state.result_page_index += page.rows.items.len;
-    const is_final = page.final;
-
-    const status = try proto_util.buildStatus(pa, "00000", result_ptr.flags.items);
-    const resp = schema.ExecutionResponse{
-        .status = status,
-        .payload = .{ .page = page },
-    };
-    // resp.deinit not needed: arena handles all proto object memory
-
-    const encoded_tmp = try encodeMessage(pa, resp);
-    const encoded = try allocator.dupe(u8, encoded_tmp);
-
-    if (is_final) {
-        state.resetResult();
-    }
-
-    return .{ .bytes = encoded, .is_final = is_final };
-}
-
 /// Issue #514: Lock-free variant that operates on an already-locked state pointer.
 /// Caller MUST hold entry.mutex for the entire streaming loop.
 fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.mem.Allocator) !PageResult {
     // SONNY-6334: the page encodes FLE fields as the session may read them.
     state.installRequestThreadState();
     defer server_state.ServerState.clearRequestThreadState();
+    // SONNY-2465: a statement the node-scan fast path served holds a stream,
+    // not an executor result; page it as Pull does (it used to end the
+    // streamed Execute after the schema frame with zero rows).
+    if (state.active_node_scan_stream) |*active_stream| {
+        // The scan reads storage as it pages: in the session's transaction.
+        const txn_scope = state.enterSessionTxn();
+        defer state.leaveSessionTxn(txn_scope);
+        return buildNodeScanStreamPage(state, active_stream, allocator);
+    }
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
         defer resp.deinit(allocator);
@@ -1597,6 +1553,43 @@ fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.me
     }
 
     return .{ .bytes = encoded, .is_final = is_final };
+}
+
+// CANARY: REQ=REQ-SONNY-2465-GRPC-STREAM-NODE-SCAN; FEATURE="GrpcStreaming"; ASPECT=NodeScanPushedPages; STATUS=TESTED; TEST=tests/test_sonny2465_grpc_stream_node_scan.zig; OWNER=transport; UPDATED=2026-11-13
+/// SONNY-2465: the next pushed page of a node-scan stream (the streamed twin
+/// of handlePull's node-scan branch). A limit a page's WHERE runs into ends
+/// the stream with its SQLSTATE and fails the statement's transaction; the
+/// final page releases the stream. Caller holds `entry.mutex`.
+fn buildNodeScanStreamPage(
+    state: *server_state.ServerState,
+    active_stream: *node_scan_stream.NodeScanStream,
+    allocator: std.mem.Allocator,
+) !PageResult {
+    var page_result = active_stream.buildNextPage(allocator, grpc_stream_page_size) catch |err| {
+        if (!geode.eval.isResourceLimitError(err)) return err;
+        state.resetResult();
+        abortTxnAfterPullFailure(state);
+        const info = proto_util.mapError(err);
+        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+    defer page_result.result.deinit(allocator);
+
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    const pa = page_arena.allocator();
+
+    const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+    const status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+    const resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .page = page },
+    };
+    const encoded_tmp = try encodeMessage(pa, resp);
+    const encoded = try allocator.dupe(u8, encoded_tmp);
+    if (page.final) state.resetResult();
+    return .{ .bytes = encoded, .is_final = page.final };
 }
 
 // ── SONNY-1560: bounded, lock-free-between-pages pushed-result drain ────────
@@ -1821,7 +1814,7 @@ pub fn pushResultPages(
             });
             return .superseded;
         }
-        if (entry.state.active_result_values == null) {
+        if (entry.state.active_result_values == null and entry.state.active_node_scan_stream == null) {
             entry.mutex.unlock(io);
             return .no_result;
         }

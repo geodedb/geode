@@ -282,7 +282,7 @@ pub fn printHelp() void {
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141). Also GEODE_PORT=<port> (binds 0.0.0.0:<port>)\n", .{});
-    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051)\n", .{});
+    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051); IPv4 only; a port alone binds the --listen address (or 0.0.0.0)\n", .{});
     std.debug.print("  --lsp-port=<port>            Embedded LSP TCP listener port (default 3142; 0 disables it; also GEODE_LSP_PORT)\n", .{});
     std.debug.print("  --lsp-bind-all               Bind the embedded LSP listener on 0.0.0.0 instead of 127.0.0.1\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
@@ -372,6 +372,54 @@ fn refuseServeArgument(arg: []const u8) error{ MissingArgument, UnknownServeOpti
         std.debug.print("Error: geode serve: unexpected argument '{s}' (see geode serve --help)\n", .{arg});
     }
     return error.UnknownServeOption;
+}
+
+// CANARY: REQ=REQ-SONNY-1336-GRPC-BIND; FEATURE="GrpcListenAddress"; ASPECT=ResolveBind; STATUS=TESTED; TEST=tests/test_sonny1336_grpc_bind_address.zig; OWNER=transport; UPDATED=2026-11-13
+/// SONNY-1336: the address and port the gRPC listener binds.
+pub const GrpcBind = struct {
+    /// An IPv4 literal (grpc-zig's `GrpcServer.initWithBind` parses IPv4 only).
+    address: []const u8,
+    port: u16,
+};
+
+pub const GrpcListenError = error{
+    /// The port is missing, not a number, or out of range.
+    InvalidGrpcListenPort,
+    /// Not an IPv4 address (IPv6 or a host name): grpc-zig cannot bind it.
+    GrpcListenAddressNotIpv4,
+};
+
+/// The IPv4 address a listen host names, or null when it names none.
+/// "localhost" is 127.0.0.1, as for the QUIC listener.
+fn ipv4ListenHost(host: []const u8) ?[]const u8 {
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return "127.0.0.1";
+    _ = std.Io.net.Ip4Address.parse(host, 0) catch return null;
+    return host;
+}
+
+/// SONNY-1336: resolve `--listen-grpc` (`<ipv4>:<port>`, `localhost:<port>`
+/// or `<port>`) to the address the gRPC listener binds. A port alone binds
+/// the QUIC listener's address (`listen_quic`), or 0.0.0.0 -- the QUIC
+/// port-only default -- when that names no IPv4 address. An IPv6 address or a
+/// host name is refused rather than replaced: grpc-zig binds IPv4 only.
+pub fn resolveGrpcBind(listen_grpc: []const u8, listen_quic: ?[]const u8) GrpcListenError!GrpcBind {
+    var host: []const u8 = "";
+    var port_text: []const u8 = listen_grpc;
+    if (std.mem.lastIndexOfScalar(u8, listen_grpc, ':')) |ci| {
+        host = listen_grpc[0..ci];
+        port_text = listen_grpc[ci + 1 ..];
+    }
+    const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidGrpcListenPort;
+    if (host.len > 0) {
+        const address = ipv4ListenHost(host) orelse return error.GrpcListenAddressNotIpv4;
+        return .{ .address = address, .port = port };
+    }
+    if (listen_quic) |quic| {
+        if (std.mem.lastIndexOfScalar(u8, quic, ':')) |ci| {
+            if (ipv4ListenHost(quic[0..ci])) |address| return .{ .address = address, .port = port };
+        }
+    }
+    return .{ .address = "0.0.0.0", .port = port };
 }
 
 /// Parse command line arguments from a caller-supplied slice.
@@ -623,6 +671,18 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
 
     if (config.listen_quic == null and config.listen_grpc == null) {
         config.listen_quic = "0.0.0.0:3141";
+    }
+
+    // SONNY-1336: refuse a gRPC listen address that cannot be bound as given,
+    // instead of listening on loopback (or on port 3142) without saying so.
+    if (config.listen_grpc) |grpc_addr| {
+        _ = resolveGrpcBind(grpc_addr, config.listen_quic) catch |err| {
+            switch (err) {
+                error.InvalidGrpcListenPort => std.debug.print("Error: geode serve: --listen-grpc '{s}' has no valid port (expected <ipv4>:<port> or <port>, port 0-65535)\n", .{grpc_addr}),
+                error.GrpcListenAddressNotIpv4 => std.debug.print("Error: geode serve: --listen-grpc '{s}' is not an IPv4 address; the gRPC listener binds IPv4 only (for example 0.0.0.0:50051 or 127.0.0.1:50051)\n", .{grpc_addr}),
+            }
+            return err;
+        };
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=EnvVar; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08

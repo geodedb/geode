@@ -117,6 +117,11 @@ pub const app_error = struct {
     /// knows the connection died under it and that a retry on a fresh
     /// connection is the correct response (it is not a graceful close).
     pub const server_teardown: u64 = 0x4745_0001;
+
+    /// SONNY-3232: the client sent a message over the 16 MiB maximum. The
+    /// server answered SQLSTATE 54000 on the stream and closed the
+    /// connection, since it cannot stop the client sending the rest.
+    pub const message_too_large: u64 = 0x4745_0002;
 };
 
 // Module-level pointer set by listen() so the OTel gauge callback can read
@@ -1764,6 +1769,19 @@ pub const QuicStream = struct {
     /// racing a connection teardown cannot double-free.
     released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    /// SONNY-3232: close this stream's connection with `app_error_code`
+    /// (CONNECTION_CLOSE on the wire), from a stream handler that must stop
+    /// the peer sending: the library cannot send STOP_SENDING. The connection
+    /// drains and is torn down by its acceptor as for a peer close.
+    pub fn closeConnection(self: *QuicStream, app_error_code: u64) void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
+        api.closeConnection(self.connection, app_error_code) catch {};
+        if (self.poll_sync) |ps| ps.notifyPoll();
+    }
+
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         if (self.shutdown_requested) |shutdown| {
             if (shutdown.load(.acquire)) return QuicError.Closed;
@@ -2314,6 +2332,12 @@ pub const QuicClient = struct {
     /// the vendor TLS client via cfg.inline_ca_chain_der. Owns its backing; freed
     /// last in deinit() so it outlives any TLS context that references it.
     ca_chain_der: ?[]const []const u8 = null,
+    /// SONNY-6457: DER client certificate and private key presented when the
+    /// server requests one, handed to the vendor TLS client via
+    /// cfg.inline_client_cert_der / cfg.inline_client_priv_key. Owned; freed
+    /// (the key zeroed first) after the endpoint in deinit().
+    client_cert_der: ?[]u8 = null,
+    client_key_der: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
         return QuicClient{
@@ -2378,6 +2402,55 @@ pub const QuicClient = struct {
             self.allocator.free(chain);
             self.ca_chain_der = null;
         }
+        self.freeClientIdentity();
+    }
+
+    fn freeClientIdentity(self: *QuicClient) void {
+        if (self.client_cert_der) |der| {
+            self.allocator.free(der);
+            self.client_cert_der = null;
+        }
+        if (self.client_key_der) |der| {
+            std.crypto.secureZero(u8, der);
+            self.allocator.free(der);
+            self.client_key_der = null;
+        }
+    }
+
+    /// SONNY-6457: load the PEM client certificate and private key into
+    /// client_cert_der / client_key_der. Any failure is an error, never a
+    /// connection without the certificate the caller asked to present.
+    fn loadClientIdentity(self: *QuicClient, cert_path: []const u8, key_path: []const u8) !void {
+        self.freeClientIdentity();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const limit: std.Io.Limit = .limited(1024 * 1024);
+
+        const cert_pem = std.Io.Dir.cwd().readFileAlloc(io, cert_path, self.allocator, limit) catch |err| {
+            tlog.err("TLS: cannot read client certificate; refusing to connect", &.{ Attr.string("path", cert_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        defer self.allocator.free(cert_pem);
+        const cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
+            tlog.err("TLS: cannot parse client certificate; refusing to connect", &.{ Attr.string("path", cert_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        errdefer self.allocator.free(cert_der);
+
+        const key_pem = std.Io.Dir.cwd().readFileAlloc(io, key_path, self.allocator, limit) catch |err| {
+            tlog.err("TLS: cannot read client private key; refusing to connect", &.{ Attr.string("path", key_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        defer {
+            std.crypto.secureZero(u8, key_pem);
+            self.allocator.free(key_pem);
+        }
+        const key_der = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
+            tlog.err("TLS: cannot parse client private key; refusing to connect", &.{ Attr.string("path", key_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+
+        self.client_cert_der = cert_der;
+        self.client_key_der = key_der;
     }
 
     pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {
@@ -2477,6 +2550,17 @@ pub const QuicClient = struct {
             };
         }
 
+        // SONNY-6457: the client certificate goes in inline_client_cert_der /
+        // inline_client_priv_key, the fields the vendor client TLS context
+        // sends from. Never in cfg.cert_path: a cert_path makes the vendor
+        // endpoint a SERVER. A certificate needs its key and vice versa.
+        // CANARY: REQ=REQ-AUTH-MTLS-QUIC-007; FEATURE="mTLS over QUIC"; ASPECT=ClientCertPresentation; STATUS=TESTED; TEST=tests/test_sonny6457_connectex_client_cert.zig; OWNER=security; UPDATED=2026-11-13
+        if ((client_cert_path == null) != (client_key_path == null)) {
+            tlog.err("TLS: a client certificate and its private key must be given together; refusing to connect", &.{});
+            return error.ClientCertificateKeyMismatch;
+        }
+        if (client_cert_path) |cert_p| try self.loadClientIdentity(cert_p, client_key_path.?);
+
         // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
         const cfg = try self.allocator.create(VendorQuicConfig);
         errdefer {
@@ -2500,14 +2584,16 @@ pub const QuicClient = struct {
             // GAP-0259: Match server idle timeout (300s) to prevent premature disconnect during bulk writes
             .max_idle_timeout_ms = 300000,
             .max_udp_payload = 1350,
-            .cert_path = client_cert_path,
-            .key_path = client_key_path,
+            .cert_path = null,
+            .key_path = null,
             .ca_path = ca_cert_path,
             .allow_insecure = false,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
+            .inline_client_cert_der = self.client_cert_der,
+            .inline_client_priv_key = self.client_key_der,
             // GAP-0838: hand the loaded CA trust anchors to the vendor TLS client.
             .inline_ca_chain_der = self.ca_chain_der,
         };
@@ -2642,6 +2728,10 @@ pub const QuicClientStream = struct {
         const max_blocked_retries: usize = 1_000_000; // safety cap; wall-clock deadline is authoritative
         while (written < data.len) {
             if (monoNsRaw() -| start_ns > max_blocked_ns) return QuicError.WriteError;
+            // SONNY-3232: a peer that closed the connection (a server
+            // refusing a message over its maximum) frees no more credit; stop
+            // now instead of waiting out the writer deadline.
+            if (api.isDrained(self.connection)) return QuicError.Closed;
             const n = self.write(data[written..]) catch |err| {
                 if (err == error.FlowControlBlocked or err == error.WouldBlock) {
                     blocked_retries += 1;

@@ -669,7 +669,7 @@ const geode_completion_completion_cmd = CliCommand{
 
 const geode_completion_mtls_cmd = CliCommand{
     .name = "mtls",
-    .summary = "Mutual TLS certificate mapping management",
+    .summary = "Mutual TLS certificate-to-user mapping (not supported yet, SONNY-6458)",
 };
 
 const geode_completion_mcp_cmd = CliCommand{
@@ -956,7 +956,7 @@ fn printFishCompletions() void {
         \\complete -c geode -n "__fish_use_subcommand" -a storage -d 'Storage engine management'
         \\complete -c geode -n "__fish_use_subcommand" -a audit -d 'Audit log management'
         \\complete -c geode -n "__fish_use_subcommand" -a completion -d 'Generate shell completion scripts'
-        \\complete -c geode -n "__fish_use_subcommand" -a mtls -d 'Mutual TLS certificate mapping management'
+        \\complete -c geode -n "__fish_use_subcommand" -a mtls -d 'Mutual TLS certificate-to-user mapping (not supported yet)'
         \\complete -c geode -n "__fish_use_subcommand" -a mcp -d 'Model Context Protocol server (AI/LLM integration)'
         \\
         \\# Subcommand options

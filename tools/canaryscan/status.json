@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:24:14.68706626Z",
+  "generated_at": "2026-11-13T11:32:53.723653436Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -4893,6 +4893,25 @@
           ],
           "tests": [
             "tests/test_sonny6453_mtls_client_ca.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-AUTH-MTLS-QUIC-007",
+      "features": [
+        {
+          "feature": "mTLS over QUIC",
+          "aspect": "ClientCertPresentation",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6457_connectex_client_cert.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -20785,17 +20804,17 @@
       "features": [
         {
           "feature": "mTLS CLI",
-          "aspect": "CertificateMapping",
+          "aspect": "MappingRefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/mtls_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gap_0258_mtls_cli.yml"
+            "tests/test_sonny6457_mtls_cli_unsupported.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-09"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -31001,20 +31020,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-27"
-        },
-        {
-          "feature": "Security Audit",
-          "aspect": "AuditSinks",
-          "status": "TESTED",
-          "files": [
-            "src/security/audit_sink.zig"
-          ],
-          "tests": [
-            "audit_tests"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-11-12"
         }
       ]
     },
@@ -68798,6 +68803,25 @@
       ]
     },
     {
+      "id": "REQ-SHELL-PLAIN-EOF-001",
+      "features": [
+        {
+          "feature": "ShellPlainMode",
+          "aspect": "ExitAtEndOfInput",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_loop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3060_shell_plain_eof.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SHELL-RECONNECT-011",
       "features": [
         {
@@ -69782,6 +69806,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-1336-GRPC-BIND",
+      "features": [
+        {
+          "feature": "GrpcListenAddress",
+          "aspect": "ResolveBind",
+          "status": "TESTED",
+          "files": [
+            "src/server/cli_args.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1336_grpc_bind_address.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-1562-COLD-SUBQUERY-SCAN",
       "features": [
         {
@@ -70047,6 +70090,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-25"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2465-GRPC-STREAM-NODE-SCAN",
+      "features": [
+        {
+          "feature": "GrpcStreaming",
+          "aspect": "NodeScanPushedPages",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2465_grpc_stream_node_scan.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -77835,6 +77897,25 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3232-OVERSIZE-REFUSAL",
+      "features": [
+        {
+          "feature": "QuicTransport",
+          "aspect": "OversizeMessageRefusedFast",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3232_quic_request_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -86132,6 +86213,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6465-AWS-SIGV4",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "AwsKmsSigV4",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6465-ENVELOPE-CIPHERTEXT",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "UnwrapFromEnvelope",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6465-KMS-TLS",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "TlsOptionsHonoured",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93799,7 +93937,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4891
+      "TESTED": 4898
     },
     "by_aspect": {
       "2PC": 3,
@@ -93987,7 +94125,6 @@
       "AuditLog": 2,
       "AuditLogging": 6,
       "AuditSeedEpochsAndHmacStartup": 1,
-      "AuditSinks": 1,
       "AuditTrail": 2,
       "AuditTransports": 1,
       "AuditedGrantRevokeConfigure": 1,
@@ -94021,6 +94158,7 @@
       "AvgAggregation": 1,
       "AvgRefactor": 1,
       "AvgVarianceEnvelope": 1,
+      "AwsKmsSigV4": 1,
       "BACKUP_MANAGER": 1,
       "BATCH_ALLOC": 1,
       "BENCH": 1,
@@ -94243,7 +94381,6 @@
       "CertGenExplicitDir": 1,
       "CertValidation": 1,
       "CertVerification": 1,
-      "CertificateMapping": 1,
       "ChaCha20Parameters": 1,
       "Chain": 1,
       "ChainDispatch": 1,
@@ -94317,6 +94454,7 @@
       "CliRlsPolicyCreate": 1,
       "CliUtf16HexInputFlag": 1,
       "ClientCaTrust": 1,
+      "ClientCertPresentation": 1,
       "ClientConnect": 1,
       "ClientConnectEx": 1,
       "ClientExecTimeout": 1,
@@ -95063,6 +95201,7 @@
       "Exists": 1,
       "ExistsCheck": 1,
       "ExistsPredicateIsolation": 1,
+      "ExitAtEndOfInput": 1,
       "ExitCode": 2,
       "ExitLeaksArgonBoundsLoggerDocker": 1,
       "ExpandPathsAndLists": 1,
@@ -95877,6 +96016,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MappingRefusedAsUnsupported": 1,
       "MasterKeyCheckValue": 1,
       "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,
@@ -96148,6 +96288,7 @@
       "NodeProperties": 1,
       "NodePropertyKeys": 1,
       "NodePropertyWrite": 1,
+      "NodeScanPushedPages": 1,
       "NodeStorage": 1,
       "NodeTenantTag": 1,
       "NodeWithLabelsAndName": 1,
@@ -96273,6 +96414,7 @@
       "OverheadClaimsMatchMeasurement": 1,
       "OverlapAndContains": 1,
       "OverlongStoredPolicy": 1,
+      "OversizeMessageRefusedFast": 1,
       "OversizedValueErrorMapping": 1,
       "OwnedGraphEntities": 1,
       "OwnedKeys": 1,
@@ -97003,6 +97145,7 @@
       "ResidentEdgesNested": 1,
       "ResolvConfSearchExpansion": 1,
       "ResolveAfterInserts": 1,
+      "ResolveBind": 1,
       "ResolveInboundIdleDeadline": 1,
       "ResolvedDataDirEverywhere": 1,
       "ResolverIgnoresReadSnapshot": 1,
@@ -97624,6 +97767,7 @@
       "TimeseriesCallHandlers": 1,
       "Timestamp": 1,
       "TimestampTZNormalization": 1,
+      "TlsOptionsHonoured": 1,
       "ToBooleanConversion": 1,
       "ToLower": 1,
       "ToPrincipal": 1,
@@ -97781,6 +97925,7 @@
       "UnwindFiltering": 1,
       "UnwindIsolation": 1,
       "UnwindStreaming": 1,
+      "UnwrapFromEnvelope": 1,
       "UnwrapKeyAdminAllowed": 1,
       "UnwrapKeyExplicitPolicyGrants": 1,
       "UnwrapKeyGate": 1,

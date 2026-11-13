@@ -649,16 +649,23 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
   bundle, within its validity period. A client must therefore send its
   chain up to that CA, or present a self-signed CA certificate that is
   itself in the bundle (pinning).
-- **Known limit:** the TLS library geode's Zig clients use (including
-  `geode query` / `geode shell --client-cert --client-key`) sends only the
+- **Known limit:** the TLS library geode's Zig clients use sends only the
   leaf certificate, and the server does not complete a client chain from
   the bundle, so such a client is rejected even when its leaf is signed by
-  a CA in the bundle. Clients that send the full chain are not affected.
-- **Identity mapping is not active.** The server's certificate-to-user
-  mapping (`src/security/mtls_provider.zig`) starts empty and nothing on
-  the server loads mappings (`geode mtls map ...` writes a local file the
-  server does not read), so a client certificate never selects the user:
-  the user is always the one that authenticates in HELLO.
+  a CA in the bundle; present a pinned self-signed CA certificate from the
+  bundle instead. Clients that send the full chain are not affected.
+- **Known limit (SONNY-6457):** `geode query` / `geode shell` / `geode
+  backup` `--client-cert --client-key` dial through the geode-client-zig
+  library, which until its fix is pinned does not present the certificate
+  (the connection times out against an mTLS-required server). geode's
+  internal QUIC client (`QuicClient.connectEx`) presents it.
+- **Identity mapping is not supported (SONNY-6458).** The server's
+  certificate-to-user mapping (`src/security/mtls_provider.zig`) starts
+  empty and nothing loads mappings, so a client certificate never selects
+  the user: the user is always the one that authenticates in HELLO. `geode
+  mtls map create|list|delete`, `config` and `status` are refused as
+  unsupported (non-zero exit); they used to write a local
+  `geode_mtls_state.db` the server never read (SONNY-6457).
 
 ### Not Supported (Tracking Issues Open)
 

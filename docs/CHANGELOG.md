@@ -70,9 +70,51 @@
   given (the gRPC transport does not verify client certificates). Known
   limit (dependency): the TLS library checks the client chain as sent, so a
   client must send its chain up to a CA in the bundle (or present a pinned
-  self-signed CA certificate from the bundle); Zig `tls`-based clients,
-  including `geode query --client-cert`, send only the leaf and are
-  rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
+  self-signed CA certificate from the bundle); Zig `tls`-based clients
+  send only the leaf, so a leaf signed by a bundle CA is rejected (geode's
+  own clients could not present a certificate at all: SONNY-6457).
+  Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **geode's internal QUIC client presents the client certificate it is
+  given (SONNY-6457 item 1).** `QuicClient.connectEx` put a client
+  certificate path in the vendor config's `cert_path`, which makes the
+  vendored quic endpoint a server, and never loaded the certificate, so
+  no geode-side dial could present one. It now loads the PEM certificate
+  and key into the client TLS fields (`inline_client_cert_der` /
+  `inline_client_priv_key`), and refuses before dialling when only one of
+  the two is given (`ClientCertificateKeyMismatch`) or a file cannot be
+  read or parsed. Cluster peer dials (`cluster_auth.dialClusterPeer`)
+  still present no certificate: peer listeners do not request one and
+  peers authenticate with `GEODE_CLUSTER_TOKEN`. `geode query` / `shell`
+  / `backup` / `mcp` dial through geode-client-zig, which has the same
+  defect; until the fixed library is pinned, `--client-cert` against an
+  mTLS-required server still times out (`zig build
+  test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
+  build test-sonny6457-connectex-client-cert`.
+- **The Vault Transit and AWS KMS clients compile again (SONNY-6457 item
+  4).** `src/security/external_kms_client.zig` built `std.http.Client`
+  without the `io` field Zig 0.16 requires and used the removed
+  `open`/`write`/`finish`/`wait` request API; nothing constructs these
+  clients yet (KMS wiring is SONNY-6380), so no build noticed. Both now
+  POST through `std.http.Client.fetch`; the Vault token (and the
+  configured `vault_namespace`, previously ignored, as
+  `X-Vault-Namespace`) are privileged headers, dropped on a cross-host
+  redirect; responses are parsed as JSON instead of by substring search,
+  so a pretty-printed Vault response is read and a field name inside a
+  string value is not; a decrypted data key must be exactly 32 bytes.
+  Still not production-ready: AWS requests are not SigV4-signed,
+  `tls_ca_cert` is not used (the system CA bundle is), and the Vault
+  ciphertext lives only in memory. Regression: `zig build
+  test-sonny6457-external-kms-compile` (no network calls).
+- **BREAKING (CLI): `geode mtls` subcommands are refused as unsupported
+  (SONNY-6457 item 5).** `geode mtls map create|list|delete`, `config` and
+  `status` kept certificate-to-user mappings in `geode_mtls_state.db` in
+  the CLI state directory and reported success, but the server never read
+  that file and its certificate-to-user store is never populated, so a
+  mapping changed nothing. Each now exits 1 with a message naming
+  SONNY-6458 (the mapping story) and how mTLS is actually enabled
+  (`GEODE_MTLS_REQUIRED=1` + `GEODE_MTLS_CLIENT_CA`); `geode mtls --help`
+  says the same. An existing `geode_mtls_state.db` is left alone and
+  ignored. Regression: `zig build test-sonny6457-mtls-cli-unsupported`.
 - **BREAKING (operator): `geode query`, `geode shell` and the REPL refuse
   an implicit unverified connection under production posture, like
   `geode auth` (SONNY-6453 item 4).** With no `--ca-cert`, no client
@@ -2283,6 +2325,99 @@
   127.0.0.14-16, the peer TLS tests 127.0.0.31 and 127.0.0.32;
   `zig build test-sonny6460-cluster-test-addresses` (in the aggregate)
   fails when a cluster test step's address appears in another test source.
+- **Inline tests of 12 live files outside src/distributed run; dead files
+  removed (SONNY-6463 item 5, partial).** `zig build test-sonny6463-inline`
+  runs the inline tests of the MVCC heuristics (`conflict_repair_heuristics`,
+  `early_detect`, `partial_rollback`, `predictive_skew_filter`),
+  `stream_scheduler`, `index/selectivity`, `mcp/prompts`, `tools/bulk_loader`,
+  `cli/tenant_cli`, `transactions/range_tracker`,
+  `cli/security/session_storage` and `cli/geode_audit_verify` (78 tests), none
+  of which any step ran. Found on the way: `CredentialStore.saveCredentials`
+  / `deleteCredentials` did not compile under Zig 0.16 (ported);
+  `getSystemFingerprint` leaked its environment copies on every call (the CLI
+  calls it on each auto-loaded session); the CredentialStore tests wrote the
+  real `~/.geode/credentials.json` (they now use a private HOME); the skew
+  filter test contradicted its own documented threshold (corrected) and its
+  uncompilable, uncalled `simulateHotWorkload` is removed. Removed as verified
+  dead: `src/util/text_formatter.zig` (did not compile; its only importer was
+  an unused alias in `src/server/main.zig`) and `src/security/audit_sink.zig`
+  (no importer). The rest of the ticket's candidate list remains (see the
+  SONNY-6463 report).
+
+- **External KMS clients: AWS requests signed, TLS options honoured,
+  unwrap from the envelope (SONNY-6465).** `src/security/external_kms_client.zig`
+  (not yet constructed by the product; wiring is SONNY-6380): AWS KMS
+  requests are now SigV4-signed for service `kms` (they were unsigned, so real
+  AWS KMS refused them) and need static credentials (`aws_access_key` /
+  `aws_secret_key`; instance-role credentials are refused with
+  `AwsCredentialsRequired`, not implemented); `tls_ca_cert` is now the only
+  trust anchor when set and `tls_skip_verify` is refused
+  (`TlsSkipVerifyUnsupported`) instead of both being ignored; an envelope now
+  carries its Vault ciphertext or AWS CiphertextBlob (`kms_ciphertext`, also
+  in its JSON form as `kms_ct`) and `unwrap` decrypts that, checked against
+  the envelope's hash (it decrypted whatever the last wrap left in memory, so
+  nothing unwrapped after a restart); Vault `rotateKey` no longer bumps a local
+  counter (the version comes from the next wrap's `vault:v<N>:`), AWS
+  `rotateKey` refuses (`AwsKmsRotationIsManagedByAws`); `KmsProvider.deinit`
+  frees what `createKmsProvider` allocated (it leaked). The file's inline tests
+  run in `zig build test-sonny6465-external-kms-inline` (the live Vault / AWS
+  cases skip unless `VAULT_ADDR` / `AWS_KMS_ENDPOINT` and credentials are set,
+  and fail on any error once they are; they used to pass when a call failed).
+  Regression `zig build test-sonny6465-external-kms` (no network call).
+
+- **A QUIC request over the 16 MiB maximum is refused promptly
+  (SONNY-3232).** The server refused such a message at its length prefix by
+  ending the stream with no reply; it stopped reading, so the client, held by
+  the stream window, blocked writing until its own 60 s writer deadline and
+  learned nothing. The server now answers SQLSTATE 54000 (the message names
+  the size and the 16,777,216-byte limit) and closes the connection with the
+  new QUIC application error `message_too_large` (0x47450002), since the QUIC
+  library cannot send STOP_SENDING; geode's own QUIC client stops writing as
+  soon as the peer has closed the connection. Requests of 1 MiB and 4 MiB are
+  answered (the loss-recovery stall round 15 hit, SONNY-3351, was fixed in
+  quic 0.1.48). Still open: a request larger than the 10 MiB stream receive
+  window crawls once the window is spent (ReleaseSafe answered 16 MiB in
+  ~168 s; a Debug server did not answer it in 300 s), in the QUIC library's
+  flow-control credit path. Keep QUIC requests well under 10 MiB (use
+  parameters or `geode query --batch`). Regression
+  `zig build test-sonny3232-quic-request-size`.
+
+- **gRPC streaming Execute pages node-scan fast-path reads (SONNY-2465).**
+  The streamed `/Execute` drain (`pushResultPages`) paged only an executor
+  result; a statement served by the node-scan fast path holds a scan stream
+  instead, so the client would get the schema frame and then zero rows. The
+  drain now pages the scan stream as `Pull` does (a resource limit ends the
+  stream with its SQLSTATE and fails the transaction; the final page
+  releases the stream). Latent over the wire today: on `geode serve` the gRPC
+  fast-path gate never opens for an authenticated session; this removes the
+  hazard before that gate is aligned with QUIC's policy-aware one. The
+  uncalled `buildStreamDataPage` was removed. Regression
+  `zig build test-sonny2465-grpc-stream-node-scan`.
+
+- **`--listen-grpc` binds the address it is given (SONNY-1336).** The
+  address in `geode serve --listen-grpc <addr:port>` reached only a log line:
+  the listener was created from the port alone and grpc-zig bound
+  `127.0.0.1` (or `GRPC_ZIG_BIND_ADDR`), so `--listen-grpc 0.0.0.0:50051` in a
+  container listened on loopback and a published port reached nothing; a
+  port that did not parse silently became 3142. The listener now binds the
+  given IPv4 address through grpc-zig's `initWithBind`; a port alone binds
+  the `--listen` address (or `0.0.0.0`); a startup banner names the address
+  and port bound. **Breaking:** an IPv6 address, a host name or a bad port in
+  `--listen-grpc` is refused at startup (exit 2) instead of silently binding
+  loopback. See `docs/GRPC_TRANSPORT.md` "Listen address". Regression
+  `zig build test-sonny1336-grpc-bind-address` reads the bound socket from
+  `/proc/net/tcp` and answers a real gRPC HELLO at the address.
+
+- **`geode shell --plain` exits at end of input (SONNY-3060).** Piping a
+  file or a here-doc into `geode shell --plain` used to run the statements
+  and then print `geode>` prompts forever: the plain-mode reader treated
+  Zig 0.16's `error.EndOfStream` as "end of this line" and read again. The
+  shell now ends the session at EOF and exits with status 0 (a last line
+  without a trailing newline still runs first); any other stdin read error
+  ends the shell with a non-zero status instead of looping. Regression
+  `zig build test-sonny3060-shell-plain-eof` runs the real shell against a
+  real server with piped input.
+
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so
