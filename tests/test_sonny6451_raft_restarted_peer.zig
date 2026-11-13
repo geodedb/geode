@@ -20,7 +20,7 @@
 // connection), and the follower never received another append.
 //
 // The test drives the real receiver (a started ClusterCoordinator on
-// 127.0.0.11) and real QUIC senders with the raft `PeerConnection` lifecycle:
+// 127.0.0.64) and real QUIC senders with the raft `PeerConnection` lifecycle:
 // six incarnations of peer 2, each sending heartbeats at a higher term on one
 // long-lived stream and then vanishing without FIN or CONNECTION_CLOSE, as a
 // restarted or evicted peer does. Each
@@ -41,7 +41,8 @@ const quic = @import("transport/quic");
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
-const receiver_ip = "127.0.0.1";
+/// A loopback address no other cluster test uses.
+const receiver_ip = "127.0.0.64";
 const token = "test-sonny6451-restarted-peer";
 /// The receiver's inbound idle deadline for this test (default 30 s).
 const idle_deadline_ms: i64 = 1000;
@@ -65,8 +66,8 @@ fn sleepMs(ms: u64) void {
 /// election timeout, so its own raft traffic stays out of the way.
 fn startReceiver(a: std.mem.Allocator, port: u16, cert_path: []const u8, key_path: []const u8) !*ClusterCoordinator {
     const peers = [_]ClusterCoordinator.PeerConfig{
-        .{ .id = 2, .address = "127.0.0.12", .port = port + 1 },
-        .{ .id = 3, .address = "127.0.0.13", .port = port + 2 },
+        .{ .id = 2, .address = "127.0.0.65", .port = port + 1 },
+        .{ .id = 3, .address = "127.0.0.66", .port = port + 2 },
     };
     const coord = try a.create(ClusterCoordinator);
     errdefer a.destroy(coord);

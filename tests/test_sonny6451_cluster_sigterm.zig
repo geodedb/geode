@@ -13,11 +13,12 @@
 // connection pool could not join it.
 //
 // The test starts nodes 1 and 2 of a three-node cluster on distinct loopback
-// IPs with CA-signed TLS (node 3 stays down; two of three elect), waits for a
-// leader, then sends SIGTERM to node 1 while node 2 keeps its raft stream to
-// it open. Node 1 must exit within a bound well under the 30 s teardown
-// watchdog, its log must show the cluster stopped before the flush, and no raft
-// activity, pool-join timeout or watchdog exit may follow the flush.
+// IPs (127.0.0.61-63) with CA-signed TLS (node 3 stays down; two of three
+// elect), waits for a leader, then sends SIGTERM to node 1 while node 2
+// keeps its raft stream to it open. Node 1 must exit within a bound well
+// under the 30 s teardown watchdog, its log must show the cluster stopped
+// before the flush, and no raft activity, pool-join timeout or watchdog exit
+// may follow the flush.
 //
 // CANARY: REQ=REQ-SONNY-6451-CLUSTER-SIGTERM; FEATURE="DistributedCluster"; ASPECT=ShutdownStopsRaftBeforeFlush; STATUS=TESTED; TEST=tests/test_sonny6451_cluster_sigterm.zig; OWNER=distributed; UPDATED=2026-11-12
 
@@ -26,8 +27,10 @@ const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
 const BINARY_PATH = geode_test_bin.geode_exe;
-const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12" };
-const PEERS = "127.0.0.11:4251,127.0.0.12:4251,127.0.0.13:4251";
+/// Loopback addresses no other cluster test uses, so the aggregate's parallel
+/// shards cannot collide with test-cluster-steady-state / -replicable-mutations.
+const NODE_IPS = [_][]const u8{ "127.0.0.61", "127.0.0.62" };
+const PEERS = "127.0.0.61:4251,127.0.0.62:4251,127.0.0.63:4251";
 const STARTUP_DEADLINE_MS: i64 = 60_000;
 /// Exit bound after SIGTERM: well under the 30 s teardown watchdog that a
 /// wedged teardown runs into.
@@ -89,7 +92,7 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     const ext = j(aa, dir, "leaf.ext");
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.11,IP:127.0.0.12,IP:127.0.0.13,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
+        .data = "subjectAltName=IP:127.0.0.61,IP:127.0.0.62,IP:127.0.0.63,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-sonny6451-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });

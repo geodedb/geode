@@ -5783,7 +5783,7 @@ REQ-SONNY-6447-NUMERIC-KEY-PARITY,WriteFastPathParity,IntFloatEqualEndpointKeys,
 REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,Regression,TESTED,,,cli,2026-11-12,tests/test_sonny6447_quic_retry_connect_stops.zig,17
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2368
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6447_rls_raw_tokenize.zig,17
-REQ-SONNY-6451-CLUSTER-SIGTERM,DistributedCluster,ShutdownStopsRaftBeforeFlush,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_cluster_sigterm.zig,22
+REQ-SONNY-6451-CLUSTER-SIGTERM,DistributedCluster,ShutdownStopsRaftBeforeFlush,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_cluster_sigterm.zig,23
 REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_health_failed_peer.zig,17
 REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_raft_restarted_peer.zig,31
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,41
