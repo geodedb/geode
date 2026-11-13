@@ -42,14 +42,14 @@ const QuicServer = struct {
     handle: util.ServerHandle,
     addr: []u8,
 
-    fn start(allocator: std.mem.Allocator, data_dir: []const u8) !QuicServer {
+    fn start(allocator: std.mem.Allocator, data_dir: []const u8, env: ?[]const []const u8) !QuicServer {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
         var handle = try util.spawnServer(
             allocator,
             &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
-            null,
+            env,
         );
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
@@ -173,7 +173,7 @@ test "SONNY-2978: a change that commits its own engine transaction inside a Geod
 
     var before: [cases.len]i64 = undefined;
     {
-        var server = try QuicServer.start(allocator, data_dir);
+        var server = try QuicServer.start(allocator, data_dir, null);
         defer server.kill(allocator);
         var client = try server.connect(allocator);
         defer client.deinit();
@@ -188,7 +188,7 @@ test "SONNY-2978: a change that commits its own engine transaction inside a Geod
     }
 
     // Killed (SIGKILL); restarted on the same data directory.
-    var server = try QuicServer.start(allocator, data_dir);
+    var server = try QuicServer.start(allocator, data_dir, null);
     defer server.kill(allocator);
     var client = try server.connect(allocator);
     defer client.deinit();
@@ -202,4 +202,103 @@ test "SONNY-2978: a change that commits its own engine transaction inside a Geod
         }
     }
     if (wrong > 0) return error.CommittedChangeUndoneByTheKill;
+}
+
+// SONNY-6472 (3): a REMOVE of a node property, a DELETE of a node and a
+// REMOVE of a relationship property on the session engine transaction's
+// shard join that transaction (they committed their own), so the request's
+// same-shard changes are crash-atomic: a kill while the request is still
+// running loses all of them. The request ends with a long read; the server
+// is killed while it runs, after the changes, before the COMMIT. Changes on
+// the other 15 shards still commit one engine transaction each (SONNY-2979),
+// so the counts are of what survived on the session transaction's shard:
+// with every change committing its own transaction, none did.
+
+/// Rows the closing read counts: 200^3, far longer than the kill delay.
+const n_big = 200;
+/// How long after the request is sent the server is killed.
+const kill_after_ms = 10000;
+
+const MidRequest = struct {
+    client: *util.QuicProtoClient,
+    allocator: std.mem.Allocator,
+
+    fn go(self: *MidRequest) void {
+        // The server dies under this request: whatever it answers is moot.
+        var r = self.client.executeAndCollect(self.allocator, "START TRANSACTION; " ++
+            // The request's first change opens the session engine
+            // transaction (a CREATE or MERGE does, SONNY-2823).
+            "CREATE (:Mstart); " ++
+            "MATCH (n:Mr) REMOVE n.p; " ++
+            "MATCH (n:Md) DELETE n; " ++
+            "MATCH (:Mr)-[e:ME]->() REMOVE e.q; " ++
+            "MATCH (a:Big), (b:Big), (c:Big) RETURN count(*) AS c; " ++
+            "COMMIT", util.emptyParams(), 1000) catch return;
+        r.deinit(self.allocator);
+    }
+};
+
+test "SONNY-6472: a request's REMOVE, DELETE and relationship-property REMOVE on the session engine transaction's shard are lost together by a kill before its end" {
+    const allocator = testing.allocator;
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    var dir_buf: [96]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6472-{d}", .{try util.getRandomPort()});
+    std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
+    // No checkpoint before the kill: what the restart sees is the WAL's.
+    const env: []const []const u8 = &.{ "GEODE_CHECKPOINT_INTERVAL_MS=86400000", "GEODE_CHECKPOINT_OPS=1000000000" };
+
+    {
+        var server = try QuicServer.start(allocator, data_dir, env);
+        defer server.kill(allocator);
+        var client = try server.connect(allocator);
+        defer client.deinit();
+        try quicOk(&client, allocator, "CREATE GRAPH s6472");
+        try quicOk(&client, allocator, "USE GRAPH s6472");
+        // One statement each, so the nodes take consecutive slots: every
+        // shard holds n_nodes / 16 of each kind.
+        var stmt: std.ArrayList(u8) = .empty;
+        defer stmt.deinit(allocator);
+        for ([_][]const u8{ "Mr", "Md" }) |label| {
+            stmt.clearRetainingCapacity();
+            try stmt.appendSlice(allocator, "CREATE ");
+            for (0..n_nodes) |i| try stmt.print(allocator, "{s}(:{s} {{i: {d}, p: 1}})", .{ if (i == 0) "" else ", ", label, i });
+            try quicOk(&client, allocator, stmt.items);
+        }
+        try quicOk(&client, allocator, "MATCH (a:Mr) CREATE (a)-[:ME {q: 1}]->(:Me2)");
+        var big_q: [96]u8 = undefined;
+        try quicOk(&client, allocator, try std.fmt.bufPrint(&big_q, "FOR i IN range(0, {d}) CREATE (:Big {{i: i}})", .{n_big}));
+        try testing.expectEqual(@as(i64, n_nodes), try quicCount(&client, allocator, "MATCH (n:Mr) WHERE n.p IS NOT NULL RETURN count(n) AS c"));
+        try testing.expectEqual(@as(i64, n_nodes), try quicCount(&client, allocator, "MATCH (n:Md) RETURN count(n) AS c"));
+        try testing.expectEqual(@as(i64, n_nodes), try quicCount(&client, allocator, "MATCH (:Mr)-[e:ME]->() WHERE e.q IS NOT NULL RETURN count(e) AS c"));
+
+        var req_client = try server.connect(allocator);
+        defer req_client.deinit();
+        try quicOk(&req_client, allocator, "USE GRAPH s6472");
+        var req = MidRequest{ .client = &req_client, .allocator = allocator };
+        const t = try std.Thread.spawn(.{}, MidRequest.go, .{&req});
+        try std.Io.sleep(io_fs, .fromMilliseconds(kill_after_ms), .awake);
+        // Killed (SIGKILL) while the request runs; the request thread then
+        // sees the server gone.
+        // sees the server gone. Reaped here (which clears the child's id), so
+        // the deferred teardown neither kills nor waits again.
+        std.posix.kill(server.handle.child.id.?, .KILL) catch {};
+        _ = server.handle.child.wait(server.handle.threaded.io()) catch {};
+        t.join();
+    }
+
+    var server = try QuicServer.start(allocator, data_dir, env);
+    defer server.kill(allocator);
+    var client = try server.connect(allocator);
+    defer client.deinit();
+    try quicOk(&client, allocator, "USE GRAPH s6472");
+    const props = try quicCount(&client, allocator, "MATCH (n:Mr) WHERE n.p IS NOT NULL RETURN count(n) AS c");
+    const nodes = try quicCount(&client, allocator, "MATCH (n:Md) RETURN count(n) AS c");
+    const edge_props = try quicCount(&client, allocator, "MATCH (:Mr)-[e:ME]->() WHERE e.q IS NOT NULL RETURN count(e) AS c");
+    std.debug.print("SONNY-6472 (3): after the kill {d} node properties, {d} nodes, {d} relationship properties of {d} kept (the session transaction's shard holds {d} of each)\n", .{ props, nodes, edge_props, n_nodes, n_nodes / 16 });
+    var lost: usize = 0;
+    if (props == 0) lost += 1;
+    if (nodes == 0) lost += 1;
+    if (edge_props == 0) lost += 1;
+    if (lost > 0) return error.SessionShardChangeCommittedAlone;
 }
