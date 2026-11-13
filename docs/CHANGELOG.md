@@ -121,13 +121,26 @@
   verified CertificateVerify; and `geode serve` exits at startup when
   `GEODE_MTLS_REQUIRED` is set and `GEODE_MTLS_CLIENT_CA` is unset, cannot
   be loaded, or holds a non-CA certificate, or when `--listen-grpc` is also
-  given (the gRPC transport does not verify client certificates). Known
-  limit (dependency): the TLS library checks the client chain as sent, so a
-  client must send its chain up to a CA in the bundle (or present a pinned
-  self-signed CA certificate from the bundle); Zig `tls`-based clients
-  send only the leaf, so a leaf signed by a bundle CA is rejected (geode's
-  own clients could not present a certificate at all: SONNY-6457).
+  given (the gRPC transport does not verify client certificates).
   Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **An mTLS server accepts a leaf of a `GEODE_MTLS_CLIENT_CA` CA sent
+  without its chain (SONNY-6457 item 2; quic v0.1.50, tls v0.1.27).** The
+  TLS layer checked a client chain only as sent, so a leaf signed by a
+  bundle CA was rejected unless the client also sent the CA; geode's Zig
+  clients send only the leaf, so only a pinned self-signed CA certificate
+  worked. `installClientCaTrust` now keeps the bundle's DER certificates
+  and `geode serve` hands them to the QUIC server's TLS context
+  (`QuicTransport.Config.inline_client_ca_der`), which trusts only those
+  CAs for client chains and completes a leaf-only chain from them, also
+  when the bundle holds several unrelated CAs. Unchanged: the certificate
+  counts only with a verified CertificateVerify, every certificate must be
+  within its validity period, a leaf whose extendedKeyUsage lacks
+  clientAuth is rejected (one with no extendedKeyUsage is accepted, as RFC
+  5280 specifies), and `geode serve` still refuses to start with mTLS
+  required and no usable bundle. Regression: `zig build
+  test-sonny6453-mtls-client-ca` (a leaf of a bundle CA sent alone, a leaf
+  of the second of two unrelated bundle CAs, an expired leaf, a
+  serverAuth-only leaf).
 - **geode's internal QUIC client presents the client certificate it is
   given (SONNY-6457 item 1).** `QuicClient.connectEx` put a client
   certificate path in the vendor config's `cert_path`, which makes the

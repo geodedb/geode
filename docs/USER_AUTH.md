@@ -645,15 +645,15 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
   client certificates, so `geode serve` refuses to start with both
   `GEODE_MTLS_REQUIRED` and `--listen-grpc`.
 - A certificate is accepted only when the client proves it holds the key
-  (TLS CertificateVerify) and the chain it sends ends in a CA from the
-  bundle, within its validity period. A client must therefore send its
-  chain up to that CA, or present a self-signed CA certificate that is
-  itself in the bundle (pinning).
-- **Known limit:** the TLS library geode's Zig clients use sends only the
-  leaf certificate, and the server does not complete a client chain from
-  the bundle, so such a client is rejected even when its leaf is signed by
-  a CA in the bundle; present a pinned self-signed CA certificate from the
-  bundle instead. Clients that send the full chain are not affected.
+  (TLS CertificateVerify) and its chain ends in a CA from the bundle, with
+  every certificate within its validity period. The server completes the
+  chain from the bundle, so a client may send only its leaf (geode's Zig
+  clients do), its chain up to the CA, or a self-signed CA certificate that
+  is itself in the bundle (pinning). The bundle may hold several unrelated
+  CAs (SONNY-6457).
+- A leaf whose extendedKeyUsage extension does not list clientAuth is
+  rejected; a leaf with no extendedKeyUsage extension is accepted (RFC 5280:
+  any purpose).
 - `geode query` / `geode shell` / `geode backup` present the certificate
   given with `--client-cert --client-key` (geode-client-zig v0.3.15,
   SONNY-6457), as does geode's internal QUIC client

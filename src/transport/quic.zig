@@ -596,6 +596,10 @@ pub const QuicTransport = struct {
         /// When true, connections without a valid client certificate will be rejected.
         /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_mtls_rejection_matrix.yml; OWNER=transport; UPDATED=2026-06-11
         require_client_cert: bool = false,
+        /// SONNY-6457: DER client CA certificates (`ClientCaTrust.ders`) the
+        /// server TLS layer validates a client chain against and completes
+        /// a leaf-only chain from. Borrowed: must outlive the transport.
+        inline_client_ca_der: ?[]const []const u8 = null,
         /// SONNY-2394: may `listen` self-sign a missing certificate? The
         /// default refuses in production posture (see `CertAutoGenerate`).
         cert_auto_generate: CertAutoGenerate = .dev_only,
@@ -877,6 +881,7 @@ pub const QuicTransport = struct {
             .dead_conn_reap_ms = self.config.dead_conn_reap_ms,
             .defer_accept_until_stream = true,
             .require_client_cert = self.config.require_client_cert,
+            .inline_client_ca_der = self.config.inline_client_ca_der,
             .inline_server_cert_der = inline_cert_der,
             .inline_server_priv_p256 = inline_priv_key,
         };
@@ -2086,6 +2091,9 @@ fn clientCaIsTrustedSpki(spki_der: []const u8) bool {
 pub const ClientCaTrust = struct {
     allocator: std.mem.Allocator,
     spkis: []const []const u8,
+    /// SONNY-6457: the bundle's DER certificates, for
+    /// `QuicTransport.Config.inline_client_ca_der`.
+    ders: []const []const u8,
 
     /// Removes the trust store and frees the anchors.
     pub fn deinit(self: *ClientCaTrust) void {
@@ -2093,6 +2101,8 @@ pub const ClientCaTrust = struct {
         g_client_ca_spkis = &.{};
         for (self.spkis) |s| self.allocator.free(s);
         self.allocator.free(self.spkis);
+        for (self.ders) |d| self.allocator.free(d);
+        self.allocator.free(self.ders);
     }
 };
 
@@ -2103,9 +2113,14 @@ pub const ClientCaTrust = struct {
 /// the TLS layer requires the chain's last certificate to be one. Call once,
 /// before the QUIC listener starts. A bundle that cannot be loaded, holds no
 /// certificate, or holds a non-CA certificate is an error.
+///
+/// SONNY-6457: the returned `ders` must also be set as the transport's
+/// `inline_client_ca_der`; with them the server TLS layer trusts only these
+/// CAs for client chains and completes a chain the client sent without its
+/// issuer (a leaf of a bundle CA, sent alone, is accepted).
 pub fn installClientCaTrust(allocator: std.mem.Allocator, path: []const u8) !ClientCaTrust {
     const chain = try loadCaChainDer(allocator, path);
-    defer {
+    errdefer {
         for (chain) |der| allocator.free(der);
         allocator.free(chain);
     }
@@ -2124,7 +2139,7 @@ pub fn installClientCaTrust(allocator: std.mem.Allocator, path: []const u8) !Cli
     const owned = try spkis.toOwnedSlice(allocator);
     g_client_ca_spkis = owned;
     quic_x509.setTrustStore(.{ .isTrustedSpki = clientCaIsTrustedSpki });
-    return .{ .allocator = allocator, .spkis = owned };
+    return .{ .allocator = allocator, .spkis = owned, .ders = chain };
 }
 
 /// GAP-0838: parse a PEM CA file into a DER trust-anchor chain.
