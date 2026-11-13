@@ -237,12 +237,12 @@ test "exec.zig: ORDER BY nulls policy: FIRST/LAST" {
     var rows: [5]Row = .{
         .{
             .id = 0,
-            .key = .{.Null},
+            .key = .Null,
         },
         .{ .id = 1, .key = .{ .DateTime = .{ .raw = "2024-01-01T10:00Z", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T10:00Z", true) } } },
         .{
             .id = 2,
-            .key = .{.Null},
+            .key = .Null,
         },
         .{ .id = 3, .key = .{ .DateTime = .{ .raw = "2024-01-01T09:00Z", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T09:00Z", true) } } },
         .{ .id = 4, .key = .{ .DateTime = .{ .raw = "2024-01-01T11:00+01:00", .parsed = try @import("temporal.zig").parseDateTime("2024-01-01T11:00+01:00", true) } } },
@@ -308,6 +308,10 @@ pub fn multisetIntersect(allocator: std.mem.Allocator, a: []const i64, b: []cons
 /// - input_rows: matrix of evaluator Values for each input row
 /// - param_names/param_values: optional parameter bindings referenced in expressions
 /// Output: rows of BindingValue containing exactly the RETURN item values (projected order).
+/// SONNY-6460: the result, its values and everything the evaluation
+/// allocates (HAVING rewrites, ORDER BY keys, computed strings) are on
+/// `allocator`, which the caller passes as a per-query arena and frees
+/// whole (the `gql` executable's grouped query does).
 pub const AggStageTimings = struct { build_ns: i128 = 0, emit_ns: i128 = 0 };
 
 pub fn runGroupedQuery(
@@ -422,6 +426,15 @@ pub fn runGroupedQuery(
                     },
                     else => {},
                 },
+                // SONNY-6460 item 3: an aggregate inside a comparison or a
+                // boolean (`HAVING count(*) > 2 AND sum(a) > 2`) is
+                // computed too; only a top-level call was, so the HAVING
+                // read NULL for every nested one and kept no group.
+                .Unary => |u| go(allocator_inner, aggs_out, args_out, u.expr.*),
+                .Binary => |b| {
+                    go(allocator_inner, aggs_out, args_out, b.left.*);
+                    go(allocator_inner, aggs_out, args_out, b.right.*);
+                },
                 else => {},
             }
         }
@@ -511,7 +524,7 @@ pub fn runGroupedQuery(
     var vi: usize = 0;
     while (vi < aggs.items.len) : (vi += 1) v_idxs[vi] = key_len + vi;
     const grouped = try groupAndAggregate(allocator, rows.items, spec, v_idxs);
-    defer allocator.free(grouped);
+    defer freeGroupedRows(allocator, grouped);
 
     // 4) HAVING filter: build maps and evaluate predicate on aggregated rows
     var key_map = std.StringHashMap(usize).init(allocator);
@@ -531,7 +544,14 @@ pub fn runGroupedQuery(
         }
     }
     var agg_map = std.StringHashMap(usize).init(allocator);
-    defer agg_map.deinit();
+    // SONNY-6460 item 3: the map owns its signature keys. It kept each
+    // signature's buffer, freed at the end of its loop iteration, so the
+    // projection and HAVING looked aggregates up against freed bytes.
+    defer {
+        var sig_keys = agg_map.keyIterator();
+        while (sig_keys.next()) |k| allocator.free(k.*);
+        agg_map.deinit();
+    }
     // Build normalized signatures for collected aggregates
     var ai2: usize = 0;
     while (ai2 < aggs.items.len) : (ai2 += 1) {
@@ -583,7 +603,13 @@ pub fn runGroupedQuery(
                 try sig.append(allocator, ')');
             },
         }
-        try agg_map.put(sig.items, ai2);
+        const owned_sig = try allocator.dupe(u8, sig.items);
+        const gop = agg_map.getOrPut(owned_sig) catch |err| {
+            allocator.free(owned_sig);
+            return err;
+        };
+        if (gop.found_existing) allocator.free(owned_sig);
+        gop.value_ptr.* = ai2;
     }
 
     // Filtered aggregated rows
@@ -624,9 +650,7 @@ pub fn runGroupedQuery(
                     };
                     var sig = std.ArrayList(u8).empty;
                     defer sig.deinit(allocator);
-                    // lowercase name
-                    var ii: usize = 0;
-                    while (ii < nm.len) : (ii += 1) try sig.append(allocator, std.ascii.toLower(nm[ii]));
+                    try appendAggSignatureName(allocator, &sig, nm);
                     try sig.append(allocator, '(');
                     if (c.args.len == 0) {
                         try sig.append(allocator, '*');
@@ -730,10 +754,11 @@ pub fn runGroupedQuery(
                     return a < b; // stable tie-break
                 }
             }.less);
-            // Apply permutation
-            var sorted = std.ArrayList([]const BindingValue).empty;
-            defer sorted.deinit(allocator);
-            for (idxs) |ix| try sorted.append(allocator, out.items[ix]);
+            // Apply permutation. SONNY-6460 item 3: `out` takes over the
+            // sorted list's buffer; a `defer sorted.deinit` freed it under
+            // `out` before the result was returned.
+            var sorted = try std.ArrayList([]const BindingValue).initCapacity(allocator, idxs.len);
+            for (idxs) |ix| sorted.appendAssumeCapacity(out.items[ix]);
             out.deinit(allocator);
             out = sorted;
         }
@@ -743,6 +768,15 @@ pub fn runGroupedQuery(
         tp2.emit_ns = now_ns - t_emit_start;
     }
     return out.toOwnedSlice(allocator);
+}
+
+/// The function-name part of an aggregate's signature in `runGroupedQuery`'s
+/// aggregate map: the name lowercased. SONNY-6460 item 3: `count_distinct`
+/// is `countdistinct`, the form the map registers COUNT DISTINCT under; the
+/// lookups kept the underscore, so `count_distinct(x)` read NULL.
+fn appendAggSignatureName(allocator: std.mem.Allocator, sig: *std.ArrayList(u8), name: []const u8) !void {
+    if (std.ascii.eqlIgnoreCase(name, "count_distinct")) return sig.appendSlice(allocator, "countdistinct");
+    for (name) |ch| try sig.append(allocator, std.ascii.toLower(ch));
 }
 
 // CANARY: REQ=REQ-TYPE-CONVERSION-001; FEATURE="ComplexTypeConversion"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=core; UPDATED=2026-01-25
@@ -774,20 +808,26 @@ fn valueToBinding(v: eval.Value) BindingValue {
 // ---------------------------
 
 test "exec.zig: executor: COUNT(expr) vs COUNT(*)" {
-    const allocator = std.testing.allocator;
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Query: GROUP BY s RETURN COUNT(a), COUNT(*)
-    const cal = ast.Expr{ .Ident = "count" };
-    const a_id = ast.Expr{ .Ident = "a" };
-    const s_id = ast.Expr{ .Ident = "s" };
-    const call_count_a = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{&a_id} } };
+    var cal = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var a_id = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    const s_id = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
+    var call_count_a_args = [_]*ast.Expr{&a_id};
+    const call_count_a = ast.Expr{ .Call = .{ .callee = &cal, .args = &call_count_a_args } };
     const call_count_star = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
-    var items: [2]ast.ReturnItem = .{ .{ .expr = call_count_a, .alias = null }, .{ .expr = call_count_star, .alias = null } };
+    var items: [3]ast.ReturnItem = .{ .{ .expr = s_id, .alias = null }, .{ .expr = call_count_a, .alias = null }, .{ .expr = call_count_star, .alias = null } };
+    var gb_keys = [_]ast.Expr{s_id};
     const q: ast.Query = .{
         .optional_match = false,
         .match = .{ .chains = &.{} },
         .where_clause = null,
         .with_clause = null,
-        .group_by = .{ .keys = &.{s_id} },
+        .group_by = .{ .keys = &gb_keys },
         .having = null,
         .ret = .{ .items = items[0..], .distinct = false },
         .order_by = null,
@@ -795,21 +835,20 @@ test "exec.zig: executor: COUNT(expr) vs COUNT(*)" {
         .offset = null,
     };
     const names = &.{ "a", "s" };
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "g1" } };
-    const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g1" } };
-    const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "g2" } };
-    const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g2" } };
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "g1" } };
+    var r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g1" } };
+    var r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "g2" } };
+    var r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "g2" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
     const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
-    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
     // Validate both groups: counts should be (1,2)
     var seen = [_]bool{ false, false };
     for (out) |r| {
-        try std.testing.expect(r.len == 2);
-        try std.testing.expect(r[0] == .Int);
+        try std.testing.expect(r.len == 3);
         try std.testing.expect(r[1] == .Int);
-        if (r[0].Int == 1 and r[1].Int == 2) {
+        try std.testing.expect(r[2] == .Int);
+        if (r[1].Int == 1 and r[2].Int == 2) {
             if (!seen[0]) {
                 seen[0] = true;
             } else {
@@ -817,69 +856,83 @@ test "exec.zig: executor: COUNT(expr) vs COUNT(*)" {
             }
         }
     }
-    try std.testing.expect(seen[0]);
+    try std.testing.expect(seen[0] and seen[1]);
 }
 
 test "exec.zig: executor: empty input yields no groups" {
-    const allocator = std.testing.allocator;
-    const cal = ast.Expr{ .Ident = "count" };
-    const s_id = ast.Expr{ .Ident = "s" };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var cal = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    const s_id = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     const call_count_star = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = call_count_star, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{s_id} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var items: [2]ast.ReturnItem = .{ .{ .expr = s_id, .alias = null }, .{ .expr = call_count_star, .alias = null } };
+    var gb_keys = [_]ast.Expr{s_id};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{"s"};
     const rows: []const []eval.Value = &.{};
     const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
-    defer allocator.free(out);
     try std.testing.expect(out.len == 0);
 }
 
 test "exec.zig: executor: multi-key GROUP BY counts" {
-    const allocator = std.testing.allocator;
-    const cal = ast.Expr{ .Ident = "count" };
-    const s1 = ast.Expr{ .Ident = "s1" };
-    const s2 = ast.Expr{ .Ident = "s2" };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var cal = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    const s1 = ast.Expr{ .Ident = .{ .orig = "s1", .cnf = "S1" } };
+    const s2 = ast.Expr{ .Ident = .{ .orig = "s2", .cnf = "S2" } };
     const count_star = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = count_star, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{ s1, s2 } }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var items: [3]ast.ReturnItem = .{ .{ .expr = s1, .alias = null }, .{ .expr = s2, .alias = null }, .{ .expr = count_star, .alias = null } };
+    var gb_keys = [_]ast.Expr{ s1, s2 };
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "s1", "s2" };
-    const r0 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
-    const r1 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
-    const r2 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "z" } };
+    var r0 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
+    var r1 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "y" } };
+    var r2 = [_]eval.Value{ .{ .Str = "x" }, .{ .Str = "z" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..] };
     const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
-    defer allocator.free(out);
     try std.testing.expect(out.len == 2);
 }
 
 test "exec.zig: executor: complex HAVING with SUM/AVG/COUNT and projection" {
-    const allocator = std.testing.allocator;
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Query: GROUP BY g HAVING COUNT(*) > 2 AND (SUM(a) > 2 OR AVG(a) = 1) RETURN g, SUM(a), AVG(a)
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fnc = ast.Expr{ .Ident = "count" };
-    const fns = ast.Expr{ .Ident = "sum" };
-    const fnv = ast.Expr{ .Ident = "avg" };
-    const count_star = ast.Expr{ .Call = .{ .callee = &fnc, .args = &.{} } };
-    const sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &.{&a} } };
-    const avg_a = ast.Expr{ .Call = .{ .callee = &fnv, .args = &.{&a} } };
-    const two = ast.Expr{ .Int = 2 };
-    const one = ast.Expr{ .Int = 1 };
-    const gt = ast.Expr{ .Binary = .{ .op = .Gt, .left = &count_star, .right = &two } };
-    const gt2 = ast.Expr{ .Binary = .{ .op = .Gt, .left = &sum_a, .right = &two } };
-    const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &avg_a, .right = &one } };
-    const orp = ast.Expr{ .Binary = .{ .op = .Or, .left = &gt2, .right = &eq } };
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fnc = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var fns = ast.Expr{ .Ident = .{ .orig = "sum", .cnf = "SUM" } };
+    var fnv = ast.Expr{ .Ident = .{ .orig = "avg", .cnf = "AVG" } };
+    var count_star = ast.Expr{ .Call = .{ .callee = &fnc, .args = &.{} } };
+    var sum_a_args = [_]*ast.Expr{&a};
+    var sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &sum_a_args } };
+    var avg_a_args = [_]*ast.Expr{&a};
+    var avg_a = ast.Expr{ .Call = .{ .callee = &fnv, .args = &avg_a_args } };
+    var two = ast.Expr{ .Int = 2 };
+    var one = ast.Expr{ .Int = 1 };
+    var gt = ast.Expr{ .Binary = .{ .op = .Gt, .left = &count_star, .right = &two } };
+    var gt2 = ast.Expr{ .Binary = .{ .op = .Gt, .left = &sum_a, .right = &two } };
+    var eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &avg_a, .right = &one } };
+    var orp = ast.Expr{ .Binary = .{ .op = .Or, .left = &gt2, .right = &eq } };
     const having = ast.Expr{ .Binary = .{ .op = .And, .left = &gt, .right = &orp } };
     var items: [3]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = sum_a, .alias = null }, .{ .expr = avg_a, .alias = null } };
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = having, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = having, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
-    const r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
-    const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
-    const r3 = [_]eval.Value{ .{ .Int = 10 }, .{ .Str = "B" } };
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
+    var r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
+    var r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
+    var r3 = [_]eval.Value{ .{ .Int = 10 }, .{ .Str = "B" } };
     const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..] };
     const out = try runGroupedQuery(allocator, q, names, rows, &.{}, &.{}, null, null);
-    defer allocator.free(out);
     // Expect only group A remains, with columns: g, SUM(a)=4, AVG(a)=1
     try std.testing.expect(out.len == 1);
     const r = out[0];
@@ -890,88 +943,108 @@ test "exec.zig: executor: complex HAVING with SUM/AVG/COUNT and projection" {
 }
 
 test "exec.zig: executor: COUNT on NULL-only inputs and COUNT(*)" {
-    const allocator = std.testing.allocator;
-    const cal = ast.Expr{ .Ident = "count" };
-    const a = ast.Expr{ .Ident = "a" };
-    const g = ast.Expr{ .Ident = "g" };
-    const cnt_a = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{&a} } };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var cal = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var cnt_a_args = [_]*ast.Expr{&a};
+    const cnt_a = ast.Expr{ .Call = .{ .callee = &cal, .args = &cnt_a_args } };
     const cnt_star = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
-    var items: [2]ast.ReturnItem = .{ .{ .expr = cnt_a, .alias = null }, .{ .expr = cnt_star, .alias = null } };
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var items: [3]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = cnt_a, .alias = null }, .{ .expr = cnt_star, .alias = null } };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
-    const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
+    var r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
     const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
-    defer allocator.free(out);
     try std.testing.expect(out.len == 1);
-    try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 0);
-    try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 3);
+    try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 0);
+    try std.testing.expect(out[0][2] == .Int and out[0][2].Int == 3);
 }
 
 test "exec.zig: executor: HAVING 3VL nested boolean with NULL short-circuit" {
-    const allocator = std.testing.allocator;
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fnc = ast.Expr{ .Ident = "count" };
-    const fnv = ast.Expr{ .Ident = "avg" };
-    const cnt_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &.{&a} } };
-    const avg_a = ast.Expr{ .Call = .{ .callee = &fnv, .args = &.{&a} } };
-    const zero = ast.Expr{ .Int = 0 };
-    const one = ast.Expr{ .Int = 1 };
-    const gt0 = ast.Expr{ .Binary = .{ .op = .Gt, .left = &cnt_a, .right = &zero } };
-    const eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &avg_a, .right = &one } };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fnc = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var fnv = ast.Expr{ .Ident = .{ .orig = "avg", .cnf = "AVG" } };
+    var cnt_a_args = [_]*ast.Expr{&a};
+    var cnt_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &cnt_a_args } };
+    var avg_a_args = [_]*ast.Expr{&a};
+    var avg_a = ast.Expr{ .Call = .{ .callee = &fnv, .args = &avg_a_args } };
+    var zero = ast.Expr{ .Int = 0 };
+    var one = ast.Expr{ .Int = 1 };
+    var gt0 = ast.Expr{ .Binary = .{ .op = .Gt, .left = &cnt_a, .right = &zero } };
+    var eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &avg_a, .right = &one } };
     const having = ast.Expr{ .Binary = .{ .op = .And, .left = &gt0, .right = &eq1 } };
     var items: [1]ast.ReturnItem = .{.{ .expr = g, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = having, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = having, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
     // Group A: a values [1, null] -> COUNT(a)>0 true, AVG(a)=1 true -> kept
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
-    const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "A" } };
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
+    var r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "A" } };
     // Group B: a values [null] -> COUNT(a)>0 false, AVG(a)=NULL; false AND NULL -> false -> dropped
-    const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "A"));
 }
 
 test "exec.zig: executor: multi-key GROUP BY with NULL keys" {
-    const allocator = std.testing.allocator;
-    const k1 = ast.Expr{ .Ident = "k1" };
-    const k2 = ast.Expr{ .Ident = "k2" };
-    const cal = ast.Expr{ .Ident = "count" };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const k1 = ast.Expr{ .Ident = .{ .orig = "k1", .cnf = "K1" } };
+    const k2 = ast.Expr{ .Ident = .{ .orig = "k2", .cnf = "K2" } };
+    var cal = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
     const cnt = ast.Expr{ .Call = .{ .callee = &cal, .args = &.{} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = cnt, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{ k1, k2 } }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var items: [3]ast.ReturnItem = .{ .{ .expr = k1, .alias = null }, .{ .expr = k2, .alias = null }, .{ .expr = cnt, .alias = null } };
+    var gb_keys = [_]ast.Expr{ k1, k2 };
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "k1", "k2" };
-    const r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
-    const r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
-    const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "y" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
+    var r1 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "x" } };
+    var r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "y" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     // Expect two groups: (NULL,x) and (NULL,y)
     try std.testing.expect(out.len == 2);
 }
 
 test "exec.zig: executor: ORDER BY over aggregated outputs with NULLS policy" {
-    const allocator = std.testing.allocator;
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fns = ast.Expr{ .Ident = "sum" };
-    const sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &.{&a} } };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fns = ast.Expr{ .Ident = .{ .orig = "sum", .cnf = "SUM" } };
+    var sum_a_args = [_]*ast.Expr{&a};
+    const sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &sum_a_args } };
     var items: [2]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = sum_a, .alias = null } };
     var ok1: [2]ast.OrderBy.OrderKey = .{ .{ .expr = sum_a, .desc = false, .nulls = .last }, .{ .expr = g, .desc = false, .nulls = .first } };
     const ob = ast.OrderBy{ .keys = ok1[0..] };
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = ob, .limit = null, .offset = null };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = ob, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
     // Groups: A(sum=3), B(sum=NULL), C(sum=1)
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
-    const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
-    const r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
-    const r3 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "C" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "A" } };
+    var r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "A" } };
+    var r2 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "B" } };
+    var r3 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "C" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null, null);
     // Expect order by SUM ascending with NULLS LAST -> C(1), A(3), B(NULL)
     try std.testing.expect(out.len == 3);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "C"));
@@ -982,7 +1055,7 @@ test "exec.zig: executor: ORDER BY over aggregated outputs with NULLS policy" {
 test "exec.zig: grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
     const allocator = std.testing.allocator;
     // rows: (g, d as Decimal literal via eval.Value, s, b)
-    const rows: []const []BindingValue = &.{
+    const rows: []const []const BindingValue = &.{
         &.{ .{ .Str = "A" }, .{ .Decimal = .{ .coeff = 1234, .scale = 2 } }, .{ .Str = "z" }, .{ .Bool = true } }, // 12.34
         &.{ .{ .Str = "A" }, .{ .Decimal = .{ .coeff = 1, .scale = 0 } }, .{ .Str = "a" }, .{ .Bool = false } }, // 1
         &.{ .{ .Str = "B" }, .{ .Null = {} }, .{ .Str = "m" }, .{ .Bool = true } },
@@ -991,7 +1064,7 @@ test "exec.zig: grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
     const spec = GroupSpec{ .key_idxs = &.{0}, .aggs = &.{ .Sum, .Avg, .Min, .Max } };
     const vals = &.{ 1, 1, 2, 3 }; // indices for d,d,s,b
     const out = try groupAndAggregate(allocator, rows, spec, vals);
-    defer allocator.free(out);
+    defer freeGroupedRows(allocator, out);
     try std.testing.expect(out.len == 2);
     var sawA = false;
     var sawB = false;
@@ -1020,45 +1093,55 @@ test "exec.zig: grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
 }
 
 test "exec.zig: executor: HAVING with Decimal literal compares against decimal AVG" {
-    const allocator = std.testing.allocator;
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fna = ast.Expr{ .Ident = "avg" };
-    const avg_a = ast.Expr{ .Call = .{ .callee = &fna, .args = &.{&a} } };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fna = ast.Expr{ .Ident = .{ .orig = "avg", .cnf = "AVG" } };
+    var avg_a_args = [_]*ast.Expr{&a};
+    var avg_a = ast.Expr{ .Call = .{ .callee = &fna, .args = &avg_a_args } };
     // HAVING AVG(a) > 1.50
-    const one_five = ast.Expr{ .Decimal = .{ .coeff = 150, .scale = 2 } };
+    var one_five = ast.Expr{ .Decimal = .{ .coeff = 150, .scale = 2 } };
     const gt = ast.Expr{ .Binary = .{ .op = .Gt, .left = &avg_a, .right = &one_five } };
     var items: [1]ast.ReturnItem = .{.{ .expr = g, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = gt, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = gt, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
     // Groups: X -> [1.00, 2.20] avg = 1.60 -> kept; Y -> [1.00] avg = 1.00 -> dropped
-    const r0 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 220, .scale = 2 } }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 220, .scale = 2 } }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Decimal = .{ .coeff = 100, .scale = 2 } }, .{ .Str = "Y" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "X"));
 }
 
 test "exec.zig: executor: ORDER BY using ordinal and alias resolution on aggregated output" {
-    const allocator = std.testing.allocator;
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fns = ast.Expr{ .Ident = "sum" };
-    const sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &.{&a} } };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fns = ast.Expr{ .Ident = .{ .orig = "sum", .cnf = "SUM" } };
+    var sum_a_args = [_]*ast.Expr{&a};
+    const sum_a = ast.Expr{ .Call = .{ .callee = &fns, .args = &sum_a_args } };
     var items: [2]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = sum_a, .alias = "total" } };
     // ORDER BY 2 ASC, alias then
-    var ok: [2]ast.OrderBy.OrderKey = .{ .{ .expr = .{ .Int = 2 }, .desc = false, .nulls = .last }, .{ .expr = .{ .Ident = "total" }, .desc = true, .nulls = .default } };
+    var ok: [2]ast.OrderBy.OrderKey = .{ .{ .expr = .{ .Int = 2 }, .desc = false, .nulls = .last }, .{ .expr = .{ .Ident = .{ .orig = "total", .cnf = "TOTAL" } }, .desc = true, .nulls = .default } };
     const ob = ast.OrderBy{ .keys = ok[0..] };
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = ob, .limit = null, .offset = null };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = ob, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
     // Groups: X(sum=3), Y(sum=1)
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "Y" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 2);
     // ORDER BY 2 (sum) ASC: Y(1) then X(3). Second key orders by alias desc but distinct sums mean first key decides
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "Y"));
@@ -1066,73 +1149,88 @@ test "exec.zig: executor: ORDER BY using ordinal and alias resolution on aggrega
 }
 
 test "exec.zig: executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
-    const allocator = std.testing.allocator;
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Query: GROUP BY g RETURN COUNT_DISTINCT(a)
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fnc = ast.Expr{ .Ident = "countDistinct" };
-    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &.{&a} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = cntd_a, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fnc = ast.Expr{ .Ident = .{ .orig = "countDistinct", .cnf = "COUNTDISTINCT" } };
+    var cntd_a_args = [_]*ast.Expr{&a};
+    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &cntd_a_args } };
+    var items: [2]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = cntd_a, .alias = null } };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
+    var r3 = [_]eval.Value{ .{ .Null = {} }, .{ .Str = "X" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 1);
     // Distinct non-null values: {1,2} => 2
-    try std.testing.expect(out[0].len == 1);
-    try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 2);
+    try std.testing.expect(out[0].len == 2);
+    try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 2);
 }
 
 test "exec.zig: executor: COUNT_DISTINCT multi-group" {
-    const allocator = std.testing.allocator;
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
-    const fnc2 = ast.Expr{ .Ident = "count_distinct" };
-    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc2, .args = &.{&a} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = cntd_a, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
+    var fnc2 = ast.Expr{ .Ident = .{ .orig = "count_distinct", .cnf = "COUNT_DISTINCT" } };
+    var cntd_a_args = [_]*ast.Expr{&a};
+    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc2, .args = &cntd_a_args } };
+    var items: [2]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = cntd_a, .alias = null } };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
     // Group X: values 1,1,2 -> 2 distinct; Group Y: values 5,5 -> 1 distinct
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const r3 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
-    const r4 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
+    var r3 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
+    var r4 = [_]eval.Value{ .{ .Int = 5 }, .{ .Str = "Y" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 2);
     var sawX = false;
     var sawY = false;
     for (out) |r| {
-        try std.testing.expect(r.len == 1);
-        if (r[0] == .Int and r[0].Int == 2) sawX = true else if (r[0] == .Int and r[0].Int == 1) sawY = true;
+        try std.testing.expect(r.len == 2);
+        if (r[1] == .Int and r[1].Int == 2) sawX = true else if (r[1] == .Int and r[1].Int == 1) sawY = true;
     }
     try std.testing.expect(sawX and sawY);
 }
 
 test "TestCANARY_REQ_GQL_012_CountDistinctExec" {
     // E2E: parse source with COUNT(DISTINCT) and run grouping manually through runGroupedQuery using constructed AST.
-    const allocator = std.testing.allocator;
+    // runGroupedQuery allocates its result and its scratch on `allocator`,
+    // which the caller passes as a per-query arena (SONNY-6460).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Build AST manually similar to parser output: RETURN COUNT(DISTINCT a) GROUP BY g
-    const g = ast.Expr{ .Ident = "g" };
-    const a = ast.Expr{ .Ident = "a" };
+    const g = ast.Expr{ .Ident = .{ .orig = "g", .cnf = "G" } };
+    var a = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     // Executor expects synthetic callee countDistinct produced by parser rewrite
-    const fnc = ast.Expr{ .Ident = "countDistinct" };
-    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &.{&a} } };
-    var items: [1]ast.ReturnItem = .{.{ .expr = cntd_a, .alias = null }};
-    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
+    var fnc = ast.Expr{ .Ident = .{ .orig = "countDistinct", .cnf = "COUNTDISTINCT" } };
+    var cntd_a_args = [_]*ast.Expr{&a};
+    const cntd_a = ast.Expr{ .Call = .{ .callee = &fnc, .args = &cntd_a_args } };
+    var items: [2]ast.ReturnItem = .{ .{ .expr = g, .alias = null }, .{ .expr = cntd_a, .alias = null } };
+    var gb_keys = [_]ast.Expr{g};
+    const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &gb_keys }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
-    const r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
-    const r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
-    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null);
-    defer allocator.free(out);
+    var r0 = [_]eval.Value{ .{ .Int = 1 }, .{ .Str = "X" } };
+    var r1 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
+    var r2 = [_]eval.Value{ .{ .Int = 2 }, .{ .Str = "X" } };
+    const out = try runGroupedQuery(allocator, q, names, &.{ r0[0..], r1[0..], r2[0..] }, &.{}, &.{}, null, null);
     try std.testing.expect(out.len == 1);
-    try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 2);
+    try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 2);
 }
 
 pub fn multisetExcept(allocator: std.mem.Allocator, a: []const i64, b: []const i64) ![]i64 {
@@ -1462,6 +1560,7 @@ fn rowKeyAlloc(allocator: std.mem.Allocator, row: []const BindingValue) ![]u8 {
 // Allocate a canonical byte key for a single BindingValue used in COUNT DISTINCT.
 fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
     var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(allocator);
     switch (v) {
         .Null => try buf.appendSlice(allocator, "n"),
         .Int => |n| try buf.print(allocator, "i{d}", .{n}),
@@ -1491,15 +1590,15 @@ fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
 
 fn sortUniqueRows(allocator: std.mem.Allocator, rows: []const []const BindingValue) ![]const []const BindingValue {
     // Make a copy of slice-of-slices and sort lexicographically; then unique adjacent equals.
+    // SONNY-6460 item 3: the sorted copy is scratch; it was never freed.
     const tmp = try allocator.alloc([]const BindingValue, rows.len);
-    errdefer allocator.free(tmp);
+    defer allocator.free(tmp);
     std.mem.copyForwards([]const BindingValue, tmp, rows);
     std.sort.block([]const BindingValue, tmp, {}, struct {
         fn less(_: void, a: []const BindingValue, b: []const BindingValue) bool {
             return rowLess(a, b);
         }
     }.less);
-    if (tmp.len == 0) return tmp;
     var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     var i: usize = 0;
@@ -1521,6 +1620,11 @@ pub fn unionDistinctRows(allocator: std.mem.Allocator, a: []const []const Bindin
 
 /// Optimized UNION DISTINCT with a simple threshold to pick between sort-unique and hash-then-sort.
 pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue, threshold: usize) ![]const []const BindingValue {
+    // SONNY-6460 item 3: the maps below keep the row keys they are given
+    // (they were freed right after the put, so later lookups read freed
+    // bytes); the keys live until this returns.
+    var keys = std.heap.ArenaAllocator.init(allocator);
+    defer keys.deinit();
     const total = a.len + b.len;
     if (total < threshold) return try unionDistinctRows(allocator, a, b);
     var set = std.StringHashMap(void).init(allocator);
@@ -1530,8 +1634,7 @@ pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []con
     // Insert all rows from a, then b
     var i: usize = 0;
     while (i < a.len) : (i += 1) {
-        const key = try rowKeyAlloc(allocator, a[i]);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), a[i]);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
             try uniq.append(allocator, a[i]);
@@ -1539,8 +1642,7 @@ pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []con
     }
     i = 0;
     while (i < b.len) : (i += 1) {
-        const key = try rowKeyAlloc(allocator, b[i]);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), b[i]);
         if (!set.contains(key)) {
             _ = try set.put(key, {});
             try uniq.append(allocator, b[i]);
@@ -1559,20 +1661,23 @@ pub fn unionAllRows(allocator: std.mem.Allocator, a: []const []const BindingValu
 }
 
 pub fn intersectAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    // SONNY-6460 item 3: the maps below keep the row keys they are given
+    // (they were freed right after the put, so later lookups read freed
+    // bytes); the keys live until this returns.
+    var keys = std.heap.ArenaAllocator.init(allocator);
+    defer keys.deinit();
     // Stable-left: walk A, but limit multiplicity by counts in B
     var counts = std.StringHashMap(usize).init(allocator);
     defer counts.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
     var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (a) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         if (counts.get(key)) |cnt| {
             if (cnt > 0) {
                 try out.append(allocator, row);
@@ -1584,11 +1689,15 @@ pub fn intersectAllRows(allocator: std.mem.Allocator, a: []const []const Binding
 }
 
 pub fn intersectDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    // SONNY-6460 item 3: the maps below keep the row keys they are given
+    // (they were freed right after the put, so later lookups read freed
+    // bytes); the keys live until this returns.
+    var keys = std.heap.ArenaAllocator.init(allocator);
+    defer keys.deinit();
     var setA = std.StringHashMap(void).init(allocator);
     defer setA.deinit();
     for (a) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         _ = try setA.put(key, {});
     }
     var uniq = std.ArrayList([]const BindingValue).empty;
@@ -1596,8 +1705,7 @@ pub fn intersectDistinctRows(allocator: std.mem.Allocator, a: []const []const Bi
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         if (setA.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
             try uniq.append(allocator, row);
@@ -1608,20 +1716,23 @@ pub fn intersectDistinctRows(allocator: std.mem.Allocator, a: []const []const Bi
 }
 
 pub fn exceptAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    // SONNY-6460 item 3: the maps below keep the row keys they are given
+    // (they were freed right after the put, so later lookups read freed
+    // bytes); the keys live until this returns.
+    var keys = std.heap.ArenaAllocator.init(allocator);
+    defer keys.deinit();
     // Stable-left: emit rows from A after subtracting multiplicities found in B
     var counts = std.StringHashMap(usize).init(allocator);
     defer counts.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
     var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (a) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         if (counts.get(key)) |cnt| {
             if (cnt == 0) {
                 try out.append(allocator, row);
@@ -1658,31 +1769,100 @@ pub const GroupSpec = struct {
     aggs: []const Agg,
 };
 
+/// One group's accumulators in `groupAndAggregate`. It owns every slice, the
+/// key slice and each COUNT DISTINCT set (with the value keys in it); the
+/// values in `key`, `mins` and `maxs` are borrowed from the input rows.
+const GroupAcc = struct {
+    key: []const BindingValue = &.{},
+    // Per-aggregate counters:
+    //  - for Count: number of non-NULL values
+    //  - for CountStar: number of rows (all)
+    //  - for Sum/Avg: number of non-NULL integer values
+    counts: []usize = &.{},
+    // For integer sums/avgs use i128 accumulator. For decimals, track coeff and a common scale per-agg.
+    sums: []i128 = &.{},
+    dec_sums: []i128 = &.{}, // decimal coefficient sums after aligning scales
+    dec_scale: []u8 = &.{}, // common scale per-agg when decimals seen; 0 if none
+    saw_decimal: []bool = &.{},
+    ovf: []bool = &.{}, // overflow flags for sums/avg accumulation
+    mins: []?BindingValue = &.{},
+    maxs: []?BindingValue = &.{},
+    // COUNT DISTINCT: one set of encoded values per aggregate, created when
+    // the aggregate sees its first non-NULL value.
+    distinct_sets: []?*std.StringHashMapUnmanaged(void) = &.{},
+
+    /// Fresh zeroed accumulators for `m` aggregates; frees what it allocated
+    /// when an allocation fails. `key` stays the caller's.
+    fn init(allocator: std.mem.Allocator, m: usize) !GroupAcc {
+        var acc: GroupAcc = .{};
+        errdefer acc.deinit(allocator);
+        acc.counts = try allocator.alloc(usize, m);
+        @memset(acc.counts, 0);
+        acc.sums = try allocator.alloc(i128, m);
+        @memset(acc.sums, 0);
+        acc.dec_sums = try allocator.alloc(i128, m);
+        @memset(acc.dec_sums, 0);
+        acc.dec_scale = try allocator.alloc(u8, m);
+        @memset(acc.dec_scale, 0);
+        acc.saw_decimal = try allocator.alloc(bool, m);
+        @memset(acc.saw_decimal, false);
+        acc.ovf = try allocator.alloc(bool, m);
+        @memset(acc.ovf, false);
+        acc.mins = try allocator.alloc(?BindingValue, m);
+        @memset(acc.mins, null);
+        acc.maxs = try allocator.alloc(?BindingValue, m);
+        @memset(acc.maxs, null);
+        acc.distinct_sets = try allocator.alloc(?*std.StringHashMapUnmanaged(void), m);
+        @memset(acc.distinct_sets, null);
+        return acc;
+    }
+
+    fn deinit(self: *GroupAcc, allocator: std.mem.Allocator) void {
+        for (self.distinct_sets) |set_opt| {
+            const set = set_opt orelse continue;
+            var keys = set.keyIterator();
+            while (keys.next()) |k| allocator.free(k.*);
+            set.deinit(allocator);
+            allocator.destroy(set);
+        }
+        allocator.free(self.distinct_sets);
+        allocator.free(self.maxs);
+        allocator.free(self.mins);
+        allocator.free(self.ovf);
+        allocator.free(self.saw_decimal);
+        allocator.free(self.dec_scale);
+        allocator.free(self.dec_sums);
+        allocator.free(self.sums);
+        allocator.free(self.counts);
+        allocator.free(self.key);
+        self.* = .{};
+    }
+};
+
+/// SONNY-6460 item 3: frees what `groupAndAggregate` returns: each row and
+/// the slice holding them. The values in the rows are borrowed from its
+/// input rows and are not freed.
+pub fn freeGroupedRows(allocator: std.mem.Allocator, rows: []const []const BindingValue) void {
+    for (rows) |row| allocator.free(row);
+    allocator.free(rows);
+}
+
 // CANARY: REQ=REQ-SONNY-6437-GQL-GROUP-KEYS; FEATURE="GqlEngineAggregation"; ASPECT=GroupKeyOwnership; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=engine; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6460-GQL-GROUP-OWNERSHIP; FEATURE="GqlEngineAggregation"; ASPECT=GroupAccumulatorOwnership; STATUS=TESTED; TEST=tests/test_sonny6460_query_residuals.zig; OWNER=engine; UPDATED=2026-11-13
 /// Group rows (binding rows) by key columns and compute aggregates over a single Int column per agg index.
+/// The caller owns the returned rows and the slice holding them
+/// (`freeGroupedRows`); their values are borrowed from `rows`.
 pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []const BindingValue {
-    var map = std.StringHashMap(struct {
-        key: []const BindingValue,
-        // Per-aggregate counters:
-        //  - for Count: number of non-NULL values
-        //  - for CountStar: number of rows (all)
-        //  - for Sum/Avg: number of non-NULL integer values
-        counts: []usize,
-        // For integer sums/avgs use i128 accumulator. For decimals, track coeff and a common scale per-agg.
-        sums: []i128,
-        dec_sums: []i128, // decimal coefficient sums after aligning scales
-        dec_scale: []u8, // common scale per-agg when decimals seen; 0 if none
-        saw_decimal: []bool,
-        ovf: []bool, // overflow flags for sums/avg accumulation
-        mins: []?BindingValue,
-        maxs: []?BindingValue,
-        // For CountDistinct maintain a hash map per-agg when needed. We store pointer array to maps allocated on demand.
-        distinct_maps: []*std.StringHashMap(void),
-    }).init(allocator);
+    var map = std.StringHashMap(GroupAcc).init(allocator);
     // SONNY-6437 item 3: the map owns each group's encoded key, freed here.
+    // SONNY-6460 item 3: and each group's accumulators, which were never
+    // freed (the gql executable leaked them on every grouped query).
     defer {
-        var keys = map.keyIterator();
-        while (keys.next()) |key_enc| allocator.free(key_enc.*);
+        var entries = map.iterator();
+        while (entries.next()) |e| {
+            allocator.free(e.key_ptr.*);
+            e.value_ptr.deinit(allocator);
+        }
         map.deinit();
     }
     // scratch buffers length per agg
@@ -1692,6 +1872,8 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
         const row = rows[i];
         // Build key slice
         var key = try allocator.alloc(BindingValue, spec.key_idxs.len);
+        var key_owned = true;
+        defer if (key_owned) allocator.free(key);
         var k: usize = 0;
         while (k < spec.key_idxs.len) : (k += 1) key[k] = row[spec.key_idxs[k]];
         const key_enc = try rowKeyAlloc(allocator, key);
@@ -1699,38 +1881,20 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
         // `key`); it was freed at the end of the row, so the next row's
         // lookup compared against freed bytes and every row was a group of
         // its own. A row of an existing group frees both.
-        var new_group = false;
-        defer if (!new_group) {
-            allocator.free(key_enc);
-            allocator.free(key);
-        };
+        var key_enc_owned = true;
+        defer if (key_enc_owned) allocator.free(key_enc);
         const entry_ptr = blk: {
             if (map.getPtr(key_enc)) |p| break :blk p;
-            // initialize accumulators
-            const counts = try allocator.alloc(usize, m);
-            const sums = try allocator.alloc(i128, m);
-            const dec_sums = try allocator.alloc(i128, m);
-            const dec_scale = try allocator.alloc(u8, m);
-            const saw_decimal = try allocator.alloc(bool, m);
-            const mins = try allocator.alloc(?BindingValue, m);
-            const maxs = try allocator.alloc(?BindingValue, m);
-            const ovf = try allocator.alloc(bool, m);
-            const distinct_maps = try allocator.alloc(*std.StringHashMap(void), m);
-            @memset(counts, 0);
-            @memset(sums, 0);
-            @memset(dec_sums, 0);
-            @memset(dec_scale, 0);
-            @memset(saw_decimal, false);
-            var z: usize = 0;
-            while (z < m) : (z += 1) {
-                mins[z] = null;
-                maxs[z] = null;
-                ovf[z] = false;
-                distinct_maps[z] = undefined; // lazily allocated when first distinct value seen
-            }
-            try map.put(key_enc, .{ .key = key, .counts = counts, .sums = sums, .dec_sums = dec_sums, .dec_scale = dec_scale, .saw_decimal = saw_decimal, .ovf = ovf, .mins = mins, .maxs = maxs, .distinct_maps = distinct_maps });
-            new_group = true;
-            break :blk map.getPtr(key_enc).?;
+            var acc = try GroupAcc.init(allocator, m);
+            errdefer acc.deinit(allocator);
+            const gop = try map.getOrPut(key_enc);
+            // From here the map owns the encoded key, the accumulators and
+            // the key slice.
+            acc.key = key;
+            gop.value_ptr.* = acc;
+            key_owned = false;
+            key_enc_owned = false;
+            break :blk gop.value_ptr;
         };
         // update accumulators
         var a: usize = 0;
@@ -1748,18 +1912,25 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
                 .CountDistinct => blk_cd: {
                     const v = row[vi];
                     if (v == .Null) break :blk_cd; // NULLs not counted
-                    // Build string key for value
-                    const key_val = valueKeyAlloc(allocator, v) catch break :blk_cd;
-                    defer allocator.free(key_val);
-                    // Lazily allocate map
-                    if (@intFromPtr(entry_ptr.distinct_maps[a]) == 0) {
-                        const mapp = try allocator.create(std.StringHashMap(void));
-                        mapp.* = std.StringHashMap(void).init(allocator);
-                        entry_ptr.distinct_maps[a] = mapp;
-                    }
-                    var hm = entry_ptr.distinct_maps[a];
-                    if (!hm.contains(key_val)) {
-                        _ = hm.put(key_val, {}) catch break :blk_cd;
+                    // SONNY-6460 item 3: the set was read through an
+                    // `undefined` pointer (the "not created yet" test
+                    // compared it with 0), and it kept keys freed at the end
+                    // of this block. It owns its keys now, and an allocation
+                    // failure is an error, not an uncounted value.
+                    const set = entry_ptr.distinct_sets[a] orelse blk_new: {
+                        const created = try allocator.create(std.StringHashMapUnmanaged(void));
+                        created.* = .empty;
+                        entry_ptr.distinct_sets[a] = created;
+                        break :blk_new created;
+                    };
+                    const key_val = try valueKeyAlloc(allocator, v);
+                    const gop = set.getOrPut(allocator, key_val) catch |err| {
+                        allocator.free(key_val);
+                        return err;
+                    };
+                    if (gop.found_existing) {
+                        allocator.free(key_val);
+                    } else {
                         entry_ptr.counts[a] += 1;
                     }
                 },
@@ -1875,10 +2046,13 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
     // Materialize output rows: key columns first, then aggregate outputs as Int or Null
     var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
+    errdefer for (out.items) |done| allocator.free(done);
+    try out.ensureTotalCapacityPrecise(allocator, map.count());
     var it = map.valueIterator();
     while (it.next()) |p| {
         const acc = p.*;
         var row = try allocator.alloc(BindingValue, spec.key_idxs.len + m);
+        out.appendAssumeCapacity(row);
         // copy key columns
         var x: usize = 0;
         while (x < spec.key_idxs.len) : (x += 1) row[x] = acc.key[x];
@@ -1912,7 +2086,6 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
                 .Max => row[dst] = acc.maxs[a] orelse BindingValue{ .Null = {} },
             }
         }
-        try out.append(allocator, row);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -1951,9 +2124,7 @@ pub fn rewriteExprWithAggregates(
             };
             var sig_buf = std.ArrayList(u8).empty;
             defer sig_buf.deinit(allocator);
-            // append lowercase function name
-            var i_nm: usize = 0;
-            while (i_nm < nm.len) : (i_nm += 1) try sig_buf.append(allocator, std.ascii.toLower(nm[i_nm]));
+            try appendAggSignatureName(allocator, &sig_buf, nm);
             try sig_buf.append(allocator, '(');
             if (c.args.len == 0) {
                 try sig_buf.append(allocator, '*');
@@ -1972,21 +2143,25 @@ pub fn rewriteExprWithAggregates(
             }
             break :blk_call .{ .Null = {} };
         },
+        // SONNY-6460 item 3: the rewritten operands live on `allocator`. They
+        // were locals of this call, so the returned tree pointed at dead
+        // stack and evaluating a HAVING with AND/OR/NOT (`evalBinaryChain`)
+        // read garbage and looped forever.
         .Unary => |u| blk_u: {
-            const inner = try rewriteExprWithAggregates(allocator, u.expr.*, key_map, agg_map, row, key_len);
+            const inner = try allocator.create(ast.Expr);
+            inner.* = try rewriteExprWithAggregates(allocator, u.expr.*, key_map, agg_map, row, key_len);
             var u_copy = u;
-            var inner_copy = inner;
-            u_copy.expr = &inner_copy;
+            u_copy.expr = inner;
             break :blk_u .{ .Unary = u_copy };
         },
         .Binary => |b| blk_b: {
-            const l = try rewriteExprWithAggregates(allocator, b.left.*, key_map, agg_map, row, key_len);
-            const r = try rewriteExprWithAggregates(allocator, b.right.*, key_map, agg_map, row, key_len);
+            const l = try allocator.create(ast.Expr);
+            l.* = try rewriteExprWithAggregates(allocator, b.left.*, key_map, agg_map, row, key_len);
+            const r = try allocator.create(ast.Expr);
+            r.* = try rewriteExprWithAggregates(allocator, b.right.*, key_map, agg_map, row, key_len);
             var b2 = b;
-            var lc = l;
-            var rc = r;
-            b2.left = &lc;
-            b2.right = &rc;
+            b2.left = l;
+            b2.right = r;
             break :blk_b .{ .Binary = b2 };
         },
         else => .{ .Null = {} },
@@ -2023,11 +2198,15 @@ fn bindingValueToExpr(allocator: std.mem.Allocator, v: BindingValue) !ast.Expr {
 }
 
 pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
+    // SONNY-6460 item 3: the maps below keep the row keys they are given
+    // (they were freed right after the put, so later lookups read freed
+    // bytes); the keys live until this returns.
+    var keys = std.heap.ArenaAllocator.init(allocator);
+    defer keys.deinit();
     var setB = std.StringHashMap(void).init(allocator);
     defer setB.deinit();
     for (b) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         _ = try setB.put(key, {});
     }
     var uniq = std.ArrayList([]const BindingValue).empty;
@@ -2035,8 +2214,7 @@ pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const Bindi
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (a) |row| {
-        const key = try rowKeyAlloc(allocator, row);
-        defer allocator.free(key);
+        const key = try rowKeyAlloc(keys.allocator(), row);
         if (!setB.contains(key) and !seen.contains(key)) {
             _ = try seen.put(key, {});
             try uniq.append(allocator, row);
@@ -2047,13 +2225,13 @@ pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const Bindi
 
 test "exec.zig: binding table set ops: multi-column with NULLs" {
     const A0 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
-    const A1 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
+    const A1 = [_]BindingValue{ .Null, .{ .Str = "x" } };
     const A2 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
     const B0 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
-    const B1 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
-    const B2 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
-    const A: []const []BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
-    const B: []const []BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
+    const B1 = [_]BindingValue{ .Null, .{ .Str = "x" } };
+    const B2 = [_]BindingValue{ .Null, .{ .Str = "x" } };
+    const A: []const []const BindingValue = &.{ A0[0..], A1[0..], A2[0..] };
+    const B: []const []const BindingValue = &.{ B0[0..], B1[0..], B2[0..] };
     const allocator = std.testing.allocator;
     const uD = try unionDistinctRows(allocator, A, B);
     defer allocator.free(uD);
@@ -2074,13 +2252,13 @@ test "exec.zig: binding table set ops: multi-column with NULLs" {
 
 test "exec.zig: binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
     // Build inputs with duplicates and mixed types across both sides
-    const R0 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } };
+    const R0 = [_]BindingValue{ .Null, .{ .Str = "n" } };
     const R1 = [_]BindingValue{ .{ .Bool = false }, .{ .Str = "b" } };
     const R2 = [_]BindingValue{ .{ .Int = 42 }, .{ .Str = "i" } };
     const R3 = [_]BindingValue{ .{ .Str = "aaa" }, .{ .Str = "s" } };
-    const R4 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } }; // duplicate of R0
-    const A: []const []BindingValue = &.{ R2[0..], R3[0..], R4[0..] };
-    const B: []const []BindingValue = &.{ R0[0..], R1[0..], R2[0..] };
+    const R4 = [_]BindingValue{ .Null, .{ .Str = "n" } }; // duplicate of R0
+    const A: []const []const BindingValue = &.{ R2[0..], R3[0..], R4[0..] };
+    const B: []const []const BindingValue = &.{ R0[0..], R1[0..], R2[0..] };
     const allocator = std.testing.allocator;
     const ud = try unionDistinctRows(allocator, A, B);
     defer allocator.free(ud);

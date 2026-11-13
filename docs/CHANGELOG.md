@@ -1993,6 +1993,24 @@
 
 ### Fixed
 
+- **The `gql` executable's GROUP BY engine no longer leaks, crashes or
+  hangs (SONNY-6460 item 3).** `src/exec.zig` `groupAndAggregate` never
+  freed a group's accumulators or key slice (every grouped query leaked),
+  and COUNT DISTINCT read its per-group set through an `undefined` pointer
+  (a general protection fault). Its inline tests had compiled in no step;
+  running them (`zig build test-sonny6460-exec-inline`, now in the
+  aggregate) found more in the same engine: a HAVING with AND, OR or NOT
+  pointed at dead stack and looped forever; an aggregate inside a HAVING
+  comparison (`HAVING count(*) > 2 AND ...`) was never computed; the
+  aggregate and set-operation (UNION/INTERSECT/EXCEPT) maps kept keys they
+  had freed; an ORDER BY returned a freed buffer; `count_distinct(x)` read
+  NULL; the planner refused `countDistinct`/`count_distinct` and a DECIMAL
+  literal in HAVING. `groupAndAggregate`'s caller frees its result with
+  `exec.freeGroupedRows`; `runGroupedQuery` allocates its result and
+  scratch on the allocator it is given, which the `gql` executable now
+  passes as a per-query arena. Regression: `zig build
+  test-sonny6460-query-residuals` (leak-checked, including every
+  allocation failure).
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

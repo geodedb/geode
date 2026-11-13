@@ -491,11 +491,15 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                         var r4 = [_]eval.Value{ .{ .Int = 2 }, .{ .Null = {} } };
                         const rows: []const []eval.Value = &.{ r0[0..], r1[0..], r2[0..], r3[0..], r4[0..] };
                         // GAP-004: Pass ts_store to executor
-                        const out = exec.runGroupedQuery(ally, q, names, rows, param_names.items, param_values.items, null, &ts_store) catch |e| {
+                        // SONNY-6460: the grouped query's result and scratch live on a
+                        // per-query arena (`exec.runGroupedQuery`); on the process GPA
+                        // they leaked on every query.
+                        var group_arena = std.heap.ArenaAllocator.init(ally);
+                        defer group_arena.deinit();
+                        const out = exec.runGroupedQuery(group_arena.allocator(), q, names, rows, param_names.items, param_values.items, null, &ts_store) catch |e| {
                             std.debug.print("demo-eval(grouped): error {s}\n", .{@errorName(e)});
                             return;
                         };
-                        defer ally.free(out);
                         // Header from RETURN
                         try w.print("demo-eval(grouped): projected RETURN columns\n", .{});
                         for (q.ret.items, 0..) |it, i| {
@@ -718,7 +722,7 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                         std.debug.print("demo-agg: runtime error: {s}\n", .{@errorName(e)});
                         return;
                     };
-                    defer gpa.free(out_rows);
+                    defer exec.freeGroupedRows(gpa, out_rows);
                     // Prepare HAVING evaluation: build maps (group key -> index, agg signature -> rel index)
                     var key_map = std.StringHashMap(usize).init(gpa);
                     defer key_map.deinit();

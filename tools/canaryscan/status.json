@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:45:52.074426048Z",
+  "generated_at": "2026-11-13T09:18:19.202656943Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85565,6 +85565,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6460-GQL-GROUP-OWNERSHIP",
+      "features": [
+        {
+          "feature": "GqlEngineAggregation",
+          "aspect": "GroupAccumulatorOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6460-QUERY-RESIDUALS",
       "features": [
         {
@@ -93218,7 +93237,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4856
+      "TESTED": 4857
     },
     "by_aspect": {
       "2PC": 3,
@@ -94792,6 +94811,7 @@
       "GreyCardinal": 1,
       "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,
       "GreyCardinalVarianceEnvelope": 1,
+      "GroupAccumulatorOwnership": 1,
       "GroupAggregation": 2,
       "GroupBy": 5,
       "GroupByPatterns": 1,

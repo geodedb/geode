@@ -5459,6 +5459,7 @@ REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP,DistributedCluster,ClusterListenerReapsDea
 REQ-SONNY-6456-CLUSTER-HEALTH-LIVENESS,DistributedCluster,HealthLivenessFromRaftTraffic,TESTED,tests/test_sonny6456_cluster_health_liveness.zig,tests/test_sonny6456_cluster_health_liveness.zig,,distributed,2026-11-13
 REQ-SONNY-6456-RAFT-REAL-SENDER,DistributedCluster,RaftSenderReconnectsInProcess,TESTED,tests/test_sonny6456_raft_real_sender.zig,tests/test_sonny6456_raft_real_sender.zig,,distributed,2026-11-13
 REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP,Persistence,PersistenceStopIsPrompt,TESTED,tests/test_sonny6456_shutdown_persistence_stop.zig,tests/test_sonny6456_shutdown_persistence_stop.zig,,storage,2026-11-13
+REQ-SONNY-6460-GQL-GROUP-OWNERSHIP,GqlEngineAggregation,GroupAccumulatorOwnership,TESTED,src/exec.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test_sonny6460_query_residuals.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
