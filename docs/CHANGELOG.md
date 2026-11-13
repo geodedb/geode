@@ -820,6 +820,16 @@
   allocator there and leaked every extended value a WHERE read, the
   SONNY-2656 leak). Regression: `zig build
   test-sonny2670-fle-singletons-process-allocator`.
+- **The schema catalog lives for the process; a batch property write
+  encrypts each FLE value once (SONNY-6468).** `ensureCatalogInstance` made
+  the process-wide catalog on its first caller's allocator, so a request
+  arena could own it and leave it freed (the SONNY-2670 class); it is now
+  made on the process allocator. `setNodePropertiesBatch` and
+  `setEdgePropertiesBatch` sealed each FLE value twice, once for the storage
+  layer and once for the in-memory copy: twice the encryption work, and two
+  different envelopes for one write (each seal draws a fresh nonce). Each
+  value is now sealed once and both copies hold that envelope. Regression:
+  `zig build test-sonny6468-catalog-and-batch-fle`.
 - **FLE: a string shaped like an envelope is encrypted; the record's tenant
   is the encryption identity (SONNY-6347).** (2) The graph-store write
   primitives skipped encryption for any string with the shape of an FLE

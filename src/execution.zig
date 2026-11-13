@@ -353,6 +353,13 @@ pub const writeValue = value_utilities.writeValue;
 var global_catalog_instance: ?*catalog_mod.Catalog = null;
 var catalog_instance_mutex = std.Io.Mutex.init;
 
+// CANARY: REQ=REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR; FEATURE="SchemaCatalog"; ASPECT=SingletonOnProcessAllocator; STATUS=TESTED; TEST=tests/test_sonny6468_catalog_and_batch_fle.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6468: the allocator the process catalog lives on (as the FLE
+/// singletons' do, SONNY-2670). It was made on the first caller's allocator,
+/// which could be a request arena: once that was torn down the catalog was
+/// freed memory.
+const catalog_singleton_allocator = std.heap.smp_allocator;
+
 /// Ensure the global catalog instance is initialized
 /// Returns a pointer to the process-level catalog singleton
 /// Thread-safe via double-checked locking with atomic load (CWE-543 mitigation)
@@ -362,6 +369,8 @@ var catalog_instance_mutex = std.Io.Mutex.init;
 ///
 /// M2 Note: This singleton is injected into ExecutionContext by entry points (server, CLI)
 /// All execution code accesses catalog via context.catalog, not by calling this function
+///
+/// `allocator` is used only for the duration of the call (SONNY-6468).
 pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog {
     // GAP-0203: Fast path - atomic load avoids mutex lock when already initialized (99.99% of calls)
     // CANARY: REQ=REQ-PERF-CATALOG-FASTPATH-001; FEATURE="CatalogFastPath"; ASPECT=AtomicLoad; STATUS=TESTED; TEST="GAP-0514 P3: ensureCatalogInstance fast path returns the same singleton"; OWNER=execution; UPDATED=2026-06-11
@@ -400,8 +409,7 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     };
     defer if (data_dir_owned) |owned| allocator.free(owned);
 
-    // Create the catalog instance with provided allocator
-    const instance = try catalog_mod.Catalog.init(allocator, data_dir);
+    const instance = try catalog_mod.Catalog.init(catalog_singleton_allocator, data_dir);
     // SONNY-2846: the graphs the loaded UNIQUE rows apply in are closed to
     // the server's bulk fast paths (`graph_store.uniqueFenced`). Fail
     // closed: a catalog whose fences cannot be recorded is not used.
@@ -409,7 +417,7 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     unique_constraints.registerCatalogFences(instance) catch |err| {
         graph_store.resetUniqueFences();
         instance.deinit();
-        allocator.destroy(instance);
+        catalog_singleton_allocator.destroy(instance);
         return err;
     };
     // GAP-0203: Atomic store ensures other threads see the fully-initialized instance

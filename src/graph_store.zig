@@ -8271,58 +8271,66 @@ pub const GraphStore = struct {
         for (entries) |entry| try self.undoRecordNodeProperty(node_id, entry.key, entry.value == null);
         const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
 
+        if (global_adapter == null and global_vtable == null) {
+            return self.applyNodeBatchInMemory(node_id, entries, .encrypt);
+        }
+
+        // CANARY: REQ=REQ-SONNY-6468-BATCH-FLE-SEAL-ONCE; FEATURE="FieldLevelEncryption"; ASPECT=BatchSealOnce; STATUS=TESTED; TEST=tests/test_sonny6468_catalog_and_batch_fle.zig; OWNER=security; UPDATED=2026-11-13
+        // SONNY-6468: each value is FLE-sealed once, here; the storage layer
+        // and the in-memory copy below both take that envelope. A second
+        // seal for the in-memory copy doubled the encryption work and, with
+        // a fresh nonce each time, left the two holding different envelopes.
+        const sealed = try self.allocator.alloc(BatchPropertyEntry, entries.len);
+        defer self.allocator.free(sealed);
+
+        // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
+        // are freed exactly once after storage and the in-memory store have
+        // copied them. Indexed parallel to `sealed`; null when the entry was
+        // a removal or no encryption occurred.
+        var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
+        defer {
+            for (owned_envelopes) |maybe_buf| {
+                if (maybe_buf) |buf| self.allocator.free(buf);
+            }
+            self.allocator.free(owned_envelopes);
+        }
+        @memset(owned_envelopes, null);
+
+        for (entries, 0..) |entry, i| {
+            if (entry.value) |val| {
+                const res = try self.applyFleEncryption(node_id, entry.key, val);
+                sealed[i] = .{ .key = entry.key, .value = res.value };
+                owned_envelopes[i] = res.owned;
+            } else {
+                sealed[i] = .{ .key = entry.key, .value = null };
+            }
+        }
+
+        const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
         // --- Adapter path: single lock acquisition for all properties ---
         if (global_adapter) |adapter| {
-            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
-
-            // Build adapter-level batch entries, applying FLE encryption
-            // where required.
-            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
+            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, sealed.len);
             defer self.allocator.free(adapter_entries);
-
-            // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
-            // are freed exactly once after the adapter has copied them into
-            // storage. Indexed parallel to `adapter_entries`; null when the
-            // entry was a removal or no encryption occurred.
-            var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
-            defer {
-                for (owned_envelopes) |maybe_buf| {
-                    if (maybe_buf) |buf| self.allocator.free(buf);
-                }
-                self.allocator.free(owned_envelopes);
-            }
-            @memset(owned_envelopes, null);
-
-            for (entries, 0..) |entry, i| {
-                if (entry.value) |val| {
-                    const res = try self.applyFleEncryption(node_id, entry.key, val);
-                    adapter_entries[i] = .{ .key = entry.key, .value = res.value };
-                    owned_envelopes[i] = res.owned;
-                } else {
-                    adapter_entries[i] = .{ .key = entry.key, .value = null };
-                }
-            }
-
+            for (sealed, 0..) |entry, i| adapter_entries[i] = .{ .key = entry.key, .value = entry.value };
             try adapter.setNodePropertiesBatch(node_meta.graph_name, slot_id, adapter_entries);
         } else if (global_vtable) |vt| {
             // Fallback: vtable without direct adapter access (shouldn't
             // happen in practice, but keep correctness).
-            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
-            for (entries) |entry| {
+            for (sealed) |entry| {
                 if (entry.value) |val| {
-                    const res = try self.applyFleEncryption(node_id, entry.key, val);
-                    // GAP-0854 follow-up: free the envelope after the vtable
-                    // setter has copied it into the storage layer.
-                    defer if (res.owned) |buf| self.allocator.free(buf);
-                    try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key, res.value);
+                    try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key, val);
                 } else {
                     try vt.removeNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key);
                 }
             }
         }
 
-        try self.setNodePropertiesBatchInMemoryOnly(node_id, entries);
+        try self.applyNodeBatchInMemory(node_id, sealed, .sealed);
     }
+
+    /// SONNY-6468: whether a batch's values still need FLE sealing
+    /// (`.encrypt`) or already hold what is stored (`.sealed`).
+    const BatchValues = enum { encrypt, sealed };
 
     // CANARY: REQ=REQ-QUIC-HC-022; FEATURE="HighConcurrencyMutations"; ASPECT=ShardTxnPropertyFastPath; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-26
     /// Update only GraphStore's in-memory compatibility store.
@@ -8333,12 +8341,19 @@ pub const GraphStore = struct {
     /// the adapter-level graph lookup mutex, and opens redundant property
     /// work after the shard worker already owns the correct shard lock.
     pub fn setNodePropertiesBatchInMemoryOnly(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry) !void {
+        return self.applyNodeBatchInMemory(node_id, entries, .encrypt);
+    }
+
+    fn applyNodeBatchInMemory(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry, values: BatchValues) !void {
         if (self.nodes.getPtr(node_id)) |node| {
             for (entries) |entry| {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const res = try self.applyFleEncryption(node_id, entry.key, val);
+                    const res: FleApplyResult = switch (values) {
+                        .encrypt => try self.applyFleEncryption(node_id, entry.key, val),
+                        .sealed => .{ .value = val },
+                    };
                     // GAP-0854 follow-up: the encrypted envelope is copied into
                     // the in-memory store and read by the WAL notify below;
                     // free the freshly-allocated buffer once both have consumed
@@ -11092,52 +11107,50 @@ pub const GraphStore = struct {
         // SONNY-3348 (round 18): each entry's prior state.
         for (entries) |entry| try self.undoRecordEdgeProperty(edge_id, entry.key, entry.value == null);
 
+        // SONNY-6468: each value is FLE-sealed once, here; the adapter and
+        // the in-memory copy below both take that envelope (as the node
+        // batch path does).
+        const sealed = try self.allocator.alloc(BatchPropertyEntry, entries.len);
+        defer self.allocator.free(sealed);
+
+        // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
+        // are freed exactly once after the adapter and the in-memory store
+        // have copied them (mirrors the node batch path).
+        var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
+        defer {
+            for (owned_envelopes) |maybe_buf| {
+                if (maybe_buf) |buf| self.allocator.free(buf);
+            }
+            self.allocator.free(owned_envelopes);
+        }
+        @memset(owned_envelopes, null);
+
+        for (entries, 0..) |entry, i| {
+            if (entry.value) |val| {
+                const res = try self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                sealed[i] = .{ .key = entry.key, .value = res.value };
+                owned_envelopes[i] = res.owned;
+            } else {
+                sealed[i] = .{ .key = entry.key, .value = null };
+            }
+        }
+
         // --- Adapter path: single lock acquisition for all properties ---
         if (global_adapter) |adapter| {
             const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
-
-            // Build adapter-level batch entries, applying FLE encryption per
-            // entry (mirrors the per-property encryption in `setEdgeProperty`
-            // above).
-            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
+            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, sealed.len);
             defer self.allocator.free(adapter_entries);
-
-            // GAP-0854 follow-up: track freshly-allocated FLE envelopes so they
-            // are freed exactly once after the adapter has copied them into
-            // storage (mirrors the node batch path).
-            var owned_envelopes = try self.allocator.alloc(?[]const u8, entries.len);
-            defer {
-                for (owned_envelopes) |maybe_buf| {
-                    if (maybe_buf) |buf| self.allocator.free(buf);
-                }
-                self.allocator.free(owned_envelopes);
-            }
-            @memset(owned_envelopes, null);
-
-            for (entries, 0..) |entry, i| {
-                if (entry.value) |val| {
-                    const res = try self.applyFleEncryptionForEdge(edge_id, entry.key, val);
-                    adapter_entries[i] = .{ .key = entry.key, .value = res.value };
-                    owned_envelopes[i] = res.owned;
-                } else {
-                    adapter_entries[i] = .{ .key = entry.key, .value = null };
-                }
-            }
-
+            for (sealed, 0..) |entry, i| adapter_entries[i] = .{ .key = entry.key, .value = entry.value };
             try adapter.setEdgePropertiesBatch(edge.graph_name, slot_edge, adapter_entries);
         }
 
         // --- In-memory store update (always, regardless of adapter) ---
         if (self.getEdgePtrHydrated(edge_id)) |edge_ptr| {
-            for (entries) |entry| {
+            for (sealed) |entry| {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const res = try self.applyFleEncryptionForEdge(edge_id, entry.key, val);
-                    // GAP-0854 follow-up: free the in-memory-path envelope after
-                    // the copy + WAL notify have consumed it.
-                    defer if (res.owned) |buf| self.allocator.free(buf);
-                    const effective = res.value;
+                    const effective = val;
                     const value_copy = try copyPropertyValue(self, effective);
                     errdefer freePropertyValue(self, value_copy);
 

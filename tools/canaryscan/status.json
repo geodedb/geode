@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:32:07.088227371Z",
+  "generated_at": "2026-11-13T10:45:16.732952547Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85981,6 +85981,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6468-BATCH-FLE-SEAL-ONCE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "BatchSealOnce",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6468-CATALOG-AND-BATCH-FLE",
       "features": [
         {
@@ -85995,6 +86014,25 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "SingletonOnProcessAllocator",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
           "updated": "2026-11-13"
         }
       ]
@@ -93667,7 +93705,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4883
+      "TESTED": 4885
     },
     "by_aspect": {
       "2PC": 3,
@@ -93930,6 +93968,7 @@
       "BatchGeneration": 1,
       "BatchParsing": 1,
       "BatchProcessing": 1,
+      "BatchSealOnce": 1,
       "BatchStreaming": 1,
       "BatchTxnGate": 1,
       "BatchedCountFastPathResponse": 1,
@@ -97215,6 +97254,7 @@
       "SingleSourceOfTruth": 1,
       "SingleStreamLoop": 1,
       "SingleStreamStressMode": 1,
+      "SingletonOnProcessAllocator": 1,
       "SingletonsOnProcessAllocator": 1,
       "Sinks": 1,
       "SizeCap": 1,
