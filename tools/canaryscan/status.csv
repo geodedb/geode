@@ -5508,6 +5508,7 @@ REQ-SONNY-6467-FILTER-AFTER-LET,FilterStatement,AfterInlineLet,TESTED,src/gql/pa
 REQ-SONNY-6467-QUERY-RESIDUALS,BooleanExpressions,Regression,TESTED,tests/test_sonny6467_query_residuals.zig,tests/test_sonny6467_query_residuals.zig,,parser,2026-11-13
 REQ-SONNY-6471-EDGE-PROP-CRASH,TransactionManagement,EdgePropHeadWalImage,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6471_edge_prop_crash.zig,,storage,2026-11-13
 REQ-SONNY-6471-EDGE-PROP-CRASH,TransactionManagement,Regression,TESTED,tests/test_sonny6471_edge_prop_crash.zig,tests/test_sonny6471_edge_prop_crash.zig,,storage,2026-11-13
+REQ-SONNY-6472-DROP-PURGES-MEMORY,MultiGraphIsolation,InMemoryPurge,TESTED,src/graph_store.zig,tests/test_sonny3033_batch_graph_gate.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

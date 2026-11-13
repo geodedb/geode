@@ -2069,6 +2069,17 @@
 
 ### Fixed
 
+- **DROP GRAPH then CREATE GRAPH of the same name starts empty again
+  (SONNY-6472 item 1).** DROP GRAPH takes the graph's nodes and edges out of
+  memory after the storage engine has dropped the graph. Since SONNY-6268
+  made node and edge deletes failure-atomic, those deletes read each
+  node's incident edges and each edge's body through the dropped engine,
+  failed with `GraphNotFound` and left the node in memory, so a graph
+  created again under the name answered with the dropped graph's nodes
+  (its label counts and postings): `test-sonny3033-batch-graph-gate`
+  failed. The drop now removes the graph's resident edges, then its
+  resident nodes, in memory directly. Regression: `zig build
+  test-sonny3033-batch-graph-gate`.
 - **A request's REMOVE and DELETE join its transaction's engine
   transaction on that shard (SONNY-6472 item 3).** Inside a Geode
   transaction, `StorageAdapter.deleteNode`, `removeNodeProperty` and

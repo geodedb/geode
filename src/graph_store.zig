@@ -3131,22 +3131,30 @@ pub const GraphStore = struct {
                 if (std.mem.eql(u8, e.graph_name, c.graph_name)) try c.ids.append(c.allocator, id);
             }
         };
-        var nodes_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
-        defer nodes_to_remove.ids.deinit(self.allocator);
-        self.nodes.forEachResident(&nodes_to_remove, Collect.node) catch {};
-
-        // Remove and free the nodes
-        for (nodes_to_remove.ids.items) |node_id| {
-            self.deleteNodeNoSave(node_id);
-        }
-
-        // Remove any remaining edges tagged with this graph (defensive cleanup)
+        // CANARY: REQ=REQ-SONNY-6472-DROP-PURGES-MEMORY; FEATURE="MultiGraphIsolation"; ASPECT=InMemoryPurge; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=storage; UPDATED=2026-11-13
+        // SONNY-6472 (1): the graph's resident edges, then its resident nodes,
+        // are taken out of memory directly (`removeEdgeInMemory`,
+        // `removeNodeInMemory`), never through the engine. DROP GRAPH runs
+        // this after the adapter dropped the graph's engine, and the
+        // failure-atomic deletes (SONNY-6268) read a node's incident edges
+        // and an edge's body through it: they failed with GraphNotFound and
+        // left the node "unchanged", so a graph created again under the name
+        // showed the dropped graph's nodes (its label counts and postings).
+        // Every edge of the graph is tagged with it, so the edges a node's
+        // removal would read are among the ones removed first.
         var edges_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
         defer edges_to_remove.ids.deinit(self.allocator);
         self.edges.forEachResident(&edges_to_remove, Collect.edge) catch {};
-
         for (edges_to_remove.ids.items) |edge_id| {
-            self.deleteEdgeNoSave(edge_id);
+            const body = self.edges.get(edge_id) orelse continue;
+            self.removeEdgeInMemory(edge_id, body);
+        }
+
+        var nodes_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
+        defer nodes_to_remove.ids.deinit(self.allocator);
+        self.nodes.forEachResident(&nodes_to_remove, Collect.node) catch {};
+        for (nodes_to_remove.ids.items) |node_id| {
+            self.removeNodeInMemory(node_id, &.{});
         }
     }
 

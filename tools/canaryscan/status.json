@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:26:05.547784849Z",
+  "generated_at": "2026-11-13T13:44:42.505458692Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86435,6 +86435,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6472-DROP-PURGES-MEMORY",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "InMemoryPurge",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3033_batch_graph_gate.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94102,7 +94121,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4908
+      "TESTED": 4909
     },
     "by_aspect": {
       "2PC": 3,
@@ -95843,6 +95862,7 @@
       "ImplicitNoCaDefault": 1,
       "InFlightHandlerDrain": 1,
       "InMemoryCatalog": 1,
+      "InMemoryPurge": 1,
       "InWorkloadMutationVerifier": 1,
       "InboundConnSnapshot": 1,
       "InboundIdleDeadline": 1,
