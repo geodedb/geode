@@ -32,6 +32,9 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-002; FEATURE="Error Handling"; ASPECT=EvalError; STATUS=TESTED; TEST=geodetestlab/specs/geode_edge_cases_errors.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Evaluation errors that can occur during expression evaluation and query execution
 pub const EvalError = error{
+    // SONNY-6499: a value of the wrong type for an operation, a function or
+    // a CAST (user data; GQLSTATUS 22G03 invalid value type). An internal
+    // invariant failure uses an error of its own, never this one.
     TypeMismatch,
     DivisionByZero,
     IntegerOverflow,
@@ -77,6 +80,10 @@ pub const EvalError = error{
     // character for the target) vs an unsupported target type.
     InvalidCast,
     UnsupportedCastTarget,
+    // SONNY-6499: a value no target number type represents without losing
+    // leading digits (ISO/IEC 39075 20.8 GR i i 2, 22003): CAST('1e400' AS
+    // DOUBLE), CAST of a NaN or an infinity to STRING.
+    NumericOutOfRange,
     // GAP-0926: an out-of-range positional parameter ($2 with one param).
     MissingParameter,
     IdnaError,

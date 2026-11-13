@@ -22,7 +22,7 @@ Time("14:30:00.123456")                -- Time with microseconds
 TimeTZ("14:30:00", 3600)               -- Time with timezone offset (seconds)
 Timestamp("2024-09-28 14:30:00")       -- Timestamp
 TimestampTZ("2024-09-28 14:30:00+02:00") -- Timestamp with timezone (stored as UTC)
-Interval("P1Y2M3DT4H5M6S")             -- ISO duration
+Interval("P1Y2M3DT4H5M6S")             -- ISO duration  (Geode extension: both unit groups)
 MakeInterval(12, 30, 1000000)          -- 12 months, 30 days, 1M microseconds
 
 -- Binary/JSON Types
@@ -253,6 +253,40 @@ Char → Varchar → Text                -- String widening
 CAST(value AS TypeName)              -- Standard SQL cast
 value::TypeName                      -- PostgreSQL-style cast
 ```
+
+`CAST` follows ISO/IEC 39075:2024 20.8 (Table 4 and General Rules g to k).
+A value stored on a node converts as the value it is (a stored DOUBLE is a
+DOUBLE). No combination answers a silent NULL; `CAST(NULL AS T)` is NULL.
+
+| Source \ Target | INTEGER / INT / BIGINT | DECIMAL(p, s) / NUMERIC | FLOAT / DOUBLE / REAL | STRING / VARCHAR / TEXT | BOOLEAN | DATE / TIME / TIMESTAMP |
+|---|---|---|---|---|---|---|
+| INTEGER | itself | exact, 22003 past i128 | the nearest DOUBLE | digits | Geode extension: `<> 0` | 22G03 |
+| DECIMAL | truncated, 22003 past i64 | rescaled (truncated) | the nearest DOUBLE | its digits at its scale | 22G03 | 22G03 |
+| DOUBLE | truncated, 22003 out of range | truncated at `s`, 22003 out of range | itself | shortest literal: `1.5E0`, `1.0E-1`, `0E0` | 22G03 | 22G03 |
+| STRING | trimmed numeric literal, exponent allowed, truncated; else 22018; 22003 out of range | the same | trimmed numeric literal (no `nan`, `inf`, `_`, hex), else 22018; 22003 out of range | itself | trimmed `true` / `false` (any case), Geode extension `1` / `0`; else 22018 | trimmed ISO 8601 literal, else 22007 |
+| BOOLEAN | Geode extension: 1 / 0 | 22G03 | 22G03 | `TRUE` / `FALSE` | itself | 22G03 |
+| DATE, TIME, TIMESTAMP, zoned, DURATION | 22G03 | 22G03 | 22G03 | its ISO 8601 literal | 22G03 | itself; DATE from TIMESTAMP, TIME from TIMESTAMP, TIMESTAMP from DATE; other pairs 22G03 (the standard also allows zoned to local: not implemented) |
+| LIST, RECORD, NODE, EDGE, PATH, extension types | 22G03 | 22G03 | 22G03 | 22G03 | 22G03 | 22G03 |
+
+22G03 (invalid value type) is the standard's exception for a value whose
+type has no conversion to the target (20.8 GR 7 d ii); 22018 (invalid
+character value for cast) and 22007 are for text that is not a literal of
+the target (GR g ii, i ii, k i, l i).
+
+An unknown target type name (`CAST(x AS DURATION)`, `AS ZONED DATETIME`)
+is 0A000. Every type with a character form reads back from it as the same
+value (`CAST(CAST(x AS STRING) AS T) = x`).
+
+### Durations: unit groups
+
+ISO/IEC 39075 types a duration as year-to-month (`P1Y2M`) or day-to-second
+(`P3DT4H`); a duration string naming both (`P1M1D`) is 22G0H there (20.29
+GR 1). Geode accepts it as an extension: a mixed duration holds both parts,
+renders as `P1M1D` and reads back as itself. Adding or subtracting a
+year-to-month and a day-to-second duration is 22G14 (incompatible temporal
+instant unit groups, 20.28 GR 5c ii); a mixed operand is added part by part.
+A component past its field's range (`P999999999Y`) is 22015 (interval field
+overflow); text that is not an ISO 8601 duration is 22G0H.
 
 ## Error Handling
 

@@ -12,10 +12,14 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 /// records (persisted :User records on disk, records loaded in memory, or a
 /// chain root). Fails closed: when it cannot tell, it answers yes, so no key
 /// is invented over records it could not see.
-fn storeHasAuthRecords(allocator: std.mem.Allocator, store: *graph_store.GraphStore) bool {
+/// SONNY-6499: an auth graph manager that cannot be opened is that error
+/// (the caller refuses startup naming it), not "records exist": a data
+/// directory the timeseries store refused (`..` in the path) was reported as
+/// "HMAC key required" on a fresh directory.
+fn storeHasAuthRecords(allocator: std.mem.Allocator, store: *graph_store.GraphStore) !bool {
     const persisted = auth_graph_manager.persistedSecurityUserCountOnDisk() catch return true;
     if (persisted > 0) return true;
-    var agm = auth_graph_manager.AuthGraphManager.init(allocator, store) catch return true;
+    var agm = try auth_graph_manager.AuthGraphManager.init(allocator, store);
     defer agm.deinit();
     return agm.countAuthRecords() > 0 or agm.storage.loadChainRoot() != null;
 }
@@ -564,6 +568,10 @@ pub fn initialize(
 ) !InitContext {
     // Initialize index catalog (idempotent)
     index_catalog.initIndexCatalog(allocator);
+    // SONNY-6499: a startup refusal below (HMAC key required, storage or
+    // auth state unavailable) returns before `InitContext.deinit` exists to
+    // free it; it leaked the estimator and the stats maps.
+    errdefer index_catalog.deinitIndexCatalog();
 
     // Process environment variables
     const env_config = try processEnvironmentVariables(allocator, memcurve_profile_ref);
@@ -625,7 +633,11 @@ pub fn initialize(
                 return error.HmacKeyUnusable;
             },
         }
-        if (storeHasAuthRecords(allocator, store)) {
+        const has_records = storeHasAuthRecords(allocator, store) catch |err| {
+            printAuthStateUnavailable(data_dir, "initializing the auth graph manager", err);
+            return error.AuthGraphUnavailable;
+        };
+        if (has_records) {
             printHmacKeyRequired(data_dir);
             return error.HmacKeyRequired;
         }

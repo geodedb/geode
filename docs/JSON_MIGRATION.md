@@ -720,7 +720,6 @@ Add tracking markers for migration progress:
 - [ ] `src/performance/json_optimized_fixed.zig`
 - [ ] `src/performance/test_json_optimization.zig`
 - [ ] `src/eval_extended.zig`
-- [ ] `src/fts/bm25.zig`
 - [ ] `src/execution/value_utilities.zig`
 - [ ] `src/test_harness.zig`
 - [ ] `src/tools/security_progress.zig`

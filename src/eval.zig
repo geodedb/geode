@@ -1801,6 +1801,9 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     return EvalError.TimeParse;
                 } else if (std.mem.eql(u8, err_name, "DurationParse")) {
                     return EvalError.DurationParse;
+                } else if (std.mem.eql(u8, err_name, "IntervalFieldOverflow")) {
+                    // SONNY-6499: a duration component past its range (22015).
+                    return EvalError.IntervalFieldOverflow;
                 } else if (std.mem.eql(u8, err_name, "InvalidArgs")) {
                     // Wrong arity on a resolved basic function is a caller
                     // error (22023), not a silent NULL.
@@ -4595,7 +4598,11 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // exception — `return null` here used to fall through to 42883
         // ("Unknown function"), disagreeing with the interval() error path.
         // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
-        const interval = datetime_module.Interval.fromStr(str) catch return EvalError.DurationParse;
+        const interval = datetime_module.Interval.fromStr(str) catch |e| return switch (e) {
+            // SONNY-6499: a component past its range is 22015.
+            error.IntervalFieldOverflow => EvalError.IntervalFieldOverflow,
+            else => EvalError.DurationParse,
+        };
         return Value{ .Interval = interval };
     }
 
@@ -4785,7 +4792,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
@@ -4815,7 +4824,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
@@ -4824,7 +4835,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
@@ -4833,7 +4846,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
@@ -4871,7 +4886,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
@@ -4881,7 +4898,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);

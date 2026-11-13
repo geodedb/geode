@@ -343,41 +343,19 @@ pub const EnhancedQueryTransport = struct {
         });
     }
 
-    /// Send message with retry logic and error handling
+    /// SONNY-6499: no inter-node send exists here. This called
+    /// `NetworkTransport.sendToNode`, which did not compile (std.Thread.sleep
+    /// here, the managed ArrayList API, std.time.sleep and a
+    /// QuicTransport.connect there) and was never reached; it was removed. A
+    /// distributed fragment is refused, never reported sent. (The cluster's
+    /// working transport is ClusterCoordinator.sendToNode, cluster.zig.)
     fn sendWithRetry(self: *EnhancedQueryTransport, node_id: u32, message: ClusterMessage) !void {
-        var attempts: u32 = 0;
-        const max_attempts = self.config.retry_attempts;
-
-        while (attempts < max_attempts) : (attempts += 1) {
-            self.network_transport.sendToNode(node_id, &message) catch |err| {
-                self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                self.statistics.connection_errors += 1;
-                self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-                if (attempts + 1 < max_attempts) {
-                    // Exponential backoff
-                    const delay_ms = @as(u64, 100) << @intCast(attempts);
-                    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
-                    self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                    self.statistics.retry_count += 1;
-                    self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                    continue;
-                }
-
-                log.err("Failed to send message to node after retries", &.{
-                    Attr.uint("node_id", @as(u64, node_id)),
-                    Attr.uint("max_attempts", @as(u64, max_attempts)),
-                });
-                return err;
-            };
-
-            // Success (PERF-D010: thread-safe)
-            self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            self.statistics.messages_sent += 1;
-            self.statistics.bytes_transferred += message.payload.len;
-            self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return;
-        }
+        _ = self;
+        _ = message;
+        log.err("Inter-node fragment send is not implemented", &.{
+            Attr.uint("node_id", @as(u64, node_id)),
+        });
+        return error.InterNodeSendNotImplemented;
     }
 
     /// Handle incoming query results from shards

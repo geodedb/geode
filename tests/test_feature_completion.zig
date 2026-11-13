@@ -1,7 +1,5 @@
 const std = @import("std");
 const parallel = @import("../src/execution/parallel.zig");
-const fts = @import("../src/fts/advanced.zig");
-const bm25 = @import("../src/fts/bm25.zig");
 const cbo = @import("../src/planner/cbo.zig");
 const builtin_algos = @import("../src/graph/builtin_algorithms.zig");
 
@@ -19,53 +17,6 @@ test "multi-threading: thread-pool-backed parallel pool" {
     const chunk_size = estimator.estimateChunkSize(10000, 4);
     try std.testing.expect(chunk_size > 0);
     try std.testing.expect(chunk_size <= 10000);
-}
-
-test "advanced FTS: BM25 scoring" {
-    const allocator = std.testing.allocator;
-
-    // Test BM25 scoring
-    const params = bm25.Params{};
-    const score = bm25.score(5, 100, 150, 10, 1000, params);
-    try std.testing.expect(score > 0);
-
-    // Test search engine
-    var engine = bm25.SearchEngine.init(allocator);
-    defer engine.deinit();
-
-    // Test HyperLogLog
-    var hll = bm25.IndexStats.HyperLogLog.init();
-    hll.add("test1");
-    hll.add("test2");
-    const cardinality = hll.estimate();
-    try std.testing.expect(cardinality > 0);
-}
-
-test "advanced FTS: language analyzers" {
-    const allocator = std.testing.allocator;
-
-    // Test English analyzer
-    var analyzer = try fts.LanguageAnalyzer.init(allocator, .english);
-    defer analyzer.deinit();
-
-    const tokens = try analyzer.analyze("The quick brown fox jumps over the lazy dog");
-    defer {
-        for (tokens) |token| allocator.free(token);
-        allocator.free(tokens);
-    }
-
-    // Should remove stop words and apply stemming
-    try std.testing.expect(tokens.len > 0);
-    try std.testing.expect(tokens.len < 9); // Less than word count due to stop words
-
-    // Test fuzzy matching
-    const is_match = try fts.fuzzyMatch(allocator, "test", "text", 1);
-    try std.testing.expect(is_match);
-
-    // Test Soundex
-    const soundex_code = try fts.soundex(allocator, "Smith");
-    defer allocator.free(soundex_code);
-    try std.testing.expectEqualStrings("S530", soundex_code);
 }
 
 test "graph algorithms: comprehensive suite" {
@@ -158,8 +109,6 @@ test "integration: all features compile and link" {
     // without conflicts or missing dependencies
 
     try std.testing.expect(@sizeOf(parallel.Pool) > 0);
-    try std.testing.expect(@sizeOf(fts.AdvancedSearch) > 0);
-    try std.testing.expect(@sizeOf(bm25.BM25F) > 0);
     try std.testing.expect(@sizeOf(cbo.StatsRegistry) > 0);
     try std.testing.expect(@sizeOf(builtin_algos.BuiltinAlgorithms) > 0);
 }

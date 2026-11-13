@@ -376,7 +376,36 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
         error.ValuesNotComparable => .{ .code = "22G04", .message = "values not comparable: an ordering comparison of a year-to-month duration and a day-to-second duration (1 month is not a number of days)" },
         error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
-        error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
+        // CANARY: REQ=REQ-SONNY-6499-GQLSTATE-RESIDUALS; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatusResiduals; STATUS=TESTED; TEST=tests/test_sonny6499_gqlstate_residuals.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-6499: data errors that answered 58000 (system error), each
+        // with its ISO/IEC 39075:2024 23.1 Table 8 code. (InvalidTypeConversion,
+        // 22003 here, had no raise site; its arm was removed.)
+        // A value of the wrong type for an operation, a function or a CAST
+        // (20.8 GR 7 d ii): invalid value type. Internal failures carry
+        // errors of their own (TypeMismatch is the user-data one).
+        error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
+        // No GQL number is NaN or infinite: numeric value out of range.
+        error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
+        // Raised only by substring() for a start before the first character.
+        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: the start position is before the first character" },
+        // range() past its 10,000,000-element limit: the class the other size
+        // limits use (VectorTooLarge, PropertyValueTooLarge).
+        error.RangeTooLarge => .{ .code = "54000", .message = "RangeTooLarge: range() would return more than 10,000,000 elements" },
+        // intrange() bounds that do not form a range; no subclass names it.
+        error.RangeBoundsError => .{ .code = "22000", .message = "Data exception: the range bounds are invalid (a lower bound above the upper, or bounds text other than '[]', '[)', '(]', '()')" },
+        // The text of an extension-type value that does not parse: the
+        // condition 20.8 GR g ii / k i name for text cast to a type.
+        error.HexFormatError => .{ .code = "22018", .message = "Invalid character value for cast: not hexadecimal text" },
+        error.JsonInvalid => .{ .code = "22018", .message = "Invalid character value for cast: not a JSON document" },
+        error.XmlNotWellFormed => .{ .code = "22018", .message = "Invalid character value for cast: not a well-formed XML document" },
+        error.UrlParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a URL" },
+        error.DomainSyntaxError => .{ .code = "22018", .message = "Invalid character value for cast: not a domain name" },
+        error.UuidParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a UUID" },
+        error.BitParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a bit string" },
+        error.InvalidSubnet => .{ .code = "22018", .message = "Invalid character value for cast: not a subnet (CIDR)" },
+        error.IdnaError => .{ .code = "22018", .message = "Invalid character value for cast: not an internationalized domain name" },
+        error.EnumValueError => .{ .code = "22018", .message = "Invalid character value for cast: not a value of the enum" },
+        error.EnumTypeError => .{ .code = "22G03", .message = "Invalid value type: not a value of the enum type" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
         error.IntegerOverflow => .{ .code = "22003", .message = "Integer value out of range" },
@@ -390,6 +419,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DecimalOverflow => .{ .code = "22003", .message = "Numeric value out of range for DECIMAL" },
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
+        // SONNY-6499: ISO/IEC 39075 20.8 GR i i 2 (numeric value out of range).
+        error.NumericOutOfRange => .{ .code = "22003", .message = "Numeric value out of range: no value of the target type represents it" },
         // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
         // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
         // Table 8, class 22); each answered 58000 (system error).
@@ -530,8 +561,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // answered without the session's RLS policies.
         error.EvaluatorNotInitialized => .{ .code = "XX000", .message = "EvaluatorNotInitialized: the query evaluator's execution layer and row-level security are not initialized in this process; the statement was refused" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
-        error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
-        error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
+        // SONNY-6499: 22P02 is PostgreSQL's; GQL's is 22018 (Table 8).
+        error.InvalidIpAddress => .{ .code = "22018", .message = "Invalid character value for cast: not an IP address" },
+        error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22018", .message = "Invalid character value for cast: not a MAC address" },
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
         // SONNY-6291: the geode.auth.apikey_* procedures (no server-side
         // API-key store).

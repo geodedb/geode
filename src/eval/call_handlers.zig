@@ -45,7 +45,7 @@ fn roundedScale6(f: f64) EvalError!i128 {
     return decimal128.checkedScaledCoeff(@round(f * 1_000_000), 1.0);
 }
 
-fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
+pub fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
     return switch (err) {
         evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
         evaluator_functions.EvaluatorError.DivisionByZero => EvalError.DivisionByZero,
@@ -933,6 +933,147 @@ fn parseDecimalText(s: []const u8, max_scale: u8) EvalError!struct { coeff: i128
     return .{ .coeff = coeff, .scale = scale };
 }
 
+/// SONNY-6499: the value CAST converts. A value stored on a node is read
+/// back as an extended value (a DOUBLE, a datetime); the integer and
+/// approximate kinds convert as INTEGER and DOUBLE do; a TEXT, CHAR or
+/// VARCHAR as a STRING.
+fn castSource(v: Value) Value {
+    return switch (v) {
+        .SmallInt => |i| .{ .Int = i },
+        .BigInt => |i| .{ .Int = i },
+        .Real => |r| .{ .Double = r },
+        .Text => |t| .{ .Str = t },
+        .Char => |c| .{ .Str = c.data },
+        .Varchar => |c| .{ .Str = c.data },
+        .ExtValue => |e| switch (e) {
+            .Int, .BigInt => |i| .{ .Int = i },
+            .SmallInt => |i| .{ .Int = i },
+            .Bool => |b| .{ .Bool = b },
+            .Str, .Text => |t| .{ .Str = t },
+            .Char => |c| .{ .Str = c.data },
+            .Varchar => |c| .{ .Str = c.data },
+            .Decimal => |dec| .{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
+            .Double => |x| .{ .Double = x },
+            .Real => |x| .{ .Double = x },
+            .Date => |x| .{ .Date = x },
+            .Time => |x| .{ .Time = x },
+            .TimeTZ => |x| .{ .TimeTZ = x },
+            .Timestamp => |x| .{ .Timestamp = x },
+            .TimestampTZ => |x| .{ .TimestampTZ = x },
+            .Interval => |x| .{ .Interval = x },
+            .Null => .{ .Null = {} },
+            else => v,
+        },
+        else => v,
+    };
+}
+
+/// SONNY-6499: whether `t` is a <signed numeric literal> (ISO/IEC 39075
+/// 21.2) in decimal notation: an optional sign, digits with an optional
+/// period, an optional exponent. ISO 20.8 GR g ii, h ii and i ii make any
+/// other text 22018; `std.fmt.parse*` also accepted 'nan', 'inf', '1_000'
+/// and hexadecimal.
+fn isNumericLiteralText(t: []const u8) bool {
+    var i: usize = 0;
+    if (i < t.len and (t[i] == '+' or t[i] == '-')) i += 1;
+    var digits: usize = 0;
+    while (i < t.len and std.ascii.isDigit(t[i])) : (i += 1) digits += 1;
+    if (i < t.len and t[i] == '.') {
+        i += 1;
+        while (i < t.len and std.ascii.isDigit(t[i])) : (i += 1) digits += 1;
+    }
+    if (digits == 0) return false;
+    if (i < t.len and (t[i] == 'e' or t[i] == 'E')) {
+        i += 1;
+        if (i < t.len and (t[i] == '+' or t[i] == '-')) i += 1;
+        const start = i;
+        while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
+        if (i == start) return false;
+    }
+    return i == t.len;
+}
+
+/// SONNY-6499: ISO 20.8 GR g ii, i ii, k i: the source text with leading
+/// and trailing <truncating whitespace> removed.
+fn castTrim(t: []const u8) []const u8 {
+    return std.mem.trim(u8, t, " \t\r\n");
+}
+
+/// SONNY-6499: the exact value of a <signed numeric literal>, exponent
+/// included. Fraction digits past what the coefficient holds (or past
+/// scale 38) are truncated, as the rescale to any DECIMAL would; an integer
+/// part past it is 22003.
+fn parseExactNumericText(text: []const u8) EvalError!struct { coeff: i128, scale: u8 } {
+    if (!isNumericLiteralText(text)) return EvalError.InvalidCast;
+    var i: usize = 0;
+    var negative = false;
+    if (text[0] == '+' or text[0] == '-') {
+        negative = text[0] == '-';
+        i = 1;
+    }
+    var coeff: i128 = 0;
+    var scale: i64 = 0;
+    var in_fraction = false;
+    var full = false;
+    while (i < text.len and text[i] != 'e' and text[i] != 'E') : (i += 1) {
+        if (text[i] == '.') {
+            in_fraction = true;
+            continue;
+        }
+        if (in_fraction and (full or scale == 38)) continue;
+        const next = std.math.mul(i128, coeff, 10) catch null;
+        const with_digit = if (next) |n| std.math.add(i128, n, text[i] - '0') catch null else null;
+        if (with_digit) |v| {
+            coeff = v;
+            if (in_fraction) scale += 1;
+        } else if (in_fraction) {
+            full = true;
+        } else return EvalError.IntegerOverflow;
+    }
+    const exp: i64 = if (i < text.len) std.fmt.parseInt(i64, text[i + 1 ..], 10) catch return EvalError.IntegerOverflow else 0;
+    if (negative) coeff = -coeff;
+    scale = std.math.sub(i64, scale, exp) catch return EvalError.IntegerOverflow;
+    if (scale < 0) {
+        if (coeff == 0) return .{ .coeff = 0, .scale = 0 };
+        const factor = narrowing.pow10(std.math.cast(u8, -scale) orelse return EvalError.IntegerOverflow) orelse return EvalError.IntegerOverflow;
+        return .{ .coeff = std.math.mul(i128, coeff, factor) catch return EvalError.IntegerOverflow, .scale = 0 };
+    }
+    if (scale > 38) {
+        const drop = scale - 38;
+        const kept = if (drop > 38) 0 else narrowing.decimalRound(coeff, @intCast(drop), .trunc);
+        return .{ .coeff = kept, .scale = 38 };
+    }
+    return .{ .coeff = coeff, .scale = @intCast(scale) };
+}
+
+/// SONNY-6499: ISO 20.8 GR j ii: the character form of an approximate
+/// number, the shortest <approximate numeric literal> whose mantissa is one
+/// non-zero digit, a period and an unsigned integer ('1.5E0', '1.0E-1'),
+/// '0E0' for zero. It reads back as the same DOUBLE. NaN and the
+/// infinities have no literal: 22003.
+fn approximateText(allocator: std.mem.Allocator, x: f64) EvalError![]const u8 {
+    if (!std.math.isFinite(x)) return EvalError.NumericOutOfRange;
+    if (x == 0) return "0E0";
+    var buf: [64]u8 = undefined;
+    const sci = std.fmt.bufPrint(&buf, "{e}", .{x}) catch return EvalError.Unsupported;
+    const e_at = std.mem.indexOfScalar(u8, sci, 'e') orelse return EvalError.Unsupported;
+    const mant = sci[0..e_at];
+    const exp = sci[e_at + 1 ..];
+    const point: []const u8 = if (std.mem.indexOfScalar(u8, mant, '.') == null) ".0" else "";
+    return std.fmt.allocPrint(allocator, "{s}{s}E{s}", .{ mant, point, exp }) catch EvalError.OutOfMemory;
+}
+
+/// SONNY-6499: ISO 20.8 GR g i: a DOUBLE as an exact number at `scale`,
+/// truncated (IA005); 22003 past the target. Through its shortest decimal
+/// form, which reads back as the same DOUBLE.
+fn doubleToDecimal(x: f64, scale: u8) EvalError!i128 {
+    if (!std.math.isFinite(x)) return EvalError.IntegerOverflow;
+    var buf: [400]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{d}", .{x}) catch return EvalError.IntegerOverflow;
+    const parsed = try parseDecimalText(text, 38);
+    return rescaleDecimal(parsed.coeff, parsed.scale, scale);
+}
+
 // CANARY: REQ=REQ-EVAL-REFACTOR-004; FEATURE="EvalExpr Refactoring"; ASPECT=TypeCastFunctions; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
 /// Evaluate type cast functions: cast, toString, toInteger, toFloat, toBoolean
@@ -947,7 +1088,7 @@ pub fn evalTypeCastFunction(
     if (std.mem.eql(u8, function_name, "cast")) {
         if (args.len != 2) return Value{ .Null = {} };
 
-        const value_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const value_arg = castSource(try eval.evalExpr(allocator, args[0].*, env));
         const type_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         if (value_arg == .Null) return Value{ .Null = {} };
@@ -975,6 +1116,12 @@ pub fn evalTypeCastFunction(
             }
         }
 
+        // SONNY-6499: a source type with no conversion to the target (ISO
+        // 20.8 Table 4 "N"; GR 7 d ii for a dynamically typed value) is
+        // TypeMismatch, 22G03 invalid value type; text that is not a literal
+        // of the target is InvalidCast, 22018 (GR g ii, i ii), or for a
+        // datetime target TimeParse, 22007 (GR k i, l i).
+
         // Normalize base type to uppercase
         var upper_buf: [32]u8 = undefined;
         const type_len = @min(base_type.len, upper_buf.len);
@@ -994,11 +1141,13 @@ pub fn evalTypeCastFunction(
                 .Int => |i| return Value{ .Decimal = .{ .coeff = try rescaleDecimal(i, 0, target_scale), .scale = target_scale } },
                 .Decimal => |d| return Value{ .Decimal = .{ .coeff = try rescaleDecimal(d.coeff, d.scale, target_scale), .scale = target_scale } },
                 .Str => |s| {
-                    const parsed = try parseDecimalText(s, target_scale);
+                    // SONNY-6499: trimmed, exponent read (ISO 20.8 GR g ii).
+                    const parsed = try parseExactNumericText(castTrim(s));
                     return Value{ .Decimal = .{ .coeff = try rescaleDecimal(parsed.coeff, parsed.scale, target_scale), .scale = target_scale } };
                 },
+                .Double => |x| return Value{ .Decimal = .{ .coeff = try doubleToDecimal(x, target_scale), .scale = target_scale } },
                 // GAP-0921: an unconvertible source value is a cast error.
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1018,18 +1167,22 @@ pub fn evalTypeCastFunction(
                     return Value{ .Int = as_i64 };
                 },
                 .Str => |s| {
-                    if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
-                        const int_part = s[0..dot_idx];
-                        const val = std.fmt.parseInt(i64, int_part, 10) catch |e| return castParseError(e);
-                        return Value{ .Int = val };
-                    } else {
-                        const val = std.fmt.parseInt(i64, s, 10) catch |e| return castParseError(e);
-                        return Value{ .Int = val };
-                    }
+                    // SONNY-6499: trimmed, exponent read, truncated (ISO
+                    // 20.8 GR g ii; IA005).
+                    const parsed = try parseExactNumericText(castTrim(s));
+                    return Value{ .Int = try narrowing.decimalToInt(parsed.coeff, parsed.scale, .trunc) };
                 },
+                // SONNY-6499: truncated (IA005); 22003 out of range (GR g i).
+                .Double => |x| {
+                    if (!std.math.isFinite(x)) return EvalError.IntegerOverflow;
+                    const t = @trunc(x);
+                    if (t < -9223372036854775808.0 or t >= 9223372036854775808.0) return EvalError.IntegerOverflow;
+                    return Value{ .Int = @intFromFloat(t) };
+                },
+                // Geode extension (Table 4: BOOLEAN to a number is not valid).
                 .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
                 // GAP-0921: an unconvertible source value is a cast error.
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1048,8 +1201,11 @@ pub fn evalTypeCastFunction(
                     // (-0.5 was '0.5').
                     return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
                 },
-                .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
+                // SONNY-6499: ISO 20.8 GR j v: 'TRUE' / 'FALSE'.
+                .Bool => |b| return Value{ .Str = if (b) "TRUE" else "FALSE" },
                 .Str => |s| return Value{ .Str = s },
+                // SONNY-6499: GR j ii; it was NULL.
+                .Double => |x| return Value{ .Str = try approximateText(allocator, x) },
                 // SONNY-6489: a datetime or duration casts to the character
                 // form of its literal (20.8; ISO 8601), the form it renders
                 // in, which reads back as the same value. It was NULL.
@@ -1058,27 +1214,37 @@ pub fn evalTypeCastFunction(
                     const text = try value_types.stringify(value_arg, &buf);
                     return Value{ .Str = try allocator.dupe(u8, text) };
                 },
-                else => return Value{ .Null = {} },
+                // SONNY-6499: a list, record, reference or extension value
+                // has no character form here (ISO 20.8 Table 4); refused, it
+                // was NULL.
+                else => return EvalError.TypeMismatch,
             }
         }
 
         // FLOAT/DOUBLE/REAL conversion
         if (std.mem.eql(u8, upper_type, "FLOAT") or std.mem.eql(u8, upper_type, "DOUBLE") or std.mem.eql(u8, upper_type, "REAL")) {
             switch (value_arg) {
-                .Int => |i| {
-                    const coeff = @as(i128, i) * 1000000;
-                    return Value{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                // SONNY-6499: an approximate target gives a DOUBLE (ISO 20.8
+                // GR i); it gave a DECIMAL at scale 6.
+                .Int => |i| return Value{ .Double = @floatFromInt(i) },
+                .Decimal => |d| {
+                    // Correctly rounded: the exact text, read as a double.
+                    const text = try decimal_text.alloc(allocator, d.coeff, d.scale);
+                    defer allocator.free(text);
+                    return Value{ .Double = std.fmt.parseFloat(f64, text) catch return EvalError.InvalidCast };
                 },
-                .Decimal => |d| return Value{ .Decimal = d },
+                .Double => |x| return Value{ .Double = x },
                 .Str => |s| {
-                    // GAP-0921: non-numeric string is a cast error, not NULL.
-                    const f = std.fmt.parseFloat(f64, s) catch return EvalError.InvalidCast;
-                    // SONNY-2739: 'nan', 'inf' or a magnitude past the
-                    // decimal is 22003; `@intFromFloat` aborted the server.
-                    const coeff = try decimal128.checkedScaledCoeff(f, 1_000_000.0);
-                    return Value{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
+                    // GR i ii: the trimmed text of a <signed numeric
+                    // literal>, else 22018 ('nan', 'inf', '1_000' were read).
+                    const t = castTrim(s);
+                    if (!isNumericLiteralText(t)) return EvalError.InvalidCast;
+                    const f = std.fmt.parseFloat(f64, t) catch return EvalError.InvalidCast;
+                    // GR i i 2: no double holds it.
+                    if (!std.math.isFinite(f)) return EvalError.NumericOutOfRange;
+                    return Value{ .Double = f };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1087,7 +1253,9 @@ pub fn evalTypeCastFunction(
             switch (value_arg) {
                 .Bool => |b| return Value{ .Bool = b },
                 .Int => |i| return Value{ .Bool = i != 0 },
-                .Str => |s| {
+                .Str => |raw| {
+                    // SONNY-6499: trimmed (21.2 <boolean literal>).
+                    const s = castTrim(raw);
                     if (std.ascii.eqlIgnoreCase(s, "true") or std.mem.eql(u8, s, "1")) {
                         return Value{ .Bool = true };
                     } else if (std.ascii.eqlIgnoreCase(s, "false") or std.mem.eql(u8, s, "0")) {
@@ -1097,7 +1265,7 @@ pub fn evalTypeCastFunction(
                         return EvalError.InvalidCast;
                     }
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1107,7 +1275,7 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-date string is a cast error, not NULL.
-                    const date = datetime_module.Date.fromStr(s) catch return EvalError.InvalidCast;
+                    const date = datetime_module.Date.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Date = date };
                 },
                 .Date => return value_arg,
@@ -1116,7 +1284,7 @@ pub fn evalTypeCastFunction(
                     const days: i32 = @intCast(@divFloor(ts.micros_since_epoch, 24 * 3600 * 1_000_000));
                     return Value{ .Date = datetime_module.Date{ .days_since_epoch = days } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1126,7 +1294,7 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-time string is a cast error, not NULL.
-                    const time = datetime_module.Time.fromStr(s) catch return EvalError.InvalidCast;
+                    const time = datetime_module.Time.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Time = time };
                 },
                 .Time => return value_arg,
@@ -1135,7 +1303,7 @@ pub fn evalTypeCastFunction(
                     const micros = @rem(ts.micros_since_epoch, 24 * 3600 * @as(i64, 1_000_000));
                     return Value{ .Time = datetime_module.Time{ .micros_since_midnight = if (micros < 0) micros + 24 * 3600 * 1_000_000 else micros } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1145,14 +1313,14 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-timestamp string is a cast error.
-                    const ts = datetime_module.Timestamp.fromStr(s) catch return EvalError.InvalidCast;
+                    const ts = datetime_module.Timestamp.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Timestamp = ts };
                 },
                 .Timestamp => return value_arg,
                 .Date => |d| {
                     return Value{ .Timestamp = .{ .micros_since_epoch = @as(i64, d.days_since_epoch) * 24 * 3600 * 1_000_000 } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1831,7 +1999,13 @@ pub fn evalAdvancedTypeFunction(
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = textLike(arg) orelse return Value{ .Null = {} };
         // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
-        return Value{ .Interval = datetime.Interval.fromStr(text) catch return EvalError.DurationParse };
+        return Value{
+            .Interval = datetime.Interval.fromStr(text) catch |e| return switch (e) {
+                // SONNY-6499: a component past its range is 22015.
+                error.IntervalFieldOverflow => EvalError.IntervalFieldOverflow,
+                else => EvalError.DurationParse,
+            },
+        };
     }
 
     if (std.mem.eql(u8, function_name, "makeinterval")) {

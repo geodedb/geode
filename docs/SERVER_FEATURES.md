@@ -310,10 +310,15 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 
 **Features**:
 
-- Stemming: Porter stemmer
-- Stop words: Configurable list
-- Phrase queries: Positional indexing
-- Fuzzy matching: Levenshtein distance
+- Stemming: none (terms are indexed as tokenized, normalized with the
+  partial NFC subset `geode_unicode.nfcNormalize` and case-folded)
+- Stop words: a fixed 24-word English list (`src/index/fts_tokenizer.zig`),
+  not configurable
+- Phrase and proximity queries: positional postings
+  (`CALL geode.fts.phrase` / `geode.fts.proximity`)
+- Fuzzy matching, synonyms, phonetic matching and per-language analyzers:
+  not implemented (the unreachable, non-compiling `src/fts/advanced.zig`
+  that sketched them was removed, SONNY-6499)
 
 **Performance**:
 

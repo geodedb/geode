@@ -10034,6 +10034,21 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny6489_codes_tests);
     b.step("test-sonny6489-data-exception-codes", "Run SONNY-6489 item 1 regression (a malformed datetime string answers 22007, a malformed duration string 22G0H, DECIMAL division by zero 22012, CHAR truncation 22001, on gRPC and QUIC; ISO/IEC 39075 23.1 Table 8)").dependOn(&run_sonny6489_codes_tests.step);
     shardDep(test_step, &run_sonny6489_codes_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6499 (6): the remaining data errors answer their Table 8 code.
+    const sonny6499_codes_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_gqlstate_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6499_codes_mod.link_libc = true;
+    sonny6499_codes_mod.addImport("geode", root_mod);
+    sonny6499_codes_mod.addImport("schema", schema_mod);
+    sonny6499_codes_mod.addImport("protobuf", protobuf_mod);
+    sonny6499_codes_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6499_codes_mod.addImport("logging", logging_mod);
+    sonny6499_codes_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6499_codes_tests = b.addTest(.{ .root_module = sonny6499_codes_mod });
+    const run_sonny6499_codes_tests = b.addRunArtifact(sonny6499_codes_tests);
+    spawnsBuiltGeode(sonny6499_codes_tests);
+    b.step("test-sonny6499-gqlstate-residuals", "Run SONNY-6499 item 6 regression (a wrong value type 22G03, a substring start 22011, NaN 22003, range() past its limit 54000, an inverted intrange 22000, an unparseable json/xml/url/domain/uuid/bit/hex/subnet/ipaddr text 22018, a duration component overflow 22015, on gRPC and QUIC; ISO/IEC 39075 23.1 Table 8)").dependOn(&run_sonny6499_codes_tests.step);
+    shardDep(test_step, &run_sonny6499_codes_tests.step, 1, test_shard_loads, test_shard_index);
     // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
     // tests) through the geode lib module, filtered, as test-quality733 does.
     const txn_undo_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "undo log", "savepoint" } });
@@ -10886,6 +10901,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6339_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6339_step = b.step("test-sonny6339-resolved-data-dir", "Run SONNY-6339 regression (spawns servers with --data-dir, GEODE_DATA_DIR only, and the per-user default under a private HOME/TMPDIR: users, roles, per-graph grants and policies survive a restart, the HMAC key, TLS pair, audit log, tenant registry and timeseries land in the resolved directory, never the working directory, and geode auth verify passes; a malformed .geode_hmac_key or GEODE_AUTH_HMAC_KEY refuses startup; startup reads the raw flag once)");
     sonny6339_step.dependOn(&run_sonny6339_tests.step);
+
+    // SONNY-6499 (3): a relative --data-dir (with a `..` segment) on a fresh
+    // directory starts as the absolute path does; a startup refusal frees
+    // what startup allocated.
+    const sonny6499_reldir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_relative_data_dir.zig"), .target = target, .optimize = optimize });
+    sonny6499_reldir_mod.link_libc = true;
+    sonny6499_reldir_mod.addImport("geode", root_mod);
+    sonny6499_reldir_mod.addImport("protobuf", protobuf_mod);
+    sonny6499_reldir_mod.addImport("schema", schema_mod);
+    sonny6499_reldir_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6499_reldir_tests = b.addTest(.{ .root_module = sonny6499_reldir_mod });
+    const run_sonny6499_reldir_tests = b.addRunArtifact(sonny6499_reldir_tests);
+    spawnsBuiltGeode(sonny6499_reldir_tests);
+    shardDep(test_step, &run_sonny6499_reldir_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-relative-data-dir", "Run SONNY-6499 item 3 regression (spawns servers: --data-dir ../REL on a fresh directory starts and keeps its HMAC key there, as an absolute path does, and restarts; an HMAC-key refusal with a relative or absolute --data-dir exits non-zero with no leaked allocation)").dependOn(&run_sonny6499_reldir_tests.step);
 
     // SONNY-3147: an audit record's event_hash covers the whole record (hash
     // format 2); the verifier recomputes every record's hash, reports format-1
@@ -12719,6 +12749,34 @@ pub fn build(b: *std.Build) void {
     const run_sonny6489_topk_tests = b.addRunArtifact(sonny6489_topk_tests);
     shardDep(test_step, &run_sonny6489_topk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6489-topk-order", "Run SONNY-6489 item 2 regression (ORDER BY ... LIMIT k, served by the top-K heap, returns the first k rows of the full ORDER BY for every k: numbers by exact value, a DECIMAL stays a DECIMAL, strings by NFC)").dependOn(&run_sonny6489_topk_tests.step);
+
+    // SONNY-6499 (1): both ORDER BY ... LIMIT fast paths return the full
+    // sort's first k rows, NULL rows and NULLS FIRST/LAST included.
+    const sonny6499_orderby_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_orderby_fastpath_nulls.zig"), .target = target, .optimize = optimize });
+    sonny6499_orderby_mod.addImport("geode", root_mod);
+    sonny6499_orderby_mod.addImport("logging", logging_mod);
+    const sonny6499_orderby_tests = b.addTest(.{ .root_module = sonny6499_orderby_mod });
+    const run_sonny6499_orderby_tests = b.addRunArtifact(sonny6499_orderby_tests);
+    shardDep(test_step, &run_sonny6499_orderby_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-orderby-fastpath-nulls", "Run SONNY-6499 item 1 regression (the value-ordered index and top-K heap ORDER BY ... LIMIT fast paths return the full sort's first k rows for every k, direction and null ordering: NULL rows, non-NFC strings, DOUBLEs; the hit counters prove which path served)").dependOn(&run_sonny6499_orderby_tests.step);
+
+    // SONNY-6499 (2): CAST per ISO/IEC 39075 20.8 for every source and target.
+    const sonny6499_cast_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_cast_matrix.zig"), .target = target, .optimize = optimize });
+    sonny6499_cast_mod.addImport("geode", root_mod);
+    sonny6499_cast_mod.addImport("logging", logging_mod);
+    const sonny6499_cast_tests = b.addTest(.{ .root_module = sonny6499_cast_mod });
+    const run_sonny6499_cast_tests = b.addRunArtifact(sonny6499_cast_tests);
+    shardDep(test_step, &run_sonny6499_cast_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-cast-matrix", "Run SONNY-6499 item 2 regression (CAST per ISO/IEC 39075 20.8: a DOUBLE casts to its approximate numeric literal and back, an approximate target gives a DOUBLE, a stored DOUBLE converts, text is trimmed and read as a numeric literal, no cell answers a silent NULL)").dependOn(&run_sonny6499_cast_tests.step);
+
+    // SONNY-6499 (5): the exec ORDER BY text fallback orders strings by NFC.
+    const sonny6499_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_exec_order_nfc.zig"), .target = target, .optimize = optimize });
+    sonny6499_exec_mod.addImport("geode", root_mod);
+    sonny6499_exec_mod.addImport("logging", logging_mod);
+    const sonny6499_exec_tests = b.addTest(.{ .root_module = sonny6499_exec_mod });
+    const run_sonny6499_exec_tests = b.addRunArtifact(sonny6499_exec_tests);
+    shardDep(test_step, &run_sonny6499_exec_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-exec-order-nfc", "Run SONNY-6499 item 5 regression (exec.stableOrderByTemporal orders keys it compares as text by their NFC forms, as the full ORDER BY does: KELVIN SIGN sorts as K, ANGSTROM SIGN as U+00C5, a decomposed and a precomposed letter are peers)").dependOn(&run_sonny6499_exec_tests.step);
 
     // SONNY-6489 (4): localdatetime() is a local datetime; durations render
     // their fraction of a second (stringify and the wire writer).

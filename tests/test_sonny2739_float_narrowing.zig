@@ -428,10 +428,12 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     }
     try expectValue(s, f, "RETURN toFloat('4503599627370496') AS x", "4503599627370496.000000m");
     try expectValue(s, f, "RETURN toFloat('2.5') AS x", "2.500000m");
-    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.DecimalOverflow);
-    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.500000m");
+    // SONNY-6499: an approximate CAST target gives a DOUBLE; 'nan' and
+    // 'inf' are no numeric literal (22018); 1e400 no double holds (22003).
+    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.InvalidCast);
+    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.NumericOutOfRange);
+    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.InvalidCast);
+    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.5d");
     // degrees and radians.
     try expectFail(s, f, "RETURN degrees(1e33) AS x", &.{}, error.DecimalOverflow);
     try expectFail(s, f, "RETURN radians(1e35) AS x", &.{}, error.DecimalOverflow);
@@ -464,14 +466,15 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN toInteger(-" ++ scale40 ++ ") AS x", "-1");
     // sum() and avg() of a list (a scalar function, in WHERE or a list
     // comprehension): a decimal narrowed to its floor, and the sum, checked.
-    // (The planned read's WHERE drops a row whose predicate fails, so there
-    // the overflow filters every row out instead of failing the query.)
+    // The overflow fails the query in every mode: since SONNY-6296 the
+    // planned read raises a WHERE that errors instead of dropping the row
+    // (ISO/IEC 39075:2024 19.1 GR 1).
     for ([_][]const u8{
         "MATCH (n:F) WHERE sum([9223372036854775808.0]) > 0 RETURN count(*) AS c",
         "MATCH (n:F) WHERE sum([9223372036854775807, 1]) > 0 RETURN count(*) AS c",
         "MATCH (n:F) WHERE avg([9223372036854775808.0]) > 0 RETURN count(*) AS c",
     }) |q| {
-        if (s.mode == .in_memory) try expectFail(s, f, q, &.{}, error.IntegerOverflow) else try expectValue(s, f, q, "0");
+        try expectFail(s, f, q, &.{}, error.IntegerOverflow);
     }
     try expectValue(s, f, "RETURN [x IN [1] | sum([1.5, 2])] AS s", "[3]");
     try expectValue(s, f, "RETURN [x IN [1] | avg([2.5, 4])] AS s", "[3]");

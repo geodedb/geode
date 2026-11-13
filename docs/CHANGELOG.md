@@ -2356,6 +2356,95 @@
   which no step ran) and `zig build
   test-sonny6494-mcp-validate-recommendations` (MCP `tools/call` →
   `validate`).
+- **Data errors answer their ISO/IEC 39075 Table 8 GQLSTATUS (SONNY-6499
+  item 6).** `proto_util.mapError`, on QUIC and gRPC: `TypeMismatch` (a
+  value of the wrong type for an operation, a function or a CAST) is 22G03
+  invalid value type, was 58000; the internal failures it also stood for
+  now keep their own errors (the evaluator mappers of `sqrt`, `asin`,
+  `acos`, `log`, `toInteger`, `toReal` turned every other error, out of
+  memory included, into `TypeMismatch`; the Prometheus exporter's metric
+  kind mismatch is `MetricKindMismatch`). `FloatNaN` 22003 (no GQL number
+  is NaN or infinite); `IndexOutOfBounds` 22011 (substring); `RangeTooLarge`
+  54000 (range() past 10,000,000 elements, the class the other size limits
+  use); `RangeBoundsError` 22000; text that does not parse as a JSON, XML,
+  URL, domain, UUID, bit string, hexadecimal, subnet, IDNA name or enum
+  value 22018 (were 58000), an IP or MAC address 22018 (was 22P02, a
+  PostgreSQL code); a duration component past its field's range
+  (`P999999999Y`) 22015 interval field overflow (was 22G0H; it was also
+  turned into NULL by the function dispatch once it had its own identity,
+  now surfaced). CAST: a source type with no conversion to the target
+  (20.8 GR 7 d ii, Table 4 "N": a list to STRING, a BOOLEAN to DOUBLE) is
+  22G03 (was 22018); a datetime string that does not parse is 22007 (GR k
+  i; was 22018). The unused `InvalidTypeConversion` arm (no raise site) was
+  removed. Durations: a string naming both unit groups (`P1M1D`) stays
+  accepted as a Geode extension (ISO 20.29 GR 1 would make it 22G0H) and
+  round-trips; adding or subtracting a year-to-month and a day-to-second
+  duration stays 22G14 (SONNY-6489); documented in
+  docs/TYPE_QUICK_REFERENCE.md. **Behaviour change:** clients see the codes
+  above instead of 58000 / 22018 / 22P02 / 22G0H. Regression:
+  `zig build test-sonny6499-gqlstate-residuals`.
+- **The `exec` ORDER BY text fallback orders strings by NFC (SONNY-6499 item
+  5).** `exec.stableOrderByTemporal` (the standalone `exec` executor's ORDER
+  BY, used by the `gql --demo-sort` driver) compares keys it cannot order as
+  datetimes by their text, after the partial `geode_unicode.nfcNormalize`
+  (it knows é and É only): U+212A KELVIN SIGN sorted after every ASCII
+  letter. It now compares with `canonical_string.orderNoAlloc`, the order
+  the full ORDER BY uses (SONNY-3055). Regression:
+  `zig build test-sonny6499-exec-order-nfc`.
+- **`geode serve --data-dir` with a relative path holding `..` starts, and a
+  startup refusal leaks nothing (SONNY-6499 item 3).** On a fresh directory
+  `--data-dir ../X` refused to start with "HMAC key required": the server
+  kept the path as given, the timeseries store behind the auth graph
+  manager refuses any path holding `..` (`validateDataDir`,
+  PathTraversal), and the startup guard (`storeHasAuthRecords`) read that
+  failure as "auth records exist". The data directory is now made absolute
+  and normalized once, where it is resolved (`resolveServerDataDir`); an
+  auth graph manager that cannot be opened refuses startup naming its error
+  (`AuthGraphUnavailable`) instead of claiming records exist; and every
+  startup refusal frees the index catalog it had set up (5 allocations the
+  debug allocator reported leaked). The log and messages show the absolute
+  path. Regression: `zig build test-sonny6499-relative-data-dir`.
+- **CAST follows ISO/IEC 39075 20.8 for every source and target (SONNY-6499
+  item 2).** `CAST(x AS STRING)` returned NULL for a DOUBLE, a REAL, a
+  stored DOUBLE (read back as an extended value), a list, a record and
+  every other kind it did not name; `CAST(x AS FLOAT / DOUBLE / REAL)`
+  returned a DECIMAL at scale 6 and refused a DOUBLE; a DOUBLE could not be
+  cast to INTEGER or DECIMAL; text was not trimmed and `nan`, `inf`,
+  `1_000` and `0x10` were read as numbers. Now (`src/eval/call_handlers.zig`
+  `evalTypeCastFunction`): a DOUBLE casts to its shortest approximate
+  numeric literal (`1.5E0`, `1.0E-1`, `0E0`; GR j ii), which reads back as
+  the same DOUBLE; a BOOLEAN to `TRUE` / `FALSE` (GR j v); an approximate
+  target gives a DOUBLE (GR i); a DOUBLE converts to INTEGER and DECIMAL
+  truncated, 22003 out of range (GR g i); text is trimmed and must be a
+  `<signed numeric literal>`, exponent included (`'1e3'` AS INTEGER is
+  1000), else 22018, and `'1e400'` AS DOUBLE is 22003 (new
+  `NumericOutOfRange`); a value with no character form is 22018, never
+  NULL. Matrix: docs/TYPE_QUICK_REFERENCE.md. **Behaviour change:**
+  `CAST(1 AS DOUBLE)` is `1.0` (DOUBLE), was `1.000000` (DECIMAL);
+  `CAST(true AS STRING)` is `'TRUE'`, was `'true'`; `CAST('nan' AS
+  DOUBLE)` is 22018, was 22003. Regression:
+  `zig build test-sonny6499-cast-matrix`.
+- **`ORDER BY ... LIMIT k` fast paths return the NULL rows, honour NULLS
+  FIRST / LAST, and never serve a mis-ordered index (SONNY-6499 item 1).**
+  Both fast paths for `MATCH (n:L) RETURN n.k ORDER BY n.k LIMIT k` (the
+  value-ordered index, `orderedScanFastPath`, and the top-K heap,
+  `topKOrderedFastPath`) skipped every node lacking the key (and the heap
+  every stored NULL), so the NULL rows the full sort returns first were
+  missing; both declined an explicit NULLS FIRST / NULLS LAST. They now
+  place the NULL rows as the full sort does (ISO/IEC 39075 16.17 SR 6 and
+  GR 1 g ii; Geode's default is NULLS FIRST in either direction) and serve
+  NULLS FIRST / LAST. The value-ordered index (graph-storage) orders
+  strings by their bytes, not by NFC (SONNY-3055), and decides eligibility
+  per shard, so a column with INTEGERs on one shard and DOUBLEs on another
+  was served with every INTEGER first: it is now served only when every
+  indexed string is in NFC (a walk of the in-memory trees,
+  `StorageAdapter.orderedIndexColumn`) and every shard holds one value
+  class; otherwise the heap serves it. A node that loses the key between
+  the index walk and the read, or a value of a kind the index does not
+  order, declines the fast path instead of dropping the row. **Behaviour
+  change:** those queries return their NULL rows; a non-NFC string column
+  is no longer index-served (slower, correct). Regression:
+  `zig build test-sonny6499-orderby-fastpath-nulls`.
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a
@@ -5490,6 +5579,18 @@
   (`fuzz/targets/lfu_cache_fuzz.zig`) stay: a running test uses them.
   `docs/GRAPH_ALGORITHM_PERFORMANCE_ENHANCEMENTS.md` and the "20-90%
   performance gains" of Phase 7 described the removed modules.
+- **`src/fts/advanced.zig`, `src/fts/bm25.zig` and
+  `NetworkTransport.sendToNode` (SONNY-6499 item 4).** Nothing reached them
+  and they did not compile: `LanguageAnalyzer.analyze` used the managed
+  `std.ArrayList(T).init` that Zig 0.16 removed (its CANARY marker said
+  TESTED; it was re-exported as `lib.fts_advanced` and never referenced),
+  bm25.zig was imported only by it and by an unregistered skeleton test,
+  and `sendToNode` called `std.time.sleep` and a `QuicTransport.connect`
+  that do not exist. `EnhancedQueryTransport.sendWithRetry`, its only
+  caller (itself unreached), now refuses (`InterNodeSendNotImplemented`)
+  instead of claiming a send. docs/SERVER_FEATURES.md no longer claims
+  Porter stemming, a configurable stop-word list or Levenshtein fuzzy
+  matching for full-text search: none exists.
 
 - **Dead benchmark: `tests/benchmark_hashagg_distinct_variance.zig`
   (SONNY-6456 item 5).** No build step compiled it and it could not

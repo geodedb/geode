@@ -383,7 +383,13 @@ pub const Interval = struct {
         return a.months == b.months or a.dayTimeMicros() == b.dayTimeMicros();
     }
 
-    pub fn fromStr(str: []const u8) Date.Error!Interval {
+    /// SONNY-6499: a component past its field's range (`P99999999999Y`,
+    /// `P999999999Y`) is IntervalFieldOverflow (ISO/IEC 39075 22015
+    /// interval field overflow); text that is not an ISO 8601 duration is
+    /// ParseError (22G0H). Both were ParseError.
+    pub const FromStrError = Date.Error || error{IntervalFieldOverflow};
+
+    pub fn fromStr(str: []const u8) FromStrError!Interval {
         if (str.len == 0 or str[0] != 'P') return Date.Error.ParseError;
 
         var months: i32 = 0;
@@ -407,7 +413,10 @@ pub const Interval = struct {
             while (num_end < str.len and std.ascii.isDigit(str[num_end])) num_end += 1;
             if (num_end == digits_start or num_end >= str.len) return Date.Error.ParseError;
 
-            const magnitude = std.fmt.parseInt(i32, str[digits_start..num_end], 10) catch return Date.Error.ParseError;
+            const magnitude = std.fmt.parseInt(i32, str[digits_start..num_end], 10) catch |e| return switch (e) {
+                error.Overflow => error.IntervalFieldOverflow,
+                error.InvalidCharacter => Date.Error.ParseError,
+            };
             const num = if (negative) -magnitude else magnitude;
             var frac_micros: i64 = 0;
             if (str[num_end] == '.') {
@@ -429,23 +438,23 @@ pub const Interval = struct {
             // GAP-0906: components accumulate with checked arithmetic — the
             // unchecked forms panicked on overflow (e.g. P999999999Y, whose
             // year count fits i32 but whose month total does not, or repeated
-            // units that overflow an accumulator). Overflow is reported as
-            // ParseError, the same class the 10-digit forms already produce.
+            // units that overflow an accumulator). SONNY-6499: overflow is
+            // IntervalFieldOverflow, as the 10-digit forms are.
             switch (unit) {
                 'Y' => {
-                    const yr_months = std.math.mul(i32, num, 12) catch return Date.Error.ParseError;
-                    months = std.math.add(i32, months, yr_months) catch return Date.Error.ParseError;
+                    const yr_months = std.math.mul(i32, num, 12) catch return error.IntervalFieldOverflow;
+                    months = std.math.add(i32, months, yr_months) catch return error.IntervalFieldOverflow;
                 },
                 'M' => {
                     if (in_time) {
-                        micros = std.math.add(i64, micros, @as(i64, num) * 60 * 1_000_000) catch return Date.Error.ParseError;
+                        micros = std.math.add(i64, micros, @as(i64, num) * 60 * 1_000_000) catch return error.IntervalFieldOverflow;
                     } else {
-                        months = std.math.add(i32, months, num) catch return Date.Error.ParseError;
+                        months = std.math.add(i32, months, num) catch return error.IntervalFieldOverflow;
                     }
                 },
-                'D' => days = std.math.add(i32, days, num) catch return Date.Error.ParseError,
-                'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return Date.Error.ParseError,
-                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000 + frac_micros) catch return Date.Error.ParseError,
+                'D' => days = std.math.add(i32, days, num) catch return error.IntervalFieldOverflow,
+                'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return error.IntervalFieldOverflow,
+                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000 + frac_micros) catch return error.IntervalFieldOverflow,
                 else => return Date.Error.ParseError,
             }
 

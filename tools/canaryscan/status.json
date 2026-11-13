@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:21:44.767327504Z",
+  "generated_at": "2026-11-13T19:54:26.586370894Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -36392,36 +36392,6 @@
           "benches": [],
           "owner": "index",
           "updated": "2026-05-30"
-        },
-        {
-          "feature": "BM25 Scoring",
-          "aspect": "SEARCH",
-          "status": "BENCHED",
-          "files": [
-            "src/fts/bm25.zig"
-          ],
-          "tests": [
-            "tests/e2e_fts_advanced.zig:1"
-          ],
-          "benches": [
-            "tests/benchmark_fts_bm25_scoring.zig:1"
-          ],
-          "owner": "search",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "BM25 skeleton",
-          "aspect": "SEARCH",
-          "status": "TESTED",
-          "files": [
-            "tests/unit_bm25_skeleton.zig"
-          ],
-          "tests": [
-            "tests/unit_bm25_skeleton.zig:1"
-          ],
-          "benches": [],
-          "owner": "search",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -36649,22 +36619,6 @@
           ],
           "benches": [],
           "owner": "index",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "Advanced FTS",
-          "aspect": "QUERY",
-          "status": "BENCHED",
-          "files": [
-            "src/fts/advanced.zig"
-          ],
-          "tests": [
-            "tests/e2e_fts_advanced.zig:1"
-          ],
-          "benches": [
-            "tests/benchmark_fts_analyzer_perf.zig:1"
-          ],
-          "owner": "search",
           "updated": "2026-06-10"
         },
         {
@@ -42104,12 +42058,10 @@
           "aspect": "AnalyzerLower",
           "status": "TESTED",
           "files": [
-            "src/fts/advanced.zig",
             "tests/canary_unicode_fts.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower",
-            "TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer"
+            "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower"
           ],
           "benches": [],
           "owner": "unicode",
@@ -42144,7 +42096,6 @@
           "aspect": "CompareNfc",
           "status": "TESTED",
           "files": [
-            "src/exec.zig",
             "tests/canary_unicode_orderby.zig"
           ],
           "tests": [
@@ -42153,6 +42104,20 @@
           "benches": [],
           "owner": "unicode",
           "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeOrderBy",
+          "aspect": "CompareNfc",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -85422,6 +85387,116 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-CAST-MATRIX",
+      "features": [
+        {
+          "feature": "TypeCasting",
+          "aspect": "StandardCastMatrix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_cast_matrix.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_cast_matrix.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6499-EXEC-ORDER-NFC",
+      "features": [
+        {
+          "feature": "UnicodeOrderBy",
+          "aspect": "ExecTextFallbackNfc",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6499-GQLSTATE-RESIDUALS",
+      "features": [
+        {
+          "feature": "ErrorMapping",
+          "aspect": "DataExceptionGqlstatusResiduals",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig",
+            "tests/test_sonny6499_gqlstate_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_gqlstate_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
+      "features": [
+        {
+          "feature": "OrderedIndex",
+          "aspect": "ColumnEntriesAndNfc",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TopKOrderedFastPath",
+          "aspect": "FastPathsReturnFullSortPrefix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6499-RELATIVE-DATA-DIR",
+      "features": [
+        {
+          "feature": "Server Startup",
+          "aspect": "RelativeDataDirAndRefusalCleanup",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_relative_data_dir.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_relative_data_dir.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -92991,11 +93066,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 145,
+      "BENCHED": 143,
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4904
+      "TESTED": 4910
     },
     "by_aspect": {
       "2PC": 3,
@@ -93546,6 +93621,7 @@
       "CollectionFunctions": 2,
       "CollectionParsing": 1,
       "Collections": 1,
+      "ColumnEntriesAndNfc": 1,
       "ColumnIndexLookup": 1,
       "ColumnOrder": 1,
       "ColumnSchema": 1,
@@ -93565,7 +93641,7 @@
       "Community": 3,
       "CommunityDetection": 1,
       "Compaction": 1,
-      "CompareNfc": 2,
+      "CompareNfc": 3,
       "ComparisonHelpers": 1,
       "Compilation": 1,
       "Compile": 1,
@@ -93794,6 +93870,7 @@
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
       "DataExceptionGqlstatus": 1,
+      "DataExceptionGqlstatusResiduals": 1,
       "DataExport": 1,
       "DataGeneration": 1,
       "DataIngestion": 2,
@@ -94202,6 +94279,7 @@
       "ExclusiveEndGeodeExtension": 1,
       "ExclusiveNoFollow0600": 1,
       "ExecContextWiring": 1,
+      "ExecTextFallbackNfc": 1,
       "ExecuteCreate": 1,
       "ExecuteCreateUndoLog": 2,
       "ExecuteHandler": 1,
@@ -94322,6 +94400,7 @@
       "FastPathDecline": 1,
       "FastPathFence": 1,
       "FastPathGate": 1,
+      "FastPathsReturnFullSortPrefix": 1,
       "FeatureFlag": 2,
       "FeatureFlags": 1,
       "FeatureImpl": 1,
@@ -95857,7 +95936,6 @@
       "PunycodeHandling": 1,
       "PureFunction": 1,
       "PureValidation": 1,
-      "QUERY": 1,
       "QUICAccept": 1,
       "QUICAlgorithms": 1,
       "QUICBasicE2E": 1,
@@ -96086,6 +96164,7 @@
       "RelationshipMatchEdgeRls": 1,
       "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
+      "RelativeDataDirAndRefusalCleanup": 1,
       "ReleaseAtStatement": 1,
       "ReleaseSafe": 1,
       "RemainingCategories": 1,
@@ -96235,7 +96314,6 @@
       "RuntimeTypeMapping": 1,
       "S3RestoreIsStaged": 1,
       "SCHEMA": 2,
-      "SEARCH": 2,
       "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
@@ -96544,6 +96622,7 @@
       "StaleDetection": 1,
       "StallEvictDecision": 1,
       "StandaloneCallReturn": 1,
+      "StandardCastMatrix": 1,
       "Start": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,

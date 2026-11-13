@@ -274,6 +274,10 @@ pub const activeRlsPoliciesConfigured = match_operations.activeRlsPoliciesConfig
 // H3-P3: planner ordered-scan fast-path hit counter (test path signal).
 pub const getOrderedScanFastPathHits = match_operations.getOrderedScanFastPathHits;
 pub const resetOrderedScanFastPathHits = match_operations.resetOrderedScanFastPathHits;
+// SONNY-6499: the top-K heap's hit counter, and the full ORDER BY's order of
+// two values (the reference the fast paths are tested against).
+pub const getTopKFastPathHits = match_operations.getTopKFastPathHits;
+pub const compareValuesWithNullsPolicy = return_and_sorting.compareValuesWithNullsPolicy;
 // GAP (write-path OOM, 2026-07-04): engine-direct point-write vs legacy
 // write-scan path counters (routing-table test signals).
 pub const getPointWriteFastPathTotal = match_operations.getPointWriteFastPathTotal;
