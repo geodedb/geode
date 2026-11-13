@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:36:34.100130181Z",
+  "generated_at": "2026-11-13T03:54:23.292770815Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85697,6 +85697,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6451-RAFT-RESTARTED-PEER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InboundStreamReleasesWorker",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_raft_restarted_peer.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_raft_restarted_peer.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6451-UNKNOWN-SECRET",
       "features": [
         {
@@ -93346,7 +93365,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4864
+      "TESTED": 4865
     },
     "by_aspect": {
       "2PC": 3,
@@ -95081,6 +95100,7 @@
       "InboundIdleDeadline": 1,
       "InboundOccupancySweeper": 1,
       "InboundReapCountForCapacity": 1,
+      "InboundStreamReleasesWorker": 1,
       "IncomingEdgeFilter": 1,
       "IncrementalPathReachableOnWirePath": 1,
       "IncrementalRefresh": 1,

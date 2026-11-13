@@ -5468,6 +5468,7 @@ REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,Regression,TESTED,tests
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,src/security/rls_core.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6447_rls_raw_tokenize.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,TESTED,tests/test_sonny6451_health_failed_peer.zig,tests/test_sonny6451_health_failed_peer.zig,,distributed,2026-11-12
+REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,tests/test_sonny6451_raft_restarted_peer.zig,tests/test_sonny6451_raft_restarted_peer.zig,,distributed,2026-11-12
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

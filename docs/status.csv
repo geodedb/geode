@@ -1688,7 +1688,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,957
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,16078
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,16094
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2166
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1535
@@ -1835,7 +1835,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,16087
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,16103
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1690
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1942
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1036
@@ -1847,7 +1847,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7657
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,16099
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,16115
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -5784,6 +5784,7 @@ REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,Regression,TESTED,,,cli
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2368
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6447_rls_raw_tokenize.zig,17
 REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_health_failed_peer.zig,17
+REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_raft_restarted_peer.zig,31
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,41
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,293
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
