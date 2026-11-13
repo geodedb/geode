@@ -14,6 +14,7 @@ const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 // GAP-0535: value ownership helpers for projection results
 const value_utilities = @import("value_utilities.zig");
 const value_order = @import("value_order.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
 // SONNY-2696: aggregate detection walks every expression kind.
 const grouped_having = @import("grouped_having.zig");
 
@@ -405,7 +406,8 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
         if (numberOf(b)) |nb| return compareNumbers(na, nb);
     }
     if (textOf(a)) |ta| {
-        if (textOf(b)) |tb| return orderToI8(std.mem.order(u8, ta, tb));
+        // SONNY-3055: by their NFC forms, as `<` and `=` order them.
+        if (textOf(b)) |tb| return orderToI8(canonical_string.orderNoAlloc(ta, tb));
     }
     if (std.meta.activeTag(a) == std.meta.activeTag(b)) {
         switch (a) {

@@ -673,6 +673,12 @@ distance_haversine(point1, point2)
      greater than it. NaN equals nothing under `=` (IEEE 754) and is one
      value for GROUP BY and DISTINCT, sorting after every number
      (SONNY-2807).
+   - Strings (STRING, TEXT, VARCHAR, CHAR values) compare by the UTF-8 bytes
+     of their Unicode Normalization Form C (UAX #15, Unicode 15.1): a
+     precomposed `'é'` equals `'e'` + U+0301, U+212B ANGSTROM SIGN equals
+     `'Å'`. `=`, the order operators, IN, GROUP BY, DISTINCT, ORDER BY,
+     joins, inline property maps, MERGE, UNIQUE and the index seeks share
+     this one rule; values are stored as written (SONNY-3055).
 
 ## Performance Characteristics
 

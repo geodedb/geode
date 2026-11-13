@@ -2161,6 +2161,33 @@
 
 ### Fixed
 
+- **One string identity: NFC, on every path (SONNY-3055).** `=` compared
+  two strings by their Unicode Normalization Form C (UAX #15) forms, but its
+  NFC knew two characters (é and É), and everything else that decides string
+  identity compared raw bytes: an inline property map and MERGE, the
+  persisted read paths' matcher, GROUP BY and DISTINCT, the planned read's
+  hash join, the exact node-property index the WHERE and inline-map seeks
+  probe, MERGE's property index and tuple locks, and UNIQUE. So `WHERE n.s =
+  'é'` (precomposed) missed a stored `'e' + U+0301` that `=` called equal,
+  MERGE created a second node, and the two were two groups. Every path now
+  compares, keys and hashes the full NFC form (the `strings` dependency's
+  Unicode 15.1 normalizer; ISO/IEC 39075:2024 19.3 GR 3b compares strings by
+  a collation, and leaves operations on unnormalized strings
+  implementation-defined, IA003). **Behaviour change:**
+  - `RETURN 'Å' = 'Å'` (U+212B ANGSTROM SIGN against U+00C5), Hangul
+    syllables against their jamo, and marks in another order now compare
+    equal (FALSE before); `'e' + U+0301 = 'é'` was already TRUE for `=`.
+  - `MATCH (n) WHERE n.s = 'é'`, `{s: 'é'}`, `IN`, MERGE and UNIQUE find a
+    stored decomposed `'é'` (they did not); GROUP BY, DISTINCT and
+    `count(DISTINCT ...)` make the two forms one group (they were two).
+  - ORDER BY, `<` and `min`/`max` order strings by their NFC bytes: a
+    decomposed `'é'` sorts after `'f'`, as a precomposed one did.
+  - **Upgrade:** the persisted exact index (`prop_exact.idx` GENPIDX6,
+    `prop_rev.idx` GENRVIX3) and the hydration snapshots
+    (`HYDRATION_SNAP_VERSION` 6) change format; files written by an earlier
+    binary are stale and rebuilt on open (a one-time rebuild; no wrong answer
+    is served from an old file). ASCII and NFC strings keep their keys.
+  Regression: `zig build test-sonny3055-nfc-string-identity`.
 - **One numeric equality rule: `=` compares a DOUBLE and an exact number by
   exact value (SONNY-2807).** ISO/IEC 39075:2024 19.3 (General Rule 3a)
   compares numbers "with respect to their numerical values". GROUP BY,

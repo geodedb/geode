@@ -13,6 +13,18 @@ Geode integrates a _minimal_ Unicode pipeline focused on:
 
 The implementation deliberately vendors only a reduced UCD subset sufficient for current normalization/folding coverage. Full canonical combining class and composition tables are **not** yet included (future expansion). A generator tool builds small tables at build time (non-fatal if it fails; promotion to enforced step tracked by REQ-GQL-UNICODE-006).
 
+### String identity (SONNY-3055)
+
+String equality, ordering and keys use the **full** Unicode 15.1 Normalization
+Form C (UAX #15) from the `strings` dependency, through
+`src/unicode/canonical_string.zig`: `=`, the order operators, IN, GROUP BY,
+DISTINCT, ORDER BY, joins, inline property maps, MERGE, UNIQUE and the exact
+property index all compare the NFC forms' UTF-8 bytes (ASCII and NFC strings
+take a no-allocation fast path). Values are stored as written. The subset
+normalizer `nfcNormalize` below is no longer used by `=` or any key; it
+remains in the FTS analyzer (`src/fts/advanced.zig`) and in the text fallback
+of the `exec.zig` ORDER BY comparator.
+
 ## Features & Requirement IDs
 
 | REQ                 | Feature           | Aspect            | Status | Notes                                              |

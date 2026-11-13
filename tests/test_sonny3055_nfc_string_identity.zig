@@ -110,3 +110,41 @@ fn checkUnique(s: *Session, f: *Failures) !void {
 test "SONNY-3055: UNIQUE treats NFC and NFD forms as one value" {
     try vs.inModes("unique", &vs.all_modes, checkUnique);
 }
+
+// ---------------------------------------------------------------------------
+// Upgrade: an exact index and a merge snapshot written with the earlier key
+// derivation are rebuilt, not served.
+// ---------------------------------------------------------------------------
+
+test "SONNY-3055: a store whose indexes were written with raw-byte string keys is rebuilt on open" {
+    const adapter_mod = geode.graph_storage_adapter;
+    vs.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    var s = try Session.init(.persisted);
+    defer s.deinit();
+    {
+        // An earlier binary: raw-byte string keys, the earlier format editions.
+        adapter_mod.setLegacyStringKeysForTest(true);
+        defer adapter_mod.setLegacyStringKeysForTest(false);
+        geode.graph_store.setLegacyStringKeysForTest(true);
+        defer geode.graph_store.setLegacyStringKeysForTest(false);
+        try s.exec("CREATE (:L {s: $v, k: 'nfd'})", &.{p("v", e_nfd)});
+        try s.exec("MERGE (:L {s: $v, k: 'nfd'})", &.{p("v", e_nfd)});
+        // Builds both indexes and writes them at a full checkpoint.
+        try expectRows(&s, &f, "MATCH (n:L {s: $v}) RETURN n.k AS k", &.{p("v", e_nfd)}, &.{"'nfd'"});
+        const adapter = geode.graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+        try adapter.checkpointAll();
+        const magic = adapter.exactIndexMagicForTesting(geode.graph_store.DEFAULT_GRAPH_NAME) orelse return error.NoExactIndexFile;
+        try testing.expectEqualStrings("GENPIDX5", &magic);
+        // The earlier binary shuts down (and persists what it persists at
+        // close) before the upgraded one opens the store.
+        s.close();
+    }
+    try s.open();
+    try expectRows(&s, &f, "MATCH (n:L) WHERE n.s = $v RETURN n.k AS k", &.{p("v", e_nfc)}, &.{"'nfd'"});
+    try expectRows(&s, &f, "MATCH (n:L {s: $v}) RETURN n.k AS k", &.{p("v", e_nfc)}, &.{"'nfd'"});
+    try expectValue(&s, &f, "MERGE (n:L {s: $v}) RETURN n.k AS k", &.{p("v", e_nfc)}, "'nfd'");
+    try expectValue(&s, &f, "MATCH (n:L) RETURN count(n) AS c", &.{}, "1");
+    try f.check("upgrade");
+}

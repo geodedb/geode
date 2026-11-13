@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:03:43.441590961Z",
+  "generated_at": "2026-11-13T14:08:42.72521351Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76536,6 +76536,20 @@
       "features": [
         {
           "feature": "UnicodeEval",
+          "aspect": "CanonicalNfcForm",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/canonical_string.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "UnicodeEval",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94180,7 +94194,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4911
+      "TESTED": 4912
     },
     "by_aspect": {
       "2PC": 3,
@@ -94597,6 +94611,7 @@
       "CandidateRowVisibility": 1,
       "CandidateShardReadLocks": 1,
       "CanonicalKeyEncoding": 1,
+      "CanonicalNfcForm": 1,
       "CanonicalRecordHash": 1,
       "CardinalityEstimation": 2,
       "CardinalityPrivacyGuard": 1,

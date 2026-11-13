@@ -31,6 +31,22 @@ const id_map_mod = @import("storage/id_map.zig");
 pub const IdMap = id_map_mod.IdMap;
 const hydration_snapshot = @import("storage/hydration_snapshot.zig");
 const value_order = @import("execution/value_order.zig");
+const canonical_string = @import("unicode/canonical_string.zig");
+
+/// SONNY-3055 test-only: key a string in MERGE's index by its raw bytes and
+/// write HYDRATION_SNAP_VERSION 5, as a binary before SONNY-3055 did, so a
+/// test can prove such a snapshot is rebuilt, never served. Always false
+/// outside tests.
+var legacy_string_keys_for_test: bool = false;
+
+pub fn setLegacyStringKeysForTest(on: bool) void {
+    if (!@import("builtin").is_test) @compileError("test-only helper");
+    legacy_string_keys_for_test = on;
+}
+
+fn legacyStringKeys() bool {
+    return @import("builtin").is_test and legacy_string_keys_for_test;
+}
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
 // SONNY-1330: PUBLIC so `execution/set_operations.zig` can open/close the
@@ -6781,9 +6797,15 @@ pub const GraphStore = struct {
             return writer.end;
         }
         switch (value) {
+            // SONNY-3055: a string by its NFC form, as MERGE compares it, so
+            // 'e' + U+0301 and 'é' share one entry (HYDRATION_SNAP_VERSION 6).
             .String => |s| {
                 writer.writeByte('s') catch return null;
-                writer.writeAll(s) catch return null;
+                if (legacyStringKeys()) {
+                    writer.writeAll(s) catch return null;
+                } else {
+                    canonical_string.writeCanonical(&writer, s) catch return null;
+                }
             },
             .Bool => |b| writer.writeAll(if (b) "b\x01" else "b\x00") catch return null,
             else => return null,
@@ -12521,7 +12543,16 @@ pub const GraphStore = struct {
     // tagged by its kind ('s', 'b'; `writeMergeValue`). A v4 file's untagged
     // strings and booleans would all miss, so it loads as null and the index
     // is rebuilt.
-    const HYDRATION_SNAP_VERSION: u32 = 5;
+    // v6 = SONNY-3055: a merge-index key's string is its NFC form. A v5 file
+    // keyed 'e' + U+0301 apart from 'é', so a MERGE of one missed the other
+    // and duplicated it; it loads as null and the index is rebuilt.
+    const HYDRATION_SNAP_VERSION: u32 = 6;
+
+    /// The version a snapshot is written with: v5 under the SONNY-3055
+    /// test-only legacy switch.
+    fn hydrationSnapVersionForWrite() u32 {
+        return if (legacyStringKeys()) 5 else HYDRATION_SNAP_VERSION;
+    }
     const HYDRATION_COUNTERS_MAGIC: [8]u8 = "GHYDCNT1".*;
     const HYDRATION_COUNTERS_FILE = "hydration_counters.snap";
     const HYDRATION_COUNTERS_TMP = "hydration_counters.snap.tmp";
@@ -12843,7 +12874,7 @@ pub const GraphStore = struct {
             for (entries.items) |en| try w.writeAll(en.key);
         }
 
-        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+        try w.finish(hydrationSnapVersionForWrite(), checkpoint_epoch, covered_lsn);
     }
 
     /// Serialize one hydrated graph's label-index postings. Payload layout:
@@ -12890,7 +12921,7 @@ pub const GraphStore = struct {
             for (posting.list.items) |id| try w.writeInt(u64, id);
         }
 
-        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+        try w.finish(hydrationSnapVersionForWrite(), checkpoint_epoch, covered_lsn);
     }
 
     /// Serialize one hydrated graph's counter products. Payload layout
@@ -12972,7 +13003,7 @@ pub const GraphStore = struct {
         try self.writeHydrationTenantSection(&w, &self.edge_types_by_tenant, graph_name);
         try self.writeHydrationTenantSection(&w, &self.label_properties_by_tenant, graph_name);
 
-        try w.finish(HYDRATION_SNAP_VERSION, checkpoint_epoch, covered_lsn);
+        try w.finish(hydrationSnapVersionForWrite(), checkpoint_epoch, covered_lsn);
     }
 
     fn writeHydrationTenantSection(

@@ -579,6 +579,7 @@ const truthy = value_types.truthy;
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 const value_order = @import("execution/value_order.zig");
+const canonical_string = @import("unicode/canonical_string.zig");
 const decimal_text = @import("types/decimal_text.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
@@ -922,12 +923,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     // BOTH to NFC (a non-ASCII string may normalize to a different form, so we
                     // must never shortcut unless BOTH operands are ASCII).
                     if (@import("builtin").is_test) nfc_fallback_count += 1;
-                    const unicode = @import("unicode/geode_unicode.zig");
-                    const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(ln);
-                    const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(rn);
-                    break :nfc_blk std.mem.order(u8, ln, rn);
+                    // SONNY-3055: full UAX #15 NFC (canonical_string), the
+                    // form every key, index and equality shares. The helper
+                    // here knew two characters (é and É).
+                    break :nfc_blk canonical_string.order(alloc, l.Str, r.Str) catch return EvalError.OutOfMemory;
                 };
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,

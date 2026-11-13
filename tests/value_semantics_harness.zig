@@ -82,10 +82,20 @@ pub const Session = struct {
     /// Closes the persisted store and opens it again from its data
     /// directory, as a server restart does.
     pub fn reopen(self: *Session) !void {
-        if (self.mode == .in_memory) return error.NotPersisted;
+        self.close();
+        try self.open();
+    }
+
+    /// Closes the store (a clean shutdown: it persists what it persists at
+    /// close). `open` opens it again.
+    pub fn close(_: *Session) void {
         execution.cleanupCatalogInstance();
         index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
+    }
+
+    pub fn open(self: *Session) !void {
+        if (self.mode == .in_memory) return error.NotPersisted;
         graph_store.setDataDirOverride(testing.allocator, self.data_dir.?);
         self.ctx.catalog = try execution.ensureCatalogInstance(testing.allocator);
         _ = graph_store.getGlobalStore(testing.allocator);

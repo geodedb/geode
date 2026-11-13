@@ -1363,6 +1363,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("uuid", uuid_ext_mod);
     root_mod.addImport("wal", wal_ext_mod);
     root_mod.addImport("graph_storage", graph_storage_mod);
+    root_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     root_mod.addImport("raft", raft_ext_mod);
 
     // Phase 7 External Library Imports (extracted domain libraries)
@@ -1442,6 +1443,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("uuid", uuid_ext_mod);
     geode_exe.root_module.addImport("wal", wal_ext_mod);
     geode_exe.root_module.addImport("graph_storage", graph_storage_mod);
+    geode_exe.root_module.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     geode_exe.root_module.addImport("raft", raft_ext_mod);
 
     // Phase 7 External Library Imports for CLI (extracted domain libraries)
@@ -1954,6 +1956,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     node_cache_mod_for_test.addImport("graph_storage", graph_storage_mod);
+    node_cache_mod_for_test.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     node_cache_test_mod.addImport("node_cache", node_cache_mod_for_test);
     const node_cache_tests = b.addTest(.{ .root_module = node_cache_test_mod });
     const run_node_cache_tests = b.addRunArtifact(node_cache_tests);
@@ -2798,6 +2801,7 @@ pub fn build(b: *std.Build) void {
     // compiled here) now @import("runtime_metrics") — wire the canonical module.
     graph_store_mod.addImport("runtime_metrics", runtime_metrics_module);
     graph_store_mod.addImport("graph_storage", graph_storage_mod);
+    graph_store_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     graph_store_mod.addImport("fle_aead", fle_aead_mod);
     graph_store_mod.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_mod.addImport("fle_key_types", fle_key_types_mod);
@@ -3271,6 +3275,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("logging", logging_mod);
     graph_store_unit_tests.root_module.addImport("json", json_mod);
     graph_store_unit_tests.root_module.addImport("graph_storage", graph_storage_mod);
+    graph_store_unit_tests.root_module.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     graph_store_unit_tests.root_module.addImport("fle_aead", fle_aead_mod);
     graph_store_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
@@ -3367,6 +3372,7 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("logging", logging_mod);
     eval_handler_mod.addImport("json", json_mod);
     eval_handler_mod.addImport("graph_storage", graph_storage_mod);
+    eval_handler_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     eval_handler_mod.addImport("fle_aead", fle_aead_mod);
     eval_handler_mod.addImport("fle_key_manager", fle_key_manager_mod);
     eval_handler_mod.addImport("fle_key_types", fle_key_types_mod);
@@ -5615,6 +5621,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("logging", logging_mod);
     merge_bench_gs_mod.addImport("json", json_mod);
     merge_bench_gs_mod.addImport("graph_storage", graph_storage_mod);
+    merge_bench_gs_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     merge_bench_gs_mod.addImport("fle_aead", fle_aead_mod);
     merge_bench_gs_mod.addImport("fle_key_manager", fle_key_manager_mod);
     merge_bench_gs_mod.addImport("fle_key_types", fle_key_types_mod);
@@ -8787,6 +8794,7 @@ pub fn build(b: *std.Build) void {
     const gap0900_ckpt_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0900_deferred_checkpoint_cadence.zig"), .target = target, .optimize = optimize });
     gap0900_ckpt_mod.addImport("geode", root_mod);
     gap0900_ckpt_mod.addImport("graph_storage", graph_storage_mod);
+    gap0900_ckpt_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const gap0900_ckpt_tests = b.addTest(.{ .root_module = gap0900_ckpt_mod });
     const run_gap0900_ckpt_tests = b.addRunArtifact(gap0900_ckpt_tests);
     shardDep(test_step, &run_gap0900_ckpt_tests.step, 2, test_shard_loads, test_shard_index);
@@ -8810,6 +8818,7 @@ pub fn build(b: *std.Build) void {
     const sharded_coord_routing_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sharded_coordinator_routing.zig"), .target = target, .optimize = optimize });
     sharded_coord_routing_mod.addImport("geode", root_mod);
     sharded_coord_routing_mod.addImport("graph_storage", graph_storage_mod);
+    sharded_coord_routing_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sharded_coord_routing_tests = b.addTest(.{ .root_module = sharded_coord_routing_mod });
     const run_sharded_coord_routing_tests = b.addRunArtifact(sharded_coord_routing_tests);
     shardDep(test_step, &run_sharded_coord_routing_tests.step, 1, test_shard_loads, test_shard_index);
@@ -10712,6 +10721,7 @@ pub fn build(b: *std.Build) void {
     sonny6452_ptr_test_mod.link_libc = true;
     sonny6452_ptr_test_mod.addImport("geode", root_mod);
     sonny6452_ptr_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6452_ptr_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     sonny6452_ptr_test_mod.addImport("logging", logging_mod);
     const sonny6452_ptr_tests = b.addTest(.{ .root_module = sonny6452_ptr_test_mod });
     const run_sonny6452_ptr_tests = b.addRunArtifact(sonny6452_ptr_tests);
@@ -11710,6 +11720,7 @@ pub fn build(b: *std.Build) void {
     });
     sonny6433_locks_mod.addImport("geode", root_mod);
     sonny6433_locks_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6433_locks_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sonny6433_locks_tests = b.addTest(.{ .root_module = sonny6433_locks_mod });
     const run_sonny6433_locks_tests = b.addRunArtifact(sonny6433_locks_tests);
     shardDep(test_step, &run_sonny6433_locks_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13406,6 +13417,7 @@ pub fn build(b: *std.Build) void {
     });
     adapter_registry_restart_test_mod.addImport("geode", root_mod);
     adapter_registry_restart_test_mod.addImport("graph_storage", graph_storage_mod);
+    adapter_registry_restart_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const adapter_registry_restart_tests = b.addTest(.{ .root_module = adapter_registry_restart_test_mod });
     const run_adapter_registry_restart_tests = b.addRunArtifact(adapter_registry_restart_tests);
     shardDep(test_step, &run_adapter_registry_restart_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13423,6 +13435,7 @@ pub fn build(b: *std.Build) void {
     });
     startup_lazy_test_mod.addImport("geode", root_mod);
     startup_lazy_test_mod.addImport("graph_storage", graph_storage_mod);
+    startup_lazy_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const startup_lazy_tests = b.addTest(.{ .root_module = startup_lazy_test_mod });
     const run_startup_lazy_tests = b.addRunArtifact(startup_lazy_tests);
     shardDep(test_step, &run_startup_lazy_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13440,6 +13453,7 @@ pub fn build(b: *std.Build) void {
     });
     hydration_stream_test_mod.addImport("geode", root_mod);
     hydration_stream_test_mod.addImport("graph_storage", graph_storage_mod);
+    hydration_stream_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const hydration_stream_tests = b.addTest(.{ .root_module = hydration_stream_test_mod });
     const run_hydration_stream_tests = b.addRunArtifact(hydration_stream_tests);
     // The heavy hydration stress cases (T2b memory N=128k, the N=4k T2c/merge/
@@ -13483,6 +13497,7 @@ pub fn build(b: *std.Build) void {
     });
     startup_lazy_tsan_mod.addImport("geode", root_mod);
     startup_lazy_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    startup_lazy_tsan_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const startup_lazy_tsan_tests = tsanTest(b, startup_lazy_tsan_mod);
     const run_startup_lazy_tsan_tests = b.addRunArtifact(startup_lazy_tsan_tests);
     const startup_lazy_tsan_step = b.step(
@@ -13503,6 +13518,7 @@ pub fn build(b: *std.Build) void {
     });
     slab_packing_test_mod.addImport("geode", root_mod);
     slab_packing_test_mod.addImport("graph_storage", graph_storage_mod);
+    slab_packing_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const slab_packing_tests = b.addTest(.{ .root_module = slab_packing_test_mod });
     const run_slab_packing_tests = b.addRunArtifact(slab_packing_tests);
     const slab_packing_step = b.step("test-slab-packing-geode", "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the geode adapter");
@@ -13518,6 +13534,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_scan_test_mod.addImport("geode", root_mod);
     ordered_scan_test_mod.addImport("graph_storage", graph_storage_mod);
+    ordered_scan_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const ordered_scan_tests = b.addTest(.{ .root_module = ordered_scan_test_mod });
     const run_ordered_scan_tests = b.addRunArtifact(ordered_scan_tests);
     shardDep(test_step, &run_ordered_scan_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13539,6 +13556,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_scan_tsan_mod.addImport("geode", root_mod);
     ordered_scan_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    ordered_scan_tsan_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const ordered_scan_tsan_tests = tsanTest(b, ordered_scan_tsan_mod);
     const run_ordered_scan_tsan_tests = b.addRunArtifact(ordered_scan_tsan_tests);
     const ordered_scan_tsan_step = b.step(
@@ -13560,6 +13578,7 @@ pub fn build(b: *std.Build) void {
     });
     sonny6375_mod.addImport("geode", root_mod);
     sonny6375_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6375_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sonny6375_tests = b.addTest(.{ .root_module = sonny6375_mod });
     const run_sonny6375_tests = b.addRunArtifact(sonny6375_tests);
     shardDep(test_step, &run_sonny6375_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13577,6 +13596,7 @@ pub fn build(b: *std.Build) void {
     });
     sonny6375_tsan_mod.addImport("geode", root_mod);
     sonny6375_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6375_tsan_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sonny6375_tsan_tests = tsanTest(b, sonny6375_tsan_mod);
     const run_sonny6375_tsan_tests = b.addRunArtifact(sonny6375_tsan_tests);
     const sonny6375_tsan_step = b.step("test-sonny6375-ordered-scan-locking-tsan", "SONNY-6375 TSan: orderedScan locking under -fsanitize-thread");
@@ -13623,6 +13643,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_scan_fastpath_test_mod.addImport("geode", root_mod);
     ordered_scan_fastpath_test_mod.addImport("graph_storage", graph_storage_mod);
+    ordered_scan_fastpath_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const ordered_scan_fastpath_tests = b.addTest(.{ .root_module = ordered_scan_fastpath_test_mod });
     const run_ordered_scan_fastpath_tests = b.addRunArtifact(ordered_scan_fastpath_tests);
     shardDep(test_step, &run_ordered_scan_fastpath_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13640,6 +13661,7 @@ pub fn build(b: *std.Build) void {
     });
     h3_fastpath_repro_test_mod.addImport("geode", root_mod);
     h3_fastpath_repro_test_mod.addImport("graph_storage", graph_storage_mod);
+    h3_fastpath_repro_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const h3_fastpath_repro_tests = b.addTest(.{ .root_module = h3_fastpath_repro_test_mod });
     const run_h3_fastpath_repro_tests = b.addRunArtifact(h3_fastpath_repro_tests);
     const h3_fastpath_repro_step = b.step("test-h3-fastpath-repro", "Run H3-P3 bench repro (CREATE INDEX before nodes)");
@@ -13657,6 +13679,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_autobuild_test_mod.addImport("geode", root_mod);
     ordered_autobuild_test_mod.addImport("graph_storage", graph_storage_mod);
+    ordered_autobuild_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const ordered_autobuild_tests = b.addTest(.{ .root_module = ordered_autobuild_test_mod });
     const run_ordered_autobuild_tests = b.addRunArtifact(ordered_autobuild_tests);
     shardDep(test_step, &run_ordered_autobuild_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13678,6 +13701,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_autobuild_tsan_mod.addImport("geode", root_mod);
     ordered_autobuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    ordered_autobuild_tsan_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const ordered_autobuild_tsan_tests = tsanTest(b, ordered_autobuild_tsan_mod);
     const run_ordered_autobuild_tsan_tests = b.addRunArtifact(ordered_autobuild_tsan_tests);
     const ordered_autobuild_tsan_step = b.step(
@@ -13696,6 +13720,7 @@ pub fn build(b: *std.Build) void {
     });
     parallel_index_rebuild_test_mod.addImport("geode", root_mod);
     parallel_index_rebuild_test_mod.addImport("graph_storage", graph_storage_mod);
+    parallel_index_rebuild_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const parallel_index_rebuild_tests = b.addTest(.{ .root_module = parallel_index_rebuild_test_mod });
     const run_parallel_index_rebuild_tests = b.addRunArtifact(parallel_index_rebuild_tests);
     shardDep(test_step, &run_parallel_index_rebuild_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13714,6 +13739,7 @@ pub fn build(b: *std.Build) void {
     });
     exact_index_deferred_test_mod.addImport("geode", root_mod);
     exact_index_deferred_test_mod.addImport("graph_storage", graph_storage_mod);
+    exact_index_deferred_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const exact_index_deferred_tests = b.addTest(.{ .root_module = exact_index_deferred_test_mod });
     const run_exact_index_deferred_tests = b.addRunArtifact(exact_index_deferred_tests);
     shardDep(test_step, &run_exact_index_deferred_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13731,6 +13757,7 @@ pub fn build(b: *std.Build) void {
     });
     sonny6362_read_mod.addImport("geode", root_mod);
     sonny6362_read_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6362_read_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sonny6362_read_tests = b.addTest(.{ .root_module = sonny6362_read_mod });
     const run_sonny6362_read_tests = b.addRunArtifact(sonny6362_read_tests);
     shardDep(test_step, &run_sonny6362_read_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13749,6 +13776,7 @@ pub fn build(b: *std.Build) void {
     });
     exact_index_persist_interleave_mod.addImport("geode", root_mod);
     exact_index_persist_interleave_mod.addImport("graph_storage", graph_storage_mod);
+    exact_index_persist_interleave_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const exact_index_persist_interleave_tests = b.addTest(.{ .root_module = exact_index_persist_interleave_mod });
     const run_exact_index_persist_interleave_tests = b.addRunArtifact(exact_index_persist_interleave_tests);
     shardDep(test_step, &run_exact_index_persist_interleave_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13769,6 +13797,7 @@ pub fn build(b: *std.Build) void {
     });
     exact_index_crash_reconcile_mod.addImport("geode", root_mod);
     exact_index_crash_reconcile_mod.addImport("graph_storage", graph_storage_mod);
+    exact_index_crash_reconcile_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const exact_index_crash_reconcile_tests = b.addTest(.{ .root_module = exact_index_crash_reconcile_mod });
     const run_exact_index_crash_reconcile_tests = b.addRunArtifact(exact_index_crash_reconcile_tests);
     shardDep(test_step, &run_exact_index_crash_reconcile_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13789,6 +13818,7 @@ pub fn build(b: *std.Build) void {
     });
     parallel_index_rebuild_tsan_mod.addImport("geode", root_mod);
     parallel_index_rebuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    parallel_index_rebuild_tsan_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const parallel_index_rebuild_tsan_tests = tsanTest(b, parallel_index_rebuild_tsan_mod);
     const run_parallel_index_rebuild_tsan_tests = b.addRunArtifact(parallel_index_rebuild_tsan_tests);
     const parallel_index_rebuild_tsan_step = b.step(
@@ -13812,6 +13842,7 @@ pub fn build(b: *std.Build) void {
     });
     edge_durability_churn_repro_test_mod.addImport("geode", root_mod);
     edge_durability_churn_repro_test_mod.addImport("graph_storage", graph_storage_mod);
+    edge_durability_churn_repro_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const edge_durability_churn_repro_tests = b.addTest(.{ .root_module = edge_durability_churn_repro_test_mod });
     const run_edge_durability_churn_repro_tests = b.addRunArtifact(edge_durability_churn_repro_tests);
     shardDep(test_step, &run_edge_durability_churn_repro_tests.step, 1, test_shard_loads, test_shard_index);
@@ -13831,6 +13862,7 @@ pub fn build(b: *std.Build) void {
     });
     edge_inline_public_id_test_mod.addImport("geode", root_mod);
     edge_inline_public_id_test_mod.addImport("graph_storage", graph_storage_mod);
+    edge_inline_public_id_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const edge_inline_public_id_tests = b.addTest(.{ .root_module = edge_inline_public_id_test_mod });
     const run_edge_inline_public_id_tests = b.addRunArtifact(edge_inline_public_id_tests);
     shardDep(test_step, &run_edge_inline_public_id_tests.step, 1, test_shard_loads, test_shard_index);
@@ -15447,6 +15479,7 @@ pub fn build(b: *std.Build) void {
     const sonny6450_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6450_ownership_residuals.zig"), .target = target, .optimize = optimize });
     sonny6450_test_mod.addImport("geode", root_mod);
     sonny6450_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6450_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const sonny6450_tests = b.addTest(.{ .root_module = sonny6450_test_mod });
     const run_sonny6450_tests = b.addRunArtifact(sonny6450_tests);
     shardDep(test_step, &run_sonny6450_tests.step, 1, test_shard_loads, test_shard_index);
@@ -15796,6 +15829,7 @@ pub fn build(b: *std.Build) void {
     });
     prop_atomicity_test_mod.addImport("geode", root_mod);
     prop_atomicity_test_mod.addImport("graph_storage", graph_storage_mod);
+    prop_atomicity_test_mod.addImport("strings", strings_mod); // SONNY-3055: canonical_string (NFC)
     const prop_atomicity_tests = b.addTest(.{ .root_module = prop_atomicity_test_mod });
     const run_prop_atomicity_tests = b.addRunArtifact(prop_atomicity_tests);
     shardDep(test_step, &run_prop_atomicity_tests.step, 1, test_shard_loads, test_shard_index);

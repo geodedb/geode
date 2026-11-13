@@ -16,6 +16,7 @@ const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_order = @import("../execution/value_order.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
 // SONNY-2806 (round 8): value equality without importing the executor.
 const value_equality = @import("../execution/value_equality.zig");
 const audit = @import("../security/audit.zig");
@@ -312,7 +313,9 @@ pub const exact_node_property_index_shard_count: usize = 64;
 /// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
 const prop_rev_index_file_name = "prop_rev.idx";
 // GENRVIX2 (SONNY-2806): numbers hash by value; a GENRVIX1 file is stale.
-const prop_rev_index_magic = "GENRVIX2";
+// GENRVIX3 (SONNY-3055): strings hash by their NFC form; a GENRVIX2 file is
+// stale.
+const prop_rev_index_magic = "GENRVIX3";
 
 const graph_store_file_names = [_][]const u8{
     "nodes.store",
@@ -968,7 +971,7 @@ const NodePropertyExactIndex = struct {
         // configuration). GENPIDX4, GENPIDX3 (bytes-hashed numbers), GENPIDX2
         // (counter-stamped) and GENPIDX1 (unstamped) are treated as stale on
         // load → rebuild (never mis-served).
-        try writer.writeAll(exact_index_magic);
+        try writer.writeAll(exactIndexMagicForWrite());
         // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
         // generation) and the durable-frontier LSN this index covers.
         try writer.writeInt(u64, checkpoint_epoch, .little);
@@ -1035,7 +1038,7 @@ const NodePropertyExactIndex = struct {
         var rev_fw = file.writerStreaming(rev_io, &rev_wbuf);
         const writer = &rev_fw.interface;
 
-        try writer.writeAll(prop_rev_index_magic);
+        try writer.writeAll(revIndexMagicForWrite());
         try writer.writeInt(u64, checkpoint_epoch, .little);
         try writer.writeInt(u64, covered_lsn, .little);
 
@@ -1216,7 +1219,33 @@ const NodePropertyExactIndex = struct {
 const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
 /// `prop_exact.idx` format edition (see `NodePropertyExactIndex.saveToFile`).
-const exact_index_magic = "GENPIDX5";
+/// GENPIDX6 (SONNY-3055): a string's value hash is that of its NFC form; a
+/// GENPIDX5 file hashed raw bytes, so a stored 'e' + U+0301 was missed by a
+/// seek for 'é', and is stale (rebuilt on open).
+const exact_index_magic = "GENPIDX6";
+
+/// SONNY-3055 test-only: write the earlier key derivation (strings hashed by
+/// their raw bytes) and format editions (GENPIDX5, GENRVIX2), as a binary
+/// before SONNY-3055 did, so a test can prove such files are rebuilt, never
+/// served. Always false outside tests.
+var legacy_string_keys_for_test: bool = false;
+
+pub fn setLegacyStringKeysForTest(on: bool) void {
+    if (!builtin.is_test) @compileError("test-only helper");
+    legacy_string_keys_for_test = on;
+}
+
+fn legacyStringKeys() bool {
+    return builtin.is_test and legacy_string_keys_for_test;
+}
+
+fn exactIndexMagicForWrite() []const u8 {
+    return if (legacyStringKeys()) "GENPIDX5" else exact_index_magic;
+}
+
+fn revIndexMagicForWrite() []const u8 {
+    return if (legacyStringKeys()) "GENRVIX2" else prop_rev_index_magic;
+}
 
 /// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
 /// `prop_exact.idx`, read from its header alone (no postings). `null` when the
@@ -1638,6 +1667,14 @@ fn numberHash(n: value_order.Number) u64 {
 
 fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
     if (storedNumber(value)) |n| return numberHash(n);
+    // SONNY-3055: a string hashes as its NFC form does (`=` compares the NFC
+    // forms), so a stored 'e' + U+0301 and a seek for 'é' meet. An ASCII or
+    // NFC string hashes its bytes, as before.
+    if (value == .string and !legacyStringKeys() and !canonical_string.isCanonical(value.string)) {
+        const c = try canonical_string.canonical(allocator, value.string);
+        defer c.deinit(allocator);
+        return hashStorageProperty(allocator, .{ .string = c.bytes });
+    }
     var stack_buf: [64]u8 = undefined;
     const encoded_len = gs.property.encodedSize(value);
     if (encoded_len <= stack_buf.len) {
@@ -1656,6 +1693,13 @@ fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
 fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
     if (gs.property.decodeView(encoded_value)) |decoded| {
         if (storedNumber(decoded.value)) |n| return numberHash(n);
+        // SONNY-3055: a string by its NFC form, as in `hashStorageProperty`.
+        // Out of memory canonicalizing a non-NFC string (a few KiB) leaves the
+        // raw-bytes hash: the seek then misses it, as before SONNY-3055.
+        if (decoded.value == .string and !legacyStringKeys() and !canonical_string.isCanonical(decoded.value.string)) {
+            var sfa = std.heap.stackFallback(1024, std.heap.smp_allocator);
+            if (hashStorageProperty(sfa.get(), decoded.value)) |h| return h else |_| {}
+        }
     } else |_| {}
     return std.hash.Wyhash.hash(0, encoded_value);
 }
@@ -8210,6 +8254,29 @@ pub const StorageAdapter = struct {
         return stat.size;
     }
 
+    /// SONNY-3055 test-only: the format edition (magic) of the persisted
+    /// `prop_exact.idx`, or null when the file is absent.
+    pub fn exactIndexMagicForTesting(self: *StorageAdapter, graph_name: []const u8) ?[8]u8 {
+        if (!builtin.is_test) @compileError("test-only helper");
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const idx_path = std.fmt.allocPrint(self.allocator, "{s}/prop_exact.idx", .{dir_path}) catch return null;
+        defer self.allocator.free(idx_path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io, idx_path, .{}) catch return null;
+        defer file.close(io);
+        var rbuf: [16]u8 = undefined;
+        var fr = file.reader(io, &rbuf);
+        var magic: [8]u8 = undefined;
+        fr.interface.readSliceAll(&magic) catch return null;
+        return magic;
+    }
+
     /// SONNY-1574 test-only: size of the persisted `prop_exact.idx` snapshot, or
     /// null when the file is absent. The ground truth behind the persist
     /// counters — a test can prove that a "completed" persist really did put a
@@ -12191,7 +12258,18 @@ fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
     };
     h = std.hash.Wyhash.hash(h, &[_]u8{tag});
     switch (value) {
-        .String => |s| h = std.hash.Wyhash.hash(h, s),
+        // SONNY-3055: a string by its NFC form, the form MERGE compares, so
+        // 'é' and 'e' + U+0301 take one tuple lock.
+        .String => |s| {
+            // Out of memory canonicalizing a non-NFC string hashes its raw
+            // bytes: two forms may then take two locks, as before SONNY-3055.
+            var sfa = std.heap.stackFallback(1024, std.heap.smp_allocator);
+            const a = sfa.get();
+            if (canonical_string.canonical(a, s)) |c| {
+                defer c.deinit(a);
+                h = std.hash.Wyhash.hash(h, c.bytes);
+            } else |_| h = std.hash.Wyhash.hash(h, s);
+        },
         .Bool => |b| h = std.hash.Wyhash.hash(h, if (b) &[_]u8{1} else &[_]u8{0}),
         .Null, .ExtValue => {},
         .Int, .Float, .Decimal => unreachable,
