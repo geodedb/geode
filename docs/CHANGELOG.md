@@ -1709,6 +1709,19 @@
 
 ### Fixed
 
+- **Lean indexing registers and indexes every MERGE key, the 65th included
+  (SONNY-6447 item 3).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1` the
+  registered-key set was a fixed table of 64 keys of at most 128 bytes, and
+  `registerMergeIndexKey` dropped a 65th (or longer) key silently, although
+  its comment said such a key fell back to being indexed. The key was then
+  never indexed: `lookupMergeCandidate` answered `.not_indexable` for it for
+  the life of the process, and the server's bulk MERGE fast path refused
+  every MERGE on it (`MergeValueNotIndexable`). The set now grows (a map of
+  owned keys under the same leaf mutex), so every MERGE key is registered.
+  The `merge_index_keys.dat` sidecar keeps keys of any length (a key with a
+  line break is not persisted and registers again at its first MERGE, as a
+  late key), and its load cap is 1 MiB instead of the old table's size.
+  Regression: `zig build test-sonny6447-lean-key-overflow`.
 - **The MATCH ... MERGE edge fast path declines a composite endpoint key
   two nodes hold, and no merge lookup answers "no node holds it" for a key
   lean indexing left out of MERGE's index (SONNY-6436 items 2-3).**

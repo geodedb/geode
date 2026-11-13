@@ -83,19 +83,18 @@ pub fn lastLoadHadChecksumError() bool {
 // server's property-lookup point-read fast path is completely unchanged. The
 // flag is read once, lazily, on first use.
 //
-// The registered-key set is intentionally tiny and append-only: real workloads
-// MERGE on a small, fixed set of keys (here just "taxon_id"). Keys are copied
-// into a fixed static buffer under a leaf mutex; overflow simply falls back to
-// indexing the key (safe — over-indexing never breaks correctness).
-const lean_index_max_keys: usize = 64;
-const lean_index_key_cap: usize = 128;
+// The registered-key set is small in practice and append-only: real workloads
+// MERGE on a few fixed keys (here just "taxon_id"). Keys are copied
+// (process-lifetime, `lean_key_allocator`) into a map under a leaf mutex.
+// SONNY-6447: the set grows, so every MERGE key is registered and indexed. It
+// was a fixed table of 64 keys of at most 128 bytes, and a 65th (or longer)
+// key was silently dropped: never indexed, so `lookupMergeCandidate` answered
+// `.not_indexable` for it for the life of the process and the bulk MERGE fast
+// path refused every MERGE on it, although this comment said such a key fell
+// back to being indexed.
+// CANARY: REQ=REQ-SONNY-6447-LEAN-KEY-OVERFLOW; FEATURE="LeanMergeKeyIndexing"; ASPECT=GrowableRegistry; STATUS=TESTED; TEST=tests/test_sonny6447_lean_key_overflow.zig; OWNER=storage; UPDATED=2026-11-12
+const lean_key_allocator = std.heap.smp_allocator;
 
-var g_lean_index_mutex: std.Io.Mutex = std.Io.Mutex.init;
-var g_lean_index_enabled: bool = false;
-var g_lean_index_flag_loaded: bool = false;
-var g_lean_index_key_bufs: [lean_index_max_keys][lean_index_key_cap]u8 = undefined;
-var g_lean_index_key_lens: [lean_index_max_keys]usize = [_]usize{0} ** lean_index_max_keys;
-var g_lean_index_key_count: usize = 0;
 // SONNY-3056: per registered key, whether it was registered at RUNTIME (the
 // first MERGE on it in this process) rather than read from the sidecar at
 // adapter init, and the registration's generation (process-monotonic, never
@@ -105,8 +104,15 @@ var g_lean_index_key_count: usize = 0;
 // MERGE's index complete for it, per (graph, label), from the label's
 // postings, before a lookup trusts a miss. A sidecar key was registered
 // before any graph hydrated, so hydration and every later write indexed it.
-var g_lean_index_key_late: [lean_index_max_keys]bool = [_]bool{false} ** lean_index_max_keys;
-var g_lean_index_key_gen: [lean_index_max_keys]u64 = [_]u64{0} ** lean_index_max_keys;
+const LeanKeyInfo = struct {
+    late: bool,
+    gen: u64,
+};
+
+var g_lean_index_mutex: std.Io.Mutex = std.Io.Mutex.init;
+var g_lean_index_enabled: bool = false;
+var g_lean_index_flag_loaded: bool = false;
+var g_lean_keys: std.StringArrayHashMapUnmanaged(LeanKeyInfo) = .empty;
 var g_lean_registration_gen: u64 = 0;
 /// Late keys registered (lock-free fast path for every lookup: zero after a
 /// restart, when every key comes from the sidecar).
@@ -151,29 +157,36 @@ pub fn registerMergeIndexKey(key: []const u8) void {
 /// de-dups, but the file would grow on every restart). All other effects
 /// (registry membership, in-memory merge-index backfill) are identical.
 fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
+    var out_of_memory = false;
     const newly_registered = blk: {
         g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (!leanIndexEnabledLocked()) break :blk false;
-        if (key.len == 0 or key.len > lean_index_key_cap) break :blk false;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) break :blk false;
-        }
-        if (g_lean_index_key_count >= lean_index_max_keys) break :blk false; // overflow: tolerate
-        @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
-        g_lean_index_key_lens[g_lean_index_key_count] = key.len;
-        g_lean_registration_gen += 1;
-        g_lean_index_key_gen[g_lean_index_key_count] = g_lean_registration_gen;
+        if (key.len == 0) break :blk false;
+        if (g_lean_keys.contains(key)) break :blk false;
+        const owned = lean_key_allocator.dupe(u8, key) catch {
+            out_of_memory = true;
+            break :blk false;
+        };
         // `persist` is true on the runtime path, false for a sidecar key.
-        g_lean_index_key_late[g_lean_index_key_count] = persist;
-        g_lean_index_key_count += 1;
+        g_lean_keys.put(lean_key_allocator, owned, .{ .late = persist, .gen = g_lean_registration_gen + 1 }) catch {
+            lean_key_allocator.free(owned);
+            out_of_memory = true;
+            break :blk false;
+        };
+        g_lean_registration_gen += 1;
         if (persist) {
             g_lean_late_gen_max.store(g_lean_registration_gen, .release);
             _ = g_lean_late_key_count.fetchAdd(1, .release);
         }
         break :blk true;
     };
+    if (out_of_memory) {
+        // Not registered, so not indexed: a lookup on it answers
+        // `.not_indexable` (the executor scans; the bulk fast path refuses),
+        // never a wrong "absent".
+        log.err("lean indexing: out of memory registering a MERGE key; it stays unindexed", &.{Attr.string("key", key)});
+    }
 
     // GAP-0900 Layer-3 (Fix 3): a key that becomes indexable for the FIRST time
     // in lean mode may already have nodes carrying it, written or hydrated
@@ -209,6 +222,10 @@ fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
 /// per line. See `persistMergeIndexKey` / `loadPersistedMergeIndexKeys`.
 const merge_index_keys_filename = "merge_index_keys.dat";
 
+/// Read cap for the merge-key sidecar at load (SONNY-6447: was sized to the
+/// old 64 x 128-byte registry).
+const merge_index_keys_sidecar_max_bytes: usize = 1 << 20;
+
 /// Append `key` to the persisted merge-key sidecar in `data_dir`, allocating
 /// scratch with `alloc`. Idempotent at the registry level (callers only persist
 /// a key the first time it is registered), but the file itself tolerates
@@ -218,7 +235,11 @@ const merge_index_keys_filename = "merge_index_keys.dat";
 /// is empty (ad-hoc unit stores).
 pub fn persistMergeIndexKey(alloc: std.mem.Allocator, data_dir: []const u8, key: []const u8) void {
     if (data_dir.len == 0) return;
-    if (key.len == 0 or key.len > lean_index_key_cap) return;
+    // SONNY-6447: the sidecar is one key per line, so a key holding a line
+    // break is not persisted; after a restart it registers again at its first
+    // MERGE, as a late key (SONNY-3056), which is complete, just not seekable
+    // until then.
+    if (key.len == 0 or std.mem.indexOfAny(u8, key, "\r\n") != null) return;
 
     const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, merge_index_keys_filename }) catch return;
     defer alloc.free(path);
@@ -268,9 +289,10 @@ pub fn loadPersistedMergeIndexKeys(alloc: std.mem.Allocator, data_dir: []const u
     };
     defer file.close(io);
 
-    // Bounded read: the registry is tiny (a handful of fixed merge keys). Cap at
-    // a generous size so a corrupt/huge file can never OOM startup.
-    const max_bytes: usize = lean_index_max_keys * (lean_index_key_cap + 1) * 4;
+    // Bounded read: the registry is small (a handful of fixed merge keys). Cap
+    // at a generous size so a corrupt/huge file can never OOM startup; a key
+    // past the cap registers again at its first MERGE (as a late key).
+    const max_bytes: usize = merge_index_keys_sidecar_max_bytes;
     const st = file.stat(io) catch return;
     const want: usize = @min(@as(usize, @intCast(st.size)), max_bytes);
     if (want == 0) return;
@@ -305,7 +327,8 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     g_lean_index_flag_loaded = true;
     g_lean_index_enabled = enabled;
-    g_lean_index_key_count = 0;
+    for (g_lean_keys.keys()) |k| lean_key_allocator.free(k);
+    g_lean_keys.clearRetainingCapacity();
     g_lean_late_key_count.store(0, .release);
 }
 
@@ -341,10 +364,7 @@ pub fn exactIndexConfigHash() u64 {
     h.update(&[_]u8{@intFromBool(lean)});
     if (lean) {
         var acc: u64 = 0;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
-        }
+        for (g_lean_keys.keys()) |k| acc ^= std.hash.Wyhash.hash(1, k);
         var b: [8]u8 = undefined;
         std.mem.writeInt(u64, &b, acc, .little);
         h.update(&b);
@@ -354,20 +374,15 @@ pub fn exactIndexConfigHash() u64 {
 
 // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=LateKeyRegistry; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
 /// SONNY-3056: the registration generation of `key` when lean mode is on
-/// and `key` was registered at runtime (see `g_lean_index_key_late`), else
+/// and `key` was registered at runtime (see `LeanKeyInfo.late`), else
 /// null (lean off, the key not registered, or read from the sidecar).
 fn leanLateKeyGen(key: []const u8) ?u64 {
     if (g_lean_late_key_count.load(.acquire) == 0) return null;
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!leanIndexEnabledLocked()) return null;
-    var i: usize = 0;
-    while (i < g_lean_index_key_count) : (i += 1) {
-        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) {
-            return if (g_lean_index_key_late[i]) g_lean_index_key_gen[i] else null;
-        }
-    }
-    return null;
+    const info = g_lean_keys.get(key) orelse return null;
+    return if (info.late) info.gen else null;
 }
 
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
@@ -467,11 +482,7 @@ pub fn shouldIndexProperty(key: []const u8) bool {
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!leanIndexEnabledLocked()) return true;
-    var i: usize = 0;
-    while (i < g_lean_index_key_count) : (i += 1) {
-        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return true;
-    }
-    return false;
+    return g_lean_keys.contains(key);
 }
 
 /// GAP-ENT-0023 P3: fingerprint of the merge-index CONFIGURATION — the lean
@@ -493,10 +504,7 @@ fn mergeIndexConfigHash() u64 {
     h.update(&[_]u8{@intFromBool(lean)});
     if (lean) {
         var acc: u64 = 0;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
-        }
+        for (g_lean_keys.keys()) |k| acc ^= std.hash.Wyhash.hash(1, k);
         var b: [8]u8 = undefined;
         std.mem.writeInt(u64, &b, acc, .little);
         h.update(&b);

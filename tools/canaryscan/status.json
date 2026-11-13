@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:53:00.410689263Z",
+  "generated_at": "2026-11-13T02:14:31.577170821Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84528,6 +84528,20 @@
       "features": [
         {
           "feature": "LeanMergeKeyIndexing",
+          "aspect": "GrowableRegistry",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "LeanMergeKeyIndexing",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -92223,7 +92237,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4799
+      "TESTED": 4800
     },
     "by_aspect": {
       "2PC": 3,
@@ -93791,6 +93805,7 @@
       "GroupValidationHookImplementation": 1,
       "GroupValidationHookPipelineIntegration": 1,
       "GroupingLogic": 2,
+      "GrowableRegistry": 1,
       "GrpcAlterUserParse": 1,
       "GrpcCleanup": 1,
       "GrpcCommit": 1,
