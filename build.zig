@@ -10320,6 +10320,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6430_cli_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6430_cli_step = b.step("test-sonny6430-cli-fail-closed", "Run SONNY-6430 items 6 and 8 regression (geode storage verify checks the data directory the server would open and refuses when it holds no store; geode migrate create without an HMAC key refuses and writes nothing)");
     sonny6430_cli_step.dependOn(&run_sonny6430_cli_tests.step);
+    // SONNY-6452 (1): detect and repair stores whose encrypted pages were
+    // written by graph_storage <= 0.4.11 (the AES-GCM tag over the page tail).
+    const sonny6452_ptr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6452_tde_page_tail_repair.zig"), .target = target, .optimize = optimize });
+    sonny6452_ptr_test_mod.link_libc = true;
+    sonny6452_ptr_test_mod.addImport("geode", root_mod);
+    sonny6452_ptr_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6452_ptr_test_mod.addImport("logging", logging_mod);
+    const sonny6452_ptr_tests = b.addTest(.{ .root_module = sonny6452_ptr_test_mod });
+    const run_sonny6452_ptr_tests = b.addRunArtifact(sonny6452_ptr_tests);
+    spawnsBuiltGeode(sonny6452_ptr_tests);
+    shardDep(test_step, &run_sonny6452_ptr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6452_ptr_step = b.step("test-sonny6452-tde-page-tail-repair", "Run SONNY-6452 item 1 regression (a store rewritten in the graph_storage <= 0.4.11 page envelope: geode storage verify --check tde-page-tail reports the old-envelope pages, the slot-169 nodes and lost incoming-edge directory heads without changing the store; geode storage repair --tde-page-tail refuses without --i-have-a-backup or the key, restores label counts and the directory, names what is not derivable, and verify is clean after)");
+    sonny6452_ptr_step.dependOn(&run_sonny6452_ptr_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);

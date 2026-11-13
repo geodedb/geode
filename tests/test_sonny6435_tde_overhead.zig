@@ -18,12 +18,19 @@
 // The engine configuration is the production default (8 KiB pages, a
 // 1024-page buffer pool per shard with auto-size), so the working set stays
 // cached as in an OLTP server: the encryption on the measured path is the
-// WAL records of every commit and the pages every checkpoint writes. Reads
-// that miss the pool (and decrypt) are not measured: with a pool smaller
-// than the store, the encrypting engine loses committed node records
-// (graph_storage 0.4.10, see the SONNY-6435 report), so a cold-read figure
-// would time a defect. The engine is built ReleaseFast whatever -Doptimize
-// says (a Debug build would time Debug crypto).
+// WAL records of every commit and the pages every checkpoint writes. The
+// engine is built ReleaseFast whatever -Doptimize says (a Debug build would
+// time Debug crypto).
+// Cold reads (SONNY-6452), a third measurement: reads that miss the buffer
+// pool, so every miss is a page read and, in arm B, an AES-GCM decrypt.
+// Both arms hold the same checkpointed store, far larger than their 8-page
+// per-shard pools (auto-size off); one operation reads the property of a
+// node chosen at random. The store files sit in the OS page cache, so this
+// is the CPU cost of a miss (pread + decrypt), not disk latency. The step
+// asserts that most reads really miss (buffer-pool misses per read, from
+// the engine's own counters). Taken only once graph_storage 0.4.12 made the
+// small-pool path lossless (SONNY-6441; before it, a cold read could find
+// the record damaged).
 // Samples are perf_gate batches, the arms interleaved batch by batch;
 // overhead = (median B - median A) / median A. Two durability settings:
 //   - `deferred` WAL sync: no fsync per commit, so the crypto cost is not
@@ -66,14 +73,25 @@ const Arm = struct {
     payload: [payload_len]u8 = undefined,
 
     fn init(root: []const u8, name: []const u8, sync_mode: gs.SyncMode, every: u64, key: ?[32]u8) !Arm {
+        return initPool(root, name, sync_mode, every, key, null);
+    }
+
+    /// `pool_pages`: an exact per-shard buffer pool (auto-size off); null =
+    /// the production default.
+    fn initPool(root: []const u8, name: []const u8, sync_mode: gs.SyncMode, every: u64, key: ?[32]u8, pool_pages: ?u32) !Arm {
         const dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, name });
         errdefer allocator.free(dir);
         try std.Io.Dir.cwd().createDirPath(fsIo(), dir);
-        const eng = try gs.ShardedGraphEngine.create(allocator, dir, [_]u8{0x64} ** 16, .{
+        var cfg: gs.GraphConfig = .{
             .data_dir = dir,
             .encryption_key = key,
             .sync_mode = sync_mode,
-        });
+        };
+        if (pool_pages) |p| {
+            cfg.buffer_pool_pages = p;
+            cfg.buffer_pool_auto_size = false;
+        }
+        const eng = try gs.ShardedGraphEngine.create(allocator, dir, [_]u8{0x64} ** 16, cfg);
         var arm: Arm = .{ .eng = eng, .dir = dir, .rng = .init(0x6435), .checkpoint_every = every };
         @memcpy(arm.payload[0..marker.len], marker);
         return arm;
@@ -111,6 +129,27 @@ const Arm = struct {
         if (self.checkpoint_every != 0 and self.ops % self.checkpoint_every == 0) try self.eng.checkpoint();
         return id;
     }
+
+    /// One cold read: the property of a node chosen at random.
+    fn read(self: *Arm) !u64 {
+        const id = self.ids.items[self.rng.random().uintLessThan(usize, self.ids.items.len)];
+        const rec = (try self.eng.getNode(id)) orelse return error.NodeMissing;
+        const got = (try self.eng.getNodeProperty(id, rec.prop_head, "payload", allocator)) orelse return error.PropertyMissing;
+        defer switch (got) {
+            .string => |str| allocator.free(str),
+            else => {},
+        };
+        if (got != .string or got.string.len != payload_len or !std.mem.eql(u8, got.string[0..marker.len], marker)) return error.PropertyMismatch;
+        self.ops += 1;
+        return id;
+    }
+
+    /// Buffer-pool misses summed over the shards.
+    fn misses(self: *const Arm) u64 {
+        var n: u64 = 0;
+        for (self.eng.shards) |sh| n += sh.metrics.buffer_misses;
+        return n;
+    }
 };
 
 const Ctx = struct {
@@ -123,6 +162,14 @@ const Ctx = struct {
 
     fn opEnc(self: *Ctx) !u64 {
         return self.enc.step();
+    }
+
+    fn readPlain(self: *Ctx) !u64 {
+        return self.plain.read();
+    }
+
+    fn readEnc(self: *Ctx) !u64 {
+        return self.enc.read();
     }
 };
 
@@ -184,6 +231,46 @@ fn measure(root: []const u8, tag: []const u8, sync_mode: gs.SyncMode, every: u64
     return .{ .plain = ra, .enc = rb, .overhead = perf_gate.medianOverhead(ra, rb) };
 }
 
+const ColdResult = struct { r: Result, plain_misses_per_read: f64, enc_misses_per_read: f64 };
+
+/// Cold reads: two stores of `nodes` nodes, written the same way, each with
+/// an exact `pool_pages` pool per shard; time random property reads.
+fn measureCold(root: []const u8, nodes: usize, pool_pages: u32, batch: usize, comptime samples: usize) !ColdResult {
+    var ctx: Ctx = .{
+        .plain = try Arm.initPool(root, "cold-plain", .deferred, 0, null, pool_pages),
+        .enc = undefined,
+    };
+    defer ctx.plain.deinit();
+    ctx.enc = try Arm.initPool(root, "cold-tde", .deferred, 0, tde_key, pool_pages);
+    defer ctx.enc.deinit();
+    for (0..nodes) |_| {
+        _ = try ctx.plain.step();
+        _ = try ctx.enc.step();
+    }
+    try ctx.plain.eng.checkpoint();
+    try ctx.enc.eng.checkpoint();
+    var warm_a: [4]f64 = undefined;
+    var warm_b: [4]f64 = undefined;
+    try perf_gate.interleavedAB(&ctx, Ctx.readPlain, Ctx.readEnc, batch, &warm_a, &warm_b);
+
+    const ops0 = .{ ctx.plain.ops, ctx.enc.ops };
+    const miss0 = .{ ctx.plain.misses(), ctx.enc.misses() };
+    var a: [samples]f64 = undefined;
+    var b: [samples]f64 = undefined;
+    try perf_gate.interleavedAB(&ctx, Ctx.readPlain, Ctx.readEnc, batch, &a, &b);
+    const plain_mpr = @as(f64, @floatFromInt(ctx.plain.misses() - miss0[0])) / @as(f64, @floatFromInt(ctx.plain.ops - ops0[0]));
+    const enc_mpr = @as(f64, @floatFromInt(ctx.enc.misses() - miss0[1])) / @as(f64, @floatFromInt(ctx.enc.ops - ops0[1]));
+    const ra = perf_gate.robust(&a);
+    const rb = perf_gate.robust(&b);
+
+    const plain_hits = try filesContaining(ctx.plain.dir, marker);
+    const enc_hits = try filesContaining(ctx.enc.dir, marker);
+    std.debug.print("SONNY-6452 TDE [cold reads] files holding the plaintext marker: plain={d} tde={d}; buffer-pool misses per read: plain={d:.2} tde={d:.2}\n", .{ plain_hits, enc_hits, plain_mpr, enc_mpr });
+    try testing.expect(plain_hits > 0);
+    try testing.expectEqual(@as(usize, 0), enc_hits);
+    return .{ .r = .{ .plain = ra, .enc = rb, .overhead = perf_gate.medianOverhead(ra, rb) }, .plain_misses_per_read = plain_mpr, .enc_misses_per_read = enc_mpr };
+}
+
 fn report(tag: []const u8, batch: usize, samples: usize, r: Result) void {
     std.debug.print(
         "SONNY-6435 TDE [{s}] batch={d} samples={d}: plain median={d:.0}ns/op (rel_iqr {d:.3}), tde median={d:.0}ns/op (rel_iqr {d:.3}), overhead={d:.1}%\n",
@@ -214,6 +301,30 @@ test "SONNY-6435 (2) TDE overhead of the storage engine, page and WAL encryption
     try perf_gate.check("SONNY-6435 TDE engine overhead, sync_each_commit, below " ++ durable_bound_text, durable.overhead < durable_bound, "overhead={d:.1}%", .{durable.overhead * 100.0});
 }
 
+test "SONNY-6452 (3) TDE overhead of reads that miss the buffer pool, page encryption off vs on, interleaved" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var root = try test_scratch.ScratchDir.create("sonny6452-tde-cold");
+    defer root.remove();
+
+    // 16000 nodes with a 512-byte property: ~65 property pages and 6 node
+    // pages per shard against an 8-page pool.
+    const cold = try measureCold(root.path(), cold_nodes, cold_pool_pages, 256, 41);
+    report("cold reads, 8-page pool per shard", 256, 41, cold.r);
+
+    // The measurement is of misses: most reads miss in both arms (the
+    // engine's own counters, not an assumption).
+    try testing.expect(cold.plain_misses_per_read >= cold_min_misses_per_read);
+    try testing.expect(cold.enc_misses_per_read >= cold_min_misses_per_read);
+    inline for (.{ .{ "cold plain", cold.r.plain }, .{ "cold tde", cold.r.enc } }) |arm| {
+        try perf_gate.robustEnvelope("SONNY-6452 TDE cold-read sample stability: " ++ arm[0], arm[1], 0.30, 2.55);
+    }
+    try perf_gate.check("SONNY-6452 TDE cold-read overhead below " ++ cold_bound_text, cold.r.overhead < cold_bound, "overhead={d:.1}%", .{cold.r.overhead * 100.0});
+}
+
+const cold_nodes = 16000;
+const cold_pool_pages = 8;
+const cold_min_misses_per_read: f64 = 0.5;
+
 // The claims docs/TDE_FILE_LEVEL_ENCRYPTION.md ("Measured overhead") makes,
 // from the 2026-11-12 runs on a shared, loaded dev host (16-core
 // Threadripper PRO 3955WX): durable -1.3% to +0.7% over four runs
@@ -223,3 +334,7 @@ const deferred_bound: f64 = 0.35;
 const deferred_bound_text = "35%";
 const durable_bound: f64 = 0.05;
 const durable_bound_text = "5%";
+// The cold-read claim docs/TDE_FILE_LEVEL_ENCRYPTION.md makes (SONNY-6452),
+// from the runs recorded there.
+const cold_bound: f64 = 0.10;
+const cold_bound_text = "10%";

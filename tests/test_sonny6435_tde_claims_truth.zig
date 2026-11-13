@@ -95,3 +95,29 @@ test "SONNY-6435 (2) no doc claims an unmeasured TDE overhead, and the published
     }
     try testing.expectEqual(@as(usize, 0), bad);
 }
+
+// SONNY-6452 (3): the overhead of reads that miss the buffer pool (every miss
+// a page read and, encrypted, an AES-GCM decrypt) was "not measured yet"
+// while graph_storage <= 0.4.11 lost the tail of encrypted pages. The
+// measurement step times it now, and the doc publishes the figure.
+test "SONNY-6452 (3) the cold-read TDE overhead is measured and the doc publishes it" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    const bench = try readRepoFile(allocator, "tests/test_sonny6435_tde_overhead.zig");
+    defer allocator.free(bench);
+    if (std.mem.indexOf(u8, bench, "test \"SONNY-6452 (3) TDE overhead of reads that miss the buffer pool") == null) {
+        std.debug.print("SONNY-6452 (3): tests/test_sonny6435_tde_overhead.zig does not measure reads that miss the buffer pool\n", .{});
+        bad += 1;
+    }
+    const doc = try readRepoFile(allocator, "docs/TDE_FILE_LEVEL_ENCRYPTION.md");
+    defer allocator.free(doc);
+    if (std.mem.indexOf(u8, doc, "Not measured yet: reads that miss the buffer pool") != null) {
+        std.debug.print("SONNY-6452 (3): docs/TDE_FILE_LEVEL_ENCRYPTION.md still says the cold-read overhead is not measured\n", .{});
+        bad += 1;
+    }
+    if (std.mem.indexOf(u8, doc, "| Reads that miss the buffer pool (8-page pool per shard) |") == null) {
+        std.debug.print("SONNY-6452 (3): docs/TDE_FILE_LEVEL_ENCRYPTION.md publishes no cold-read figure\n", .{});
+        bad += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
