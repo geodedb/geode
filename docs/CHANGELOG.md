@@ -4,6 +4,17 @@
 
 ### Security
 
+- **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
+  refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
+  8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was
+  checked by `geode serve` at startup only; `geode fle migrate-encrypt`
+  and the in-process FLE key manager built a key manager from whatever key
+  was set. Both now run the same check first, through the one helper
+  `geode serve` now uses (`src/keys/master_key_check.zig`
+  `verifyOrRecord`), against the data directory the FLE catalog lives in:
+  another key fails with `MasterKeyMismatch` before any key is derived, and
+  a directory without a value records one. Regression:
+  `zig build test-sonny6442-master-key-check-paths`.
 - **Operator-visible: compose health checks run, and geode no longer waits
   for Vault, MinIO or Redis (SONNY-6442 item 7).**
   `docker-compose.example.yml` and the three nodes of

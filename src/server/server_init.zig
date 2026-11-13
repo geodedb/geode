@@ -196,53 +196,8 @@ fn refuseUnusableMasterKey() !void {
 /// does not match, or a check file that cannot be read, refuses startup.
 /// Nothing names the key.
 pub fn refuseMismatchedMasterKey(allocator: std.mem.Allocator, data_dir: []const u8) !void {
-    const km = geode.fle_key_manager;
-    const tde = geode.tde_file_encryption;
-    const docs = "docs/FIELD_LEVEL_ENCRYPTION.md, \"Master key check value\"";
-    const value: []const u8 = if (std.c.getenv("GEODE_MASTER_KEY")) |raw| std.mem.span(raw) else "";
-    if (value.len == 0) return;
-    // `refuseUnusableKeyConfig` has refused an unusable key already.
-    var key = try km.parseMasterKey(value, try km.masterKeyFormatFromEnv());
-    defer std.crypto.secureZero(u8, &key);
-
-    const path = try std.fs.path.join(allocator, &.{ data_dir, km.master_key_check_file_name });
-    defer allocator.free(path);
-
-    const recorded = tde.readDecryptedFileNoFollow(allocator, path) catch |err| switch (err) {
-        error.FileNotFound => {
-            const line = try km.encodeMasterKeyCheck(key);
-            tde.writeEncryptedFilePrivate(allocator, path, &line) catch |werr| {
-                std.debug.print("[startup] cannot record the GEODE_MASTER_KEY check value in {s} ({s}); refusing to start: a later start with another key could not be detected ({s}).\n", .{ path, @errorName(werr), docs });
-                log.err("cannot record the master key check value; refusing to start", &.{ Attr.string("path", path), Attr.string("error", @errorName(werr)) });
-                return error.MasterKeyCheckUnavailable;
-            };
-            log.info("recorded the GEODE_MASTER_KEY check value", &.{Attr.string("path", path)});
-            return;
-        },
-        else => {
-            std.debug.print("[startup] the GEODE_MASTER_KEY check file {s} cannot be read ({s}); refusing to start: the key cannot be checked against the one the encrypted fields were written with. " ++
-                "Restore the file (or the GEODE_TDE_KEY it was written with) ({s}).\n", .{ path, @errorName(err), docs });
-            log.err("master key check file unreadable; refusing to start", &.{ Attr.string("path", path), Attr.string("error", @errorName(err)) });
-            return error.MasterKeyCheckUnavailable;
-        },
-    };
-    defer allocator.free(recorded);
-
-    const matches = km.masterKeyCheckMatches(recorded, key) catch |err| {
-        std.debug.print("[startup] the GEODE_MASTER_KEY check file {s} is not a key check file ({s}); refusing to start. Restore it from a backup ({s}).\n", .{ path, @errorName(err), docs });
-        log.err("master key check file corrupt; refusing to start", &.{Attr.string("path", path)});
-        return error.MasterKeyCheckUnavailable;
-    };
-    if (!matches) {
-        std.debug.print(
-            "[startup] GEODE_MASTER_KEY is not the key this data directory's encrypted fields were written with: its check value does not match {s}; " ++
-                "refusing to start: fields encrypted under the recorded key would be unreadable and new ones written under another key. Nothing was written. " ++
-                "Set the original GEODE_MASTER_KEY, with the GEODE_MASTER_KEY_FORMAT it was read in. If no field was ever encrypted, remove {s} to record the new key ({s}).\n",
-            .{ path, km.master_key_check_file_name, docs },
-        );
-        log.err("GEODE_MASTER_KEY does not match the recorded key check value: refusing to start", &.{Attr.string("path", path)});
-        return error.MasterKeyMismatch;
-    }
+    // SONNY-6442: the check every FLE key path shares (geode fle, in-process FLE).
+    return geode.fle_master_key_check.verifyOrRecord(allocator, data_dir, .serve);
 }
 
 /// SONNY-6339: the startup refusal for any other failure to establish the

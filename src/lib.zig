@@ -875,6 +875,8 @@ pub const wal = @import("wal.zig");
 pub const fle_integration = @import("fle_integration.zig");
 pub const fle_commands = @import("admin/fle_commands.zig");
 pub const fle_key_manager = @import("fle_key_manager");
+// SONNY-6442: the GEODE_MASTER_KEY check-value helper every FLE key path uses.
+pub const fle_master_key_check = @import("keys/master_key_check.zig");
 pub const fle_key_types = @import("fle_key_types");
 
 // User management and authentication

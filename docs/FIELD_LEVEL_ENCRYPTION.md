@@ -109,6 +109,15 @@ mean to change the key, remove `fle_master_key.kcv` and start with the new
 key; otherwise re-encrypt the fields first. Back the file up with the data
 directory.
 
+The same check runs wherever a master key is used, not only at server start
+(SONNY-6442): `geode fle migrate-encrypt` checks it before anything else
+(`[geode fle] ... refusing to run`), and the in-process FLE key manager
+checks it on first use (`[fle] ... refusing to use it`), against the data
+directory the FLE catalog lives in (`--data-dir`, else `GEODE_DATA_DIR`).
+Each records a value where none is. With no data directory the catalog is in
+memory and nothing is checked. All three call one helper,
+`src/keys/master_key_check.zig` `verifyOrRecord`.
+
 **Derivation:** HKDF-SHA256 with context strings:
 
 - TRK: `"geode/trk/{tenant_id}"`

@@ -205,8 +205,17 @@ test "SONNY-6430 (2) a field encrypted under a legacy 64-hex GEODE_MASTER_KEY st
             try testing.expect(!std.mem.eql(u8, got, plaintext));
         } else |_| {}
     }
-    // And a field written under the hex key round-trips under it.
+    // SONNY-6442: in this directory, whose fields use the legacy key, the
+    // in-process key manager refuses the hex key (the recorded master key
+    // check value does not match) instead of writing a field under it.
+    try testing.expectError(error.MasterKeyMismatch, fleEncrypt(allocator, plaintext));
+    // And in a directory of its own a field written under the hex key
+    // round-trips under it.
     {
+        const fresh = try std.fmt.allocPrint(allocator, "{s}/hex-only", .{root.path()});
+        defer allocator.free(fresh);
+        try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), fresh);
+        fle_catalog.setDataDirOverride(fresh);
         const c2 = try fleEncrypt(allocator, plaintext);
         defer allocator.free(c2);
         const got = try fleDecrypt(allocator, c2);

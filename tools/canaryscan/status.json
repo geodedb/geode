@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:14:20.313887637Z",
+  "generated_at": "2026-11-13T01:20:53.334869753Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84533,6 +84533,20 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "SharedVerifyOrRecord",
+          "status": "TESTED",
+          "files": [
+            "src/keys/master_key_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92243,7 +92257,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4797
+      "TESTED": 4798
     },
     "by_aspect": {
       "2PC": 3,
@@ -95688,6 +95702,7 @@
       "SharedTypeAccessibility": 1,
       "SharedTypes": 1,
       "SharedUtility": 1,
+      "SharedVerifyOrRecord": 1,
       "SharedVisibilityPredicate": 2,
       "ShellCompletions": 1,
       "ShortCircuit": 1,
