@@ -12247,6 +12247,16 @@ pub fn build(b: *std.Build) void {
     const sonny2796_step = b.step("test-sonny2796-temporal-fields", "Run SONNY-2796 regression (the fields of a datetime before 1970 are its ISO 8601 time of day, not negative; local datetimes, plain zoned datetimes and zoned times have fields; tde.configure_rotation with a negative age is refused)");
     sonny2796_step.dependOn(&run_sonny2796_tests.step);
 
+    // SONNY-2797: see tests/test_sonny2797_duration_arithmetic.zig.
+    const sonny2797_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2797_duration_arithmetic.zig"), .target = target, .optimize = optimize });
+    sonny2797_test_mod.addImport("geode", root_mod);
+    sonny2797_test_mod.addImport("logging", logging_mod);
+    const sonny2797_tests = b.addTest(.{ .root_module = sonny2797_test_mod });
+    const run_sonny2797_tests = b.addRunArtifact(sonny2797_tests);
+    shardDep(test_step, &run_sonny2797_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2797_step = b.step("test-sonny2797-duration-arithmetic", "Run SONNY-2797 regression (datetime, local datetime, date, time and zoned time plus or minus a duration, duration plus or minus duration, duration times or divided by a number, instant minus instant; month-end clamping, normalization, overflow 22003; fixed-seed property test)");
+    sonny2797_step.dependOn(&run_sonny2797_tests.step);
+
     // SONNY-2806 (round 7): MERGE matches the lowest node id among the nodes
     // holding a merge key, after a delete or a SET, on the server's bulk MERGE
     // and on a reopened store; MERGE's index keeps no number that is not an

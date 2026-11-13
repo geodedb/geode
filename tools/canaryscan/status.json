@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:17:21.062728531Z",
+  "generated_at": "2026-11-13T14:17:52.02702959Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -73867,6 +73867,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2797-DURATION-ARITHMETIC",
+      "features": [
+        {
+          "feature": "DateIntervalArithmetic",
+          "aspect": "DatetimeDurationOperators",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2797_duration_arithmetic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2797_duration_arithmetic.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2798-OFFLINE-VERIFY-FIRST",
       "features": [
         {
@@ -94214,7 +94233,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4913
+      "TESTED": 4914
     },
     "by_aspect": {
       "2PC": 3,
@@ -95044,6 +95063,7 @@
       "DateParsing": 1,
       "DateTime": 1,
       "DateType": 1,
+      "DatetimeDurationOperators": 1,
       "DbConstraints": 1,
       "DbConstraintsLocked": 1,
       "DbIndexes": 1,
