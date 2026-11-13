@@ -5348,6 +5348,23 @@
 
 ### Removed
 
+- **Dead code: 37 of the 40 files under `src/graph/` and the 64 test files that only tested them
+  (SONNY-6511 item 1 and 2).** A second set of graph algorithms and
+  containers (builders, centrality incl. the "optimized" PageRank and
+  closeness, traversal, topological sort, cycle detection, shortest paths,
+  flow, connectivity, spanning trees, Leiden, bloom filter, count-min
+  sketch, skip list, trie, KMP) that no executable called: the server's
+  `CALL algo.*` procedures run `src/execution/centrality_algorithms.zig`.
+  `src/graph/builders.zig`, which most of them build on, did not compile on
+  Zig 0.16, nor did 14 others; the tests that used them were rooted by no
+  build step or were unreferenced `tests/all_tests.zig` constants, which
+  the compiler never analyses. `community_louvain.zig`,
+  `community_label_propagation.zig` (`zig build test-e2e`,
+  `tests/e2e_graph_algos_new.zig`) and `containers/lfu.zig`
+  (`fuzz/targets/lfu_cache_fuzz.zig`) stay: a running test uses them.
+  `docs/GRAPH_ALGORITHM_PERFORMANCE_ENHANCEMENTS.md` and the "20-90%
+  performance gains" of Phase 7 described the removed modules.
+
 - **Dead benchmark: `tests/benchmark_hashagg_distinct_variance.zig`
   (SONNY-6456 item 5).** No build step compiled it and it could not
   compile: it imports `exec.zig`, `eval.zig` and `gql/ast.zig` relative to

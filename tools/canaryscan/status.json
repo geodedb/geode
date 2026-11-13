@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:15:55.14749636Z",
+  "generated_at": "2026-11-13T18:28:33.019695595Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -10709,291 +10709,6 @@
           "benches": [],
           "owner": "graph",
           "updated": "2026-01-16"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-001",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "CrossAlgorithmConsistency",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_cross_algorithm_consistency_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-002",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "LargeScaleStability",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_large_scale_stability_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-003",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "MemoryLeakPrevention",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_memory_leak_prevention_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-004",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "ErrorHandlingRobustness",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_error_handling_robustness_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-005",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "PerformanceBenchmarking",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_performance_benchmarking_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-006",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "BuildSystemIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_build_system_integration_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-INTEGRATION-OCTOBER-2025-007",
-      "features": [
-        {
-          "feature": "Compilation Fixes Integration",
-          "aspect": "ConcurrentExecutionSafety",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_integration_october_2025.zig"
-          ],
-          "tests": [
-            "test_concurrent_execution_safety_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-001",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "VariableMutability",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_variable_mutability_compliance"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-002",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "PageRankMutability",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_pagerank_mutability_compliance"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-003",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "MemoryManagement",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_memory_management_after_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-004",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "FinalScoresImmutability",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_final_scores_immutability"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-005",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "AlgorithmIntegrity",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_algorithm_integrity_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-006",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "EdgeCaseHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_edge_cases_post_compilation_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-007",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "PerformanceConsistency",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_performance_consistency_post_fix"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-COMPILATION-FIXES-OCTOBER-2025-008",
-      "features": [
-        {
-          "feature": "Compilation Fixes",
-          "aspect": "CompilationStability",
-          "status": "TESTED",
-          "files": [
-            "tests/test_compilation_fixes_october_2025.zig"
-          ],
-          "tests": [
-            "test_compilation_stability"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
         }
       ]
     },
@@ -32614,20 +32329,6 @@
       "features": [
         {
           "feature": "Core Graph Builders",
-          "aspect": "DirectedWeightedBuilders",
-          "status": "TESTED",
-          "files": [
-            "src/graph/builders.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_060_CoreGraphBuilders"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Core Graph Builders",
           "aspect": "GraphBuilderThroughputVarianceEnvelope",
           "status": "BENCHED",
           "files": [
@@ -32636,306 +32337,6 @@
           "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_060_GraphBuilderThroughputVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-062",
-      "features": [
-        {
-          "feature": "TopologicalSortDFS",
-          "aspect": "Traversal",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/topological_sort_dfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_TopoDFS"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_TopoDFS"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_bfs_traversal.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_BFS"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "BFS",
-          "status": "TESTED",
-          "files": [
-            "src/graph/traversal_bfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_BFS"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "CycleDetectDirected",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/cycle_detect_directed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_CycleDirected"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_CycleDirected"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "CycleDetectUndirected",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/cycle_detect_undirected.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_CycleUndirected"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_CycleUndirected"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "DFSIterative",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/traversal_dfs_iterative.zig",
-            "tests/benchmark_dfs_iterative.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_DFSIterative"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_DFSIterative"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "IDDFS",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/traversal_iddfs.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_IDDFSBasics"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_IDDFS"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Traversals",
-          "aspect": "TopologicalSortKahn",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/topological_sort_kahn.zig",
-            "tests/benchmark_toposort_kahn.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_062_TopoKahn"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_062_TopoKahn"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-063",
-      "features": [
-        {
-          "feature": "Shortest Paths",
-          "aspect": "AStar",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/shortest_astar.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_AStar"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_063_AStar"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "DagShortestPath",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/shortest_dag_path.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_DagShortestPath"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_063_DagShortestPath"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "Dijkstra",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/shortest_dijkstra.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_Dijkstra"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_063_Dijkstra"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-064",
-      "features": [
-        {
-          "feature": "Connectivity",
-          "aspect": "BiconnectedComponents",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/connectivity_biconnected.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_064_Biconnected"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_064_Biconnected"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Connectivity",
-          "aspect": "BridgesArticulation",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/connectivity_bridges_articulation.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_064_BridgesArticulation"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_064_BridgesArticulation"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Connectivity",
-          "aspect": "KosarajuValidation",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/connectivity_kosaraju.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_064_Kosaraju"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_064_Kosaraju"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Connectivity",
-          "aspect": "SCC_WRAPPER",
-          "status": "TESTED",
-          "files": [
-            "src/graph/strongly_connected_components.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_graph_algorithms.yml"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-12-30"
-        },
-        {
-          "feature": "Connectivity",
-          "aspect": "TarjanSCC",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/connectivity_tarjan_scc.zig",
-            "tests/benchmark_connectivity_tarjan_scc.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_064_TarjanSCC"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_064_TarjanSCC"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -32958,298 +32359,12 @@
           "benches": [],
           "owner": "graph",
           "updated": "2025-12-30"
-        },
-        {
-          "feature": "Spanning Trees",
-          "aspect": "Kruskal",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/spanning_kruskal.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_065_Kruskal"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_065_Kruskal"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Spanning Trees",
-          "aspect": "Prim",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/spanning_prim.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_065_Prim"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_065_Prim"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-066",
-      "features": [
-        {
-          "feature": "Flow/Matching",
-          "aspect": "Dinic",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/flow_dinic.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_066_DinicBasic"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_066_Dinic"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Flow/Matching",
-          "aspect": "EdmondsKarp",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/flow_edmonds_karp.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_066_EdmondsKarp"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_066_EdmondsKarp"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Flow/Matching",
-          "aspect": "EdmondsKarp",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_066_EdmondsKarp"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_066_EdmondsKarp"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Flow/Matching",
-          "aspect": "HopcroftKarp",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/flow_hopcroft_karp.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_066_HopcroftKarpBasic"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_066_HopcroftKarp"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-067",
-      "features": [
-        {
-          "feature": "Centrality",
-          "aspect": "BetweennessCentrality",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/centrality_betweenness.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_067_Betweenness"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_Betweenness"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "BetweennessVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_betweenness_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_BetweennessVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "BridgeLeverage",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/centrality_bridge_leverage.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_067_BridgeLeverage"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_BridgeLeverage"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "ClosenessCentrality",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/centrality_closeness.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_067_Closeness"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_Closeness"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "ClosenessVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_closeness_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "EigenvectorCentrality",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/centrality_eigenvector.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_067_Eigenvector"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_Eigenvector"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "EigenvectorVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_eigenvector_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_EigenvectorVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "GreyCardinalCompositeMetricBreakdownVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_grey_cardinal_composite_metric_breakdown_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_GreyCardinalCompositeMetricBreakdownVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "GreyCardinalVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_grey_cardinal_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_GreyCardinalVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "PageRank",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/centrality_pagerank.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_067_PageRank"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_PageRank"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Centrality",
-          "aspect": "PageRankVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_pagerank_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
         }
       ]
     },
     {
       "id": "REQ-GQL-068",
       "features": [
-        {
-          "feature": "Containers",
-          "aspect": "BloomFilterContainer",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/containers/bloom_filter.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_068_BloomFilter"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_068_BloomFilter"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
         {
           "feature": "Containers",
           "aspect": "LFUCache",
@@ -33262,70 +32377,6 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_068_LFU"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Containers",
-          "aspect": "LRUCache",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/containers/lru.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_068_LRU"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_068_LRU"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Containers",
-          "aspect": "SkipList",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/container_skiplist.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_068_SkipList"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_068_SkipList"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Containers",
-          "aspect": "Trie",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/container_trie.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_068_Trie"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_068_Trie"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Containers",
-          "aspect": "UnionFind",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/union_find.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_068_UnionFind"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_068_UnionFind"
           ],
           "owner": "graph",
           "updated": "2025-09-21"
@@ -33375,43 +32426,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-069",
-      "features": [
-        {
-          "feature": "Probabilistic",
-          "aspect": "CountMinSketch",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/containers/count_min_sketch.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_069_CountMinSketch"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_069_CountMinSketch"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Probabilistic",
-          "aspect": "CountMinSketch",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_count_min_sketch_container.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_069_CountMinSketch"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_069_CountMinSketch"
-          ],
-          "owner": "graph",
-          "updated": "2025-09-21"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-070",
       "features": [
         {
@@ -33426,22 +32440,6 @@
             "BenchmarkCANARY_REQ_GQL_070_CommitAdvancementVarianceEnvelope"
           ],
           "owner": "distributed",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "String Search",
-          "aspect": "KMP",
-          "status": "BENCHED",
-          "files": [
-            "src/graph/string_search_kmp.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_070_KMP"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_070_KMP"
-          ],
-          "owner": "graph",
           "updated": "2025-09-21"
         }
       ]
@@ -38642,25 +37640,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-GRAPH-001",
-      "features": [
-        {
-          "feature": "Leiden Community Detection",
-          "aspect": "Graph",
-          "status": "TESTED",
-          "files": [
-            "src/graph/leiden.zig"
-          ],
-          "tests": [
-            "TestCANARY_Leiden"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-GRAPH-DENSITY-001",
       "features": [
         {
@@ -39726,25 +38705,6 @@
           "benches": [],
           "owner": "graph",
           "updated": "2026-01-03"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-LEIDEN-TEST",
-      "features": [
-        {
-          "feature": "Leiden Test Suite",
-          "aspect": "Testing",
-          "status": "TESTED",
-          "files": [
-            "tests/test_leiden_community.zig"
-          ],
-          "tests": [
-            "TestCANARY_Leiden_Suite"
-          ],
-          "benches": [],
-          "owner": "test",
-          "updated": "2025-09-29"
         }
       ]
     },
@@ -44956,348 +43916,6 @@
           "benches": [],
           "owner": "graph",
           "updated": "2026-01-16"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-OPTIMIZATION-001",
-      "features": [
-        {
-          "feature": "Graph Algorithm Performance Optimization",
-          "aspect": "CentralityOptimization",
-          "status": "TESTED",
-          "files": [
-            "src/graph/centrality_optimized.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GRAPH_ALGORITHM_OPTIMIZATION_001_CentralityOptimization"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-001",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "OptimizedCloseness",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_optimized_closeness_centrality"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-002",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "OptimizedPageRank",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_optimized_pagerank"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-003",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "CircularQueuePerformance",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_circular_queue_performance"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-004",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "SIMDOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_simd_distance_reset"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-005",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "LargeGraphPerformance",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_large_graph_performance"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-006",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "MemoryEfficiency",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_memory_efficiency"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-007",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "AlgorithmCorrectness",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_algorithm_correctness_comparison"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-008",
-      "features": [
-        {
-          "feature": "Graph Performance Optimization",
-          "aspect": "EdgeCaseHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements.zig"
-          ],
-          "tests": [
-            "test_edge_cases"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-001",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "CrossAlgorithmIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_cross_algorithm_integration"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-002",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "PerformanceBenchmarking",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_performance_benchmarking"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-003",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "PageRankIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_pagerank_integration"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-004",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "LargeScaleIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_large_scale_integration"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-005",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "ConcurrentExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_concurrent_execution"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-006",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "ErrorHandlingIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_error_handling_integration"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-ALGORITHM-PERFORMANCE-INTEGRATION-007",
-      "features": [
-        {
-          "feature": "Graph Performance Integration",
-          "aspect": "MemoryManagementIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_algorithm_performance_enhancements_integration.zig"
-          ],
-          "tests": [
-            "test_memory_management_integration"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-LEIDEN-AGG-001",
-      "features": [
-        {
-          "feature": "Leiden Network Aggregation",
-          "aspect": "Aggregation",
-          "status": "TESTED",
-          "files": [
-            "src/graph/leiden.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_graph_algorithms.yml"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2026-01-08"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-LEIDEN-SPLIT-001",
-      "features": [
-        {
-          "feature": "Leiden Split Community",
-          "aspect": "Graph",
-          "status": "TESTED",
-          "files": [
-            "src/graph/leiden.zig"
-          ],
-          "tests": [
-            "TestCANARY_Leiden"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-10-16"
         }
       ]
     },
@@ -58219,20 +56837,6 @@
     {
       "id": "REQ-PERF-PHASE5-P1-001",
       "features": [
-        {
-          "feature": "PageRankOptimization",
-          "aspect": "EDGE_INDEX_CACHE",
-          "status": "TESTED",
-          "files": [
-            "src/graph/centrality_pagerank.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_graph_algorithms.yml"
-          ],
-          "benches": [],
-          "owner": "performance",
-          "updated": "2025-11-16"
-        },
         {
           "feature": "PageRankOptimization",
           "aspect": "TESTING",
@@ -95218,11 +93822,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 207,
+      "BENCHED": 167,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4974
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -95247,7 +93851,6 @@
       "ASTTests": 1,
       "ASTType": 1,
       "ASTVariant": 1,
-      "AStar": 1,
       "ATAN": 1,
       "ATAN2": 1,
       "Abort": 1,
@@ -95321,7 +93924,7 @@
       "AggregateWithoutMatch": 1,
       "AggregatesInsideItems": 1,
       "AggregatesThroughSharedProjection": 1,
-      "Aggregation": 7,
+      "Aggregation": 6,
       "AggregationCollect": 1,
       "AggregationComputation": 3,
       "AggregationEdgeTraversal": 1,
@@ -95331,9 +93934,7 @@
       "AggregationPerformance": 1,
       "Aggregations": 1,
       "AlgoScope": 1,
-      "AlgorithmCorrectness": 1,
       "AlgorithmIntegration": 1,
-      "AlgorithmIntegrity": 1,
       "AlgorithmVerification": 1,
       "AllErrorsDeny": 1,
       "AllOrNothingSet": 1,
@@ -95450,7 +94051,6 @@
       "BACKUP_MANAGER": 1,
       "BATCH_ALLOC": 1,
       "BENCH": 1,
-      "BFS": 2,
       "BFSExpansion": 1,
       "BUILD": 4,
       "BackfillEnumeratesFullNodeSet": 1,
@@ -95504,9 +94104,6 @@
       "Benchmarking": 3,
       "Benchmarks": 3,
       "Betweenness": 3,
-      "BetweennessCentrality": 1,
-      "BetweennessVarianceEnvelope": 1,
-      "BiconnectedComponents": 1,
       "BidirectionalGuard": 1,
       "Binding": 1,
       "BindingAggregation": 2,
@@ -95518,7 +94115,6 @@
       "BlindIndexDeterministic": 1,
       "BlindIndexNotReversible": 1,
       "BlindIndexTesting": 1,
-      "BloomFilterContainer": 1,
       "BodyExecution": 1,
       "BodyParse": 1,
       "BodyResultAggregation": 1,
@@ -95544,8 +94140,7 @@
       "BracketListLiteralKeys": 1,
       "BridgeAndDrainReady": 1,
       "BridgeContract": 1,
-      "BridgeLeverage": 2,
-      "BridgesArticulation": 1,
+      "BridgeLeverage": 1,
       "Build": 1,
       "BuildConfig": 1,
       "BuildConfiguration": 1,
@@ -95554,7 +94149,6 @@
       "BuildOptimization": 1,
       "BuildStep": 6,
       "BuildSystem": 2,
-      "BuildSystemIntegration": 1,
       "BuildTarget": 4,
       "BuildVerification": 1,
       "Builder": 1,
@@ -95668,7 +94262,6 @@
       "CdcAnalytics": 1,
       "CellOwnsItsString": 1,
       "Centrality": 6,
-      "CentralityOptimization": 1,
       "CertGenExplicitDir": 1,
       "CertValidation": 1,
       "CertVerification": 1,
@@ -95722,7 +94315,6 @@
       "ChildVerifier": 1,
       "ChunkFailureDetection": 1,
       "ChunkedExecution": 1,
-      "CircularQueuePerformance": 1,
       "ClaimGG01GG20": 1,
       "ClassifierImport": 1,
       "ClassifierUnused": 1,
@@ -95762,8 +94354,7 @@
       "ClientsAndUserPasswords": 1,
       "ClosedConnectionFailFast": 1,
       "Closeness": 1,
-      "ClosenessCentrality": 2,
-      "ClosenessVarianceEnvelope": 1,
+      "ClosenessCentrality": 1,
       "CloudSinkFailLoud": 1,
       "Cluster": 1,
       "ClusterBindAddress": 1,
@@ -95810,7 +94401,6 @@
       "CompareNfc": 2,
       "ComparisonHelpers": 1,
       "Compilation": 1,
-      "CompilationStability": 1,
       "Compile": 1,
       "CompileErrorSurfaced": 1,
       "CompileFailureMode": 1,
@@ -95840,8 +94430,6 @@
       "ConcurrencyPerf": 1,
       "ConcurrencySafety": 1,
       "ConcurrencyStressVariance": 2,
-      "ConcurrentExecution": 1,
-      "ConcurrentExecutionSafety": 1,
       "ConcurrentSingleUseRedemption": 1,
       "ConcurrentTransactions": 1,
       "ConcurrentWriteQueued": 2,
@@ -95957,7 +94545,6 @@
       "CountDistinctVarianceEnvelope": 1,
       "CountFiltering": 1,
       "CountMatches": 1,
-      "CountMinSketch": 2,
       "CountPredicateIsolation": 1,
       "CountReadSnapshotBypass": 1,
       "CountStats": 2,
@@ -96009,8 +94596,6 @@
       "CreatedAtPreservedOnAlter": 1,
       "CreationWindowConcurrency": 1,
       "CreationWindowLockUnification": 1,
-      "CrossAlgorithmConsistency": 1,
-      "CrossAlgorithmIntegration": 1,
       "CrossConnectionReuse": 1,
       "CrossGraphQueryBlock": 1,
       "CrossModule": 1,
@@ -96034,15 +94619,11 @@
       "CustomRoleGrantRefused": 1,
       "CustomRoleHydration": 1,
       "CustomRoleStoreOwnsMemory": 1,
-      "CycleDetectDirected": 1,
-      "CycleDetectUndirected": 1,
       "DDL": 2,
       "DEDUP": 1,
       "DEDUPLICATION": 1,
       "DEGREES": 1,
-      "DFSIterative": 1,
       "DML": 1,
-      "DagShortestPath": 1,
       "DataDirCreation": 1,
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
@@ -96165,7 +94746,6 @@
       "DiagnosticsTenantGate": 1,
       "Diameter": 1,
       "DigitalSignatures": 1,
-      "Dijkstra": 1,
       "DijkstraWithBinding": 1,
       "DimAdoptAfterCommit": 1,
       "DimRegistryFollowsCatalog": 1,
@@ -96175,10 +94755,8 @@
       "DimValidationRehydrate": 1,
       "DimValidationUnregister": 1,
       "DimensionWriteCheck": 1,
-      "Dinic": 1,
       "DirectCreateUser": 1,
       "DirectNodeIdFallback": 1,
-      "DirectedWeightedBuilders": 1,
       "DirectionExtraction": 1,
       "DirectionHandling": 1,
       "DirectionalEvictAllowed": 1,
@@ -96295,7 +94873,6 @@
       "E2ETesting": 1,
       "E2ETests": 1,
       "E2EUnsupported": 1,
-      "EDGE_INDEX_CACHE": 1,
       "ENGINE": 2,
       "ENV_REUSE": 1,
       "EXECUTION": 2,
@@ -96307,7 +94884,6 @@
       "EdgeCandidateEndpoints": 1,
       "EdgeCandidateRls": 1,
       "EdgeCapture": 1,
-      "EdgeCaseHandling": 2,
       "EdgeCollection": 1,
       "EdgeCreateAutoTenant": 1,
       "EdgeCreateInMemory": 1,
@@ -96336,11 +94912,9 @@
       "EdgeTypeLookup": 2,
       "EdgeWithLabel": 1,
       "EdgeWithTypeField": 1,
-      "EdmondsKarp": 2,
       "EffectfulPreambleGate": 1,
       "Eigenvector": 1,
-      "EigenvectorCentrality": 2,
-      "EigenvectorVarianceEnvelope": 1,
+      "EigenvectorCentrality": 1,
       "ElementIdUnadvertised": 1,
       "Elimination": 1,
       "EmbeddedOrderKeyDefault": 1,
@@ -96405,8 +94979,6 @@
       "ErrorDetection": 1,
       "ErrorFreesRows": 1,
       "ErrorHandling": 16,
-      "ErrorHandlingIntegration": 1,
-      "ErrorHandlingRobustness": 1,
       "ErrorLogging": 1,
       "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
@@ -96618,7 +95190,6 @@
       "FinalAggregate": 1,
       "FinalBatch": 1,
       "FinalPagination": 1,
-      "FinalScoresImmutability": 1,
       "FinalSort": 3,
       "FinalSorting": 1,
       "FindAllRefs": 1,
@@ -96787,7 +95358,7 @@
       "GrantUserGraphPermission": 1,
       "GrantWidening": 1,
       "GrantWriteThrough": 1,
-      "Graph": 5,
+      "Graph": 3,
       "GraphAnalytics": 2,
       "GraphBoundError": 1,
       "GraphBoundaryEnforcement": 1,
@@ -96826,8 +95397,6 @@
       "GraphemeCursor": 1,
       "GraphsMutex": 1,
       "GreyCardinal": 1,
-      "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,
-      "GreyCardinalVarianceEnvelope": 1,
       "GroupAccumulatorOwnership": 1,
       "GroupAggregation": 2,
       "GroupBy": 5,
@@ -96942,7 +95511,6 @@
       "HomogeneousNodes": 1,
       "HomogeneousOperations": 1,
       "HopScope": 1,
-      "HopcroftKarp": 1,
       "HopsCheck": 1,
       "HostnameResolution": 1,
       "Hosts": 1,
@@ -96958,7 +95526,6 @@
       "HydrateUser": 1,
       "Hydration": 1,
       "HydrationTolerance": 1,
-      "IDDFS": 1,
       "IMPL": 9,
       "INDEX_CATALOG": 1,
       "INFRA": 1,
@@ -97104,7 +95671,6 @@
       "JsonbCanonical": 1,
       "JsonbInvertedPersistence": 1,
       "KAT": 1,
-      "KMP": 1,
       "KMS": 1,
       "KMSIntegration": 1,
       "KafkaSink": 1,
@@ -97133,10 +95699,7 @@
       "KeywordParsing": 1,
       "KeywordRecognition": 1,
       "KindConflict": 1,
-      "KosarajuValidation": 1,
-      "Kruskal": 1,
       "LFUCache": 1,
-      "LRUCache": 1,
       "LRUEviction": 1,
       "LSNTests": 1,
       "LSPServer": 2,
@@ -97161,12 +95724,9 @@
       "LabelSetExistingVectors": 1,
       "LaneParallelismBuild": 1,
       "LargeFileSupport": 1,
-      "LargeGraphPerformance": 1,
       "LargeOrderedParity": 1,
       "LargeOrderedStreamingParity": 1,
       "LargeScaleAndCancellation": 1,
-      "LargeScaleIntegration": 1,
-      "LargeScaleStability": 1,
       "LastContactFromRaftTraffic": 1,
       "LastElement": 1,
       "LateKeyRegistry": 1,
@@ -97380,11 +95940,9 @@
       "MemberOfValue": 1,
       "MemberReadOwnership": 1,
       "MemberResolution": 1,
-      "MemoryEfficiency": 2,
+      "MemoryEfficiency": 1,
       "MemoryEstimation": 1,
-      "MemoryLeakPrevention": 1,
-      "MemoryManagement": 5,
-      "MemoryManagementIntegration": 1,
+      "MemoryManagement": 4,
       "MemoryManager": 1,
       "MemoryOptimization": 1,
       "MemoryOverGrpc": 1,
@@ -97689,8 +96247,6 @@
       "Optimization": 3,
       "OptimizationStrategy": 1,
       "OptimizationStrategySelection": 1,
-      "OptimizedCloseness": 1,
-      "OptimizedPageRank": 1,
       "Optimizer": 1,
       "OptimizerHints": 1,
       "OptionDefinition": 1,
@@ -97742,10 +96298,7 @@
       "PROCEDURE_REGISTRY": 1,
       "PTXKernel": 2,
       "PageFreesReturnedNode": 1,
-      "PageRank": 4,
-      "PageRankIntegration": 1,
-      "PageRankMutability": 1,
-      "PageRankVarianceEnvelope": 1,
+      "PageRank": 3,
       "PaginationAutoCalibration": 1,
       "PaginationExecutionStreaming": 1,
       "PaginationExecutionVarianceEnvelope": 1,
@@ -97903,9 +96456,7 @@
       "PerfMicrobenchmark": 1,
       "Performance": 6,
       "PerformanceBaselines": 1,
-      "PerformanceBenchmarking": 2,
       "PerformanceBenchmarks": 1,
-      "PerformanceConsistency": 1,
       "PerformanceMonitoring": 1,
       "PerformanceOptimizations": 1,
       "PerformanceProfiler": 1,
@@ -98095,7 +96646,6 @@
       "PreparePhase": 1,
       "PrependUseGraph": 1,
       "Prevention": 1,
-      "Prim": 1,
       "PrincipalDerivation": 1,
       "PrincipalIdentityKey": 1,
       "PrincipalKeys": 1,
@@ -98561,7 +97111,6 @@
       "RuntimeStability": 1,
       "RuntimeTypeMapping": 1,
       "S3RestoreIsStaged": 1,
-      "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
       "SECURITY": 38,
@@ -98570,7 +97119,6 @@
       "SERVER_STATE_STRUCT": 1,
       "SET_OPERATIONS": 1,
       "SIGN": 1,
-      "SIMDOptimization": 1,
       "SIMD_COSINE": 1,
       "SQLInjection": 1,
       "SQLSTATE": 3,
@@ -98824,7 +97372,6 @@
       "SizeDetection": 1,
       "SkeletonAlgo": 1,
       "SkipLimitIsolation": 1,
-      "SkipList": 1,
       "SkipValidation": 1,
       "SliceReqCrosscheckGuard": 1,
       "SliceValidation": 1,
@@ -99032,7 +97579,6 @@
       "TamperDetection": 1,
       "TargetBuild": 1,
       "TargetProps": 1,
-      "TarjanSCC": 1,
       "Telemetry": 1,
       "Temporal": 1,
       "TemporalArgumentBridge": 1,
@@ -99075,7 +97621,7 @@
       "TestSuite": 4,
       "TestTeardown": 1,
       "TestTransparentEncryption": 1,
-      "Testing": 19,
+      "Testing": 18,
       "TestingBatch2": 1,
       "Tests": 2,
       "TextPropertyValidation": 1,
@@ -99108,7 +97654,6 @@
       "ToolsThreading": 1,
       "TopKHeapSharesFullSortOrder": 1,
       "TopLevelAgg": 1,
-      "TopologicalSortKahn": 1,
       "Topology": 1,
       "Training": 1,
       "Transaction": 1,
@@ -99132,12 +97677,11 @@
       "TransportParitySmokeWiring": 1,
       "TransportProfile": 1,
       "TransportSend": 1,
-      "Traversal": 2,
+      "Traversal": 1,
       "TraversalBuffers": 1,
       "TrendAppend": 1,
       "Triage": 1,
       "TriangleCount": 1,
-      "Trie": 1,
       "TrigFunctions": 1,
       "TruncatedBuffer": 1,
       "TruthfulDeviceReporting": 1,
@@ -99210,7 +97754,6 @@
       "UnindexedDimWriteCheck": 1,
       "Union": 1,
       "UnionExecution": 1,
-      "UnionFind": 1,
       "UnionIsolation": 1,
       "UnionQueries": 1,
       "UnionQueryContext": 1,
@@ -99248,7 +97791,6 @@
       "UnsupportedImageRemoved": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,
-      "UnweightedBFSPaths": 2,
       "UnwindEach": 1,
       "UnwindExecution": 1,
       "UnwindFiltering": 1,
@@ -99318,7 +97860,6 @@
       "VariableBinding": 1,
       "VariableExtraction": 1,
       "VariableLookup": 2,
-      "VariableMutability": 1,
       "VariablePropagation": 1,
       "VariableScoping": 1,
       "VarianceConfigHelper": 1,

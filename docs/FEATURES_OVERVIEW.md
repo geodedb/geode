@@ -13,7 +13,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
 - ✅ **Phase 5**: Distributed Coordination — Raft consensus, cluster management and two-phase commit (`src/distributed/`: 22,458 lines in 26 files). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
-- ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
+- ✅ **Phase 7**: Graph Algorithms — the `CALL algo.*` procedures (`src/execution/centrality_algorithms.zig`). The "20-90% performance gains" came from `src/graph/centrality_optimized.zig` and its sibling `src/graph/` modules, which no build compiled or ran; they were removed 2026-11-13 (SONNY-6511) and no gain was ever measured on the server path
 
 **Total**: ~13,554+ lines of production code | See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
 **Details**: See [completion_reports/](./completion_reports/) for comprehensive phase documentation

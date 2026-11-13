@@ -411,55 +411,17 @@ pub const hello_decode = @import("client/hello_decode.zig");
 // Extend planner module
 pub const planner_wcoj = @import("planner/wcoj.zig");
 
-// Graph analytics (lightweight builders and centrality algorithms)
+// Standalone community-detection routines over an in-memory adjacency list
+// and an LFU cache. Only tests use them (tests/e2e_graph_algos_new.zig and
+// fuzz/targets/lfu_cache_fuzz.zig); the server's algo.louvain and
+// algo.labelPropagation procedures run src/execution/centrality_algorithms.zig.
+// SONNY-6511 removed the rest of src/graph/ (37 files no build compiled or ran).
 pub const graph = struct {
-    pub const builders = @import("graph/builders.zig");
-    pub const pagerank = @import("graph/centrality_pagerank.zig");
-    pub const eigenvector = @import("graph/centrality_eigenvector.zig");
-    pub const betweenness = @import("graph/centrality_betweenness.zig");
-    pub const closeness = @import("graph/centrality_closeness.zig");
-    pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
-    pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
-    // Performance-optimized algorithms
-    pub const optimized = @import("graph/centrality_optimized.zig");
-    pub const dfs_iterative = @import("graph/traversal_dfs_iterative.zig");
-    pub const iddfs = @import("graph/traversal_iddfs.zig");
-    pub const topo_kahn = @import("graph/topological_sort_kahn.zig");
-    pub const topo_dfs = @import("graph/topological_sort_dfs.zig");
-    pub const cycle_directed = @import("graph/cycle_detect_directed.zig");
-    pub const cycle_undirected = @import("graph/cycle_detect_undirected.zig");
-    pub const dag_shortest = @import("graph/shortest_dag_path.zig");
-    pub const shortest_dijkstra = @import("graph/shortest_dijkstra.zig");
-    pub const shortest_astar = @import("graph/shortest_astar.zig");
-    pub const shortest_unweighted = @import("graph/shortest_unweighted_bfs_paths.zig");
-    pub const union_find = @import("graph/union_find.zig");
-    pub const strongly_connected_components = @import("graph/strongly_connected_components.zig");
     pub const community_louvain = @import("graph/community_louvain.zig");
     pub const community_label_propagation = @import("graph/community_label_propagation.zig");
-    pub const traversal_bfs = @import("graph/traversal_bfs.zig");
-    pub const leiden = @import("graph/leiden.zig");
-    pub const flow = struct {
-        pub const edmonds_karp = @import("graph/flow_edmonds_karp.zig");
-        pub const dinic = @import("graph/flow_dinic.zig");
-        pub const hopcroft_karp = @import("graph/flow_hopcroft_karp.zig");
-    };
     pub const containers = struct {
-        pub const lru = @import("graph/containers/lru.zig");
         pub const lfu = @import("graph/containers/lfu.zig");
-        pub const bloom_filter = @import("graph/containers/bloom_filter.zig");
-        pub const count_min_sketch = @import("graph/containers/count_min_sketch.zig");
-        pub const skiplist = @import("graph/container_skiplist.zig");
-        pub const trie = @import("graph/container_trie.zig");
     };
-    pub const string_search = struct {
-        pub const kmp = @import("graph/string_search_kmp.zig");
-    };
-    // Connectivity and spanning tree algorithms
-    pub const connectivity_kosaraju = @import("graph/connectivity_kosaraju.zig");
-    pub const connectivity_biconnected = @import("graph/connectivity_biconnected.zig");
-    pub const connectivity_bridges_articulation = @import("graph/connectivity_bridges_articulation.zig");
-    pub const spanning_prim = @import("graph/spanning_prim.zig");
-    pub const spanning_kruskal = @import("graph/spanning_kruskal.zig");
 };
 
 // Multitenancy and GPU feature flagger re-exports so tests/benchmarks can import via the geode package

@@ -459,7 +459,7 @@ Skipped: 46 (setup requirements not met)
 - ❌ **Phase 4**: Transaction isolation (SSI, phantom read prevention). Not implemented in the server: the isolation code was never compiled and was removed 2026-11-11 (SONNY-6298)
 - ✅ **Phase 5**: Distributed coordination (Raft, cluster management). The federation-aware query coordination code from this phase was never compiled and was removed 2026-11-11 (SONNY-6279)
 - ✅ **Phase 6**: Materialized view refresh (3 refresh strategies)
-- ✅ **Phase 7**: Graph algorithm enhancements (20-90% performance gains)
+- ✅ **Phase 7**: Graph algorithm enhancements. The optimized algorithms behind the "20-90% performance gains" (`src/graph/centrality_optimized.zig` and its sibling modules) were never compiled by any build and were removed 2026-11-13 (SONNY-6511); the server runs `src/execution/centrality_algorithms.zig`
 - ✅ **Phase 8**: Mathematical functions (all trig, arithmetic, statistical functions)
 
 ### Completed Enterprise Features (2025)

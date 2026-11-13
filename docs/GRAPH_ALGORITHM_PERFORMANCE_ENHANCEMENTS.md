@@ -1,5 +1,16 @@
 # Graph Algorithm Performance Enhancements
 
+> **Status (2026-11-13, SONNY-6511): removed, never shipped.** The modules
+> this document describes (`src/graph/builders.zig`,
+> `src/graph/centrality_optimized.zig` and the other `src/graph/` algorithm
+> and container files) were not compiled by any build: `builders.zig` did
+> not compile on Zig 0.16, and no executable or running test referenced
+> them. They were removed. The performance figures below were never
+> measured on the server path. The server's `CALL algo.*` procedures run
+> `src/execution/centrality_algorithms.zig` (see
+> [GRAPH_ALGORITHMS_USAGE_GUIDE.md](GRAPH_ALGORITHMS_USAGE_GUIDE.md)).
+> Kept for history only.
+
 **Date**: October 2025  
 **Status**: ✅ **COMPLETED**  
 **CANARY**: REQ-GRAPH-ALGORITHM-PERFORMANCE-ENHANCEMENTS-001

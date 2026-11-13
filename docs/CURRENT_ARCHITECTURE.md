@@ -85,7 +85,7 @@ src/storage/        - Storage engine, page management, backup
 src/wal/            - Write-ahead logging
 src/index/          - Index implementations (B-tree, HNSW, R-tree, etc.)
 src/txn/            - Transaction management
-src/graph/          - Graph-specific data structures
+src/graph/          - Test-only community detection and LFU cache (the algo.* procedures live in src/execution/)
 ```
 
 **Security**:
