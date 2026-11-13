@@ -8352,6 +8352,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0830_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0830_step = b.step("test-gap0830", "GAP-0830: MCP/LSP bridge contract governance test");
     gap0830_step.dependOn(&run_gap0830_tests.step);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_mcp_hover_bounds.zig"), .target = target, .optimize = optimize });
+        test_mod.addImport("mcp_bridge", gap0830_bridge_mod);
+        test_mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-mcp-hover-bounds", "Run SONNY-6487 item 1 regression (MCP hover formats function parameter and procedure YIELD column lists to their real length instead of into fixed 1024/2048-byte stack buffers, and every shipped function/procedure hovers with its full signature)").dependOn(&run_tests.step);
+    }
 
     // GAP-0820..0824: LSP "honest non-support" contract — unadvertised feature
     // REQUESTS answer -32601 (MethodNotFound) and unadvertised NOTIFICATIONS are
