@@ -9837,7 +9837,17 @@ fn readWithStageRows(
 /// freed. A string, list or map is all that moves (`evaluatesFresh`), which
 /// every holder that outlives the request copies in full (`duplicateValue`).
 /// Without a scratch arena it stays where it is.
+///
+/// SONNY-6449: inside an executor entry point a scratch arena is always
+/// installed, and the stage computes its items on it
+/// (`value_utilities.lentAllocator`): there is nothing to move or free.
+/// Rows over owned pattern rows are copied (nothing adopted: what a call
+/// computed is the arena's).
 fn ownWithStageValues(allocator: std.mem.Allocator, rows: *ExecutionResult, items: []const ast.ReturnItem, pattern_owned: bool) !void {
+    if (value_utilities.valuesAreLent()) {
+        if (pattern_owned) try value_utilities.ownResultValues(allocator, rows);
+        return;
+    }
     if (pattern_owned) {
         for (rows.rows) |row| {
             for (row, 0..) |*cell, i| {
@@ -12270,9 +12280,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 } else {
                     // Explicit RETURN clause - evaluate RETURN expressions directly
                     row = try allocator.alloc(Value, items.len);
+                    // SONNY-6449: the rows borrow what the items compute, so
+                    // it is the statement's scratch arena's
+                    // (`value_utilities.lentAllocator`); on `allocator` it
+                    // was never freed.
+                    const lent = value_utilities.lentAllocator(allocator);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment
-                        row[i] = eval.evalExpr(allocator, item.expr, extended_env) catch |err| {
+                        row[i] = eval.evalExpr(lent, item.expr, extended_env) catch |err| {
                             allocator.free(row);
                             if (inline_let_bindings.len > 0) {
                                 allocator.free(extended_env.names);

@@ -1844,6 +1844,39 @@
 
 ### Fixed
 
+- **A member read (`n.p`) has one ownership, and every projection path owns
+  the values it builds from it (SONNY-6449, SONNY-6450 items 3-5,
+  SONNY-6437 items 1, 2, 6).** A read of an FLE-encrypted field returned a
+  decrypted or redacted string the evaluator allocated, a plain field the
+  store's bytes, and a list property a copy: callers could not tell which.
+  The legacy RETURN projection, the WITH stage, `executeReturnClauseWithNodes`
+  (CREATE / MERGE ... RETURN), the GROUP BY keys, the HAVING, both ORDER BY
+  comparators and VALUES ... MATCH kept those values in rows they do not
+  free, so each row leaked (a decrypted string, a list copy, a list
+  comprehension's lists, a concatenation, an `upper()`), and the ORDER BY
+  comparators leaked per comparison. Now: every executor entry point
+  (`executeStatementWithContext`, `executeProgramWithContext`) runs with a
+  scratch arena, the transport's or, for an embedded caller, one it opens
+  (`query_arena.StatementScratch`) and copies its result out of before it
+  closes it; a member read's copy and a list comprehension are lent from it
+  (`eval.lentValueAllocator`) and never freed by a caller; the projections
+  evaluate their items on it (`value_utilities.lentAllocator`) and the final
+  projection copies every value (nothing is adopted while a scratch arena is
+  installed: `upper(max(n.s))` computed on the arena was adopted and freed
+  with the result's allocator); the GROUP BY keys and both ORDER BY
+  comparators evaluate on an arena of their own, once per row. The
+  engine-direct node scan (QUIC's single-label RETURN), whose cells own
+  every value they do not copy out of their node, evaluates with nothing
+  lent (`eval.evalExprNothingLent`). Leak-checked
+  for plain and FLE-encrypted fields on every path (RETURN, DISTINCT, GROUP
+  BY, ORDER BY, WITH, WITH DISTINCT, WITH ORDER BY, VALUES ... MATCH, CALL
+  ... YIELD ... RETURN, CREATE / MERGE ... RETURN, list properties, list
+  comprehensions, the engine-direct node scan), in memory and persisted, with and without a request
+  scratch arena: `zig build test-sonny6449-projection-value-ownership` (9/9; was
+  0/8; e.g. `RETURN n.ssn` leaked 3 allocations, `RETURN [y IN n.v | y]` 12,
+  a persisted embedded read 39). An embedded caller's result is copied once
+  more when the statement used its scratch arena (its nodes and
+  relationships included, as the gRPC server copies a kept result).
 - **`test-startup-lazy-hydrate` finishes in under a minute instead of
   running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
   writes (one fsync per commit), checkpoints, crashes or closes, and reopens

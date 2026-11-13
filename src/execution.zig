@@ -1397,7 +1397,30 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
     try write_shape.validateProgram(program, context.transaction_state == .Active);
 }
 
+// CANARY: REQ=REQ-SONNY-6449-STATEMENT-SCRATCH; FEATURE="ExecutionResultOwnership"; ASPECT=EntryPointScratch; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6449: an executor entry point runs its statements with a scratch
+/// arena (`query_arena.StatementScratch`): the transport's, or one it opens
+/// for an embedded caller. A result that may borrow from an arena it opened
+/// is copied out of it first: its values (`ownResultValues`) and its nodes
+/// and relationships (`ownGraphEntities`), as the gRPC server keeps a result
+/// past its request.
+fn detachFromStatementScratch(allocator: std.mem.Allocator, scratch: *const query_arena.StatementScratch, result: *ExecutionResult) !void {
+    if (!scratch.used()) return;
+    errdefer result.deinit(allocator);
+    try value_utilities.ownResultValues(allocator, result);
+    try value_utilities.ownGraphEntities(allocator, result);
+}
+
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    var scratch: query_arena.StatementScratch = .{};
+    scratch.open(allocator);
+    defer scratch.close();
+    var result = try executeProgramInScratch(allocator, program, context);
+    try detachFromStatementScratch(allocator, &scratch, &result);
+    return result;
+}
+
+fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     installDecryptDecider(); // SONNY-6334
     // SONNY-3247: at the outermost entry point, the parameters are the
     // request's (a nested entry's context carries the ones its caller bound).
@@ -1606,6 +1629,16 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    // SONNY-6449: see `detachFromStatementScratch`.
+    var scratch: query_arena.StatementScratch = .{};
+    scratch.open(allocator);
+    defer scratch.close();
+    var result = try executeStatementInScratch(allocator, stmt, context);
+    try detachFromStatementScratch(allocator, &scratch, &result);
+    return result;
+}
+
+fn executeStatementInScratch(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     installDecryptDecider(); // SONNY-6334
     // SONNY-3247: see `executeProgramWithContext`.
     if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
@@ -4364,9 +4397,11 @@ const HavingFilter = struct {
         for (self.plan.?.slots, self.values[self.output_len..]) |slot, *value| {
             value.* = switch (slot) {
                 .column => |i| output_row[i],
-                .aggregate => |agg| try computeGroupAggregation(allocator, agg, group_rows, input_columns, self.param_names, self.param_values),
+                // SONNY-6449: what the HAVING computes is the statement's
+                // scratch arena's (`value_utilities.lentAllocator`).
+                .aggregate => |agg| try computeGroupAggregation(value_utilities.lentAllocator(allocator), agg, group_rows, input_columns, self.param_names, self.param_values),
                 // Every row of the group shares its key.
-                .key => |key| try evalGroupedExpr(allocator, key, key_env, Value{ .Null = {} }),
+                .key => |key| try evalGroupedExpr(value_utilities.lentAllocator(allocator), key, key_env, Value{ .Null = {} }),
             };
         }
         return self.evaluate(allocator, self.names, self.values);
@@ -4393,7 +4428,7 @@ const HavingFilter = struct {
             .param_values = self.param_values,
             .allocator = allocator,
         };
-        const result = try evalGroupedExpr(allocator, self.expr, env, Value{ .Bool = false });
+        const result = try evalGroupedExpr(value_utilities.lentAllocator(allocator), self.expr, env, Value{ .Bool = false });
         return switch (result) {
             .Bool => |b| b,
             else => false,
@@ -4480,6 +4515,8 @@ const GroupedItems = struct {
     /// interior is: the projection's rows borrow their values, and the final
     /// projection copies them (`adoptProjectionRowValues`), so on `allocator`
     /// the value was never freed. The scratch outlives the result's reads.
+    /// SONNY-6449: so is an item without an aggregate (a group key), as
+    /// every projection's item is (`value_utilities.lentAllocator`).
     fn project(self: *const GroupedItems, allocator: std.mem.Allocator, group_rows: []const []const Value) ![]Value {
         const installed = query_arena.currentScratchAllocator();
         const scratch = installed orelse allocator;
@@ -4501,24 +4538,24 @@ const GroupedItems = struct {
             else if (group_rows.len == 0)
                 Value{ .Null = {} }
             else
-                try evalGroupedExpr(allocator, item.expr, first_env, Value{ .Null = {} });
+                try evalGroupedExpr(scratch, item.expr, first_env, Value{ .Null = {} });
         }
         // After every other item: a lifted item reads their columns.
-        for (self.items, self.lifted, row) |item, plan, *cell| {
-            if (plan) |p| cell.* = try self.liftedValue(allocator, installed, item.expr, p, row, group_rows, first_env);
+        for (self.lifted, row) |plan, *cell| {
+            if (plan) |p| cell.* = try self.liftedValue(allocator, installed, p, row, group_rows, first_env);
         }
         return row;
     }
 
     /// A lifted item's value for a group: its slots, then the item over them,
     /// computed on the query's scratch (`installed`, else `allocator`; see
-    /// `project`). A call the final projection adopts as the result's own
-    /// (`callAlwaysAllocates`) is copied onto `allocator`.
+    /// `project`). SONNY-6449: the final projection copies it, as every
+    /// value computed on the scratch (it adopted an always-allocating call's
+    /// string, which was copied onto `allocator` for it).
     fn liftedValue(
         self: *const GroupedItems,
         allocator: std.mem.Allocator,
         installed: ?std.mem.Allocator,
-        expr: ast.Expr,
         plan: grouped_having.Plan,
         row: []const Value,
         group_rows: []const []const Value,
@@ -4542,9 +4579,7 @@ const GroupedItems = struct {
             .param_values = self.param_values,
             .allocator = scratch,
         };
-        const value = try eval.evalExpr(scratch, plan.expr, env);
-        if (expr == .Call and value_utilities.callAlwaysAllocates(expr.Call.callee.*)) return value_utilities.duplicateValue(allocator, value);
-        return value;
+        return eval.evalExpr(scratch, plan.expr, env);
     }
 };
 
@@ -4575,11 +4610,13 @@ fn appendGroupRow(
 /// residual): an error evaluating a key fails the statement, as a RETURN's
 /// ORDER BY does (`sortRowsEx`); it was sorted as NULL. The keys see the
 /// query's parameters. SONNY-6383 item 6: each key is evaluated once per row,
-/// before the sort, and what it computed is freed after it
-/// (`freeEvaluatedValue`); the comparator evaluated both rows' keys at every
+/// before the sort; the comparator evaluated both rows' keys at every
 /// comparison and freed none of them, so `ORDER BY upper(z.s)` leaked a
-/// string per comparison for a caller with no scratch arena. The rows are
-/// reordered in place, stably.
+/// string per comparison for a caller with no scratch arena. SONNY-6449,
+/// SONNY-6450 item 5: the keys are evaluated on an arena of the sort's own,
+/// freed after it, so everything a key computed is freed, also inside an
+/// expression (`upper(z.s) || 'x'`; `freeEvaluatedValue` freed the top-level
+/// value only). The rows are reordered in place, stably.
 fn sortWithStageRows(
     allocator: std.mem.Allocator,
     keys: []const ast.OrderBy.OrderKey,
@@ -4591,12 +4628,14 @@ fn sortWithStageRows(
     const width = keys.len;
     const key_values = try allocator.alloc(Value, rows.len * width);
     defer allocator.free(key_values);
+    var key_arena = std.heap.ArenaAllocator.init(allocator);
+    defer key_arena.deinit();
+    const ka = key_arena.allocator();
     var computed: usize = 0;
-    defer for (key_values[0..computed], 0..) |value, i| value_utilities.freeEvaluatedValue(allocator, keys[i % width].expr, value);
     for (rows) |row| {
-        const env = Env{ .names = columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        const env = Env{ .names = columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = ka };
         for (keys) |key| {
-            key_values[computed] = try eval.evalExpr(allocator, key.expr, env);
+            key_values[computed] = try eval.evalExpr(ka, key.expr, env);
             computed += 1;
         }
     }
@@ -4767,8 +4806,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             group_keys_list.deinit(allocator);
         }
 
-        // Group rows by GROUP BY key values
+        // Group rows by GROUP BY key values. SONNY-6449: a key is evaluated
+        // only to be encoded; what it computed is freed with the row's
+        // arena (`upper(n.s)` leaked a string per row).
+        var key_arena = std.heap.ArenaAllocator.init(allocator);
+        defer key_arena.deinit();
         for (input_result.rows) |input_row| {
+            _ = key_arena.reset(.retain_capacity);
             // Create environment for evaluating GROUP BY key
             const env = Env{
                 .names = input_result.columns,
@@ -4787,7 +4831,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             // s`) to its underlying expression before evaluating against the
             // input row (`keys`, above).
             for (keys) |key_expr| {
-                const key_val = try evalGroupedExpr(allocator, key_expr, env, Value{ .Null = {} });
+                const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env, Value{ .Null = {} });
                 // SONNY-2675: the key's typed canonical encoding.
                 try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
@@ -4850,7 +4894,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 }
 
                 // Group rows by non-aggregated expression values
+                // SONNY-6449: as the GROUP BY keys' arena, above.
+                var key_arena = std.heap.ArenaAllocator.init(allocator);
+                defer key_arena.deinit();
                 for (input_result.rows) |input_row| {
+                    _ = key_arena.reset(.retain_capacity);
                     const env = Env{
                         .names = input_result.columns,
                         .values = input_row,
@@ -4866,7 +4914,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     const key_writer = &key_aw.writer;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            const key_val = try evalGroupedExpr(allocator, item.expr, env, Value{ .Null = {} });
+                            const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env, Value{ .Null = {} });
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
@@ -4918,9 +4966,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     .allocator = allocator,
                 };
 
+                // SONNY-6449: on the statement's scratch arena
+                // (`value_utilities.lentAllocator`): the rows borrow what
+                // the items compute, and nothing freed it.
+                const lent = value_utilities.lentAllocator(allocator);
                 for (with_items, 0..) |item, i| {
                     // Evaluate the WITH expression in the context of the current row
-                    new_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    new_row[i] = try eval.evalExpr(lent, item.expr, env);
                 }
 
                 if (having_filter) |*filter| {

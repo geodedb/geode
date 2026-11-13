@@ -15,6 +15,7 @@ const property_codec = @import("../property_value_codec.zig");
 const execution = @import("../execution.zig");
 const value_types = @import("../value_types.zig");
 const decimal_text = @import("../types/decimal_text.zig");
+const query_arena = @import("../server/query_arena.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-019; FEATURE="JSON Library Migration"; ASPECT=ValueUtilities; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -323,12 +324,38 @@ pub fn callAlwaysAllocates(callee: ast_mod.Expr) bool {
 /// END`) leaks its intermediate under a strict allocator — same magnitude
 /// as the pre-GAP-0535 behavior, and absorbed by the per-request arena
 /// (GAP-0755) in production.
+///
+/// SONNY-6449: a projection evaluates its items on `lentAllocator`; while a
+/// scratch arena is installed (inside every executor entry point) what they
+/// computed is the arena's, so nothing is adopted: every value is copied.
 pub fn ensureOwnedProjectionValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, value: Value) !Value {
-    switch (expr) {
+    if (!valuesAreLent()) switch (expr) {
         .Call => |call| if (callAlwaysAllocates(call.callee.*)) return value,
         else => {},
-    }
+    };
     return duplicateValue(allocator, value);
+}
+
+// CANARY: REQ=REQ-SONNY-6449-PROJECTION-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=LentProjectionValues; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6449: the allocator a projection (the RETURN and WITH items, the
+/// rows of a CREATE's or MERGE's RETURN) evaluates its row values on: the
+/// statement's scratch arena, which every executor entry point installs
+/// (`query_arena.StatementScratch`). What an item computes (a string
+/// concatenation, a list or map literal, a function's string) is then the
+/// arena's, as a member read's copy is (`eval.lentValueAllocator`): a row
+/// that borrows it is valid for the whole statement, nothing frees it, and
+/// it never leaks; a result handed to the caller copies it
+/// (`adoptProjectionRowValues`), or is copied out of an arena the entry
+/// point opened (`execution.detachFromStatementScratch`). Outside an entry
+/// point (no scratch arena) it is `allocator`.
+pub fn lentAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
+    return query_arena.currentScratchAllocator() orelse allocator;
+}
+
+/// SONNY-6449: whether `lentAllocator` is a scratch arena: a value it
+/// allocated is then never freed by the code that evaluated it.
+pub fn valuesAreLent() bool {
+    return query_arena.currentScratchAllocator() != null;
 }
 
 /// GAP-0535: convert a projected result into one that fully OWNS its row
@@ -341,9 +368,12 @@ pub fn adoptProjectionRowValues(
     items: []const ast_mod.ReturnItem,
 ) !void {
     if (result.owns_value_memory) return; // already owned
+    // SONNY-6449: what the projection computed on a scratch arena is the
+    // arena's (`lentAllocator`): copied, never adopted.
+    const lent = valuesAreLent();
     for (result.rows) |row| {
         for (row, 0..) |val, i| {
-            const adopt = i < items.len and adoptable: {
+            const adopt = !lent and i < items.len and adoptable: {
                 switch (items[i].expr) {
                     .Call => |call| break :adoptable callAlwaysAllocates(call.callee.*),
                     else => break :adoptable false,

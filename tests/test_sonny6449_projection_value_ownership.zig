@@ -33,6 +33,7 @@ const index_manager = geode.index_manager;
 const fle_integration = geode.fle_integration;
 const fle_catalog = fle_integration.catalog_mod;
 const query_arena = geode.query_arena;
+const node_scan_stream = geode.node_scan_stream;
 const Value = geode.value_types.Value;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -463,4 +464,72 @@ test "SONNY-6449 / SONNY-6437 (1, 2, 6): lists, DISTINCT and GROUP BY over lists
 
 test "SONNY-6449 / SONNY-6437 (1, 2, 6): lists, DISTINCT and GROUP BY over lists, comprehensions, computed values and VALUES ... MATCH: persisted, with a request scratch arena" {
     try runListCases(.persisted, .scratch);
+}
+
+/// The engine-direct node scan (`node_scan_stream`) serves a single-label
+/// RETURN over QUIC, page by page, with the request's scratch arena
+/// installed. It owns every cell it does not copy out of its node and frees
+/// it with the page (`property_value_codec.freeValue`), so a member read
+/// lent from the scratch arena was freed with the wrong allocator: the
+/// server aborted ("Invalid free") on an encrypted field's read
+/// (tests/test_sonny6334_fle_authorization.zig, over QUIC).
+fn scanColumn0(fx: *Fixture, role: ?[]const u8, src: []const u8) ![]const []const u8 {
+    const aa = fx.arena.allocator();
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    const prev = query_arena.pushScratchAllocator(scratch.allocator());
+    defer query_arena.popScratchAllocator(prev);
+    fx.ctx.fle_role = role;
+    fle_integration.setCurrentUserRole(role);
+    defer fle_integration.clearCurrentThreadState();
+
+    var parsed = try geode.parseGqlOptions(src, aa, .{});
+    defer parsed.deinit();
+    const q = &parsed.program.statements[0].Query;
+    var stream = (try node_scan_stream.prepare(testing.allocator, q, fx.ctx, &.{}, &.{}, &.{})) orelse return error.FastPathDeclined;
+    defer stream.deinit();
+    var out: std.ArrayList([]const u8) = .empty;
+    while (true) {
+        var page = try stream.buildNextPage(testing.allocator, 0);
+        defer page.result.deinit(testing.allocator);
+        for (page.result.rows) |row| {
+            var text: std.ArrayList(u8) = .empty;
+            try render(aa, &text, row[0]);
+            try out.append(aa, text.items);
+        }
+        if (page.final) break;
+    }
+    std.mem.sort([]const u8, out.items, {}, lessThanStr);
+    return out.items;
+}
+
+test "SONNY-6449: the engine-direct node scan owns its cells: plain, FLE plaintext, FLE redacted and list properties" {
+    var fx: Fixture = undefined;
+    try fx.init(.persisted);
+    defer fx.deinit();
+
+    const Scan = struct { role: ?[]const u8, q: []const u8, want: []const []const u8 };
+    const scans = [_]Scan{
+        .{ .role = null, .q = "MATCH (n:S6449P) RETURN n.s AS x", .want = &.{ "plain-0", "plain-0", "plain-1" } },
+        .{ .role = "pii", .q = "MATCH (n:S6449P) RETURN n.ssn AS x", .want = &.{ "secret-0", "secret-0", "secret-1" } },
+        .{ .role = null, .q = "MATCH (n:S6449P) RETURN n.ssn AS x", .want = &.{ "[REDACTED]", "[REDACTED]", "[REDACTED]" } },
+        .{ .role = null, .q = "MATCH (n:S6449P) RETURN n.v AS x", .want = &.{ "[a,b0]", "[a,b0]", "[a,b1]" } },
+    };
+    var failures: usize = 0;
+    for (scans) |scan| {
+        const got = scanColumn0(&fx, scan.role, scan.q) catch |err| {
+            std.debug.print("FAIL [scan role={s}] {s}: {s}\n", .{ scan.role orelse "none", scan.q, @errorName(err) });
+            failures += 1;
+            continue;
+        };
+        const same = got.len == scan.want.len and for (got, scan.want) |g, w| {
+            if (!std.mem.eql(u8, g, w)) break false;
+        } else true;
+        if (!same) {
+            std.debug.print("FAIL [scan role={s}] {s}: got {d} rows\n", .{ scan.role orelse "none", scan.q, got.len });
+            for (got) |g| std.debug.print("  '{s}'\n", .{g});
+            failures += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), failures);
 }

@@ -208,11 +208,9 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
         /// cannot return it; the sort is failed with it afterwards.
         key_error: *?anyerror,
 
-        fn compare(ctx: @This(), row_a: []Value, row_b: []Value) bool {
-            for (ctx.order.keys) |key| {
-                const val1 = getValueForKey(ctx, key, row_a);
-                const val2 = getValueForKey(ctx, key, row_b);
-
+        /// `keys_a` and `keys_b`: two rows' values of the ORDER BY keys.
+        fn compare(ctx: @This(), keys_a: []const Value, keys_b: []const Value) bool {
+            for (ctx.order.keys, keys_a, keys_b) |key, val1, val2| {
                 const v1_is_null = val1 == .Null;
                 const v2_is_null = val2 == .Null;
 
@@ -318,17 +316,48 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
         }
     };
 
+    // SONNY-6449, SONNY-6450 item 5: each key is evaluated once per row,
+    // before the sort, on an arena of the sort's own, freed after it. The
+    // comparator evaluated both rows' computed keys at every comparison
+    // (`ORDER BY upper(n.s)`, `ORDER BY n.s || 'x'`) and freed none of them:
+    // a leak per comparison. The rows are permuted as the heap sort of the
+    // rows themselves permuted them.
+    var key_arena = std.heap.ArenaAllocator.init(allocator);
+    defer key_arena.deinit();
     var key_error: ?anyerror = null;
     const ctx = SortContext{
-        .allocator = allocator,
+        .allocator = key_arena.allocator(),
         .order = order,
         .columns = result.columns,
         .return_items = return_items,
         .key_error = &key_error,
     };
 
-    std.sort.heap([]Value, result.rows, ctx, SortContext.compare);
+    const width = order.keys.len;
+    const key_values = try allocator.alloc(Value, result.rows.len * width);
+    defer allocator.free(key_values);
+    for (result.rows, 0..) |row, r| {
+        for (order.keys, key_values[r * width ..][0..width]) |key, *value| value.* = ctx.getValueForKey(key, row);
+    }
     if (key_error) |err| return err;
+
+    const IndexOrder = struct {
+        sort: SortContext,
+        keys: []const Value,
+        width: usize,
+
+        fn lessThan(self: @This(), a: usize, b: usize) bool {
+            return self.sort.compare(self.keys[a * self.width ..][0..self.width], self.keys[b * self.width ..][0..self.width]);
+        }
+    };
+    const permutation = try allocator.alloc(usize, result.rows.len);
+    defer allocator.free(permutation);
+    for (permutation, 0..) |*p, i| p.* = i;
+    std.sort.heap(usize, permutation, IndexOrder{ .sort = ctx, .keys = key_values, .width = width }, IndexOrder.lessThan);
+    const sorted = try allocator.alloc([]Value, result.rows.len);
+    defer allocator.free(sorted);
+    for (permutation, sorted) |i, *row| row.* = result.rows[i];
+    @memcpy(result.rows, sorted);
 }
 
 // CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
@@ -568,9 +597,12 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
 
     // Evaluate expressions with provided environment (GAP-0535: each value is
     // adopted or duplicated so the result fully owns its row memory)
+    // SONNY-6449: evaluated on the statement's scratch arena, then copied
+    // (`value_utilities.lentAllocator`).
+    const lent = value_utilities.lentAllocator(allocator);
     var row = try allocator.alloc(Value, items.len);
     for (items, 0..) |item, i| {
-        const evaluated = try eval.evalExpr(allocator, item.expr, env);
+        const evaluated = try eval.evalExpr(lent, item.expr, env);
         row[i] = try value_utilities.ensureOwnedProjectionValue(allocator, item.expr, evaluated);
     }
 

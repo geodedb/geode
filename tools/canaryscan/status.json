@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:47:06.972663103Z",
+  "generated_at": "2026-11-13T04:35:52.844159205Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85696,6 +85696,20 @@
       "features": [
         {
           "feature": "ExpressionEvaluator",
+          "aspect": "LentValues",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ExpressionEvaluator",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -85706,6 +85720,58 @@
           ],
           "benches": [],
           "owner": "eval",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6449-PROJECTION-OWNERSHIP",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "LentProjectionValues",
+          "status": "TESTED",
+          "files": [
+            "src/execution/value_utilities.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6449-STATEMENT-SCRATCH",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "EntryPointScratch",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "PerQueryArenaPool",
+          "aspect": "StatementScratch",
+          "status": "TESTED",
+          "files": [
+            "src/server/query_arena.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -93341,7 +93407,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4863
+      "TESTED": 4867
     },
     "by_aspect": {
       "2PC": 3,
@@ -94481,6 +94547,7 @@
       "EnhancedViewWiring": 1,
       "Entry": 1,
       "EntryPoint": 1,
+      "EntryPointScratch": 1,
       "EntryStatisticsNoDrift": 1,
       "EntryType": 1,
       "EnvConfig": 1,
@@ -95281,6 +95348,8 @@
       "LegacyRemoval": 1,
       "LegacyRoleMapping": 1,
       "LegacyVarianceEnvelope": 1,
+      "LentProjectionValues": 1,
+      "LentValues": 1,
       "LetChain": 1,
       "LetOnce": 1,
       "LetScope": 1,
@@ -96972,6 +97041,7 @@
       "StatementScopeFailed": 1,
       "StatementScopedDimScratch": 1,
       "StatementScopedRecord": 1,
+      "StatementScratch": 1,
       "StatementUndoRecord": 1,
       "StatementUndoRegression": 1,
       "StatementUndoReplay": 1,
