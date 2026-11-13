@@ -8982,7 +8982,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], opts);
+        var scan_opts = opts;
+        scan_opts.node_census_writers = &mg.node_census_writers; // SONNY-6492 (2)
+        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], scan_opts);
     }
 
     /// Resolve a raw label/rel-type id to its dictionary string, or null when

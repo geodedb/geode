@@ -200,6 +200,11 @@ pub const ScanOptions = struct {
     /// `graph_store.INTERNAL_NODE_ID_PROPERTY_KEY` (passed in to keep this
     /// module free of geode-side imports).
     internal_id_key: []const u8,
+    /// SONNY-6492 (2): the graph's count of node creates and deletes in
+    /// flight (`ManagedGraph.node_census_writers`), set by
+    /// `StorageAdapter.hydrationStreamScanShard`. The live-record check
+    /// allows one record per writer in flight, as the unlabeled scan does.
+    node_census_writers: ?*const std.atomic.Value(u32) = null,
 };
 
 const DirtyKey = u64;
@@ -317,6 +322,15 @@ pub fn scanShard(
         .scratch = scratch_arena.allocator(),
     };
 
+    // SONNY-6492 (2): the live count and the writers in flight are read
+    // BEFORE the dirty-page snapshot. A create counted here either finished
+    // before the snapshot (its record is in a page the snapshot routes
+    // through the pool, or on disk) or is a writer in flight at this read;
+    // read after the snapshot, a create finished in between was counted
+    // while its record was in a page the scan then read from disk.
+    const durable_live_before = @atomicLoad(u64, &engine.manifest.node_count, .seq_cst);
+    const writers_before: u32 = if (opts.node_census_writers) |w| w.load(.seq_cst) else 0;
+
     var dirty = DirtySet{};
     try dirty.collect(allocs.scratch, &engine.buffer_pool);
 
@@ -328,7 +342,6 @@ pub fn scanShard(
     // behind in an arena) and are copied exact-size into the edge arena at the
     // end — the edge phase is the last consumer of the rows array.
     var rows: std.ArrayList(NodeRow) = .empty;
-    const durable_live_before = @atomicLoad(u64, &engine.manifest.node_count, .monotonic);
     {
         var reader = try makeReader(engine, .nodes, &dirty, page_buf);
         const npp = gs.node.nodesPerPage(page_size);
@@ -370,9 +383,16 @@ pub fn scanShard(
     // the scan: the graph is quarantined and its reads fail closed. The
     // smaller of the counts read before and after the pass is used, so a
     // concurrent delete can never look like a loss.
-    const durable_live = @min(durable_live_before, @atomicLoad(u64, &engine.manifest.node_count, .monotonic));
-    if (rows.items.len < durable_live and !liveCountCheckDisabled()) {
-        std.log.scoped(.hydration_scan).warn("hydration scan found {d} live node record(s) but the shard manifest counts {d}: node pages lost or zeroed -- refusing to hydrate from partial data", .{ rows.items.len, durable_live });
+    // SONNY-6492 (2): less one record per node create or delete in flight at
+    // either read, exactly as `StorageAdapter.scanAllNodes` (SONNY-6472 (4)):
+    // the engine counts and writes a node in separate steps. With no writer
+    // in flight the check is exact.
+    const durable_live_after = @atomicLoad(u64, &engine.manifest.node_count, .seq_cst);
+    const writers_after: u32 = if (opts.node_census_writers) |w| w.load(.seq_cst) else 0;
+    const durable_live = @min(durable_live_before, durable_live_after);
+    const slack: u64 = @as(u64, writers_before) + writers_after;
+    if (rows.items.len + slack < durable_live and !liveCountCheckDisabled()) {
+        std.log.scoped(.hydration_scan).warn("hydration scan found {d} live node record(s) but the shard manifest counts {d} ({d} node write(s) in flight): node pages lost or zeroed -- refusing to hydrate from partial data", .{ rows.items.len, durable_live, slack });
         return error.DataCorruption;
     }
 

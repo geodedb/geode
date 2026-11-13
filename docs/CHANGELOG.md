@@ -2243,6 +2243,20 @@
   truncated). Regression: `zig build
   test-sonny6492-checkpoint-free-store-crash` (464 of 464 nodes after the
   kill, with and without TDE; 0 before).
+- **The hydration scan no longer fails with a false `DataCorruption` while
+  nodes are being created (SONNY-6492 item 2).** The first-access hydration
+  scan (`hydration_scan.scanShard`) has the same live-count check as the
+  unlabeled scan (REQ-GQL-028) but none of the SONNY-6472 item 4 allowance
+  for node writes in flight, and it read the count after its dirty-page
+  snapshot, so a create finished in between was counted while its record
+  was read from disk without it. Hydration holds no graph lock, so a node
+  write that does not wait for it (an adapter-level write path) could make
+  it fail and quarantine the graph. The count
+  and the writers in flight are now read before the snapshot and the check
+  allows one missing record per node write in flight at either read, as the
+  unlabeled scan does; with none in flight it stays exact. Regression: `zig
+  build test-sonny6492-hydration-live-count-race`; the detection itself:
+  `test-sonny2409-zeroed-page-header`, `test-canary-recovery-corrupt-latency`.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness
