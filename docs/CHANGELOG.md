@@ -2376,6 +2376,18 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **A read-only `CALL { }` or procedure CALL inside an IN subquery reads
+  (SONNY-3248, M1).** The write-shape validator's write walk counted any
+  `CALL { }`, `FOR` or procedure call inside an expression or a CTE body as
+  a write, so `MATCH (n) WHERE n.k IN (CALL { RETURN 2 AS x } RETURN x)
+  RETURN n` and `... IN (MATCH (m) CALL db.labels() YIELD label RETURN
+  m.k)` were refused with 0A000. A procedure there is classified as at the
+  top of a statement, and a `CALL { }` or `FOR` body is walked like any
+  part: a write inside one is still refused before anything is written.
+  Regression: `zig build test-sonny3248-allowlist-minors` (new; also pins
+  M6 WHERE truthiness, M7 `SET ... DETACH DELETE` and `WITH ... ORDER BY
+  ... SKIP ... DELETE`, and UNIQUE on CREATE, SET and MERGE ... SET, which
+  already held).
 - **EXPLAIN describes the access path the executor takes (SONNY-6276).**
   SONNY-1335 made PROFILE name an index only when the executor seeked
   through a catalog btree or hash index; EXPLAIN kept guessing. A planned
