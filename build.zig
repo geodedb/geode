@@ -12413,6 +12413,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6489_temporal_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6489-temporal-rendering", "Run SONNY-6489 item 4 regression (localdatetime() is a local datetime, rendered without Z; a duration renders its fraction of a second and its sign in stringify, CAST and the wire writer, and reads back as the same duration)").dependOn(&run_sonny6489_temporal_tests.step);
 
+    // SONNY-6489 (6): duration arithmetic across unit groups is 22G14;
+    // overflow is 22015 (a duration) or 22008 (a datetime).
+    const sonny6489_units_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_duration_unit_groups.zig"), .target = target, .optimize = optimize });
+    sonny6489_units_mod.addImport("geode", root_mod);
+    sonny6489_units_mod.addImport("logging", logging_mod);
+    const sonny6489_units_tests = b.addTest(.{ .root_module = sonny6489_units_mod });
+    const run_sonny6489_units_tests = b.addRunArtifact(sonny6489_units_tests);
+    shardDep(test_step, &run_sonny6489_units_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-duration-unit-groups", "Run SONNY-6489 item 6 regression (duration +/- duration of a year-to-month and a day-to-second operand is 22G14; a duration result out of range is 22015, a datetime result 22008; a mixed duration is still added part by part)").dependOn(&run_sonny6489_units_tests.step);
+
     // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
     // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.
     const sonny3055_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3055_nfc_string_identity.zig"), .target = target, .optimize = optimize });

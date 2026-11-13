@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:44:29.263424065Z",
+  "generated_at": "2026-11-13T16:45:18.129367048Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86923,6 +86923,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-DURATION-UNIT-GROUPS",
+      "features": [
+        {
+          "feature": "DateIntervalArithmetic",
+          "aspect": "UnitGroupsAndOverflowCodes",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_duration_unit_groups.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_duration_unit_groups.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6489-LISTEN-ERROR-FREE",
       "features": [
         {
@@ -94650,7 +94669,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4937
+      "TESTED": 4938
     },
     "by_aspect": {
       "2PC": 3,
@@ -98629,6 +98648,7 @@
       "UniquePerfVarianceEnvelope": 1,
       "UniqueViolationCode": 1,
       "UnitAssertions": 1,
+      "UnitGroupsAndOverflowCodes": 1,
       "UnitTest": 13,
       "UnitTestCoverage": 1,
       "UnitTestExecution": 1,
