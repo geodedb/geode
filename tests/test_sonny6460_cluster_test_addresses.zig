@@ -16,6 +16,12 @@
 // loopback address other than 127.0.0.1 a cluster test step names appears in
 // that step's file only.
 //
+// SONNY-6467 item 6: so does every other step that binds such an address.
+// test-sonny6448-tls-fail-closed, test-sonny6453-cli-no-ca-default and
+// test-sonny3313-grpc-peer-ip all bound 127.0.0.2 (3313 also 127.0.0.3), so
+// two of them running at once could take each other's port or answer each
+// other's client.
+//
 // CANARY: REQ=REQ-SONNY-6460-CLUSTER-TEST-ADDRESSES; FEATURE="DistributedCluster"; ASPECT=DisjointLoopbackAddresses; STATUS=TESTED; TEST=tests/test_sonny6460_cluster_test_addresses.zig; OWNER=distributed; UPDATED=2026-11-13
 
 const std = @import("std");
@@ -26,8 +32,9 @@ fn io() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-/// The source of every cluster test step: subprocess clusters, in-process
-/// coordinators and the cluster peer TLS handshakes.
+/// The source of every cluster test step (subprocess clusters, in-process
+/// coordinators and the cluster peer TLS handshakes), and of every other
+/// step that binds a loopback address other than 127.0.0.1.
 const cluster_test_files = [_][]const u8{
     "tests/test_cluster_3node_steady_state.zig",
     "tests/test_cluster_replicable_mutations.zig",
@@ -40,6 +47,11 @@ const cluster_test_files = [_][]const u8{
     "tests/test_sonny6456_cluster_health_liveness.zig",
     "tests/test_sonny6453_cluster_peer_tls.zig",
     "tests/test_gap0838_cluster_tls_noloopback.zig",
+    // SONNY-6467 item 6: the steps that bind a loopback address of their own
+    // without a cluster.
+    "tests/test_sonny6448_tls_fail_closed.zig",
+    "tests/test_sonny6453_cli_no_ca_default.zig",
+    "tests/test_sonny3313_grpc_peer_ip.zig",
 };
 
 /// Appends to `out` every distinct `127.0.0.N` (N not 1) in `src`.

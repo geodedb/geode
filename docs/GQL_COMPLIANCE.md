@@ -124,7 +124,25 @@ MATCH (a)-[]->(b), (b)-[]->(c) RETURN a, b, c
 
 -- Optional matching
 OPTIONAL MATCH (n)-[]->(m) RETURN n, m
+
+-- Abbreviated edge patterns (16.7)
+MATCH (a)-(b) RETURN a, b      -- any direction
+MATCH (a)<-(b) RETURN a, b     -- pointing left
+MATCH (a)<->(b) RETURN a, b    -- left or right
 ```
+
+**Abbreviated edge patterns (ISO/IEC 39075:2024 16.7, SONNY-6267).** The
+<abbreviated edge pattern> tokens `<-`, `->` and `-` (Feature G044) and
+`<->` (G045) parse and match; each is the empty full edge pattern of its
+orientation (`-` is `-[ ]-`, `<->` is `<-[ ]->`). Every Geode edge is
+directed, so `-`, `<->`, `-[ ]-` and `<-[ ]->` all match an edge in either
+direction. The tilde forms `~`, `<~` and `~>` (and `~[ ]~` etc.) match
+undirected edges, which Geode does not store (GH02): refused with 0A000.
+`<--` is not GQL: 16.7 SR forbids juxtaposing `<-` with `-` without a
+separator, because the two minus signs spell a <simple comment introducer>
+(NOTE 238); it is a syntax error naming the GQL spellings. (`--(` and
+`-->` are still accepted for compatibility.) Regression: `zig build
+test-sonny6267-abbreviated-edge-patterns`.
 
 ### Operators & Expressions
 
@@ -364,9 +382,12 @@ MATCH (p:Person) CALL db.labels() YIELD label FILTER label <> 'Person' RETURN p.
 
 A `WHERE` directly after `YIELD` (the Cypher form) is not ISO GQL (16.14
 <yield clause> is `YIELD <yield item list>` only) and is refused with
-42000, naming the FILTER form. Not yet accepted: a FILTER after an inline
-`LET` or between two MATCH clauses. Regression: `zig build
-test-sonny6460-filter-statement`.
+42000, naming the FILTER form. A FILTER after an inline `LET` sees the
+LET's variables (`MATCH (n) LET x = n.a * 2 FILTER x > 2 RETURN n`), and a
+FILTER between two MATCH statements filters the rows matched so far
+(`MATCH (a) FILTER a.k > 1 MATCH (a)-[:R]->(b) RETURN b`); a FILTER before
+CREATE or MERGE is refused (SONNY-6467). Regression: `zig build
+test-sonny6460-filter-statement`, `zig build test-sonny6467-query-residuals`.
 
 ## 🔧 Advanced Features
 

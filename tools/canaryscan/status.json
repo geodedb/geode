@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:37:32.778558558Z",
+  "generated_at": "2026-11-13T12:49:12.842333061Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28275,7 +28275,7 @@
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-21"
+          "updated": "2026-11-13"
         },
         {
           "feature": "GROUP BY/Aggregation",
@@ -72290,6 +72290,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2734-AGGREGATE-RESIDUALS",
+      "features": [
+        {
+          "feature": "GroupedAggregates",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2734_aggregate_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2734_aggregate_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2734-LEGACY-AGGREGATES",
       "features": [
         {
@@ -79868,6 +79887,110 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6264-VARLEN-PATH-COUNT",
+      "features": [
+        {
+          "feature": "VariableLengthPaths",
+          "aspect": "EveryPathExpands",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6264_varlen_path_count.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "VariableLengthPaths",
+          "aspect": "OneRowPerPath",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6264_varlen_path_count.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6264_varlen_path_count.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6265-END-NODE-PROPERTY-MAP",
+      "features": [
+        {
+          "feature": "PatternMatching",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6265_end_node_property_map.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6265_end_node_property_map.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6266-EDGE-PROP-HEAD-IN",
+      "features": [
+        {
+          "feature": "EdgeProperties",
+          "aspect": "IncomingAdjacencyPropHead",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EdgeProperties",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6267-ABBREVIATED-EDGE-PATTERNS",
+      "features": [
+        {
+          "feature": "PathPatterns",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6267_abbreviated_edge_patterns.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6267_abbreviated_edge_patterns.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6268-EDGE-CREATE-ATOMIC",
       "features": [
         {
@@ -80325,6 +80448,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6282-INT-STRING-EQUALITY",
+      "features": [
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "NeverEqual",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6290-BACKUP-DOC-COMMANDS",
       "features": [
         {
@@ -80561,6 +80717,63 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6296-LEGACY-READ-GAPS",
+      "features": [
+        {
+          "feature": "ReadSemantics",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6296-PLANNED-WHERE-ERRORS",
+      "features": [
+        {
+          "feature": "PlannedRead",
+          "aspect": "WhereErrorsFailTheQuery",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6296-REL-MAP-PARAMS",
+      "features": [
+        {
+          "feature": "PatternMatching",
+          "aspect": "RelationshipMapParameters",
+          "status": "TESTED",
+          "files": [
+            "src/execution/pattern_helpers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -86127,6 +86340,63 @@
           ],
           "benches": [],
           "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6467-CALL-IN-TXN-BODY",
+      "features": [
+        {
+          "feature": "ProcedureCall",
+          "aspect": "TransactionBodyProjection",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6467-FILTER-AFTER-LET",
+      "features": [
+        {
+          "feature": "FilterStatement",
+          "aspect": "AfterInlineLet",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6467-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "BooleanExpressions",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-11-13"
         }
       ]
@@ -93818,7 +94088,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4892
+      "TESTED": 4907
     },
     "by_aspect": {
       "2PC": 3,
@@ -93905,6 +94175,7 @@
       "AdvancedCostModel": 1,
       "AdvancedCostModelCalibrationVarianceEnvelope": 1,
       "AdvancedPatterns": 1,
+      "AfterInlineLet": 1,
       "AggEndpointUnification": 1,
       "AggFunctions": 1,
       "Aggregate": 1,
@@ -95021,6 +95292,7 @@
       "EveryGraphDeny": 1,
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
+      "EveryPathExpands": 1,
       "EvictedNode": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,
@@ -95562,6 +95834,7 @@
       "InboundOccupancySweeper": 1,
       "InboundReapCountForCapacity": 1,
       "InboundStreamReleasesWorker": 1,
+      "IncomingAdjacencyPropHead": 1,
       "IncrementalPathReachableOnWirePath": 1,
       "IncrementalRefresh": 1,
       "IncrementalSnapshot": 1,
@@ -96087,6 +96360,7 @@
       "NetworkTests": 1,
       "NetworkTransport": 2,
       "NetworkTransportTests": 1,
+      "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
@@ -96240,6 +96514,7 @@
       "OneRequestContextForQuicAndGrpc": 1,
       "OneResolver": 1,
       "OneResourceRule": 1,
+      "OneRowPerPath": 1,
       "OneSetPath": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
@@ -96949,7 +97224,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 310,
+      "Regression": 317,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -96961,6 +97236,7 @@
       "RelationshipDeferToPostWith": 1,
       "RelationshipDeleteEndpointLookup": 1,
       "RelationshipLabelIndexScan": 1,
+      "RelationshipMapParameters": 1,
       "RelationshipMatchEdgeRls": 1,
       "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
@@ -97659,6 +97935,7 @@
       "Topology": 1,
       "Training": 1,
       "Transaction": 1,
+      "TransactionBodyProjection": 1,
       "TransactionCoord": 1,
       "TransactionCoordination": 2,
       "TransactionDetectionTests": 1,
@@ -97899,6 +98176,7 @@
       "WhereClause": 4,
       "WhereClauseIndexCheck": 1,
       "WhereEnvLifetime": 1,
+      "WhereErrorsFailTheQuery": 1,
       "WhereEvaluation": 2,
       "WhereFilterHonored": 1,
       "WherePassthrough": 1,

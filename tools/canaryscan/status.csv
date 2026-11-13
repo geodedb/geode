@@ -1843,7 +1843,7 @@ REQ-GQL-012,Aggregation COUNT DISTINCT,CountDistinctParser,TESTED,tests/test_cou
 REQ-GQL-012,Aggregation COUNT DISTINCT,CountDistinctVarianceEnvelope,BENCHED,tests/benchmark_count_distinct_variance.zig,BenchmarkCANARY_REQ_GQL_012_CountDistinctVarianceEnvelope,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,AvgVarianceEnvelope,BENCHED,tests/benchmark_avg_variance.zig,,BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowAvg,TESTED,tests/test_decimal_overflow_aggregates.zig,TestCANARY_REQ_GQL_012_DecimalOverflowAvg,,engine,2025-09-21
-REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowHandling,TESTED,tests/test_groupby_decimal_overflow.zig,TestCANARY_REQ_GQL_012_DecimalOverflowHandling,,engine,2025-09-21
+REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowHandling,TESTED,tests/test_groupby_decimal_overflow.zig,TestCANARY_REQ_GQL_012_DecimalOverflowHandling,,engine,2026-11-13
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowSum,TESTED,tests/test_decimal_overflow_aggregates.zig,TestCANARY_REQ_GQL_012_DecimalOverflowSum,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,Engine,TESTED,src/exec.zig,tests/e2e_protocol_groupby_basic.zig,,engine,2025-09-20
 REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,tests/test_sonny2675_grouped_having.zig,tests/test_sonny2675_grouped_having.zig,,engine,2026-11-13
@@ -4638,6 +4638,7 @@ REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,OneGraphLockAtATime,TESTED,sr
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,Regression,TESTED,tests/test_sonny2733_backfill_locking.zig,tests/test_sonny2733_backfill_locking.zig,,security,2026-09-25
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,SelfLockingProcedures,TESTED,src/execution/procedure_access.zig,tests/test_sonny2733_backfill_locking.zig,,security,2026-09-25
 REQ-SONNY-2734-AGGREGATE-ARGUMENT-ERRORS,GroupedAggregates,ArgumentErrorsEscape,TESTED,src/execution.zig,tests/test_sonny2696_aggregate_expressions.zig,,execution,2026-11-11
+REQ-SONNY-2734-AGGREGATE-RESIDUALS,GroupedAggregates,Regression,TESTED,tests/test_sonny2734_aggregate_residuals.zig,tests/test_sonny2734_aggregate_residuals.zig,,execution,2026-11-13
 REQ-SONNY-2734-LEGACY-AGGREGATES,LegacyReturnProjection,AggregatesThroughSharedProjection,TESTED,src/execution/match_operations.zig,tests/test_sonny2696_aggregate_expressions.zig,,engine,2026-11-11
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,CheckedFloatAndDecimalToInt,TESTED,src/types/narrowing.zig,tests/test_sonny2739_float_narrowing.zig,,types,2026-09-25
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,HeapRounding,TESTED,src/types/evaluator_functions.zig,tests/test_sonny2739_float_narrowing.zig,,types,2026-09-25
@@ -5119,6 +5120,12 @@ REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,DisableAllowsByPrefix,TES
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,NameCollectionAllocFailure,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,PersistenceDeleteFailure,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,Regression,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
+REQ-SONNY-6264-VARLEN-PATH-COUNT,VariableLengthPaths,EveryPathExpands,TESTED,src/execution.zig,tests/test_sonny6264_varlen_path_count.zig,,execution,2026-11-13
+REQ-SONNY-6264-VARLEN-PATH-COUNT,VariableLengthPaths,OneRowPerPath,TESTED,tests/test_sonny6264_varlen_path_count.zig,tests/test_sonny6264_varlen_path_count.zig,,execution,2026-11-13
+REQ-SONNY-6265-END-NODE-PROPERTY-MAP,PatternMatching,Regression,TESTED,tests/test_sonny6265_end_node_property_map.zig,tests/test_sonny6265_end_node_property_map.zig,,execution,2026-11-13
+REQ-SONNY-6266-EDGE-PROP-HEAD-IN,EdgeProperties,IncomingAdjacencyPropHead,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6266_planned_reverse_edge_props.zig,,storage,2026-11-13
+REQ-SONNY-6266-EDGE-PROP-HEAD-IN,EdgeProperties,Regression,TESTED,tests/test_sonny6266_planned_reverse_edge_props.zig,tests/test_sonny6266_planned_reverse_edge_props.zig,,storage,2026-11-13
+REQ-SONNY-6267-ABBREVIATED-EDGE-PATTERNS,PathPatterns,Regression,TESTED,tests/test_sonny6267_abbreviated_edge_patterns.zig,tests/test_sonny6267_abbreviated_edge_patterns.zig,,parser,2026-11-13
 REQ-SONNY-6268-EDGE-CREATE-ATOMIC,GraphStoreFailureAtomicity,EdgeCreateInMemory,TESTED,src/graph_store.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
 REQ-SONNY-6268-FAILURE-ATOMICITY,GraphStoreFailureAtomicity,Regression,TESTED,tests/test_sonny6268_graph_store_failure_atomicity.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
 REQ-SONNY-6268-LABEL-ATOMIC,GraphStoreFailureAtomicity,NodeLabelAddRemove,TESTED,src/graph_store.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
@@ -5147,6 +5154,8 @@ REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,NotNullViolationCode,
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,Regression,TESTED,tests/test_sonny6281_existence_constraints.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,StatementEndCheck,TESTED,src/execution/unique_constraints.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,UniqueIndexRefused,TESTED,src/execution.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
+REQ-SONNY-6282-INT-STRING-EQUALITY,ComparisonPredicate,NeverEqual,TESTED,src/eval.zig,tests/test_sonny6282_int_string_equality.zig,,eval,2026-11-13
+REQ-SONNY-6282-INT-STRING-EQUALITY,ComparisonPredicate,Regression,TESTED,tests/test_sonny6282_int_string_equality.zig,tests/test_sonny6282_int_string_equality.zig,,eval,2026-11-13
 REQ-SONNY-6290-BACKUP-DOC-COMMANDS,CLI Backup,DocumentedCommandsExist,TESTED,tests/test_sonny6290_backup_doc_commands.zig,tests/test_sonny6290_backup_doc_commands.zig,,cli,2026-11-12
 REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,ApiKeysNotSupported,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6291_apikey_user_show.zig,,security,2026-11-12
 REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,Regression,TESTED,tests/test_sonny6291_apikey_user_show.zig,tests/test_sonny6291_apikey_user_show.zig,,security,2026-11-12
@@ -5162,6 +5171,9 @@ REQ-SONNY-6294-DROP-INDEX-RULES,SchemaCatalog,NameIsOneObjectPerGraph,TESTED,src
 REQ-SONNY-6294-DROP-INDEX-RULES,SchemaCatalog,Regression,TESTED,tests/test_sonny6294_drop_index_rules.zig,tests/test_sonny6294_drop_index_rules.zig,,catalog,2026-11-11
 REQ-SONNY-6294-DROP-INDEX-RULES,SchemaCatalog,SqlstateMapping,TESTED,src/server/proto_util.zig,tests/test_sonny6294_drop_index_rules.zig,,catalog,2026-11-11
 REQ-SONNY-6295-CREATE-PATH-MIDDLE-NODE,CreatePath,Regression,TESTED,tests/test_sonny6295_create_path_middle_node.zig,tests/test_sonny6295_create_path_middle_node.zig,,engine,2026-11-11
+REQ-SONNY-6296-LEGACY-READ-GAPS,ReadSemantics,Regression,TESTED,tests/test_sonny6296_legacy_read_gaps.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
+REQ-SONNY-6296-PLANNED-WHERE-ERRORS,PlannedRead,WhereErrorsFailTheQuery,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
+REQ-SONNY-6296-REL-MAP-PARAMS,PatternMatching,RelationshipMapParameters,TESTED,src/execution/pattern_helpers.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,src/storage/backup.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,S3RestoreIsStaged,IMPL,src/storage/s3_backup.zig,,,storage,2026-11-12
@@ -5491,6 +5503,9 @@ REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,Regression,TESTED,tests/
 REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,ProfiledEntryPointScratch,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
 REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,Regression,TESTED,tests/test_sonny6460_unscoped_eval.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
 REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test_sonny6460_query_residuals.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6467-CALL-IN-TXN-BODY,ProcedureCall,TransactionBodyProjection,TESTED,src/execution.zig,tests/test_sonny6467_query_residuals.zig,,execution,2026-11-13
+REQ-SONNY-6467-FILTER-AFTER-LET,FilterStatement,AfterInlineLet,TESTED,src/gql/parser.zig,tests/test_sonny6467_query_residuals.zig,,parser,2026-11-13
+REQ-SONNY-6467-QUERY-RESIDUALS,BooleanExpressions,Regression,TESTED,tests/test_sonny6467_query_residuals.zig,tests/test_sonny6467_query_residuals.zig,,parser,2026-11-13
 REQ-SONNY-6471-EDGE-PROP-CRASH,TransactionManagement,Regression,TESTED,tests/test_sonny6471_edge_prop_crash.zig,tests/test_sonny6471_edge_prop_crash.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

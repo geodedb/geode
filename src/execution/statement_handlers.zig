@@ -771,7 +771,9 @@ fn expandForTable(allocator: std.mem.Allocator, header: ast.ForLoop, table: ForT
             .param_names = context.query_param_names,
             .param_values = context.query_param_values,
         };
-        const collection_value = try eval.evalExpr(allocator, header.collection, env);
+        // SONNY-6449: a list the header computes is the statement's (its
+        // scratch arena): the rows borrow its elements, and it leaked.
+        const collection_value = try eval.evalExpr(value_utilities.lentAllocator(allocator), header.collection, env);
         const items = try forElements(allocator, collection_value);
         defer if (items.owned) allocator.free(items.values);
         try rows.ensureUnusedCapacity(allocator, items.values.len);
@@ -943,7 +945,8 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
             .param_names = context.query_param_names,
             .param_values = context.query_param_values,
         };
-        const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
+        // SONNY-6449: on the statement's scratch arena, as in `expandForTable`.
+        const collection_value = try eval.evalExpr(value_utilities.lentAllocator(allocator), for_stmt.collection, empty_env);
         const items = try forElements(allocator, collection_value);
         defer if (items.owned) allocator.free(items.values);
         return executeForBody(allocator, for_stmt, body, items.values, &.{}, &.{}, context);

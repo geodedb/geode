@@ -11,17 +11,17 @@
 //     `--ca-cert` was silently ignored and a server signed by another CA was
 //     accepted. A supplied CA now always verifies.
 //
-// Real QUIC: an in-process `QuicTransport` server on 127.0.0.2 presents a
+// Real QUIC: an in-process `QuicTransport` server on 127.0.0.41 presents a
 // leaf signed by CA "good"; the clients dial it with the right CA, a CA that
 // did not sign it, and CA bundles that cannot be loaded. Fixtures are made
-// with openssl (skips only if openssl is absent or 127.0.0.2 cannot be bound).
+// with openssl (skips only if openssl is absent or 127.0.0.41 cannot be bound).
 const std = @import("std");
 const builtin = @import("builtin");
 const quic = @import("transport/quic");
 const bridge = @import("zig_quic_bridge");
 const test_ports = @import("test_ports.zig");
 
-const SERVER_IP = "127.0.0.2";
+const SERVER_IP = "127.0.0.41";
 
 const Fixtures = struct {
     tmp: std.testing.TmpDir,
@@ -91,7 +91,7 @@ fn makeFixtures() !Fixtures {
 
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.2,DNS:127.0.0.2\nextendedKeyUsage=serverAuth\n",
+        .data = "subjectAltName=IP:127.0.0.41,DNS:127.0.0.41\nextendedKeyUsage=serverAuth\n",
     });
     for ([_][2][]const u8{ .{ good_key, fx.good_ca }, .{ other_key, fx.other_ca } }, [_][]const u8{ "/CN=sonny6448-good-ca", "/CN=sonny6448-other-ca" }) |pair, subj| {
         try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", pair[0] });
@@ -133,7 +133,7 @@ const Server = struct {
         });
         self.transport.listen() catch |e| {
             self.transport.deinit();
-            // 127.0.0.2 is not bindable on every host.
+            // 127.0.0.41 is not bindable on every host.
             return if (e == error.AddressNotAvailable) error.SkipZigTest else e;
         };
         self.thread = try std.Thread.spawn(.{}, loop, .{self});
