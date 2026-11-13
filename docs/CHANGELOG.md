@@ -1902,6 +1902,30 @@
 
 ### Fixed
 
+- **Operator-visible: the cluster health monitor reports a peer failed only
+  when it stops being heard from (SONNY-6456 item 1).** A peer's
+  `last_heartbeat` was written only when its entry was created, never when
+  the peer was heard from, so 5 s after start every node logged "Node
+  detected as failed" for every peer of a healthy cluster, once, and kept
+  them all `failed`; a peer that really died looked the same as one that
+  was up. Every authenticated inbound raft frame now refreshes its
+  sender's liveness, so "failed" means "not heard from for 5 s". A node
+  fails a peer over only when it expects to hear from it: a leader or
+  candidate expects every peer, a follower of a known leader expects only
+  that leader (followers do not talk to each other), and with no known
+  leader every peer is expected. A failed peer that is heard from again
+  logs "Node is active again". A failover error (`promoteReplica`'s
+  `NoReplicasAvailable`) is logged and the pass goes on; it used to end the
+  health thread, and with it the inbound-occupancy sweeper the same loop
+  drives. `cluster_state.nodes` and `cluster_state.shards`, shared by the
+  health loop, the inbound raft workers and shard forwarding, are now
+  guarded by a leaf mutex (`cluster_state_mutex`). What `failed` drives
+  today: a peer's state, the health log lines, and replica choice when
+  re-replicating a shard (`getAvailableNodes`); production
+  `cluster_state.shards` is never populated, so no shard failover ran, and
+  shard forwarding, `sendToNode` and raft sends do not consult the state.
+  Regressions: `zig build test-sonny6456-cluster-health-liveness` (three
+  nodes) and `test-sonny6451-health-failed-peer`.
 - **Operator-visible: a cluster node closes inbound raft connections whose
   peer went silent, and gives every finished inbound connection back to
   its listener (SONNY-6456 item 2).** `ClusterCoordinator.start` creates

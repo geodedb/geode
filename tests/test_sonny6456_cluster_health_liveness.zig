@@ -352,4 +352,6 @@ test "SONNY-6456: the health monitor reports a peer failed only when it stops be
         dumpLogs(&c);
         return error.RestartedPeerNotActive;
     }
+    std.debug.print("leader node {d}, killed and restarted node {d}\n", .{ li + 1, fi + 1 });
+    dumpLogs(&c);
 }
