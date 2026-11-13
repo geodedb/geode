@@ -45,3 +45,57 @@ const cases = [_]Case{
 test "SONNY-6266: a relationship walked from its target keeps its properties on the planned read" {
     try harness.inEveryMode("SONNY-6266 reverse relationship properties", &cases);
 }
+
+// A store written before the fix: every incoming adjacency entry of an edge
+// whose properties were set kept head 0 (the edge index and the outgoing
+// entry had the real one). The fixture writes the edges, then puts every
+// incoming entry back to head 0 through the engine, which is that store's
+// on-disk state; a reverse walk must still read the edge's properties (the
+// planned read takes the head from the edge index).
+test "SONNY-6266: a store written before the fix still answers reverse property matches" {
+    const nsh = @import("node_scan_stream_harness.zig");
+    const geode = @import("geode");
+    const graph_store = geode.graph_store;
+    const testing = std.testing;
+
+    nsh.silenceEngineLogs();
+    var h = try nsh.Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed(&.{
+        "CREATE (:A {k: 1})-[:R {w: 7}]->(:B {k: 2})",
+        "CREATE (:A {k: 3})-[:R]->(:B {k: 4})",
+        "MATCH (a:A {k: 3})-[r:R]->(b:B) SET r.w = 8",
+    });
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.ExpectedPersistedAdapter;
+    const mg = adapter.engines.get(graph_store.DEFAULT_GRAPH_NAME) orelse return error.GraphNotOpen;
+    const slots = try adapter.scanAllNodes(graph_store.DEFAULT_GRAPH_NAME, testing.allocator);
+    defer testing.allocator.free(slots);
+    var zeroed: usize = 0;
+    for (slots) |slot| {
+        var out = try adapter.iterateOutgoingEdges(graph_store.DEFAULT_GRAPH_NAME, slot.slot_id, testing.allocator);
+        defer out.deinit();
+        while (try out.next()) |entry| {
+            const shard = mg.shardEngineForNode(slot.slot_id);
+            const in_head = try shard.in_head_dir.getHead(entry.neighbor);
+            if (try shard.adj_in_remote.updateEdgePropHead(in_head, entry.edge_id, 0)) |_| zeroed += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), zeroed);
+
+    const aa = h.arena.allocator();
+    var by_map = try h.run("MATCH (b:B)<-[:R {w: 7}]-(a) RETURN a.k AS k");
+    defer by_map.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), by_map.rows.len);
+    try testing.expectEqual(@as(i64, 1), by_map.rows[0][0].Int);
+
+    var by_where = try h.run("MATCH (b:B)-[r]-(a:A) WHERE r.w = 8 RETURN b.k AS k");
+    defer by_where.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), by_where.rows.len);
+    try testing.expectEqual(@as(i64, 4), by_where.rows[0][0].Int);
+
+    var projected = try h.run("MATCH (b:B {k: 2})<-[r]-(a) RETURN r.w AS w");
+    defer projected.deinit(aa);
+    try testing.expectEqual(@as(usize, 1), projected.rows.len);
+    try testing.expectEqual(@as(i64, 7), projected.rows[0][0].Int);
+}
