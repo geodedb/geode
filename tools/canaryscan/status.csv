@@ -4467,6 +4467,7 @@ REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,Regression,TESTED,te
 REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,ScopeResolution,TESTED,src/execution/graph_algorithms.zig,tests/test_sonny1326_expression_tenancy.zig,,security,2026-09-13
 REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,SharedVisibilityPredicate,TESTED,src/execution/tenant_visibility.zig,tests/test_sonny1326_expression_tenancy.zig,,security,2026-09-13
 REQ-SONNY-1330-PARALLEL-UNION-ARM-SAFETY,ParallelUnionArms,ReadOnlyArmHydration,TESTED,tests/test_sonny1330_parallel_union.zig,tests/test_sonny1330_parallel_union.zig,,execution,2026-09-14
+REQ-SONNY-1332-SELF-PASSWORD-CLUSTER-GATE,DistributedCluster,GateSelfPasswordChange,TESTED,src/server/quic_connection_handler.zig,tests/test_cluster_replicable_mutations.zig,,security,2026-11-13
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,CreateUserFailureReported,TESTED,src/security/user_management.zig,tests/test_sonny1333_grant_persist_show_grants.zig,,security,2026-11-11
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,CreateUserWriteThrough,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny1333_grant_persist_show_grants.zig,,security,2026-11-11
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,DiscardGraphGrant,TESTED,src/storage/user_storage.zig,tests/test_sonny1333_grant_persist_show_grants.zig,,security,2026-11-11

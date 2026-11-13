@@ -533,6 +533,14 @@ the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
    only). Standalone mode is unaffected. A replication slice for auth DDL is
    follow-up work. e2e: `tests/test_cluster_replicable_mutations.zig`
    ("cluster: unreplicated write surfaces fail closed").
+   This includes a user's own `ALTER USER <self> SET PASSWORD` and the
+   forced reset after a `password_reset_required` login (SONNY-1332,
+   2026-11-13): the QUIC and gRPC transports handle those themselves, and
+   they used to write the new password on the one node they reached, leaving
+   the old one valid on every other member. Offline `geode user ...` and
+   `geode auth init` commands against a stopped member's data dir still
+   write that member only: they are the per-member seeding path, so run the
+   same commands against every member.
 
 ### Future: `CREATE POLICY`
 

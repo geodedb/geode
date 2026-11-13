@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:38:13.382086732Z",
+  "generated_at": "2026-11-13T11:52:02.712975388Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69585,6 +69585,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-1332-SELF-PASSWORD-CLUSTER-GATE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "GateSelfPasswordChange",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED",
       "features": [
         {
@@ -93833,7 +93852,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4892
+      "TESTED": 4893
     },
     "by_aspect": {
       "2PC": 3,
@@ -95301,6 +95320,7 @@
       "GateHelperStandaloneUnit": 1,
       "GateIndexDDL": 1,
       "GatePolicyDDL": 1,
+      "GateSelfPasswordChange": 1,
       "GateStorageProcs": 1,
       "GateTenantOps": 1,
       "GateTsIngest": 1,

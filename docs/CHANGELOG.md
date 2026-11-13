@@ -4,6 +4,19 @@
 
 ### Security
 
+- **A user's own password change is refused in cluster mode (SONNY-1332).**
+  `ALTER USER <self> SET PASSWORD` (and the forced reset after a
+  `password_reset_required` login) is handled by the QUIC and gRPC
+  transports, not by the auth DDL path, and had no cluster gate: it wrote
+  the new password to the `__geode_security` graph of the one node it
+  reached, so the old password stayed valid on every other member. It now
+  fails closed like the other auth writes (`ClusterNotLeader` on a
+  follower, `ClusterWriteNotReplicable` on the leader, 40001). Standalone
+  mode is unaffected. Behaviour change: in cluster mode a user can no
+  longer change their password, and one that must reset it at login cannot
+  complete the reset until auth state is replicated. Regression: the
+  `auth-self-password-change` surface of `zig build
+  test-cluster-replicable-mutations`.
 - **`db.relationshipTypes()` and `db.propertyKeys()` no longer list what
   only edges with an RLS-hidden endpoint carry (SONNY-6460 item 5).** The
   RLS label policies were applied to an edge's type only, so a user denied
