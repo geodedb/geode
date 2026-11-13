@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:36:09.213169315Z",
+  "generated_at": "2026-11-13T08:49:06.233369384Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82170,6 +82170,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6348-KMS-TMP-SELFTESTS",
       "features": [
         {
@@ -93237,7 +93256,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4857
+      "TESTED": 4858
     },
     "by_aspect": {
       "2PC": 3,
@@ -96353,7 +96372,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 297,
+      "Regression": 298,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

@@ -5261,6 +5261,7 @@ REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,CleanupOwnDirectory,TESTED,src/
 REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,EveryDetailKey,TESTED,src/security/rls_core.zig,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,,security,2026-11-12
 REQ-SONNY-6346-NO-SILENT-DEGRADE,Server Startup,TenantRegistryDurableOrRefuse,TESTED,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,,security,2026-11-12
 REQ-SONNY-6346-NO-SILENT-DEGRADE,TenantRegistry,DurableOrError,TESTED,src/security/tenant_registry.zig,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,,security,2026-11-12
+REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY,FieldLevelEncryption,Regression,TESTED,tests/test_sonny6347_fle_envelope_identity.zig,tests/test_sonny6347_fle_envelope_identity.zig,,security,2026-11-13
 REQ-SONNY-6348-KMS-TMP-SELFTESTS,TDE Procedures,NoFabricatedKmsSelfTestTruth,TESTED,tests/test_sonny6348_kms_tmp_selftests_stale.zig,tests/test_sonny6348_kms_tmp_selftests_stale.zig,,security,2026-11-12
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,ChecksOnThrowawayCopy,TESTED,src/storage/backup.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,CommittedRestoreIsTheArchive,TESTED,tests/test_sonny6348_readonly_restore_checks_registry.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
