@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:24:22.157386174Z",
+  "generated_at": "2026-11-13T09:57:51.820287367Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82208,6 +82208,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6347-FLE-INDEX-DDL-SERIALIZED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "IndexDdlAndConfigureFieldSerialized",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6347-FLE-RECORD-TENANT",
       "features": [
         {
@@ -82216,6 +82235,44 @@
           "status": "TESTED",
           "files": [
             "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-INDEX-OVER-ENCRYPTED-FIELD-REPORTED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "StartupReport",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-NO-READ-FROM-INDEX-OVER-ENCRYPTED-FIELD",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "IndexServedReadDeclines",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
           ],
           "tests": [
             "tests/test_sonny6347_fle_envelope_identity.zig"
@@ -93294,7 +93351,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4860
+      "TESTED": 4863
     },
     "by_aspect": {
       "2PC": 3,
@@ -95035,6 +95092,7 @@
       "IncrementalSnapshot": 1,
       "Index": 3,
       "IndexDDL": 1,
+      "IndexDdlAndConfigureFieldSerialized": 1,
       "IndexGraphField": 1,
       "IndexGraphScope": 1,
       "IndexIndep": 1,
@@ -95057,6 +95115,7 @@
       "IndexRepairCollector": 1,
       "IndexResultsScoped": 1,
       "IndexSeekOpKind": 1,
+      "IndexServedReadDeclines": 1,
       "IndexStorage": 2,
       "IndexTests": 1,
       "IndexVector": 1,
@@ -96897,6 +96956,7 @@
       "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupReport": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
       "State": 2,

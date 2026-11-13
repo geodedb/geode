@@ -504,10 +504,18 @@ per write) or, maintained from a decrypted value, the plaintext. So:
 - `CALL geode.fle.configureField` on a field that has an index or a UNIQUE /
   NODE KEY constraint over it, in any graph, is refused (0A000): drop it
   first.
-- A fulltext index made over a field before the field was encrypted (an
-  existing deployment) refuses `geode.fts.search` / `phrase` / `proximity`
-  (0A000) instead of matching nothing. Other index types over such a field
-  are not detected at startup; drop them (`DROP INDEX`).
+- The two checks do not race (SONNY-6347): an index or constraint DDL
+  reserves its fields from its check until its catalog row is recorded, and
+  `configureField` checks the rows and those reservations and encrypts the
+  field under the same lock, so one of the two is refused.
+- An index made over a field before the field was encrypted (an existing
+  deployment) is named in a `SECURITY` error line when the catalog is opened
+  (server start), and is not used: an equality seek, a posting count and an
+  ordered scan over an encrypted field fall back to a scan or a sort
+  (SONNY-6347; a seek over such an index returned no rows). A fulltext one
+  refuses `geode.fts.search` / `phrase` / `proximity` (0A000) instead of
+  matching nothing. Its files may hold values written before the field was
+  encrypted: drop it (`DROP INDEX`).
 
 Searchable (blind-index) fields exist in the FLE catalog and the read
 path (`@searchable`, `lookupEncryptedField`), but no `CALL` procedure can

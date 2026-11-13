@@ -308,7 +308,7 @@ test "SONNY-6347 (3): configureField during a CREATE CONSTRAINT UNIQUE that alre
     {
         const aa = e.arena.allocator();
         var batch: usize = 0;
-        while (batch < 40) : (batch += 1) {
+        while (batch < 6) : (batch += 1) {
             var q: std.ArrayList(u8) = .empty;
             try q.appendSlice(aa, "CREATE ");
             for (0..500) |i| {

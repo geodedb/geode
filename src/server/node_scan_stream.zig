@@ -2052,6 +2052,8 @@ fn seekIndexedCandidates(
         allocator,
     ) catch |err| switch (err) {
         error.ExactIndexBusy => null,
+        // SONNY-6347: an index over an encrypted field cannot answer.
+        error.IndexOverEncryptedField => null,
         else => err,
     };
 }

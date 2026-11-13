@@ -414,12 +414,54 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     };
     // GAP-0203: Atomic store ensures other threads see the fully-initialized instance
     @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
+    reportIndexesOverEncryptedFields(allocator, instance);
     return instance;
 }
 
 /// SONNY-6335: the process catalog if one exists (never creates it).
 pub fn existingCatalogInstance() ?*catalog_mod.Catalog {
     return @atomicLoad(?*catalog_mod.Catalog, &global_catalog_instance, .acquire);
+}
+
+// CANARY: REQ=REQ-SONNY-6347-INDEX-OVER-ENCRYPTED-FIELD-REPORTED; FEATURE="FieldLevelEncryption"; ASPECT=StartupReport; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6347 item 4: the names (copies in `allocator`) of the indexes and
+/// UNIQUE / NODE KEY constraints over an FLE-encrypted field. None can be
+/// made now (SONNY-6335); one made before its field was encrypted holds
+/// ciphertext, or the plaintext of values written before, in its own files.
+/// Only a fulltext index was detected (at search time). Reads do not use
+/// such an index (`graph_storage_adapter.refuseIndexOverEncryptedField`);
+/// the operator drops it. Empty without a catalog or an FLE field;
+/// `error.FleCatalogUnavailable` when the FLE catalog cannot be read.
+pub fn indexesOverEncryptedFields(allocator: std.mem.Allocator) ![][]u8 {
+    const cat = existingCatalogInstance() orelse return allocator.alloc([]u8, 0);
+    return indexesOverEncryptedFieldsIn(allocator, cat);
+}
+
+fn indexesOverEncryptedFieldsIn(allocator: std.mem.Allocator, cat: *catalog_mod.Catalog) ![][]u8 {
+    if (!fle_integration.hasEncryptedFields()) return allocator.alloc([]u8, 0);
+    _ = fle_catalog.globalCatalog(allocator) catch return error.FleCatalogUnavailable;
+    return cat.indexesOnFields(allocator, encryptedFieldKnown);
+}
+
+fn encryptedFieldKnown(label: []const u8, prop: []const u8) bool {
+    const fle = fle_catalog.globalCatalog(std.heap.c_allocator) catch return false;
+    return fle.isFieldEncrypted(label, prop);
+}
+
+/// SONNY-6347 item 4: when the catalog is opened (server start), name every
+/// index over an encrypted field in a SECURITY error log line.
+fn reportIndexesOverEncryptedFields(allocator: std.mem.Allocator, cat: *catalog_mod.Catalog) void {
+    const names = indexesOverEncryptedFieldsIn(allocator, cat) catch |err| {
+        log.err("SECURITY: could not check for indexes over FLE-encrypted fields", &.{Attr.string("error", @errorName(err))});
+        return;
+    };
+    defer {
+        for (names) |n| allocator.free(n);
+        allocator.free(names);
+    }
+    for (names) |name| {
+        log.err("SECURITY: index over an FLE-encrypted field (made before the field was encrypted); reads do not use it, and its files may hold values written before encryption: DROP it", &.{Attr.string("index", name)});
+    }
 }
 
 /// M2: Get catalog from ExecutionContext
@@ -2231,9 +2273,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // it would index the ciphertext (a fulltext search, an equality
             // seek or a range never matches) or, maintained from a decrypted
             // value, put the plaintext in an unencrypted index file.
-            for (ci.properties) |prop| {
-                if (fle_integration.fieldRequiresEncryption(ci.label, prop)) return error.IndexOnEncryptedField;
-            }
+            // SONNY-6347: the fields stay reserved until the row is in the
+            // catalog, so a concurrent configureField cannot encrypt one.
+            const fle_hold = try fle_integration.reserveIndexFields(ci.label, ci.properties);
+            defer fle_integration.releaseIndexFields(fle_hold);
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -2423,11 +2466,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-6335: UNIQUE / NODE KEY compare stored values; an encrypted
             // field stores a fresh random nonce per write, so duplicates would
             // never be detected. Refused (NOT NULL / EXISTS are presence checks).
-            if (cc.constraint_type == .unique or cc.constraint_type == .node_key) {
-                for (cc.properties) |prop| {
-                    if (fle_integration.fieldRequiresEncryption(cc.label, prop)) return error.IndexOnEncryptedField;
-                }
-            }
+            // SONNY-6347: reserved until the row is in the catalog.
+            const fle_hold: ?fle_integration.IndexFieldsHold = if (cc.constraint_type == .unique or cc.constraint_type == .node_key)
+                try fle_integration.reserveIndexFields(cc.label, cc.properties)
+            else
+                null;
+            defer if (fle_hold) |hold| fle_integration.releaseIndexFields(hold);
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT: validate existing data, record the row; every
             // kind is enforced at statement end (`unique_constraints`).

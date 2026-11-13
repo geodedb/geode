@@ -523,6 +523,83 @@ pub fn getRotationStatus(
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6347-FLE-INDEX-DDL-SERIALIZED; FEATURE="FieldLevelEncryption"; ASPECT=IndexDdlAndConfigureFieldSerialized; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6347 item 3: CREATE INDEX and CREATE CONSTRAINT UNIQUE / NODE KEY
+/// check that no field they cover is encrypted, then build and record their
+/// catalog row; `geode.fle.configureField` checks that no index or such
+/// constraint covers the field, then encrypts it. Nothing was held between
+/// either check and its write, so a configureField could pass while an index
+/// DDL was between its check and its row (and the other way round), leaving
+/// an index over an encrypted field. An index DDL now reserves its fields
+/// (`reserveIndexFields`, refused when one is encrypted) until its row is in
+/// the catalog, and configureField checks the rows and the reservations and
+/// configures the field with `index_ddl_mutex` held (`lockIndexDdl`).
+///
+/// Lock order: after any graph lock (index DDL runs under the graph's write
+/// lock), before the schema catalog lock and the FLE catalog and key-state
+/// mutexes, which are taken while it is held. No graph lock is ever taken
+/// while it is held.
+var index_ddl_mutex: std.Io.Mutex = std.Io.Mutex.init;
+var index_ddl_reservations: std.ArrayList(IndexFieldReservation) = .empty;
+var index_ddl_next_id: u64 = 1;
+
+const IndexFieldReservation = struct {
+    id: u64,
+    type_name: []const u8,
+    fields: []const []const u8,
+};
+
+/// A reservation `reserveIndexFields` made; `releaseIndexFields` ends it.
+pub const IndexFieldsHold = struct { id: u64 };
+
+/// SONNY-6347: reserve `type_name`'s `fields` for an index DDL, refused
+/// (`IndexOnEncryptedField`, 0A000) when one is encrypted. The slices are
+/// borrowed: they must outlive the reservation.
+pub fn reserveIndexFields(type_name: []const u8, fields: []const []const u8) error{ IndexOnEncryptedField, OutOfMemory }!IndexFieldsHold {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    index_ddl_mutex.lockUncancelable(io);
+    defer index_ddl_mutex.unlock(io);
+    for (fields) |field| {
+        if (fieldRequiresEncryption(type_name, field)) return error.IndexOnEncryptedField;
+    }
+    const id = index_ddl_next_id;
+    index_ddl_next_id += 1;
+    try index_ddl_reservations.append(std.heap.smp_allocator, .{ .id = id, .type_name = type_name, .fields = fields });
+    return .{ .id = id };
+}
+
+pub fn releaseIndexFields(hold: IndexFieldsHold) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    index_ddl_mutex.lockUncancelable(io);
+    defer index_ddl_mutex.unlock(io);
+    for (index_ddl_reservations.items, 0..) |r, i| {
+        if (r.id != hold.id) continue;
+        _ = index_ddl_reservations.swapRemove(i);
+        return;
+    }
+}
+
+/// SONNY-6347: held by configureField from its index check to its write.
+pub fn lockIndexDdl() void {
+    index_ddl_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+}
+
+pub fn unlockIndexDdl() void {
+    index_ddl_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+}
+
+/// SONNY-6347: does an index DDL in flight cover `type_name`.`field_name`?
+/// Call with `lockIndexDdl` held.
+pub fn indexFieldReservedLocked(type_name: []const u8, field_name: []const u8) bool {
+    for (index_ddl_reservations.items) |r| {
+        if (!std.mem.eql(u8, r.type_name, type_name)) continue;
+        for (r.fields) |f| {
+            if (std.mem.eql(u8, f, field_name)) return true;
+        }
+    }
+    return false;
+}
+
 /// SONNY-6362: is `field_name` FLE-encrypted in any type? A stored value is
 /// encrypted under the first label of its node (or its edge type), so a
 /// pattern naming another label, or none, can still meet one. Fail-secure:

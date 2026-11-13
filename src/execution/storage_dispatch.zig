@@ -1520,6 +1520,18 @@ fn handleGeodeFleConfigurefield(allocator: std.mem.Allocator, call_stmt: ast.Cal
     // SONNY-6335: a field with an index or a UNIQUE / NODE KEY constraint
     // over it is not encrypted until that is dropped: the index would keep
     // (or get) the field's plaintext, or index ciphertext.
+    // SONNY-6347: checked and configured with the index DDL mutex held, and
+    // an index DDL in flight (past its own check, row not yet recorded)
+    // counts as an index.
+    fle_integration.lockIndexDdl();
+    defer fle_integration.unlockIndexDdl();
+    if (fle_integration.indexFieldReservedLocked(type_name, field_name)) {
+        log.warn("FLE configureField refused: an index or unique constraint over the field is being created", &.{
+            Attr.string("type", type_name),
+            Attr.string("field", field_name),
+        });
+        return error.EncryptedFieldIndexed;
+    }
     if (execution.existingCatalogInstance()) |schema_catalog| {
         if (try schema_catalog.indexOrUniqueOnField(allocator, type_name, field_name)) |name| {
             log.warn("FLE configureField refused: the field has an index or unique constraint; drop it first", &.{
