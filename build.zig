@@ -9171,6 +9171,30 @@ pub fn build(b: *std.Build) void {
     const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
     sonny1221_step.dependOn(&run_sonny1221_tests.step);
 
+    // SONNY-2465: gRPC streaming /Execute pushes node-scan fast-path rows
+    // (pushResultPages served only executor results: schema, then zero rows).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2465_grpc_stream_node_scan.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        if (enable_openssl) {
+            mod.linkSystemLibrary("ssl", .{});
+            mod.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
+            mod.linkSystemLibrary("dl", .{});
+        }
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2465-grpc-stream-node-scan", "Run SONNY-2465 regression (gRPC streaming Execute's push drain, pushResultPages, delivers every row of a statement the node-scan fast path served, ends with a final page and releases the stream; in process through the real handleExecute)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2472: a string property projected twice by the node-scan fast path
     // (`RETURN n.s, n.s AS t`) was one allocation in two cells, and page
     // teardown freed it once per cell. Each cell must hold its own copy.
