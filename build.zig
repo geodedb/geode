@@ -11587,6 +11587,23 @@ pub fn build(b: *std.Build) void {
     const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
+    // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the
+    // 16 MiB maximum is answered 54000 and its connection closed, so the
+    // client fails fast (it used to block until its 60 s writer deadline).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_request_size.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message fails within 20 s, not at the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).

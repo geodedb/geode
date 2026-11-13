@@ -1,0 +1,139 @@
+// SONNY-3232: how QUIC requests of 1 MiB, 4 MiB, the documented maximum
+// (16 MiB framed message, `decodeBufferedMessage`; docs/USAGE.md) and just
+// over it are answered, against a real `geode serve` over real QUIC.
+//
+// What holds on this HEAD (quic 0.1.48, which fixed the loss-recovery bug,
+// SONNY-3351, that left round 15's ~1 MiB requests unanswered):
+//   * 1 MiB and 4 MiB are answered with their full size (asserted).
+//   * A request over the maximum used to be refused by ENDING THE STREAM WITH
+//     NO REPLY: the server stopped reading, so the client, held by the stream
+//     window, blocked writing and failed only at its own 60 s writer deadline,
+//     with nothing to say why. The server now answers 54000 on the stream and
+//     closes the connection with application error `message_too_large`, so
+//     the client fails within seconds (asserted: well under the 60 s writer
+//     deadline) and the server serves the next connection.
+//   * A request larger than the 10 MiB stream receive window is still
+//     transferred very slowly (ReleaseSafe: 16 MiB in ~168 s; Debug: no
+//     answer in 300 s): the window credit after the first 10 MiB arrives at a
+//     crawl. That is in the QUIC library's flow-control path, not fixed here;
+//     the maximum-size case is RECORDED with its time, not asserted (see the
+//     SONNY-3232 report's library follow-up).
+
+const std = @import("std");
+const builtin = @import("builtin");
+const testing = std.testing;
+const util = @import("proto_test_util.zig");
+
+const max_message_bytes: usize = 16 * 1024 * 1024;
+/// Envelope room: the ClientPacket / ExecuteRequest framing around the query
+/// text, the session id, and `RETURN size('` ... `') AS n`.
+const envelope_room: usize = 4096;
+/// Bound for the asserted answers (a Debug server on a loaded machine
+/// answered 4 MiB in 16 s).
+const answer_bound_s: u32 = 120;
+/// The recorded maximum-size case waits this long, then moves on.
+const recorded_bound_s: u32 = 30;
+/// An over-maximum request must fail well inside the client's 60 s writer
+/// deadline (it used to take exactly that long).
+const refusal_bound_ms: u64 = 20_000;
+
+fn monoMs() u64 {
+    return @intCast(std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds());
+}
+
+fn sizeQuery(allocator: std.mem.Allocator, bytes: usize) ![]u8 {
+    var q: std.ArrayList(u8) = .empty;
+    errdefer q.deinit(allocator);
+    try q.appendSlice(allocator, "RETURN size('");
+    try q.appendNTimes(allocator, 'a', bytes);
+    try q.appendSlice(allocator, "') AS n");
+    return q.toOwnedSlice(allocator);
+}
+
+const Outcome = struct {
+    served_n: ?i64 = null,
+    error_code: ?[]u8 = null,
+    transport_error: ?[]const u8 = null,
+    ms: u64,
+};
+
+/// One request on a connection of its own (a failed one leaves the
+/// connection unusable).
+fn probe(allocator: std.mem.Allocator, addr: []const u8, server_pid: std.posix.pid_t, bytes: usize, bound_s: u32) !Outcome {
+    var client = try util.QuicProtoClient.connectWithHandshakeTimeout(allocator, addr, 30);
+    defer client.deinit();
+    client.watchServerLiveness(server_pid);
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello.deinit(allocator);
+    // The request keeps a fixed deadline; its time is what is measured.
+    client.server_pid = null;
+    const q = try sizeQuery(allocator, bytes);
+    defer allocator.free(q);
+    const t0 = monoMs();
+    var r = client.executeAndCollectWithTimeout(allocator, q, util.emptyParams(), 10, bound_s) catch |err| {
+        return .{ .transport_error = @errorName(err), .ms = monoMs() - t0 };
+    };
+    defer r.deinit(allocator);
+    const ms = monoMs() - t0;
+    if (r.error_code) |c| return .{ .error_code = try allocator.dupe(u8, c), .ms = ms };
+    if (r.rows.len == 1 and r.rows[0].len == 1) switch (r.rows[0][0]) {
+        .int => |n| return .{ .served_n = n, .ms = ms },
+        else => {},
+    };
+    return .{ .ms = ms };
+}
+
+fn smallRequestServed(allocator: std.mem.Allocator, addr: []const u8, server_pid: std.posix.pid_t) !bool {
+    var client = try util.QuicProtoClient.connectWithHandshakeTimeout(allocator, addr, 30);
+    defer client.deinit();
+    client.watchServerLiveness(server_pid);
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello.deinit(allocator);
+    var r = try client.executeAndCollectWithTimeout(allocator, "RETURN 1 AS x", util.emptyParams(), 10, 60);
+    defer r.deinit(allocator);
+    return r.error_code == null and r.rows.len == 1;
+}
+
+test "SONNY-3232 QUIC requests of 1 MiB and 4 MiB are answered, one over the 16 MiB maximum fails fast, and the server serves on" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    var server = try util.spawnServerRandom(allocator, null);
+    defer server.deinit();
+    const server_pid = server.child.id.?;
+    const addr = server.getAddr();
+
+    var failures: usize = 0;
+    for ([_]usize{ 1024 * 1024, 4 * 1024 * 1024 }) |bytes| {
+        const o = try probe(allocator, addr, server_pid, bytes, answer_bound_s);
+        defer if (o.error_code) |c| allocator.free(c);
+        const ok = o.served_n != null and o.served_n.? == @as(i64, @intCast(bytes));
+        std.debug.print("SONNY-3232 {s}: {d}-byte request -> served={any} error={?s} transport={?s} in {d} ms{s}\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms, if (ok) "" else "  <-- UNEXPECTED" });
+        if (!ok) failures += 1;
+        if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
+    }
+
+    // Recorded, not asserted: the window credit past 10 MiB crawls.
+    {
+        const bytes = max_message_bytes - envelope_room;
+        const o = try probe(allocator, addr, server_pid, bytes, recorded_bound_s);
+        defer if (o.error_code) |c| allocator.free(c);
+        std.debug.print("SONNY-3232 {s}: {d}-byte request (inside the maximum; recorded) -> served={any} error={?s} transport={?s} in {d} ms\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms });
+        if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
+    }
+
+    // Over the maximum: refused, and fast.
+    {
+        const bytes = max_message_bytes + 64;
+        const o = try probe(allocator, addr, server_pid, bytes, answer_bound_s);
+        defer if (o.error_code) |c| allocator.free(c);
+        const refused = o.served_n == null and (o.transport_error != null or (o.error_code != null and std.mem.eql(u8, o.error_code.?, "54000")));
+        const ok = refused and o.ms <= refusal_bound_ms;
+        std.debug.print("SONNY-3232 {s}: {d}-byte request (over the maximum) -> served={any} error={?s} transport={?s} in {d} ms{s}\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms, if (ok) "" else "  <-- UNEXPECTED (must be refused within 20 s)" });
+        if (!ok) failures += 1;
+        if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
+    }
+
+    try testing.expect(util.processAlive(server_pid));
+    try testing.expectEqual(@as(usize, 0), failures);
+}
