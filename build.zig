@@ -10906,6 +10906,20 @@ pub fn build(b: *std.Build) void {
     const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
     sonny3245_step.dependOn(&run_sonny3245_tests.step);
 
+    const sonny6433_locks_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_ordered_index_locking.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_locks_mod.addImport("geode", root_mod);
+    sonny6433_locks_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6433_locks_tests = b.addTest(.{ .root_module = sonny6433_locks_mod });
+    const run_sonny6433_locks_tests = b.addRunArtifact(sonny6433_locks_tests);
+    shardDep(test_step, &run_sonny6433_locks_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_locks_step = b.step("test-sonny6433-ordered-index-locking", "Run SONNY-6433 regression (ordered-index planner gates read under the graph and shard locks; orderedScan pins its graph against DROP GRAPH; the per-thread graph-lock table tracks past 16 graphs)");
+    sonny6433_locks_step.dependOn(&run_sonny6433_locks_tests.step);
+
     const sonny6433_fts_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_sonny6433_follower_fts_rebuild.zig"),
         .target = target,

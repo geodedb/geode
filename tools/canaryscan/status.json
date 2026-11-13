@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:56:15.742469636Z",
+  "generated_at": "2026-11-13T00:57:22.775845229Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84472,6 +84472,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-ORDERED-INDEX-LOCKING",
+      "features": [
+        {
+          "feature": "OrderedIndex",
+          "aspect": "GatesPinsAndLockTracking",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92157,7 +92176,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4791
+      "TESTED": 4792
     },
     "by_aspect": {
       "2PC": 3,
@@ -93602,6 +93621,7 @@
       "GateStorageProcs": 1,
       "GateTenantOps": 1,
       "GateTsIngest": 1,
+      "GatesPinsAndLockTracking": 1,
       "GeneratedPasswordsComply": 1,
       "Generator": 1,
       "GeoJSON": 1,
