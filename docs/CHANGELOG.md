@@ -4,6 +4,21 @@
 
 ### Security
 
+- **BREAKING (operator): QUIC clients verify against the CA bundle they are
+  given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
+  (the cluster, Raft and 2PC peer path, which reads
+  `GEODE_CLUSTER_CA_CERT`) logged a warning and connected WITHOUT a trust
+  anchor when the bundle could not be loaded; a missing, unreadable or
+  certificate-less file now fails the connect with the load error.
+  `geode query`, `geode shell` and the REPL turned certificate verification
+  off unless `--client-cert`/`--client-key` were given, so `--ca-cert` was
+  ignored and a server signed by any CA was accepted; a `--ca-cert` now
+  always verifies (chain and server name), and the no-trust-material
+  default (no `--ca-cert`, no client certificate, no insecure flag) still
+  connects unverified but says so once on stderr. Operators whose
+  `--ca-cert` / `GEODE_HEALTH_CA_CERT` does not actually sign the server
+  certificate (or whose certificate lacks the dialled name) now get a
+  refused connection. Regression: `zig build test-sonny6448-tls-fail-closed`.
 - **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
   refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
   8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was

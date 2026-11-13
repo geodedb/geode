@@ -2362,13 +2362,15 @@ pub const QuicClient = struct {
         // cfg.inline_ca_chain_der (DER trust anchors), NOT cfg.ca_path (a path string).
         // Load the CA bundle here so cluster TLS actually has a trust anchor and can
         // complete a leaf-only server chain. Owned by self; freed in deinit().
+        // SONNY-6448: a CA bundle that cannot be loaded is an error, never a
+        // connection without the trust anchor the caller asked for.
         if (ca_cert_path) |ca_p| {
-            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| blk: {
-                tlog.warn("cluster TLS: failed to load CA chain; proceeding without pinned anchor", &.{
+            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| {
+                tlog.err("TLS: cannot load CA bundle; refusing to connect", &.{
                     Attr.string("path", ca_p),
                     Attr.string("error", @errorName(err)),
                 });
-                break :blk null;
+                return err;
             };
         }
 
@@ -2421,8 +2423,8 @@ pub const QuicClient = struct {
 
     /// Connect and verify the server's certificate chain against the CA
     /// bundle at `ca_cert_path` and its name against `address` (SONNY-6442).
-    /// Unlike `connectEx`, a CA bundle that cannot be loaded is an error,
-    /// never a connection without a trust anchor.
+    /// A CA bundle that cannot be loaded is an error, never a connection
+    /// without a trust anchor (as in `connectEx` since SONNY-6448).
     pub fn connectWithCa(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: []const u8) !void {
         self.ca_chain_der = try loadCaChainDer(self.allocator, ca_cert_path);
         return self.connectEx(address, port, null, null, null);

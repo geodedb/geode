@@ -229,3 +229,14 @@ test "SONNY-6448: the CLI client verifies against a supplied --ca-cert instead o
         try client.connect();
     }
 }
+
+test "SONNY-6448: initClient verification policy" {
+    // A CA or mTLS material means verify; only the explicit flag, or no
+    // trust material at all (the dev default, which now warns), skips it.
+    const P = bridge.verificationPolicy;
+    try std.testing.expectEqual(bridge.Verification.verify, P(.{ .ca_cert_path = "/ca.crt" }));
+    try std.testing.expectEqual(bridge.Verification.verify, P(.{ .client_cert_path = "/c.crt", .client_key_path = "/c.key" }));
+    try std.testing.expectEqual(bridge.Verification.skip_by_flag, P(.{ .insecure = true, .ca_cert_path = "/ca.crt" }));
+    try std.testing.expectEqual(bridge.Verification.skip_by_flag, P(.{ .insecure = true }));
+    try std.testing.expectEqual(bridge.Verification.skip_no_trust_material, P(.{}));
+}
