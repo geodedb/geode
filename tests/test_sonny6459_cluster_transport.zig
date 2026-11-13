@@ -216,7 +216,7 @@ test "SONNY-6459 item 6: the raft sender reconnects when a peer's endpoint chang
     try t.startClientPoll();
     defer t.stopClientPoll();
 
-    var peer: raft.Peer = .{ .id = 1, .endpoint = first_ip, .port = port, .alive = true, .last_contact = 0, .rpc_client = null };
+    var peer: raft.Peer = .{ .id = 1, .endpoint = first_ip, .port = port, .last_contact = 0 };
     const to_first = deliver(&t, peer, first, 10);
     std.debug.print("peer 1 at {s}: delivered={} (terms: first={d} second={d})\n", .{ first_ip, to_first, first.currentTerm(), second.currentTerm() });
     try std.testing.expect(to_first);

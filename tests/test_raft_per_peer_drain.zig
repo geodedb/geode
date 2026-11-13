@@ -94,9 +94,7 @@ fn mkPeer(id: u64) Peer {
         .id = id,
         .endpoint = "127.0.0.1",
         .port = @intCast(21000 + id),
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
 }
 

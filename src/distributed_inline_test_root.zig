@@ -14,9 +14,9 @@
 // did not compile from 300eb9a94 until 12879e5d1); twophase.zig's by none.
 // `zig build test-sonny6459-distributed-inline` builds this root, wired like
 // the graph_store.zig test root, with filters that select those four files'
-// tests. Excluded: twophase.zig's two `TwoPCCoordinator.handleMessage` tests,
-// which cannot compile (protobuf 0.1.6 cannot decode TwoPhaseMessage's union
-// submessages). Test-only; never linked into the shipped binary.
+// tests. (twophase.zig's two `TwoPCCoordinator.handleMessage` tests, which
+// could not compile, left with the dead coordinator wrapper: SONNY-6463.)
+// Test-only; never linked into the shipped binary.
 
 test {
     _ = @import("distributed/raft_consensus.zig");

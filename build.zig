@@ -6327,20 +6327,13 @@ pub fn build(b: *std.Build) void {
     }
     const distributed_inline_tests = b.addTest(.{
         .root_module = distributed_inline_mod,
-        // twophase.zig: every test except the two that call
-        // `TwoPCCoordinator.handleMessage`, which cannot compile (protobuf
-        // 0.1.6 cannot decode TwoPhaseMessage's union submessages).
+        // twophase.zig: every test (SONNY-6463 removed the two that called
+        // `TwoPCCoordinator.handleMessage`, which could not compile).
         .filters = &.{
             "distributed.raft_consensus.test.",
             "distributed.cluster.test.",
             "distributed.cluster_auth.test.",
-            "distributed.twophase.test.applyUndoOperation ",
-            "distributed.twophase.test.Transaction.",
-            "distributed.twophase.test.getClusterToken ",
-            "distributed.twophase.test.prepare message ",
-            "distributed.twophase.test.2PC nonce generation ",
-            "distributed.twophase.test.captureNodePreImage ",
-            "distributed.twophase.test.captureEdgePreImage ",
+            "distributed.twophase.test.",
         },
     });
     const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);

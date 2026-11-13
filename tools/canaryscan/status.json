@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:01:57.359865512Z",
+  "generated_at": "2026-11-13T13:06:46.2781897Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1483,23 +1483,6 @@
       ]
     },
     {
-      "id": "REQ-2PC-ABORT-001",
-      "features": [
-        {
-          "feature": "2PC Abort Handler",
-          "aspect": "UndoApplication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-2PC-COMMIT-001",
       "features": [
         {
@@ -1513,18 +1496,6 @@
           "benches": [],
           "owner": "txn",
           "updated": "2026-01-16"
-        },
-        {
-          "feature": "2PC Commit Handler",
-          "aspect": "StorageApplication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -1559,35 +1530,6 @@
           "benches": [],
           "owner": "txn",
           "updated": "2026-01-16"
-        },
-        {
-          "feature": "2PC Participant Node",
-          "aspect": "StorageOps",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-2PC-PARTICIPANT-TEST-001",
-      "features": [
-        {
-          "feature": "2PC Participant Unit Tests",
-          "aspect": "TestCoverage",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
         }
       ]
     },
@@ -33488,20 +33430,6 @@
       "features": [
         {
           "feature": "Raft Replication",
-          "aspect": "AppendEntriesCommitAdvance",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_commit_advancement.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_070_AppendEntriesCommitAdvance"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Raft Replication",
           "aspect": "CommitAdvancementVarianceEnvelope",
           "status": "BENCHED",
           "files": [
@@ -34085,20 +34013,6 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-05-25"
-        },
-        {
-          "feature": "RaftFrame/TransportEnvelope",
-          "aspect": "NetworkTransport",
-          "status": "TESTED",
-          "files": [
-            "tests/test_quic_raft_smoke.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_RaftFrameSmoke"
-          ],
-          "benches": [],
-          "owner": "cluster",
-          "updated": "2025-09-23"
         }
       ]
     },
@@ -36125,23 +36039,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-2PC-005",
-      "features": [
-        {
-          "feature": "Distributed Query Processing",
-          "aspect": "Distributed",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
         }
       ]
     },
@@ -94040,18 +93937,6 @@
         },
         {
           "feature": "Raft RPC TLS",
-          "aspect": "RpcClientConnect",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_consensus.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-04-10"
-        },
-        {
-          "feature": "Raft RPC TLS",
           "aspect": "TransportSend",
           "status": "TESTED",
           "files": [
@@ -94089,8 +93974,8 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 333,
-      "TESTED": 4906
+      "IMPL": 329,
+      "TESTED": 4902
     },
     "by_aspect": {
       "2PC": 3,
@@ -94224,7 +94109,6 @@
       "AnnexBCompleteness": 1,
       "AnnotationsBlindIndexEvidence": 1,
       "ApiKeysNotSupported": 1,
-      "AppendEntriesCommitAdvance": 1,
       "AppendOrderedLabelPosting": 1,
       "ApplicationErrorSpace": 1,
       "ApplyAbsoluteIdEdge": 1,
@@ -95067,7 +94951,7 @@
       "DistinctExitCode": 1,
       "DistinctOptional": 1,
       "DistinctYieldNames": 1,
-      "Distributed": 3,
+      "Distributed": 2,
       "DistributedCluster": 1,
       "DistributedIndep": 1,
       "DistributedIsolation": 1,
@@ -96364,7 +96248,7 @@
       "NetworkCallback": 1,
       "NetworkSecurity": 1,
       "NetworkTests": 1,
-      "NetworkTransport": 2,
+      "NetworkTransport": 1,
       "NetworkTransportTests": 1,
       "NewlineOnEmptyInput": 1,
       "NextFreshnessGuard": 1,
@@ -97390,7 +97274,6 @@
       "RowScopeInterface": 1,
       "RowValueOwnership": 1,
       "RowVisibilityCombinator": 1,
-      "RpcClientConnect": 1,
       "RunGqlError": 1,
       "RuntimeCounterBridge": 1,
       "RuntimeEngine": 1,
@@ -97767,14 +97650,12 @@
       "Stop": 1,
       "StorableValues": 1,
       "Storage": 20,
-      "StorageApplication": 1,
       "StorageBench": 1,
       "StorageFilterAndDescendants": 1,
       "StorageIndep": 1,
       "StorageIntegration": 1,
       "StorageIsolation": 1,
       "StorageLookupResidual": 1,
-      "StorageOps": 1,
       "StorageProcedures": 1,
       "StorageTests": 3,
       "StorageUnit": 1,
@@ -97889,7 +97770,7 @@
       "TestAssertions": 1,
       "TestAutomation": 1,
       "TestCleanup": 1,
-      "TestCoverage": 5,
+      "TestCoverage": 4,
       "TestEnforcement": 1,
       "TestExecution": 1,
       "TestExposure": 1,
@@ -98012,7 +97893,6 @@
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
-      "UndoApplication": 1,
       "UndoCheckpoint": 1,
       "UndoEntry": 1,
       "UndoEntryCompaction": 1,

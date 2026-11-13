@@ -2162,6 +2162,17 @@
   "curated dataset" was never seeded, so it compared two empty answers. It
   now seeds its dataset into a fresh temporary directory and asserts the
   rows.
+- **Dead distributed code removed (SONNY-6463 items 1-3).**
+  `twophase.TwoPCCoordinator` (with `CoordinatorConfig` and the
+  `twophase_participant.zig` participant only it used) had no user, and its
+  `handleMessage` could not compile (protobuf cannot decode
+  `TwoPhaseMessage`'s union submessages); `raft_consensus.Peer.alive`,
+  `Peer.rpc_client` and the `RpcClient` type were never read or updated;
+  `ClusterCoordinator.handleClusterMessage` → `handleShardQuery` (a 2PC
+  write path that could not compile: `std.ArrayList(...).init`,
+  `std.atomic.Atomic`) and its helpers had no caller. The live inbound
+  cluster RPC path is `handleClusterRpcLocal`, unchanged. No inbound 2PC
+  path existed, so no replay check was lost.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

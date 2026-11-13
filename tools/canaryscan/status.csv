@@ -90,13 +90,9 @@ REQ-0009,Performance Budget Enforcement,CI,TESTED,.gitlab-ci.yml,test-performanc
 REQ-0009,Performance Targets,Benchmark,BENCHED,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified_Run,ops-team,2026-01-15
 REQ-2PC-001,2PC,PreparePhase,TESTED,tests/test_gap_0193_final_batch.zig,,,distributed,2026-01-15
 REQ-2PC-002,2PC,CommitPhase,TESTED,tests/test_gap_0193_final_batch.zig,,,distributed,2026-01-15
-REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
 REQ-2PC-COMMIT-001,2PC,Commit,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,txn,2026-01-16
-REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
 REQ-2PC-COORD-001,2PC,Coordinator,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-PARTICIPANT-001,2PC,Participant,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,txn,2026-01-16
-REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
-REQ-2PC-PARTICIPANT-TEST-001,2PC Participant Unit Tests,TestCoverage,TESTED,src/distributed/twophase_participant.zig,,,distributed,2026-04-06
 REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
@@ -2218,7 +2214,6 @@ REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,src/execution/algo_dispatch.zig,
 REQ-GQL-068,ExposedAlgorithms,ReExport,TESTED,src/execution.zig,geodetestlab/specs/geode_graph_algorithms.yml,,execution,2026-01-03
 REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,src/graph/containers/count_min_sketch.zig,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21
 REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,tests/benchmark_count_min_sketch_container.zig,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21
-REQ-GQL-070,Raft Replication,AppendEntriesCommitAdvance,TESTED,tests/test_raft_commit_advancement.zig,TestCANARY_REQ_GQL_070_AppendEntriesCommitAdvance,,distributed,2025-09-21
 REQ-GQL-070,Raft Replication,CommitAdvancementVarianceEnvelope,BENCHED,tests/benchmark_raft_commit_advancement_variance.zig,,BenchmarkCANARY_REQ_GQL_070_CommitAdvancementVarianceEnvelope,distributed,2025-09-21
 REQ-GQL-070,String Search,KMP,BENCHED,src/graph/string_search_kmp.zig,TestCANARY_REQ_GQL_070_KMP,BenchmarkCANARY_REQ_GQL_070_KMP,graph,2025-09-21
 REQ-GQL-073,MvccAdvanced,ConflictRepairHeuristics,BENCHED,src/transactions/mvcc_adv/conflict_repair_heuristics.zig,TestCANARY_REQ_GQL_073_ConflictRepairHeuristics,BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics,txn,2025-09-20
@@ -2262,7 +2257,6 @@ REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,tests/ben
 REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,tests/test_quic_slow_poll_warning.zig,slow_poll_warning_fires_only_past_threshold_and_rate_limited,,wire,2026-06-07
 REQ-GQL-074,QUIC Transport,ClientHandshakeStallRegression,TESTED,tests/test_quic_handshake_stall_regression.sh,test_quic_handshake_stall_regression,,transport,2026-04-16
 REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,tests/test_quic_condition_timedwait_cadence.zig,test_quic_condition_timedwait_cadence,,transport,2026-05-25
-REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,tests/test_quic_raft_smoke.zig,TestCANARY_REQ_GQL_074_RaftFrameSmoke,,cluster,2025-09-23
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,tests/debug/test_cost_model_adaptive_bias.zig,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias,,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,src/planner/cost_seed.zig,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity,,planner,2025-09-26
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,tests/debug/test_cost_model_adaptive_bias_parity.zig,,,planner,2025-09-26
@@ -2412,7 +2406,6 @@ REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,src/distributed/t
 REQ-GQL-2PC-003,2PC,Idempotence,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-06-10
 REQ-GQL-2PC-004,2PC,RaftIntegration,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-002,2PC,WriteSetParser,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-TEST,2PC Test Suite,Testing,TESTED,tests/test_2pc_distributed.zig,TestCANARY_2PC_Suite,,test,2025-09-29
@@ -5975,6 +5968,5 @@ REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,tests/test_gap_0193_impl_veri
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
 SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
-SEC-D011,Raft RPC TLS,RpcClientConnect,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SEC-D011,Raft RPC TLS,TransportSend,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SONNY-1841,WriteCancelReleasesLock,Regression,TESTED,tests/test_sonny1841_write_lock_cancel.zig,tests/test_sonny1841_write_lock_cancel.zig,,execution,2026-09-18
