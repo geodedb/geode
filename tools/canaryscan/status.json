@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:01:23.40198274Z",
+  "generated_at": "2026-11-13T09:04:25.690078206Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85894,6 +85894,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6459-CLUSTER-TRANSPORT",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "AcceptWithoutPoolAndPeerEndpointChange",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_cluster_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_cluster_transport.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6459-DISTRIBUTED-INLINE-TESTS",
       "features": [
         {
@@ -93566,7 +93585,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4879
+      "TESTED": 4880
     },
     "by_aspect": {
       "2PC": 3,
@@ -93599,6 +93618,7 @@
       "AbortedTxnGate": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
+      "AcceptWithoutPoolAndPeerEndpointChange": 1,
       "AcceptorSpawn": 1,
       "AccessControl": 3,
       "AccurateStorageMetrics": 1,

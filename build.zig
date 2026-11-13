@@ -15894,6 +15894,22 @@ pub fn build(b: *std.Build) void {
     const sonny6456_reap_step = b.step("test-sonny6456-cluster-dead-conn-reap", "Run the SONNY-6456 item 2 regression (a started ClusterCoordinator's QUIC listener reaps an inbound connection whose peer went silent, with GEODE_RAFT_DEAD_CONN_REAP_MS, well before the inbound idle deadline)");
     sonny6456_reap_step.dependOn(&run_sonny6456_reap_tests.step);
 
+    // SONNY-6459 items 5-6: the cluster listener closes a connection it has
+    // no pool for; the real raft sender reconnects when a peer's endpoint
+    // changes (127.0.0.94-98).
+    const sonny6459_transport_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_cluster_transport.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_transport_tests.root_module.addImport("geode", root_mod);
+    sonny6459_transport_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny6459_transport_tests.root_module.link_libc = true;
+    const run_sonny6459_transport_tests = b.addRunArtifact(sonny6459_transport_tests);
+    shardDep(test_step, &run_sonny6459_transport_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_transport_step = b.step("test-sonny6459-cluster-transport", "Run the SONNY-6459 items 5-6 regression (a started ClusterCoordinator with no connection pool closes an accepted connection at once; the real raft sender sends to a peer's new endpoint after it changes, not over the cached connection to the old one)");
+    sonny6459_transport_step.dependOn(&run_sonny6459_transport_tests.step);
+
     // SONNY-6456 item 3: the REAL raft sender (opted into real QUIC in a test
     // build) reconnects after the peer closes its connection and after the
     // peer restarts.
