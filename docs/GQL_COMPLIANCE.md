@@ -382,9 +382,12 @@ MATCH (p:Person) CALL db.labels() YIELD label FILTER label <> 'Person' RETURN p.
 
 A `WHERE` directly after `YIELD` (the Cypher form) is not ISO GQL (16.14
 <yield clause> is `YIELD <yield item list>` only) and is refused with
-42000, naming the FILTER form. Not yet accepted: a FILTER after an inline
-`LET` or between two MATCH clauses. Regression: `zig build
-test-sonny6460-filter-statement`.
+42000, naming the FILTER form. A FILTER after an inline `LET` sees the
+LET's variables (`MATCH (n) LET x = n.a * 2 FILTER x > 2 RETURN n`), and a
+FILTER between two MATCH statements filters the rows matched so far
+(`MATCH (a) FILTER a.k > 1 MATCH (a)-[:R]->(b) RETURN b`); a FILTER before
+CREATE or MERGE is refused (SONNY-6467). Regression: `zig build
+test-sonny6460-filter-statement`, `zig build test-sonny6467-query-residuals`.
 
 ## 🔧 Advanced Features
 

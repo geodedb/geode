@@ -2036,6 +2036,20 @@
 
 ### Fixed
 
+- **`NOT (k = 1)` is a negated comparison, not a pattern; a CALL in a
+  transaction body honours RETURN, ORDER BY, SKIP and LIMIT; FILTER after
+  an inline LET and between MATCH statements (SONNY-6467 items 1-3).**
+  After `NOT (`, any identifier not followed by `.` was taken for a node
+  pattern, so `WHERE NOT (k = 1)` was a syntax error and `WHERE NOT (flag)`
+  was `NOT EXISTS { (flag) }` (always false); an identifier is now a node
+  pattern only when a label, a property map or an edge follows it.
+  `START TRANSACTION { CALL p() YIELD x RETURN x ORDER BY x LIMIT 1 }`
+  returned every yielded row in the procedure's order; the body's CALL is
+  now finished as a statement's is. ISO/IEC 39075:2024 14.6 makes FILTER a
+  simple query statement, so `MATCH ... LET x = e FILTER x > 2 RETURN ...`
+  and `MATCH (a) FILTER a.k > 1 MATCH (a)-[:R]->(b) RETURN ...` are now
+  accepted (a FILTER before CREATE or MERGE stays refused). Regression:
+  `zig build test-sonny6467-query-residuals` (new).
 - **ISO abbreviated edge patterns `-` and `<->`, and `<-[ ]->` matches
   either direction (SONNY-6267).** ISO/IEC 39075:2024 16.7 defines seven
   abbreviated edge patterns; Geode accepted `<-` and `->` (and Cypher's

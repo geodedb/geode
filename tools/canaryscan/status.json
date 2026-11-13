@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:45:05.942530406Z",
+  "generated_at": "2026-11-13T12:45:28.035753676Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86009,6 +86009,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6467-CALL-IN-TXN-BODY",
+      "features": [
+        {
+          "feature": "ProcedureCall",
+          "aspect": "TransactionBodyProjection",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6467-FILTER-AFTER-LET",
+      "features": [
+        {
+          "feature": "FilterStatement",
+          "aspect": "AfterInlineLet",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6467-QUERY-RESIDUALS",
       "features": [
         {
@@ -93695,7 +93733,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4885
+      "TESTED": 4887
     },
     "by_aspect": {
       "2PC": 3,
@@ -93782,6 +93820,7 @@
       "AdvancedCostModel": 1,
       "AdvancedCostModelCalibrationVarianceEnvelope": 1,
       "AdvancedPatterns": 1,
+      "AfterInlineLet": 1,
       "AggEndpointUnification": 1,
       "AggFunctions": 1,
       "Aggregate": 1,
@@ -97532,6 +97571,7 @@
       "Topology": 1,
       "Training": 1,
       "Transaction": 1,
+      "TransactionBodyProjection": 1,
       "TransactionCoord": 1,
       "TransactionCoordination": 2,
       "TransactionDetectionTests": 1,
