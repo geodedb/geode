@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:24:58.175903828Z",
+  "generated_at": "2026-11-13T09:26:17.804102417Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85603,6 +85603,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6460-META-ENDPOINT-RLS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6460-QUERY-RESIDUALS",
       "features": [
         {
@@ -93256,7 +93275,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4858
+      "TESTED": 4859
     },
     "by_aspect": {
       "2PC": 3,
@@ -96374,7 +96393,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 298,
+      "Regression": 299,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

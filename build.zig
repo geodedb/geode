@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6460-meta-rls", .reason = "intentionally red TDD reproduction (SONNY-6460 item 5); register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -14997,6 +14998,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_step = b.step("test-sonny6460-query-residuals", "Run SONNY-6460 regressions (the gql engine's GROUP BY frees its per-group accumulators, keys and COUNT DISTINCT sets, also when an allocation fails)");
     sonny6460_step.dependOn(&run_sonny6460_tests.step);
+    // SONNY-6460 item 5: db.relationshipTypes() and db.propertyKeys() omit
+    // what only edges with an RLS-hidden endpoint carry.
+    const sonny6460_meta_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_meta_rls.zig"), .target = target, .optimize = optimize });
+    sonny6460_meta_mod.addImport("geode", root_mod);
+    sonny6460_meta_mod.addImport("logging", logging_mod);
+    sonny6460_meta_mod.addImport("rls_types", rls_types_mod);
+    const sonny6460_meta_tests = b.addTest(.{ .root_module = sonny6460_meta_mod });
+    const run_sonny6460_meta_tests = b.addRunArtifact(sonny6460_meta_tests);
+    const sonny6460_meta_step = b.step("test-sonny6460-meta-rls", "Run SONNY-6460 item 5 regression (db.relationshipTypes() and db.propertyKeys() omit the types and keys only edges with an endpoint the session's RLS label policies hide carry, as a MATCH does not reach those edges)");
+    sonny6460_meta_step.dependOn(&run_sonny6460_meta_tests.step);
     const sonny6460_exec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "exec.zig:", "TestCANARY_REQ_GQL_012_CountDistinctExec" } });
     const run_sonny6460_exec_inline_tests = b.addRunArtifact(sonny6460_exec_inline_tests);
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
