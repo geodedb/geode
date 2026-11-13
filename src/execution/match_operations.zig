@@ -4848,11 +4848,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 } else {
                     // RETURN clause exists - evaluate expressions
+                    // SONNY-6297: lent from the statement's scratch arena
+                    // (the rows borrow their cells; it leaked), and the row
+                    // is freed when an item fails.
                     row = try self.allocator.alloc(Value, self.items.len);
+                    errdefer self.allocator.free(row);
                     for (self.items, 0..) |item, i| {
-                        row[i] = try eval.evalExpr(self.allocator, item.expr, env);
+                        row[i] = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), item.expr, env);
                     }
                 }
+                errdefer self.allocator.free(row);
                 try self.rows.append(self.allocator, row);
                 return;
             }
@@ -6798,10 +6803,18 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Determine which items to evaluate per binding: WITH items if present, else RETURN items
     const eval_items = if (q.with_clause) |wc| wc.items else q.ret.items;
     const eval_columns = try generateUniqueColumnNames(allocator, eval_items);
+    // SONNY-6297: an error below (an item that fails, now raised) frees the
+    // columns and the rows built so far.
+    var columns_owned = true;
+    errdefer if (columns_owned) freeColumnNames(allocator, eval_columns);
 
     // Evaluate expressions for each binding
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
+    errdefer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
     // A path variable's arrays, per binding: a row that returns the path
     // keeps a copy (`keepPaths`), as the single-chain traversals keep theirs
     // (SONNY-3148); the rest are released with the binding.
@@ -6898,20 +6911,29 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         }
 
         // Evaluate items (WITH items if present, RETURN items otherwise)
-        var row = try allocator.alloc(Value, eval_items.len);
+        // SONNY-6297: the rows borrow their cells, so what an item computes
+        // is lent from the statement's scratch arena (on `allocator` nothing
+        // freed it), and an item that fails fails the statement (ISO/IEC
+        // 39075 19.1 GR 1; it was NULL).
+        try rows.ensureUnusedCapacity(allocator, 1);
+        const row = try allocator.alloc(Value, eval_items.len);
+        errdefer allocator.free(row);
         for (eval_items, 0..) |item, i| {
-            row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+            row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
             if (path_specs.items.len > 0) try keepPaths(allocator, &row[i]);
         }
-        try rows.append(allocator, row);
+        rows.appendAssumeCapacity(row);
     }
 
     // Build intermediate result
+    const result_rows = try rows.toOwnedSlice(allocator);
+    columns_owned = false;
     var result = ExecutionResult{
         .columns = eval_columns,
-        .rows = try rows.toOwnedSlice(allocator),
+        .rows = result_rows,
         .flags = std.ArrayList([]const u8).empty,
     };
+    errdefer result.deinit(allocator);
 
     // If WITH clause exists, apply RETURN projection on the WITH result
     if (q.with_clause != null) {
@@ -6920,7 +6942,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         const same_items = q.with_clause.?.items.ptr == items.ptr and q.with_clause.?.items.len == items.len;
         if (!same_items and items.len > 0) {
             const ret_columns = try generateUniqueColumnNames(allocator, items);
+            errdefer freeColumnNames(allocator, ret_columns);
             var ret_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
+            errdefer {
+                for (ret_rows.items) |row| allocator.free(row);
+                ret_rows.deinit(allocator);
+            }
             for (result.rows) |row| {
                 const ret_env = Env{
                     .names = result.columns,
@@ -6929,12 +6956,15 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                var ret_row = try allocator.alloc(Value, items.len);
+                // SONNY-6297: lent and raised, as the WITH items above.
+                const ret_row = try allocator.alloc(Value, items.len);
+                errdefer allocator.free(ret_row);
                 for (items, 0..) |item, i| {
-                    ret_row[i] = eval.evalExpr(allocator, item.expr, ret_env) catch Value{ .Null = {} };
+                    ret_row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, ret_env);
                 }
                 try ret_rows.append(allocator, ret_row);
             }
+            const new_rows = try ret_rows.toOwnedSlice(allocator);
             // Free old columns
             for (result.columns) |col| allocator.free(col);
             allocator.free(result.columns);
@@ -6942,7 +6972,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             // Free old rows
             for (result.rows) |row| allocator.free(row);
             allocator.free(result.rows);
-            result.rows = try ret_rows.toOwnedSlice(allocator);
+            result.rows = new_rows;
         }
     }
 
@@ -6950,11 +6980,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
 
     if (q.order_by) |order| {
-        sortRows(allocator, &result, order) catch |err| {
-            // SONNY-2811: a key that fails to evaluate fails the sort.
-            result.deinit(allocator);
-            return err;
-        };
+        // SONNY-2811: a key that fails to evaluate fails the sort (the
+        // result is freed by the errdefer above).
+        try sortRows(allocator, &result, order);
     }
 
     if (q.ret.distinct) {
@@ -7335,7 +7363,9 @@ fn executeVariableLengthPathTraversal(
             row = try allocator.alloc(Value, items.len);
             for (items, 0..) |item, i| {
                 // SONNY-6351 item 1: an item that fails frees the row.
-                row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                // SONNY-6297: lent from the statement's scratch arena (the
+                // rows borrow their cells; on `allocator` it leaked).
+                row[i] = eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env) catch |err| {
                     allocator.free(row);
                     return err;
                 };
@@ -10833,7 +10863,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     for (q.ret.items, 0..) |item, i| {
-                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        // SONNY-6297: lent (the rows borrow their cells).
+                        return_row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
                     }
 
                     return_rows[row_idx] = return_row;

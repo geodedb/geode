@@ -2161,6 +2161,16 @@
 
 ### Fixed
 
+- **Per-row items of the legacy traversals are freed, and an item that
+  fails fails the statement (SONNY-6297).** The variable-length traversal,
+  the multi-pattern executors and the WITH stage's RETURN computed their
+  items on the result's allocator while their rows borrow their cells
+  (`a.s || '>' || b.s` leaked once per row on the in-memory, tenant-scoped
+  and RLS sessions); they are lent from the statement's scratch arena. The
+  multi-pattern executor answered an item that fails as NULL
+  (`RETURN a.s || toString(c.i / 0)` gave NULL rows); it raises the error
+  now (ISO/IEC 39075 19.1 GR 1). Regression: `zig build
+  test-sonny6297-per-row-item-leaks`.
 - **The write step keeps one detached copy of a written node per write
   (SONNY-3148).** Each refresh of a written node took a fresh detached copy
   (kept until the graph's next checkpoint and charged to the write budget):
