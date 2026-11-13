@@ -10067,6 +10067,18 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6442-tde-measure-overhead", "Run SONNY-6442 item 6 regression (CALL tde.measure_overhead() is refused as unsupported with TDE on or off, and the memcpy-vs-AEAD measurement is gone; the real measurement is test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
     }
+    // SONNY-6448 (4): tde.test_transparent_encryption reported a
+    // memcpy-vs-AEAD "performance_impact_pct"; the self-test stays, the
+    // figure is gone.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_tde_transparent_encryption.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-tde-transparent-encryption", "Run SONNY-6448 item 4 regression (CALL tde.test_transparent_encryption() still round-trips every type through the server's TDE key and answers types_tested, all_transparent and errors_encountered, without the memcpy-vs-AEAD performance_impact_pct; FeatureDisabled with TDE off)").dependOn(&run_tests.step);
+    }
     // SONNY-6442 (8): geode fle and in-process FLE check the master key
     // check value too, through the helper geode serve uses.
     {
