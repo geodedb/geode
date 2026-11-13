@@ -783,6 +783,17 @@ pub const QuicProtoClient = struct {
         }
     }
 
+    /// Vanish WITHOUT a CONNECTION_CLOSE, as a crashed client or a dropped
+    /// network does (SONNY-6466): the endpoint is freed locally and the
+    /// server hears nothing more.
+    pub fn abandon(self: *QuicProtoClient) void {
+        self.stream.deinit();
+        self.client.deinit();
+        if (self.session_id.len > 0) {
+            self.allocator.free(self.session_id);
+        }
+    }
+
     fn ensureHello(self: *QuicProtoClient, allocator: std.mem.Allocator) !void {
         if (self.session_id.len > 0) return;
         var hello_result = try self.hello(allocator, defaultUsername(), defaultPassword());

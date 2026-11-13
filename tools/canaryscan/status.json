@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:32:53.723653436Z",
+  "generated_at": "2026-11-13T11:49:22.364500486Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86270,6 +86270,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "DrainedConnectionCancelsEveryStream",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "ConnectionKeyedStallWatchdog",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93937,7 +93975,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4898
+      "TESTED": 4900
     },
     "by_aspect": {
       "2PC": 3,
@@ -94584,6 +94622,7 @@
       "ConnectionAuth": 1,
       "ConnectionHandler": 1,
       "ConnectionHandling": 2,
+      "ConnectionKeyedStallWatchdog": 1,
       "ConnectionList": 1,
       "ConnectionManagement": 1,
       "ConnectionOutlivesFirstStream": 1,
@@ -94932,6 +94971,7 @@
       "DoubleFreeFix": 3,
       "DownReversalSafety": 1,
       "DrainReadyMessages": 1,
+      "DrainedConnectionCancelsEveryStream": 1,
       "DriftPolicyOutcomeStrict": 1,
       "DropAllRowsOfTheName": 1,
       "DropClearsDimPin": 1,
