@@ -9,7 +9,7 @@
 // posture, and in a Debug build outside GEODE_ENV=production they still
 // connect (with the warning), as before.
 //
-// Real QUIC: an in-process `QuicTransport` server on 127.0.0.2 presents a
+// Real QUIC: an in-process `QuicTransport` server on 127.0.0.42 presents a
 // leaf signed by CA "good"; the CLI client bridge dials it under each
 // posture. This Debug test binary sets GEODE_ENV=production to get
 // production posture (a release build gets it unconditionally).
@@ -22,7 +22,7 @@ const quic = @import("transport/quic");
 const bridge = @import("zig_quic_bridge");
 const test_ports = @import("test_ports.zig");
 
-const SERVER_IP = "127.0.0.2";
+const SERVER_IP = "127.0.0.42";
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -75,7 +75,7 @@ fn makeFixtures() !Fixtures {
     const leaf_csr = try std.fmt.allocPrint(a, "{s}/leaf.csr", .{dir});
     fx.leaf = try std.fmt.allocPrint(a, "{s}/leaf.crt", .{dir});
     const ext = try std.fmt.allocPrint(a, "{s}/leaf.ext", .{dir});
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = ext, .data = "subjectAltName=IP:127.0.0.2,DNS:127.0.0.2\nextendedKeyUsage=serverAuth\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = ext, .data = "subjectAltName=IP:127.0.0.42,DNS:127.0.0.42\nextendedKeyUsage=serverAuth\n" });
     try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", good_key });
     try run(spawn_gpa, io, &.{ "openssl", "req", "-sha256", "-x509", "-new", "-key", good_key, "-days", "1", "-subj", "/CN=sonny6453-cli-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", fx.good_ca });
     try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", fx.leaf_key });

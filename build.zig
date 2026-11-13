@@ -2263,7 +2263,7 @@ pub fn build(b: *std.Build) void {
     cluster_3node_election_step.dependOn(&run_cluster_3node_election_tests.step);
 
     // GAP-0838: non-loopback (distinct IP) secure-mode peer TLS handshake.
-    // Binds a QuicTransport server on 127.0.0.2 with a real openssl CA-issued
+    // Binds a QuicTransport server on 127.0.0.32 with a real openssl CA-issued
     // leaf and drives a secure QuicClient handshake (NOT insecure). This is
     // both the cross-pod reproduction and the permanent CI guard.
     const gap0838_cluster_tls_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -11074,7 +11074,7 @@ pub fn build(b: *std.Build) void {
     const sonny3313_tests = b.addTest(.{ .root_module = sonny3313_test_mod });
     const run_sonny3313_tests = b.addRunArtifact(sonny3313_tests);
     shardDep(test_step, &run_sonny3313_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny3313_step = b.step("test-sonny3313-grpc-peer-ip", "Run SONNY-3313 regression (formatPeerIp formats IPv4, IPv6 and IPv4-mapped peers; anonymous Handshakes through the real handler on real accepted sockets from 127.0.0.2, 127.0.0.3 and ::1 count per peer: at max_sessions_per_principal one peer is refused and another served)");
+    const sonny3313_step = b.step("test-sonny3313-grpc-peer-ip", "Run SONNY-3313 regression (formatPeerIp formats IPv4, IPv6 and IPv4-mapped peers; anonymous Handshakes through the real handler on real accepted sockets from 127.0.0.43, 127.0.0.44 and ::1 count per peer: at max_sessions_per_principal one peer is refused and another served)");
     sonny3313_step.dependOn(&run_sonny3313_tests.step);
 
     // SONNY-3234 (round 15, F10): a graph made under a name reserved since
