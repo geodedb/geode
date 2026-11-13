@@ -1904,55 +1904,21 @@ REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,tests/query_plan_cache_tes
 REQ-GQL-021,Bench Variance Infra,VarianceConfigHelper,TESTED,src/benchmarks/variance_config.zig,TestCANARY_REQ_GQL_021_VarianceConfigHelper,,tooling,2025-09-22
 REQ-GQL-021,Bench Variance Infra,VarianceConfigStats,TESTED,tests/test_variance_config.zig,TestCANARY_REQ_GQL_021_VarianceConfigStats,,tooling,2025-09-22
 REQ-GQL-021,Cluster Message Handler,OnMessage,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
-REQ-GQL-021,PathCache,PathCacheCore,BENCHED,src/planner/path_cache.zig,TestCANARY_REQ_GQL_021_PathCacheLookup,BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,tests/benchmark_path_cache_degree_bucket_utilization.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheDegreeUtilization,BENCHED,tests/benchmark_path_cache_degree_utilization.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeUtilization,planner,2025-09-23
-REQ-GQL-021,PathCache,PathCacheEntropyStats,TESTED,tests/canary_path_cache_entropy.zig,TestCANARY_REQ_GQL_021_PathCacheEntropyStats,,planner,2025-09-22
-REQ-GQL-021,PathCache,PathCacheEntropyVarianceEnvelope,BENCHED,tests/canary_path_cache_entropy.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheEntropyVarianceEnvelope,planner,2025-09-22
-REQ-GQL-021,PathCache,PathCacheEviction,BENCHED,src/planner/path_cache.zig,TestCANARY_REQ_GQL_021_PathCacheEviction,BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheHitMissVarianceEnvelope,BENCHED,tests/benchmark_path_cache_hit_miss_variance.zig,TestCANARY_REQ_GQL_021_PathCacheLookup,BenchmarkCANARY_REQ_GQL_021_PathCacheHitMissVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheLookup,BENCHED,tests/test_path_cache_lookup.zig,TestCANARY_REQ_GQL_021_PathCacheLookup,BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheLookupVarianceEnvelope,BENCHED,tests/benchmark_path_cache_lookup_variance.zig,TestCANARY_REQ_GQL_021_PathCacheLookup,BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheMetricsExport,TESTED,src/planner/path_cache.zig,TestCANARY_REQ_GQL_021_PathCacheMetricsExport,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCachePlannerHook,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCachePlannerHook,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCachePlannerIntegration,BENCHED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCachePlannerIntegration,BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionEnvelope,BENCHED,tests/benchmark_path_cache_structural_collision.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionTightened,BENCHED,tests/benchmark_path_cache_structural_collision.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDerivation,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyValueShapeEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation,,planner,2025-09-21
-REQ-GQL-021,Query Planner,AdaptiveReplanExecutionIntegration,BENCHED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_AdaptiveReplanExecutionIntegration,BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,GroupValidationHookImplementation,TESTED,src/planner/rewrite.zig,TestCANARY_REQ_GQL_021_GroupValidationHookImplementation,,planner,2025-09-21
-REQ-GQL-021,Query Planner,GroupValidationHookPipelineIntegration,TESTED,tests/test_planner_real_subphases.zig,TestCANARY_REQ_GQL_021_GroupValidationHookPipelineIntegration,,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerAdaptiveReplanRefinement,TESTED,src/planner/adaptive_replan.zig,TestCANARY_REQ_GQL_021_AdaptiveReplanRefinement,,planner,2025-09-22
-REQ-GQL-021,Query Planner,PlannerAdaptiveReplanRefinementVarianceEnvelope,BENCHED,tests/benchmark_adaptive_replan_refinement_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanRefinementVarianceEnvelope,planner,2025-09-22
-REQ-GQL-021,Query Planner,PlannerAdaptiveReplanTrigger,BENCHED,src/planner/adaptive_replan.zig,TestCANARY_REQ_GQL_021_AdaptiveReplanTrigger,BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerAdaptiveReplanVarianceEnvelope,BENCHED,tests/benchmark_adaptive_replan_trigger_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,Query Planner,PlannerCardinalityEstimateVarianceEnvelope,BENCHED,tests/benchmark_planner_cardinality_estimate_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerCardinalityEstimateVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerCostModelPhaseTiming,BENCHED,src/planner/phase_timing.zig,TestCANARY_REQ_GQL_021_PlannerCostModelPhaseTiming,BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerCostModelPhaseVarianceEnvelope,BENCHED,tests/benchmark_planner_cost_model_phase_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerGroupValidationTiming,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming,,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerGroupValidationVarianceEnvelope,BENCHED,tests/benchmark_planner_group_pre_validation_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerGroupValidationVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerPhaseRealTimingIntegration,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration,,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerPipelineOrchestration,BENCHED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration,BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerPipelineP95MeanVarianceEnvelope,BENCHED,tests/benchmark_planner_pipeline_p95_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerPipelineP95MeanVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerPipelineVarianceEnvelope,BENCHED,tests/benchmark_planner_pipeline_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerPreValidationVarianceEnvelope,BENCHED,tests/benchmark_planner_group_pre_validation_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerPreValidationVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerProjectionPrunePhaseTiming,TESTED,src/planner/phase_timing.zig,TestCANARY_REQ_GQL_021_PlannerProjectionPrunePhaseTiming,,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerProjectionPruneVarianceEnvelope,BENCHED,src/planner/pipeline.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerProjectionPruneVarianceEnvelope,BENCHED,tests/benchmark_planner_projection_prune_variance.zig,,,planner,2025-09-21
 REQ-GQL-021,Query Planner,PlannerRewritePassVarianceEnvelope,BENCHED,tests/benchmark_planner_rewrite_pass_variance.zig,,BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,PlannerRewritePreValidationTiming,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PlannerPreValidationTiming,,planner,2025-09-21
 REQ-GQL-021,Query Planner,PlannerSubPhaseHooks,TESTED,src/planner.zig,TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks,,planner,2025-09-21
 REQ-GQL-021,Query Planner,QueryPlanCacheEvictVarianceEnvelope,BENCHED,tests/benchmark_query_plan_cache_evict_variance.zig,,BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,Query Planner,RewriteHookImplementation,TESTED,src/planner/rewrite.zig,TestCANARY_REQ_GQL_021_RewriteHookImplementation,,planner,2025-09-21
-REQ-GQL-021,Query Planner,RewriteHookPipelineIntegration,TESTED,tests/test_planner_real_subphases.zig,TestCANARY_REQ_GQL_021_RewriteHookPipelineIntegration,,planner,2025-09-21
 REQ-GQL-021,QueryOptimization,ParallelismPlanning,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_021_ParallelismPlanning,,engine,2025-10-03
 REQ-GQL-022,DistributedQueryPlanning,FederationAwareOptimization,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_022_FederationAwareOptimization,,distributed,2025-10-05
 REQ-GQL-022,GraphStore Snapshot Load,LoadCorrectnessAndVariance,BENCHED,tests/canary_physiological_redo.zig,TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness,BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope,storage,2026-02-04
@@ -2409,7 +2375,6 @@ REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,.gitlab-ci.yml,geodetest
 REQ-GQL-COLNAME-001,UniqueColumnNames,DEDUP,TESTED,src/execution/result_utils.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-22
 REQ-GQL-COMMA-MATCH,CommaSeparatedMatches,CartesianProduct,TESTED,src/execution/match_operations.zig,,,engine,2025-10-12
 REQ-GQL-COMPLIANCE-001,GQL Compliance Regression,Parser,TESTED,tests/gql_compliance_regression_test.zig,TestCANARY_REQ_GQL_COMPLIANCE_001_Parser,,parser,2025-01-03
-REQ-GQL-COST-001,CostEvaluationPhase,PlanCost,EXEMPT,src/planner/pipeline.zig,,,planner,2026-01-10
 REQ-GQL-COUNT-001,CountSubquery,ParserSupport,TESTED,src/gql/parser.zig,geodetestlab/specs/gql_query_comprehensive.yml,,parser,2025-12-28
 REQ-GQL-COUNT-SUBQUERY-001,CountSubquery,WhereClause,TESTED,src/gql/ast.zig,geodetestlab/specs/gql_query_comprehensive.yml,,parser,2025-12-28
 REQ-GQL-COUNT-SUBQUERY-001,GQLCountSubquery,Basic,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
@@ -2837,8 +2802,6 @@ REQ-GQL-VECTOR-INDEX,VectorIndex,Core,TESTED,tests/integration/test_vector_index
 REQ-GQL-VECTOR-INDEX-001,Vector Index Integration,Index,TESTED,src/index/vector_index.zig,TestCANARY_REQ_GQL_VECTOR_INDEX_001_All,,index,2025-01-03
 REQ-GQL-VECTOR-TYPES-001,Vector Types Implementation,Types,TESTED,src/types/vector.zig,TestCANARY_REQ_GQL_VECTOR_TYPES_001_All,,types,2025-01-03
 REQ-GQL-VECTOR-TYPES-001,VectorTypes,Implementation,IMPL,tests/test_gap_0193_batch2_engine.zig,,,types,2026-11-12
-REQ-GQL-WCOJ-001,Worst-Case Optimal Joins,Planner,TESTED,src/planner/wcoj.zig,TestCANARY_WCOJ,,planner,2025-09-29
-REQ-GQL-WCOJ-TEST,WCOJ Test Suite,Testing,TESTED,tests/test_wcoj.zig,TestCANARY_WCOJ_Suite,,test,2025-09-29
 REQ-GQL-WITH-CHAIN-001,ChainedWithClauses,ParserSupport,TESTED,src/gql/parser.zig,geodetestlab/specs/gql_query_comprehensive.yml,,parser,2025-12-24
 REQ-GQL-WITH-CHAIN-001,GQLWithChain,ChainedWith,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
 REQ-GQL-WITH-CHAIN-002,ChainedWithClauseExecution,BindingTransform,TESTED,src/execution/query_execution.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-24

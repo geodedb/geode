@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:35:41.487777028Z",
+  "generated_at": "2026-11-13T18:40:05.893261362Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -29043,22 +29043,6 @@
         },
         {
           "feature": "PathCache",
-          "aspect": "PathCacheCore",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/path_cache.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheLookup"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
           "aspect": "PathCacheDegreeBucketDiscrimination",
           "status": "TESTED",
           "files": [
@@ -29084,156 +29068,6 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheDegreeUtilization",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_cache_degree_utilization.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeUtilization"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheEntropyStats",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_path_cache_entropy.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheEntropyStats"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheEntropyVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_path_cache_entropy.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheEntropyVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheEviction",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/path_cache.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheEviction"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheHitMissVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_cache_hit_miss_variance.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheLookup"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheHitMissVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheLookup",
-          "status": "BENCHED",
-          "files": [
-            "tests/test_path_cache_lookup.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheLookup"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheLookupVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_cache_lookup_variance.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheLookup"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheMetricsExport",
-          "status": "TESTED",
-          "files": [
-            "src/planner/path_cache.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheMetricsExport"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCachePlannerHook",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCachePlannerHook"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCachePlannerIntegration",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCachePlannerIntegration"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope"
           ],
           "owner": "planner",
           "updated": "2025-09-21"
@@ -29285,20 +29119,6 @@
         },
         {
           "feature": "PathCache",
-          "aspect": "PathCacheStructuralKeyDerivation",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
           "aspect": "PathCacheStructuralKeyEnrichment",
           "status": "TESTED",
           "files": [
@@ -29342,108 +29162,6 @@
         },
         {
           "feature": "Query Planner",
-          "aspect": "AdaptiveReplanExecutionIntegration",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_AdaptiveReplanExecutionIntegration"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "GroupValidationHookImplementation",
-          "status": "TESTED",
-          "files": [
-            "src/planner/rewrite.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_GroupValidationHookImplementation"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "GroupValidationHookPipelineIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_planner_real_subphases.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_GroupValidationHookPipelineIntegration"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerAdaptiveReplanRefinement",
-          "status": "TESTED",
-          "files": [
-            "src/planner/adaptive_replan.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_AdaptiveReplanRefinement"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerAdaptiveReplanRefinementVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_adaptive_replan_refinement_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanRefinementVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerAdaptiveReplanTrigger",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/adaptive_replan.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_AdaptiveReplanTrigger"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerAdaptiveReplanVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_adaptive_replan_trigger_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerAdaptiveReplanVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
           "aspect": "PlannerCardinalityEstimateVarianceEnvelope",
           "status": "BENCHED",
           "files": [
@@ -29452,165 +29170,6 @@
           "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_PlannerCardinalityEstimateVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerCostModelPhaseTiming",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/phase_timing.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerCostModelPhaseTiming"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerCostModelPhaseVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_planner_cost_model_phase_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerCostModelPhaseVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerGroupValidationTiming",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerGroupValidationVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_planner_group_pre_validation_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerGroupValidationVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerPhaseRealTimingIntegration",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerPipelineOrchestration",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerPipelineP95MeanVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_planner_pipeline_p95_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineP95MeanVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerPipelineVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_planner_pipeline_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerPreValidationVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_planner_group_pre_validation_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerPreValidationVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerProjectionPrunePhaseTiming",
-          "status": "TESTED",
-          "files": [
-            "src/planner/phase_timing.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerProjectionPrunePhaseTiming"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerProjectionPruneVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/pipeline.zig",
-            "tests/benchmark_planner_projection_prune_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope"
           ],
           "owner": "planner",
           "updated": "2025-09-21"
@@ -29626,20 +29185,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "PlannerRewritePreValidationTiming",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PlannerPreValidationTiming"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2025-09-21"
         },
@@ -29668,34 +29213,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "RewriteHookImplementation",
-          "status": "TESTED",
-          "files": [
-            "src/planner/rewrite.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_RewriteHookImplementation"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Query Planner",
-          "aspect": "RewriteHookPipelineIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_planner_real_subphases.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_RewriteHookPipelineIntegration"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2025-09-21"
         },
@@ -36135,23 +35652,6 @@
           "benches": [],
           "owner": "parser",
           "updated": "2025-01-03"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-COST-001",
-      "features": [
-        {
-          "feature": "CostEvaluationPhase",
-          "aspect": "PlanCost",
-          "status": "EXEMPT",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-01-10"
         }
       ]
     },
@@ -43154,44 +42654,6 @@
           "benches": [],
           "owner": "types",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WCOJ-001",
-      "features": [
-        {
-          "feature": "Worst-Case Optimal Joins",
-          "aspect": "Planner",
-          "status": "TESTED",
-          "files": [
-            "src/planner/wcoj.zig"
-          ],
-          "tests": [
-            "TestCANARY_WCOJ"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WCOJ-TEST",
-      "features": [
-        {
-          "feature": "WCOJ Test Suite",
-          "aspect": "Testing",
-          "status": "TESTED",
-          "files": [
-            "tests/test_wcoj.zig"
-          ],
-          "tests": [
-            "TestCANARY_WCOJ_Suite"
-          ],
-          "benches": [],
-          "owner": "test",
-          "updated": "2025-09-29"
         }
       ]
     },
@@ -93566,11 +93028,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 165,
+      "BENCHED": 145,
       "COMPLETE": 2,
-      "EXEMPT": 216,
+      "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4921
+      "TESTED": 4906
     },
     "by_aspect": {
       "2PC": 3,
@@ -93640,7 +93102,6 @@
       "AdaptiveFlush": 1,
       "AdaptiveJitterThresholds": 1,
       "AdaptiveReadPolling": 1,
-      "AdaptiveReplanExecutionIntegration": 1,
       "AdaptiveStressHarness": 1,
       "AddConcatenation": 1,
       "AddGraph": 1,
@@ -95145,8 +94606,6 @@
       "GroupCommitPin": 1,
       "GroupKeyOwnership": 1,
       "GroupKeyResolution": 1,
-      "GroupValidationHookImplementation": 1,
-      "GroupValidationHookPipelineIntegration": 1,
       "GroupingLogic": 2,
       "GrowableRegistry": 1,
       "GrpcAlterUserParse": 1,
@@ -96100,23 +95559,11 @@
       "PasswordSecurity": 1,
       "PasswordValidation": 1,
       "Path": 1,
-      "PathCacheCore": 1,
       "PathCacheDegreeBucketDiscrimination": 1,
       "PathCacheDegreeBucketUtilizationVarianceEnvelope": 1,
-      "PathCacheDegreeUtilization": 1,
-      "PathCacheEntropyStats": 1,
-      "PathCacheEntropyVarianceEnvelope": 1,
-      "PathCacheEviction": 1,
-      "PathCacheHitMissVarianceEnvelope": 1,
-      "PathCacheLookup": 1,
-      "PathCacheLookupVarianceEnvelope": 1,
-      "PathCacheMetricsExport": 1,
-      "PathCachePlannerHook": 1,
-      "PathCachePlannerIntegration": 1,
       "PathCacheStructuralKeyCollisionEnvelope": 1,
       "PathCacheStructuralKeyCollisionTightened": 1,
       "PathCacheStructuralKeyDegreeBucketEnrichment": 1,
-      "PathCacheStructuralKeyDerivation": 1,
       "PathCacheStructuralKeyEnrichment": 1,
       "PathCacheStructuralKeySelectivityEnrichment": 1,
       "PathCacheStructuralKeyValueShapeEnrichment": 1,
@@ -96243,7 +95690,6 @@
       "PlainReturnPerRow": 1,
       "PlaintextSizeLimit": 1,
       "PlanCacheEviction": 1,
-      "PlanCost": 1,
       "PlanCostModelCalibration": 1,
       "PlanCostModelCalibrationRanking": 1,
       "PlanCostModelCalibrationVarianceEnvelope": 1,
@@ -96265,28 +95711,12 @@
       "PlanSelectionVarianceEnvelope": 1,
       "PlannedFinalProjection": 1,
       "PlannedRuntimeDeclinesWrites": 1,
-      "Planner": 8,
+      "Planner": 7,
       "PlannerAdaptiveBiasApplication": 1,
-      "PlannerAdaptiveReplanRefinement": 1,
-      "PlannerAdaptiveReplanRefinementVarianceEnvelope": 1,
-      "PlannerAdaptiveReplanTrigger": 1,
-      "PlannerAdaptiveReplanVarianceEnvelope": 1,
       "PlannerCardinalityEstimateVarianceEnvelope": 1,
-      "PlannerCostModelPhaseTiming": 1,
-      "PlannerCostModelPhaseVarianceEnvelope": 1,
-      "PlannerGroupValidationTiming": 1,
-      "PlannerGroupValidationVarianceEnvelope": 1,
       "PlannerIndexOrdered": 1,
       "PlannerOps": 1,
-      "PlannerPhaseRealTimingIntegration": 1,
-      "PlannerPipelineOrchestration": 1,
-      "PlannerPipelineP95MeanVarianceEnvelope": 1,
-      "PlannerPipelineVarianceEnvelope": 1,
-      "PlannerPreValidationVarianceEnvelope": 1,
-      "PlannerProjectionPrunePhaseTiming": 1,
-      "PlannerProjectionPruneVarianceEnvelope": 1,
       "PlannerRewritePassVarianceEnvelope": 1,
-      "PlannerRewritePreValidationTiming": 1,
       "PlannerSubPhaseHooks": 1,
       "PlannerTests": 1,
       "Planning": 1,
@@ -96795,8 +96225,6 @@
       "RevokePlaintextProcedure": 1,
       "RevokeUserGraphPermission": 1,
       "RevokeWriteThrough": 1,
-      "RewriteHookImplementation": 1,
-      "RewriteHookPipelineIntegration": 1,
       "Right": 1,
       "RingOperations": 1,
       "RiskModel": 1,
@@ -97352,7 +96780,7 @@
       "TestSuite": 4,
       "TestTeardown": 1,
       "TestTransparentEncryption": 1,
-      "Testing": 18,
+      "Testing": 17,
       "TestingBatch2": 1,
       "Tests": 2,
       "TextPropertyValidation": 1,

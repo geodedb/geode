@@ -399,9 +399,6 @@ pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
 // CLI login ownership contract is reachable from a test binary.
 pub const hello_decode = @import("client/hello_decode.zig");
 
-// Extend planner module
-pub const planner_wcoj = @import("planner/wcoj.zig");
-
 // Standalone community-detection routines over an in-memory adjacency list
 // and an LFU cache. Only tests use them (tests/e2e_graph_algos_new.zig and
 // fuzz/targets/lfu_cache_fuzz.zig); the server's algo.louvain and

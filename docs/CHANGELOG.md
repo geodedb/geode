@@ -5348,6 +5348,23 @@
 
 ### Removed
 
+- **Dead code: the synthetic planner pipeline and the modules only it drove
+  (SONNY-6511 item 1).** `src/planner/{wcoj,adaptive_replan,phase_timing,rewrite,path_cache}.zig`,
+  `pipeline.runPipeline` / `planQueryWithPipeline` / `plannerPathCacheLookup`
+  / `plannerPathCacheInsert` / `planQueryRealTimed`, `planner.planQueryPhasedTimed`
+  and 15 test files that only tested them. `runPipeline` described itself
+  as "a deterministic synthetic pipeline used for integration tests &
+  variance bench"; none of it ran in a query. None of it compiled on Zig 0.16
+  (`std.math.fabs`, `std.time.nanoTimestamp`, array literals for mutable
+  slices, string literals for `IdentRepr`), and no executable or running
+  test reached it: the WCOJ executor was named only by `geode.planner_wcoj`
+  and `tests/test_wcoj.zig` (an unreferenced `tests/all_tests.zig`
+  constant); the rest only by `pipeline.zig` and test files no build step
+  roots. `pipeline.planQuerySelectBest` (`zig build
+  test-canary-planner-pipeline-selection`), the cost calibration it uses and
+  `structural_key.zig` (the `bench_pathcache_degree_util` benchmark) stay.
+  `docs/SERVER_FEATURES.md` (adaptive re-planning, PathCache) and the
+  variance-envelope and crosswalk notes described the removed code.
 - **Dead code: `src/server/flagger_impl_defined.zig` and the server's
   implementation-defined flag cache (SONNY-6511 item 1).** A second list of
   the ISO/IEC 39075 Annex B implementation-defined items whose `collect`

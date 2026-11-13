@@ -757,7 +757,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
 | performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
-| planner | Query planning | 15 | pipeline.zig (854), cost_model.zig (594), cbo.zig (579), wcoj.zig (473), rewrite.zig (360) |
+| planner | Query planning | 10 | cost_model.zig (594), cbo.zig (579), pipeline.zig (420); wcoj, rewrite, path_cache, phase_timing and adaptive_replan were removed (SONNY-6511) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
 | schema | Schema management | ~5 | catalog.zig (568) |
 | security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), user_manager.zig (733) |

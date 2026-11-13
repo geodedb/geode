@@ -242,10 +242,11 @@ The following variance envelopes explicitly guard planner/path determinism and a
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------- | ------------------- |
 | PathQuantifierBoundedVarianceEnvelope                                  | Bounded multi-branch path expansion deterministic timing stability     | cv, p95/mean    | cv≤0.23, ratio≤2.60 |
 | PathExpansionHeuristicVarianceEnvelope                                 | Heuristic pruning stability (branch ordering, deterministic tie-break) | cv, p95/mean    | cv≤0.25, ratio≤2.70 |
-| PlannerRewritePreValidationTimingVarianceEnvelope                      | Rewrite sub-phase timing stability                                     | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerGroupValidationTimingVarianceEnvelope                           | Group validation sub-phase timing stability                            | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerPipelineVarianceEnvelope / PlannerPipelinePhaseVarianceEnvelope | Integrated pipeline (rewrite→cardinality→cost) stability               | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerAdaptiveReplanTriggerVarianceEnvelope                           | Adaptive replan trigger decision latency stability                     | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
+
+The rewrite / group-validation timing, planner-pipeline and adaptive-replan
+envelopes that used to be listed here measured the synthetic
+`src/planner/pipeline.zig` runner and `adaptive_replan.zig`, which no build
+compiled; they were removed with that code (SONNY-6511).
 
 All emit dual schema versions during migration; schema v2 adds `sample_count`, range stats (`min_ns`,`max_ns`), and `thresholds_evaluated` objects for each metric. Consecutive threshold breaches (≥3 runs) mandate investigation (instrumentation drift, branching factor increase, scheduling jitter). Future enhancement: nested `phases` object with per-phase sub-metrics when cost model enumeration replaces any residual synthetic hooks.
 

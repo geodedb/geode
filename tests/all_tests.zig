@@ -121,7 +121,7 @@ const _test_gql_hash_parsing = @import("test_gql_hash_parsing.zig");
 const _test_hash_evaluator = @import("test_hash_evaluator.zig");
 const _e2e_hash_functions = @import("e2e_hash_functions.zig");
 
-// Distributed systems tests - Raft persistence, 2PC, BM25, Leiden, WCOJ
+// Distributed systems tests - Raft persistence, 2PC, BM25
 const _e2e_raft_persist = @import("e2e_raft_persist_snapshot_membership.zig");
 const _test_raft_persistent_storage = @import("test_raft_persistent_storage.zig");
 const _test_twophase_unit = @import("test_twophase_unit.zig");
@@ -137,7 +137,6 @@ const _test_fts_maintenance = @import("test_fts_maintenance.zig");
 // multi-property CREATE INDEX, store-restart reopen durability,
 // drop-then-recreate, multi-index-multi-label isolation, edge cases).
 const _test_fts_coverage = @import("test_fts_coverage.zig");
-const _test_wcoj = @import("test_wcoj.zig");
 
 // REPL QUIC Integration tests
 const _test_quic_transport = @import("test_quic_transport.zig");
