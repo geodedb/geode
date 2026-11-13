@@ -124,7 +124,25 @@ MATCH (a)-[]->(b), (b)-[]->(c) RETURN a, b, c
 
 -- Optional matching
 OPTIONAL MATCH (n)-[]->(m) RETURN n, m
+
+-- Abbreviated edge patterns (16.7)
+MATCH (a)-(b) RETURN a, b      -- any direction
+MATCH (a)<-(b) RETURN a, b     -- pointing left
+MATCH (a)<->(b) RETURN a, b    -- left or right
 ```
+
+**Abbreviated edge patterns (ISO/IEC 39075:2024 16.7, SONNY-6267).** The
+<abbreviated edge pattern> tokens `<-`, `->` and `-` (Feature G044) and
+`<->` (G045) parse and match; each is the empty full edge pattern of its
+orientation (`-` is `-[ ]-`, `<->` is `<-[ ]->`). Every Geode edge is
+directed, so `-`, `<->`, `-[ ]-` and `<-[ ]->` all match an edge in either
+direction. The tilde forms `~`, `<~` and `~>` (and `~[ ]~` etc.) match
+undirected edges, which Geode does not store (GH02): refused with 0A000.
+`<--` is not GQL: 16.7 SR forbids juxtaposing `<-` with `-` without a
+separator, because the two minus signs spell a <simple comment introducer>
+(NOTE 238); it is a syntax error naming the GQL spellings. (`--(` and
+`-->` are still accepted for compatibility.) Regression: `zig build
+test-sonny6267-abbreviated-edge-patterns`.
 
 ### Operators & Expressions
 

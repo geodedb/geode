@@ -550,6 +550,22 @@ pub const Parser = struct {
     /// pattern>, Feature GH02)? The lexer has no `~` token (`=~` and `!~`
     /// are its own), so a lone `~` is an invalid token and `<~` a `<`
     /// followed by one.
+    /// SONNY-6267: whether `second` starts where `first` ends (no separator
+    /// between them), as `<->` and `<--` are spelled.
+    fn adjacentTokens(first: tok.Token, second: tok.Token) bool {
+        return @intFromPtr(first.lexeme.ptr) + first.lexeme.len == @intFromPtr(second.lexeme.ptr);
+    }
+
+    /// SONNY-6267: a hop through an <abbreviated edge pattern> (ISO/IEC
+    /// 39075:2024 16.7), which is the empty full edge pattern of its
+    /// orientation, to the node pattern that follows.
+    fn appendAbbreviatedHop(self: *Parser, hops: *std.ArrayList(ast.Hop), left: *ast.NodePattern, dir: ast.RelDir) ParserError!void {
+        const rel = ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = dir, .min_len = null, .max_len = null };
+        const right = try self.parseNodePattern();
+        try hops.append(self.arena.allocator(), .{ .left = left.*, .rel = rel, .right = right });
+        left.* = right;
+    }
+
     fn atUndirectedEdge(self: *Parser) bool {
         if (self.cur.kind == .invalid) return self.cur.lexeme.len > 0 and self.cur.lexeme[0] == '~';
         if (self.cur.kind != .lt or self.cur.lexeme.len == 0) return false;
@@ -3278,8 +3294,33 @@ pub const Parser = struct {
                         continue;
                     }
                     self.advance();
+                    // SONNY-6267: ISO/IEC 39075:2024 16.7 <abbreviated edge
+                    // pattern> <minus sign>, `(a)-(b)`: the empty `-[ ]-`,
+                    // an edge in any direction.
+                    if (self.cur.kind == .l_paren) {
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
                 } else if (self.cur.kind == .arrow_l) {
+                    const arrow = self.cur;
                     self.advance();
+                    // SONNY-6267: 16.7 <left minus right>, `(a)<->(b)` (lexed
+                    // as `<-` `>`): the empty `<-[ ]->`, an edge pointing
+                    // left or right. Geode's edges are all directed, so that
+                    // is an edge in either direction.
+                    if (self.cur.kind == .gt and adjacentTokens(arrow, self.cur)) {
+                        self.advance();
+                        if (self.cur.kind != .l_paren) return self.unexpected("expected a node pattern after <->");
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
+                    // SONNY-6267: `<--` is not GQL. 16.7 SR: a token exposing
+                    // a minus sign on the right (`<-`) is not juxtaposed with
+                    // one exposing it on the left (`-`), as the two minus
+                    // signs would be a <simple comment introducer> (NOTE 238).
+                    if (self.cur.kind == .minus and adjacentTokens(arrow, self.cur)) {
+                        return self.unexpected("`<--` is not GQL (ISO/IEC 39075:2024 16.7: `--` begins a comment): write `<-` for an edge pointing left, `<-[ ]-` with a filler, or `-` / `<->` for either direction");
+                    }
                     // Check for bracketless left-directed relationship (<-() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .left;
@@ -3326,7 +3367,9 @@ pub const Parser = struct {
                 // CRITICAL FIX: For patterns like -[*]-> or -[:R*1]->, the direction should come from
                 // the TRAILING connector (->), not the leading one (-). Update the direction here.
                 if (self.cur.kind == .arrow_r) {
-                    rel.dir = .right;
+                    // SONNY-6267: 16.7 <full edge left or right>, `<-[ ]->`:
+                    // an edge pointing left or right, i.e. either direction.
+                    rel.dir = if (dir == .left) .undirected else .right;
                     self.advance();
                 } else if (self.cur.kind == .arrow_l) {
                     rel.dir = .left;

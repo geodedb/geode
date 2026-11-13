@@ -2036,6 +2036,18 @@
 
 ### Fixed
 
+- **ISO abbreviated edge patterns `-` and `<->`, and `<-[ ]->` matches
+  either direction (SONNY-6267).** ISO/IEC 39075:2024 16.7 defines seven
+  abbreviated edge patterns; Geode accepted `<-` and `->` (and Cypher's
+  `--`, `-->`) but refused the `-` (<minus sign>, any direction) and `<->`
+  (<left minus right>) spellings, and the full `<-[ ]->` (<full edge left or
+  right>) matched outgoing edges only. `(a)-(b)`, `(a)<->(b)` and
+  `(a)<-[r]->(b)` now match an edge in either direction (every Geode edge is
+  directed). `(a)<--(b)` stays a syntax error, now with a message: it is not
+  GQL (16.7 SR: `<-` juxtaposed with `-` would spell the `--` comment
+  introducer, NOTE 238). The tilde forms (`~`, `<~`, `~>`) match undirected
+  edges, which Geode does not store, and stay refused (SONNY-6433).
+  Regression: `zig build test-sonny6267-abbreviated-edge-patterns` (new).
 - **Breaking: an integer and a string are never equal (SONNY-6282).**
   `=` and `<>` compared an INT with a STRING by their text, so
   `WHERE n.id = 1` also matched a node whose `id` is the string `'1'`,
