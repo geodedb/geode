@@ -7092,8 +7092,14 @@ pub const GraphStore = struct {
     /// (`resolveMergeHolder`), so every caller (the executor, the server's
     /// bulk MERGE, edge endpoint resolution) gets the same authoritative
     /// answer.
+    ///
+    /// SONNY-6436: under lean indexing (GEODE_INDEX_MERGE_KEYS_ONLY) a key no
+    /// MERGE registered is not in the index at all, so `.not_indexable`, never
+    /// `.not_found`: the bulk edge path answered such a key as held by no
+    /// node and skipped an edge the executor makes.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        if (!shouldIndexProperty(prop_key)) return .not_indexable; // SONNY-6436
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         // SONNY-3056: a lean key registered at runtime is complete for this
         // label only after its backfill; a failed one leaves the index unable
@@ -7502,29 +7508,16 @@ pub const GraphStore = struct {
     ) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
-        const spec = blk: {
-            g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            if (composite_idx >= g_composite_key_count) break :blk null;
-            break :blk &g_composite_keys[composite_idx];
-        } orelse return .not_indexable;
+        const spec = compositeSpecAt(composite_idx) orelse return .not_indexable;
 
         if (filters.len != spec.prop_count) return .not_indexable;
         // SONNY-6354: a composite registered at runtime is complete for this
         // label only after its backfill; a failed one cannot answer.
         self.ensureCompositeMergeBackfill(graph_name, label, composite_idx) catch return .not_indexable;
 
-        // Gather values in the spec's (sorted) prop order by matching names.
         var values: [composite_index_max_props]PropertyValue = undefined;
-        var i: usize = 0;
-        while (i < spec.prop_count) : (i += 1) {
-            const name = spec.prop_bufs[i][0..spec.prop_lens[i]];
-            const v = findFilterValue(filters, name) orelse return .not_indexable;
-            values[i] = v;
-        }
-
         var buf: [1024]u8 = undefined;
-        const probe = buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse return .not_indexable;
+        const probe = compositeProbe(graph_name, label, spec, filters, &values, &buf) orelse return .not_indexable;
         const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
 
         // Eviction-independent existence + graph validation (mirrors
@@ -7535,6 +7528,63 @@ pub const GraphStore = struct {
             return .found;
         }
         return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .composite = .{ .spec = spec, .values = values[0..spec.prop_count], .probe = probe } }, out_node_id);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER; FEATURE="WriteFastPathParity"; ASPECT=CompositeSoleHolderEndpoint; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6436: the node holding a registered composite merge key when it
+    /// is the key's ONLY holder (the entry was never shared), for an endpoint
+    /// MATCH, which binds every node holding the key; as
+    /// `lookupOnlyMergeHolder` for one property, the caller first settles the
+    /// entry with `lookupCompositeMergeCandidate`. `.not_found`: no node
+    /// holds it. `.not_indexable`: more nodes may hold it, or the index
+    /// cannot answer (the caller declines to the executor). The MATCH ...
+    /// MERGE edge fast path took the lowest holder as the only one, and
+    /// MERGEd one edge where the executor MERGEs one per holder.
+    pub fn lookupOnlyCompositeMergeHolder(
+        self: *GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        composite_idx: usize,
+        filters: []const graph_storage_adapter.StorageAdapter.PropKV,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        const spec = compositeSpecAt(composite_idx) orelse return .not_indexable;
+        if (filters.len != spec.prop_count) return .not_indexable;
+        var values: [composite_index_max_props]PropertyValue = undefined;
+        var buf: [1024]u8 = undefined;
+        const probe = compositeProbe(graph_name, label, spec, filters, &values, &buf) orelse return .not_indexable;
+        const entry = self.merge_prop_index.get(probe) orelse return .not_found;
+        if (entry & merge_entry_shared != 0) return .not_indexable;
+        out_node_id.* = self.liveMergeHolder(entry, graph_name) orelse return .not_indexable;
+        return .found;
+    }
+
+    /// The registered composite merge key `composite_idx`, if there is one.
+    fn compositeSpecAt(composite_idx: usize) ?*const CompositeKeySpec {
+        g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (composite_idx >= g_composite_key_count) return null;
+        return &g_composite_keys[composite_idx];
+    }
+
+    /// The merge-index key `filters` give for composite `spec`, built in
+    /// `buf`, with the values gathered into `values` in the spec's (sorted)
+    /// property order by matching names; null when a filter is missing or a
+    /// value cannot be encoded.
+    fn compositeProbe(
+        graph_name: []const u8,
+        label: []const u8,
+        spec: *const CompositeKeySpec,
+        filters: []const graph_storage_adapter.StorageAdapter.PropKV,
+        values: *[composite_index_max_props]PropertyValue,
+        buf: *[1024]u8,
+    ) ?[]const u8 {
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            values[i] = findFilterValue(filters, spec.prop_bufs[i][0..spec.prop_lens[i]]) orelse return null;
+        }
+        return buildCompositeMergeIndexKey(buf, graph_name, label, spec, values[0..spec.prop_count]);
     }
 
     fn findFilterValue(filters: []const graph_storage_adapter.StorageAdapter.PropKV, key: []const u8) ?PropertyValue {

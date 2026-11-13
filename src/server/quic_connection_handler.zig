@@ -1370,7 +1370,9 @@ fn executeBulkSimpleMerge(
         if (res) |_| {
             found_in_phase1 = true;
         } else |err| switch (err) {
-            error.MergeCandidateMissing => {},
+            // SONNY-6436: MergeKeyNotUnique = the index cannot answer here
+            // (phase 2 registers the key and resolves it authoritatively).
+            error.MergeCandidateMissing, error.MergeKeyNotUnique => {},
             else => {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});

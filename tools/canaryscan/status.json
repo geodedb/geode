@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:10:31.887840454Z",
+  "generated_at": "2026-11-13T01:04:35.700610391Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84641,6 +84641,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "CompositeSoleHolderEndpoint",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6436-FIXTURE-SECRETS",
       "features": [
         {
@@ -84652,25 +84671,6 @@
           ],
           "tests": [
             "tests/test_sonny6436_fixture_secrets.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SONNY-6436-RLS-RAW-TRUTHINESS",
-      "features": [
-        {
-          "feature": "RLSExpressionEvaluation",
-          "aspect": "Regression",
-          "status": "TESTED",
-          "files": [
-            "tests/test_sonny6436_rls_raw_truthiness.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6436_rls_raw_truthiness.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -92946,6 +92946,7 @@
       "ComplianceLog": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
+      "CompositeSoleHolderEndpoint": 1,
       "ComprehensiveBatch3": 1,
       "ComprehensiveBatch4": 1,
       "ComprehensiveBatch5": 1,
@@ -95450,7 +95451,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 281,
+      "Regression": 280,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

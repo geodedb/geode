@@ -1662,6 +1662,28 @@
 
 ### Fixed
 
+- **The MATCH ... MERGE edge fast path declines a composite endpoint key
+  two nodes hold, and no merge lookup answers "no node holds it" for a key
+  lean indexing left out of MERGE's index (SONNY-6436 items 2-3).**
+  `lookupPublicNodeIdByLabelAndAllProps` resolved a registered composite
+  merge key (the from-dump `{source, source_id}`) to the lowest of the
+  nodes holding it, so `MATCH (a:L {k: 1, s: 'x'}), (b:...) MERGE
+  (a)-[:R]->(b)` over two such nodes MERGEd one edge where the executor
+  MERGEs one per node; only the key's sole holder answers now
+  (`GraphStore.lookupOnlyCompositeMergeHolder`), and more declines to the
+  executor. With `GEODE_INDEX_MERGE_KEYS_ONLY=1`, `lookupMergeCandidate`
+  answered a key no MERGE registered as held by no node; it now answers
+  that the index cannot know (`.not_indexable`), as
+  `lookupOnlyMergeHolder` does since SONNY-6429. `lookupNodeByMergeKey[ForTenant]`
+  report that as `error.MergeKeyNotUnique` (decline) instead of "not
+  found", and `bulkInsertEdge` resolves endpoints as the MATCH ... CREATE
+  edge fast path does (`lookupSoleNodeByMergeKey`), so it declines instead
+  of skipping the edge. The executor's MERGE probes that run before the
+  key is registered (`preResolveMergeNode`, `clusterReplicateMerge`) now
+  fall back to the label scan for such a key instead of taking the index's
+  miss as authoritative. Regression: `zig build test-sonny6429-sole-holder-tenant-wire`
+  (in process, and over QUIC with group commit on and off and with lean
+  indexing).
 - **The in-repo scripts and fixtures seed an HMAC key and admin passwords
   the server accepts (SONNY-6436 item 1).** The netns cluster scripts
   (`tests/cluster/netns_cluster_replication_test.sh`,

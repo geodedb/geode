@@ -5406,8 +5406,8 @@ REQ-SONNY-6430-MIGRATE-CREATE-SIGNED,Migrations,NoKeyNoFile,TESTED,src/cli/backu
 REQ-SONNY-6430-REGISTRY-FAIL-CLOSED,Storage Adapter,UnloadableRegistryRefuses,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6430_storage_open_fail_closed.zig,,storage,2026-11-12
 REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED,Security Graph Audit,NoUnauditedOpen,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6430_storage_open_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6430-STORAGE-VERIFY-DATA-DIR,Storage CLI,VerifiesTheServersDataDir,TESTED,src/cli/storage_cli.zig,tests/test_sonny6430_cli_fail_closed.zig,,storage,2026-11-12
+REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER,WriteFastPathParity,CompositeSoleHolderEndpoint,TESTED,src/graph_store.zig,tests/test_sonny6429_sole_holder_tenant_wire.zig,,storage,2026-11-12
 REQ-SONNY-6436-FIXTURE-SECRETS,GQL Auth DDL,Regression,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
-REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6436_rls_raw_truthiness.zig,tests/test_sonny6436_rls_raw_truthiness.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

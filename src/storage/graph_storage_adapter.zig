@@ -5445,10 +5445,16 @@ pub const StorageAdapter = struct {
     /// (a)-[:T {props}]->(b)`.
     ///
     /// Errors:
-    ///   * `error.SourceNodeNotFound` — the (src_label, src_filter_key=value)
-    ///     probe returned null (or not-indexable, which means the caller
-    ///     cannot use the fast path — dispatcher should fall back).
+    ///   * `error.SourceNodeNotFound` — no node holds (src_label,
+    ///     src_filter_key=value) (the executor's MATCH has no row).
     ///   * `error.TargetNodeNotFound` — symmetric.
+    ///   * `error.MergeKeyNotUnique` — an endpoint key more nodes may hold,
+    ///     or one MERGE's index cannot answer for (a value it cannot hold, or,
+    ///     SONNY-6436, a key lean indexing left out of it): nothing is
+    ///     written, and the caller falls back to the executor. Endpoints are
+    ///     resolved as the MATCH ... CREATE edge fast path resolves them
+    ///     (`lookupSoleNodeByMergeKey`); an unindexable key was answered as
+    ///     no holder, and the edge skipped.
     ///   * anything else — propagates the underlying graph-store /
     ///     engine error.
     ///
@@ -5480,23 +5486,10 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
         // Endpoint resolution — both lookups MUST succeed for a fast-path
-        // edge.  `.not_indexable` means the value type (e.g. list / map)
-        // can't use the merge-prop index; dispatchers should treat that
-        // as "fall back to full executor" not a user-visible error, so
-        // we map it here to the same not-found error code — the caller
-        // can distinguish if needed.
-        var src_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, src_label, src_filter_key, src_node_id, &src_id)) {
-            .found => {},
-            .not_found => return error.SourceNodeNotFound,
-            .not_indexable => return error.SourceNodeNotFound,
-        }
-        var dst_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, dst_label, dst_filter_key, dst_node_id, &dst_id)) {
-            .found => {},
-            .not_found => return error.TargetNodeNotFound,
-            .not_indexable => return error.TargetNodeNotFound,
-        }
+        // edge. SONNY-6436: a key MERGE's index cannot answer for declines
+        // (`error.MergeKeyNotUnique`); it was answered as "not found".
+        const src_id = try self.lookupSoleNodeByMergeKey(graph_name, src_label, src_filter_key, src_node_id, error.SourceNodeNotFound);
+        const dst_id = try self.lookupSoleNodeByMergeKey(graph_name, dst_label, dst_filter_key, dst_node_id, error.TargetNodeNotFound);
 
         // Statement-txn batching: same pattern as `bulkInsertNode`.  Join
         // an existing session/statement txn if one is active on this
@@ -5559,10 +5552,11 @@ pub const StorageAdapter = struct {
     /// read the entry (round 8, `MergePropertyIndex.settle`); a holder
     /// inserted meanwhile keeps its entry.
     ///
-    /// `.not_indexable` results are mapped to `missing_err` for the same
-    /// reason as `bulkInsertEdge` — the fast path cannot handle
-    /// non-indexable values and must treat them as a not-found for the
-    /// caller's purposes.
+    /// SONNY-6436: when MERGE's index cannot answer (`.not_indexable`: a
+    /// value it cannot hold, or a key lean indexing left out of it), this is
+    /// `error.MergeKeyNotUnique`, never `missing_err`: the index cannot know
+    /// that no node holds the key, and the caller falls back to the executor.
+    /// (It was `missing_err`, so the bulk edge path skipped the edge.)
     pub fn lookupNodeByMergeKey(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -5576,7 +5570,8 @@ pub const StorageAdapter = struct {
         var id: u64 = undefined;
         switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
             .found => return id,
-            .not_found, .not_indexable => return missing_err,
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
         }
     }
 
@@ -5624,7 +5619,9 @@ pub const StorageAdapter = struct {
     /// (the tag its writes carry): only a node of that tenant answers, unless
     /// the request is unscoped (`mergeTenantScope`). The bulk MERGE's phase-1
     /// probe and the bulk edge paths' endpoint resolution use it, so a key
-    /// held only by another tenant's node is a miss.
+    /// held only by another tenant's node is a miss. SONNY-6436: an index
+    /// that cannot answer is `error.MergeKeyNotUnique`, as for
+    /// `lookupNodeByMergeKey`.
     pub fn lookupNodeByMergeKeyForTenant(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -5639,7 +5636,8 @@ pub const StorageAdapter = struct {
         var id: u64 = undefined;
         switch (store.lookupMergeCandidateForTenant(graph_name, label, prop_key, prop_value, mergeTenantScope(request_tenant), &id)) {
             .found => return id,
-            .not_found, .not_indexable => return missing_err,
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
         }
     }
 
@@ -7660,7 +7658,18 @@ pub const StorageAdapter = struct {
                     // lookupCompositeMergeCandidate (resolveNodeGraphSlot); the
                     // composite key encodes ALL filters, so no per-filter verify.
                     // This is the from-dump hot path: ZERO getNodeProperty.
-                    return cid;
+                    //
+                    // SONNY-6436: the entry names the LOWEST holder. The
+                    // executor's MATCH binds every node holding the key, and
+                    // MERGEs an edge per matched pair, so only the key's sole
+                    // holder answers; more is `error.MergeKeyNotUnique` (the
+                    // caller declines to the executor), as the scan below.
+                    // The lookup above settled the entry.
+                    return switch (store.lookupOnlyCompositeMergeHolder(graph_name, label, composite_idx, filters, &cid)) {
+                        .found => cid,
+                        .not_found => missing_err,
+                        .not_indexable => error.MergeKeyNotUnique,
+                    };
                 },
                 // AUTHORITATIVE composite MISS (FIX #1 of the 14.27M edge-ingest
                 // wedge). The filter set EXACTLY matches a REGISTERED composite
