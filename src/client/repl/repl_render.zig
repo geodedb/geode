@@ -207,11 +207,11 @@ fn stripAnsi(text: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
 test "renderer JSON mode" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).empty;
-    defer output.deinit(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
 
-    var sink = RenderSink{
-        .writer = output.writer(),
+    var sink = RenderSink(*std.Io.Writer){
+        .writer = &output.writer,
         .format = .json,
         .allocator = allocator,
     };
@@ -219,5 +219,5 @@ test "renderer JSON mode" {
     const data = "{\"columns\":[\"a\"],\"data\":[[1]]}";
     try sink.write(data);
 
-    try std.testing.expectEqualStrings(data, output.items);
+    try std.testing.expectEqualStrings(data, output.written());
 }

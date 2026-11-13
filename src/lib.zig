@@ -1000,6 +1000,9 @@ test "repl_dispatch: inline test root" {
 // filter of `zig build test-sonny6494-lib-inline`, which also names each
 // file's tests by their fully qualified prefix (`<path>.test.`).
 test "sonny6494-lib: inline test roots" {
+    _ = @import("client/repl/repl_errors.zig");
+    _ = @import("client/repl/repl_history.zig");
+    _ = @import("client/repl/repl_render.zig");
     _ = @import("client/query_scope.zig");
     _ = @import("transport/connection_manager.zig");
     _ = @import("gql/confusable_check.zig");

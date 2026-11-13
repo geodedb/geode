@@ -43,11 +43,10 @@ pub fn formatGqlError(allocator: std.mem.Allocator, err: anyerror) ![]u8 {
 
 test "dispatcher unknown meta" {
     const allocator = std.testing.allocator;
-    var output = std.ArrayList(u8).empty;
-    defer output.deinit(allocator);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
 
-    const writer = output.writer();
-    try printError(writer, .unknown_command, "Unknown command '\\connet'. Did you mean '\\connect'?", false);
+    try printError(&output.writer, .unknown_command, "Unknown command '\\connet'. Did you mean '\\connect'?", false);
 
-    try std.testing.expectEqualStrings("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n", output.items);
+    try std.testing.expectEqualStrings("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\n", output.written());
 }

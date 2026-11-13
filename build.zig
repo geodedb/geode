@@ -16095,6 +16095,9 @@ pub fn build(b: *std.Build) void {
     // "sonny6494-lib: inline test roots" keeps the files in discovery).
     const sonny6494_lib_inline_tests = b.addTest(.{ .name = "sonny6494-lib-inline", .root_module = root_mod, .filters = &.{
         "sonny6494-lib:",
+        "client.repl.repl_errors.test.",
+        "client.repl.repl_history.test.",
+        "client.repl.repl_render.test.",
         "client.query_scope.test.",
         "transport.connection_manager.test.",
         "gql.confusable_check.test.",
@@ -16123,7 +16126,7 @@ pub fn build(b: *std.Build) void {
     } });
     const run_sonny6494_lib_inline_tests = b.addRunArtifact(sonny6494_lib_inline_tests);
     shardDep(test_step, &run_sonny6494_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
-    b.step("test-sonny6494-lib-inline", "Run SONNY-6494 item 2: the inline tests of 25 geode-module files no step ran (query scope, connection manager, confusables, numeric promotion, transport algorithms, line text, distributed explain, protocol, server flags, bulk ingest, planner calibration, ...)").dependOn(&run_sonny6494_lib_inline_tests.step);
+    b.step("test-sonny6494-lib-inline", "Run SONNY-6494 item 2: the inline tests of 28 geode-module files no step ran (query scope, connection manager, confusables, numeric promotion, transport algorithms, REPL line text, errors, history and renderer, distributed explain, protocol, server flags, bulk ingest, planner calibration, ...)").dependOn(&run_sonny6494_lib_inline_tests.step);
     // SONNY-6494 (1): src/gql/recommendations.zig's inline tests (the MCP
     // `validate` / LSP diagnostics recommendation engine), filtered from the
     // geode lib module as test-sonny6460-exec-inline does.

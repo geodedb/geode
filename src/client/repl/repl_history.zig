@@ -158,9 +158,13 @@ pub const HistoryStore = struct {
 test "history leading-space suppression" {
     const allocator = std.testing.allocator;
 
-    // Create temp file
-    const path = "test_history.tmp";
-    defer std.Io.Dir.cwd().deleteFile(path) catch {};
+    // A history file in a private temp directory (it was test_history.tmp
+    // in the working directory).
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/history", .{&tmp.sub_path});
+    defer allocator.free(path);
 
     var history = try HistoryStore.init(allocator, path, true);
     defer history.deinit();
@@ -175,10 +179,7 @@ test "history leading-space suppression" {
     try std.testing.expectEqualStrings("SELECT 1;", history.entries.items[0]);
 
     // Verify file content
-    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
-
-    var buf: [100]u8 = undefined;
-    const n = try file.read(&buf);
-    try std.testing.expectEqualStrings("SELECT 1;\n", buf[0..n]);
+    const content = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(100));
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("SELECT 1;\n", content);
 }
