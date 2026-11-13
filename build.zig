@@ -15897,6 +15897,21 @@ pub fn build(b: *std.Build) void {
     const sonny6459_ckpt_step = b.step("test-sonny6459-checkpoint-once", "Run the SONNY-6459 items 1-2 regression (each persistence tick advances checkpoints_total by one; a SIGTERM runs the full checkpoint once per graph and no other checkpoint, logs its phase timings, and the data survives a restart)");
     sonny6459_ckpt_step.dependOn(&run_sonny6459_ckpt_tests.step);
 
+    // SONNY-6459 item 3: SHOW CLUSTER STATUS last_contact_ms follows raft
+    // traffic on a real three-node cluster (spawns the built geode;
+    // 127.0.0.91-93).
+    const sonny6459_lc_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_cluster_last_contact.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_lc_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6459_lc_tests);
+    const run_sonny6459_lc_tests = b.addRunArtifact(sonny6459_lc_tests);
+    shardDep(test_step, &run_sonny6459_lc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_lc_step = b.step("test-sonny6459-cluster-last-contact", "Run the SONNY-6459 item 3 regression (three real cluster nodes: SHOW CLUSTER STATUS on the leader reports a last_contact_ms under 5 s for live peers well after start, and a growing one for a killed follower)");
+    sonny6459_lc_step.dependOn(&run_sonny6459_lc_tests.step);
+
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.
     const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });

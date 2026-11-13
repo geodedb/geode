@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:32:50.190842645Z",
+  "generated_at": "2026-11-13T08:35:11.104160747Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85909,6 +85909,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6459-CLUSTER-LAST-CONTACT",
+      "features": [
+        {
+          "feature": "SHOW CLUSTER STATUS",
+          "aspect": "LastContactFromRaftTraffic",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_cluster_last_contact.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_cluster_last_contact.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93543,7 +93562,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4876
+      "TESTED": 4877
     },
     "by_aspect": {
       "2PC": 3,
@@ -95455,6 +95474,7 @@
       "LargeScaleAndCancellation": 1,
       "LargeScaleIntegration": 1,
       "LargeScaleStability": 1,
+      "LastContactFromRaftTraffic": 1,
       "LastElement": 1,
       "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
