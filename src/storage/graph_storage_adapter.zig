@@ -2902,6 +2902,19 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
 /// caller treats an error as "no index answer" and scans. With the mutex
 /// free the read builds (or catches up) the index itself, as before. Write
 /// paths and the MERGE resolver keep waiting: they must see a complete index.
+// CANARY: REQ=REQ-SONNY-6347-NO-READ-FROM-INDEX-OVER-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=IndexServedReadDeclines; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6347 item 4: an index-served read (exact seek, posting count,
+/// ordered scan) over an FLE-encrypted field is refused with
+/// `error.IndexOverEncryptedField`, and every caller scans or sorts instead.
+/// No such index can be made now (SONNY-6335), but one made before its field
+/// was encrypted holds ciphertext (a seek never matched: a read returned no
+/// rows) or values from before. Any type, as MERGE's refusal does (a value
+/// is encrypted under its node's first label, which the pattern may not
+/// name); true when the catalog cannot be read.
+fn refuseIndexOverEncryptedField(property_key: []const u8) error{IndexOverEncryptedField}!void {
+    if (fle_integration.fieldEncryptedInAnyType(property_key)) return error.IndexOverEncryptedField;
+}
+
 fn ensureExactIndexForRead(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
     return ensureExactIndex(adapter, mg, .no_wait);
 }
@@ -7066,6 +7079,10 @@ pub const StorageAdapter = struct {
         comptime wait_for_build: bool,
     ) ![]u64 {
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+        // SONNY-6347 item 4: an index over an FLE-encrypted field (made
+        // before the field was encrypted) holds ciphertext, or plaintext
+        // from before: it cannot answer; the caller scans.
+        if (!wait_for_build) try refuseIndexOverEncryptedField(property_key);
 
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -7187,6 +7204,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) ![]u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
+        // SONNY-6347 item 4: ordered by ciphertext; the caller sorts.
+        try refuseIndexOverEncryptedField(key);
 
         // SONNY-6433: pinned (SONNY-3028) for the whole scan: its locks are
         // let go between batches, and a DROP GRAPH in that gap freed the
@@ -7979,6 +7998,10 @@ pub const StorageAdapter = struct {
         // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
         // so probe-counting callers/tests (GAP-ENT-0019) see the seek fire.
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+        // SONNY-6347 item 4: an index over an FLE-encrypted field (made
+        // before the field was encrypted) holds ciphertext, or plaintext
+        // from before: it cannot answer; the caller scans.
+        if (!wait_for_build) try refuseIndexOverEncryptedField(property_key);
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());

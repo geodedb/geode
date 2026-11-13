@@ -85,7 +85,6 @@ const Fixture = struct {
         fle_integration.setHasEncryptedFields(false);
         fle_integration.resetGlobalKeyStateForTesting();
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "S6449", .allocator = std.heap.smp_allocator }, "init");
         const catalog = try fle_catalog.globalCatalog(testing.allocator);
         var roles = [_][]const u8{"pii"};
         try catalog.configureField("S6449P", .{ .field_name = "ssn", .encryption = .{ .enabled = true }, .visibility = .{ .to_roles = &roles } });

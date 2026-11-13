@@ -809,6 +809,39 @@
   auth state, timeseries, tenants and audit log in the resolved directory
   from now on (none of it had been kept). Regression:
   `zig build test-sonny6339-resolved-data-dir`.
+- **FLE key manager and blind index live for the process; the node-scan
+  WHERE no longer leaks on FLE deployments (SONNY-2670).** The two
+  process-wide FLE singletons were created on the first caller's allocator
+  (a request arena, a per-node scratch arena, the read-budget metered
+  allocator); once that was torn down the next encrypt or decrypt used freed
+  memory. They are now made on the process allocator, as the FLE catalog
+  is, and the engine-direct node scan runs a WHERE on its per-node scratch
+  arena on deployments with encrypted fields too (it used the server's main
+  allocator there and leaked every extended value a WHERE read, the
+  SONNY-2656 leak). Regression: `zig build
+  test-sonny2670-fle-singletons-process-allocator`.
+- **FLE: a string shaped like an envelope is encrypted; the record's tenant
+  is the encryption identity (SONNY-6347).** (2) The graph-store write
+  primitives skipped encryption for any string with the shape of an FLE
+  envelope (algorithm byte 1-3 and a matching length field), so a crafted
+  plaintext of that shape reaching one outside the executor (a raft
+  payload, an internal caller) was stored in the clear. A value is now kept
+  as stored only when it authenticates as this record's envelope for the
+  field; anything else is encrypted. (5) The identity used the writer's
+  request tenant, so a parent tenant reading its child tenant's encrypted
+  row failed with 58030. It now uses the record's stored tenant; readers
+  still try the request tenant, so values written before decrypt as they
+  did. (3) `CREATE INDEX` / `CREATE CONSTRAINT ... IS UNIQUE` and `CALL
+  geode.fle.configureField` checked each other under different locks with
+  nothing held between check and write, so racing they could leave an index
+  over an encrypted field; the index DDL now reserves its fields until its
+  row is recorded and configureField checks and encrypts under the same
+  lock. (4) An index of another type than fulltext made before its field was
+  encrypted was neither detected nor avoided: a seek over it returned no
+  rows. It is now named in a `SECURITY` error line when the catalog opens,
+  and index-served seeks, posting counts and ordered scans over an
+  encrypted field fall back to a scan or sort. Regression: `zig build
+  test-sonny6347-fle-envelope-identity`.
 - **BEHAVIOUR CHANGE: one FLE encryption identity; no index over an
   encrypted field (SONNY-6335).** (1) The graph-store write primitives
   encrypted a plaintext value that reached them (raft apply, internal

@@ -5,6 +5,7 @@ const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const decimal_text = @import("../types/decimal_text.zig");
 const fle_hooks = @import("fle_hooks.zig");
+const fle_integration = @import("../fle_integration.zig"); // SONNY-6347
 // A4b: fulltext write-maintenance hook (delete-then-index on SET).
 const fts_index_ops = @import("fts_index_ops.zig");
 
@@ -420,6 +421,9 @@ pub fn setNodePropertyFromValue(
 
     const prop_value = switch (value) {
         .Str => |s| blk: {
+            // SONNY-6347: the record's stored tenant is the encryption
+            // identity's (hydrated here when the node is not resident).
+            const record_tenant = if (resident) |n| n.tenant_id else if (store.nodes.getOrHydratePtr(node_id) catch null) |n| n.tenant_id else fle_integration.tenantPreferringActiveContext();
             const encrypted_or_plain = try fle_hooks.encryptPropertyIfNeeded(
                 allocator,
                 node_graph,
@@ -427,6 +431,7 @@ pub fn setNodePropertyFromValue(
                 key,
                 s,
                 node_id,
+                record_tenant,
             );
             defer if (encrypted_or_plain.ptr != s.ptr or encrypted_or_plain.len != s.len) allocator.free(encrypted_or_plain);
             break :blk graph_store.PropertyValue{ .String = try allocator.dupe(u8, encrypted_or_plain) };
@@ -528,6 +533,8 @@ pub fn setEdgePropertyFromValue(
     const edge_graph: ?[]const u8 = if (store.getEdgePtr(edge_id)) |e| e.graph_name else null;
     const prop_value = switch (value) {
         .Str => |s| blk: {
+            // SONNY-6347: the record's stored tenant is the encryption identity's.
+            const record_tenant = if (store.getEdgePtrHydrated(edge_id)) |e| e.tenant_id else fle_integration.tenantPreferringActiveContext();
             const encrypted_or_plain = try fle_hooks.encryptEdgePropertyIfNeeded(
                 allocator,
                 edge_graph,
@@ -535,6 +542,7 @@ pub fn setEdgePropertyFromValue(
                 key,
                 s,
                 edge_id,
+                record_tenant,
             );
             defer if (encrypted_or_plain.ptr != s.ptr or encrypted_or_plain.len != s.len) allocator.free(encrypted_or_plain);
             break :blk graph_store.PropertyValue{ .String = try allocator.dupe(u8, encrypted_or_plain) };

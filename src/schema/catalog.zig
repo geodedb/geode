@@ -1215,6 +1215,38 @@ pub const Catalog = struct {
         return null;
     }
 
+    /// SONNY-6347: the names (copies in `allocator`) of the indexes, and
+    /// enforced UNIQUE / NODE KEY constraints, any of whose columns
+    /// `covered(label, prop)` names. `covered` runs under the catalog lock,
+    /// so it must take no lock ordered before it.
+    pub fn indexesOnFields(self: *Catalog, allocator: std.mem.Allocator, covered: *const fn ([]const u8, []const u8) bool) ![][]u8 {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        var names = std.ArrayList([]u8).empty;
+        errdefer {
+            for (names.items) |n| allocator.free(n);
+            names.deinit(allocator);
+        }
+        var it = self.indexes.valueIterator();
+        while (it.next()) |row| {
+            for (row.columns) |c| {
+                if (!covered(row.table_name, c)) continue;
+                try names.append(allocator, try allocator.dupe(u8, row.name));
+                break;
+            }
+        }
+        var cit = self.constraints.valueIterator();
+        while (cit.next()) |row| {
+            if (!enforcesUnique(row.*)) continue;
+            for (row.properties) |c| {
+                if (!covered(row.label, c)) continue;
+                try names.append(allocator, try allocator.dupe(u8, row.name));
+                break;
+            }
+        }
+        return names.toOwnedSlice(allocator);
+    }
+
     pub fn listAllIndexes(self: *Catalog, allocator: std.mem.Allocator) ![]IndexInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());

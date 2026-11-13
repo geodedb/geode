@@ -71,8 +71,6 @@ const Env = struct {
         errdefer self.f.deinit();
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
-        // Process-lifetime key manager (SONNY-2670 workaround).
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6335", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         self.session = execution.SessionState.init(testing.allocator);
@@ -202,7 +200,7 @@ test "SONNY-6335 (1): an edge value encrypted by the graph-store primitive decry
     try expectStr(secret, try e.str("pii", "MATCH ()-[r:R6335 {k: 2}]->() RETURN r.p"), "store-written edge");
 }
 
-test "SONNY-6335 (1): a value already on disk under the old graph-store identity (tenant/schema 'default', \"node_<id>\") still decrypts; one under no known identity is refused" {
+test "SONNY-6335 (1): a value already on disk under the old graph-store identity (tenant/schema 'default', \"node_<id>\") still decrypts; one under no known identity is encrypted as a value (SONNY-6347)" {
     var e: Env = undefined;
     try e.init();
     defer e.deinit();
@@ -221,13 +219,18 @@ test "SONNY-6335 (1): a value already on disk under the old graph-store identity
     try testing.expectEqualSlices(u8, envelope, e.f.st.getNodeProperty(id, "ssn").?.String);
     try expectStr(secret, try e.str("pii", "MATCH (n:T6335 {k: 3}) RETURN n.ssn"), "legacy store identity");
 
-    // Under another record's identity: neither identity decrypts it.
+    // Under another record's identity: no identity a reader tries.
     var buf2: [32]u8 = undefined;
     const other = fle_integration.legacyStoreIdentity(&buf2, .node, id + 1000);
     const foreign = try fle_integration.encryptFieldIfNeeded(.{ .tenant_id = other.tenant_id, .schema_name = other.schema_name, .allocator = testing.allocator }, "T6335", "ssn", secret, other.record_id);
     defer testing.allocator.free(foreign);
+    // SONNY-6347: the store keeps only an envelope that authenticates as
+    // this record's; a foreign one is a value like any other, and is
+    // encrypted. (Stored bytes that do not decrypt are refused, 58030:
+    // test-sonny6327-fle-read-gaps.)
     try e.f.st.setNodeProperty(id, "ssn", .{ .String = foreign });
-    try expectSqlstate(e.refused("MATCH (n:T6335 {k: 3}) RETURN n.ssn"), "58030");
+    try testing.expect(!std.mem.eql(u8, foreign, e.f.st.getNodeProperty(id, "ssn").?.String));
+    try expectStr(foreign, try e.str("pii", "MATCH (n:T6335 {k: 3}) RETURN n.ssn"), "a foreign envelope is a value");
 }
 
 // ---------------------------------------------------------------------------

@@ -1396,13 +1396,13 @@ fn projectValue(allocator: std.mem.Allocator, source: Value, fields: []const []c
                 // Try to get the property from the node
                 const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
                 // SONNY-6327: a string through the FLE read policy.
-                if (val == .String) break :blk_node Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, val.String, node.id) };
+                if (val == .String) break :blk_node Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, val.String, node.id, node.tenant_id) };
                 break :blk_node property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             .Edge => |edge| blk_edge: {
                 // Try to get the property from the edge
                 const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
-                if (val == .String) break :blk_edge Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, field, val.String, edge.id) };
+                if (val == .String) break :blk_edge Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, field, val.String, edge.id, edge.tenant_id) };
                 break :blk_edge property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             // ExtValue types don't support property access
@@ -1929,7 +1929,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         const result = switch (val) {
                             // SONNY-6327: the shared FLE read policy; a
                             // decrypt failure is an error (never the bytes).
-                            .String => |s| Value{ .Str = try fleReadMemberView(lent, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id) },
+                            .String => |s| Value{ .Str = try fleReadMemberView(lent, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id, node.tenant_id) },
                             .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
@@ -1942,7 +1942,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             // SONNY-6327: an edge's string goes through the
                             // same FLE read policy as a node's (it was
                             // returned as stored: ciphertext, to everyone).
-                            .String => |s| .{ .Str = try fleReadMemberView(lent, .edge, edge.label, pa.property, s, edge.id) },
+                            .String => |s| .{ .Str = try fleReadMemberView(lent, .edge, edge.label, pa.property, s, edge.id, edge.tenant_id) },
                             .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
@@ -2196,8 +2196,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 /// reads in plaintext); a decrypted or redacted string is allocated on
 /// `allocator`, which callers pass as `lentValueAllocator`. Either way the
 /// value is borrowed (`value_utilities.evaluatesFresh`).
-fn fleReadMemberView(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]const u8 {
-    return fle_integration.readStoredString(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+fn fleReadMemberView(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64, record_tenant: []const u8) EvalError![]const u8 {
+    return fle_integration.readStoredString(allocator, kind, type_name, field, stored, id, record_tenant) catch |err| fleEvalError(err);
 }
 
 /// SONNY-6449: the allocator of a value the evaluator lends its caller
@@ -2236,8 +2236,8 @@ pub fn evalExprNothingLent(allocator: std.mem.Allocator, e: ast.Expr, env: Env) 
 
 /// SONNY-6327: the same, for a whole-entity read (`properties()`, map
 /// projection): a field the principal may not read is "[REDACTED]".
-fn fleReadEntity(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]u8 {
-    return fle_integration.readStoredStringForEntity(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+fn fleReadEntity(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64, record_tenant: []const u8) EvalError![]u8 {
+    return fle_integration.readStoredStringForEntity(allocator, kind, type_name, field, stored, id, record_tenant) catch |err| fleEvalError(err);
 }
 
 fn fleEvalError(err: fle_integration.FleReadError) EvalError {
@@ -2263,7 +2263,7 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
             const result = switch (val) {
                 // SONNY-6327: the shared FLE read policy (a decrypt failure
                 // is an error; it fell back to the stored bytes).
-                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id, node.tenant_id) },
                 else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
@@ -2278,7 +2278,7 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
                 // SONNY-6327: the edge's record identity ("edge_<id>", as the
                 // write side encrypts it; it used the node form, so nothing
                 // decrypted and the stored bytes were returned).
-                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .edge, edge.label, field, s, edge.id) },
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .edge, edge.label, field, s, edge.id, edge.tenant_id) },
                 else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
@@ -3728,7 +3728,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     // SONNY-6327: a string through the FLE read policy (it
                     // was the stored bytes: ciphertext).
                     const prop_val = if (entry.value_ptr.* == .String)
-                        Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", entry.key_ptr.*, entry.value_ptr.String, node.id) }
+                        Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", entry.key_ptr.*, entry.value_ptr.String, node.id, node.tenant_id) }
                     else
                         property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
@@ -3746,7 +3746,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
                     const prop_val = if (entry.value_ptr.* == .String)
-                        Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, entry.key_ptr.*, entry.value_ptr.String, edge.id) }
+                        Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, entry.key_ptr.*, entry.value_ptr.String, edge.id, edge.tenant_id) }
                     else
                         property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;

@@ -465,20 +465,31 @@ SET` / `SET`. Matching on an encrypted value needs deterministic or
 blind-index encryption (SONNY-6350). The internal `__geode_security` graph
 is never encrypted and is exempt.
 
-#### Encryption identity (SONNY-6335)
+#### Encryption identity (SONNY-6335, SONNY-6347)
 
 Every encrypted string property is encrypted, and decrypted, under one
-identity (`fle_integration.recordIdentity`): the request tenant (else
-`default`), the node's first label or the edge's type, the field, and the
-record id `<id>` (node) or `edge_<id>` (edge). The executor's FLE hook and the
-graph-store write primitives (which encrypt a plaintext value that reaches
-them without the hook: raft apply, internal callers) both use it; a value
-that is already an envelope is stored as it is, never encrypted twice. Values
-the graph-store primitives wrote before SONNY-6335 (tenant and schema
-`default`, record id `node_<id>` / `edge_<id>`) are still read: a reader tries
-that identity after the current one. The tenant is the writer's request
-tenant: a reader in another tenant (a parent tenant reading a child's row
-included) does not decrypt it (58030).
+identity (`fle_integration.recordIdentity`): the record's stored tenant, the
+node's first label or the edge's type, the field, and the record id `<id>`
+(node) or `edge_<id>` (edge). The executor's FLE hook and the graph-store
+write primitives (which encrypt a plaintext value that reaches them without
+the hook: raft apply, internal callers) both use it. Because the tenant is
+the record's, a parent tenant that the tenant hierarchy lets read a child
+tenant's row (GAP-0846) decrypts it like the child does (SONNY-6347).
+
+A graph-store write primitive keeps a value as it is only when it
+authenticates as this record's envelope for the field (AEAD under the field
+key and one of the identities below), which is how the executor's
+already-encrypted value, an undo, or a replay of stored bytes are not
+encrypted twice. Any other value, including a plaintext that merely has the
+shape of an envelope, is encrypted (SONNY-6347; the primitives used a shape
+test, so a crafted string of that shape was stored in the clear).
+
+Readers try, in order: the current identity; the writer's request tenant in
+place of the record's (values written before SONNY-6347, when the identity
+used the request tenant: such a value written by a parent tenant into a
+child's row still decrypts only for the parent); and the identity the
+graph-store primitives wrote before SONNY-6335 (tenant and schema `default`,
+record id `node_<id>` / `edge_<id>`).
 
 #### No index over an encrypted field (SONNY-6335)
 
@@ -493,16 +504,24 @@ per write) or, maintained from a decrypted value, the plaintext. So:
 - `CALL geode.fle.configureField` on a field that has an index or a UNIQUE /
   NODE KEY constraint over it, in any graph, is refused (0A000): drop it
   first.
-- A fulltext index made over a field before the field was encrypted (an
-  existing deployment) refuses `geode.fts.search` / `phrase` / `proximity`
-  (0A000) instead of matching nothing. Other index types over such a field
-  are not detected at startup; drop them (`DROP INDEX`).
+- The two checks do not race (SONNY-6347): an index or constraint DDL
+  reserves its fields from its check until its catalog row is recorded, and
+  `configureField` checks the rows and those reservations and encrypts the
+  field under the same lock, so one of the two is refused.
+- An index made over a field before the field was encrypted (an existing
+  deployment) is named in a `SECURITY` error line when the catalog is opened
+  (server start), and is not used: an equality seek, a posting count and an
+  ordered scan over an encrypted field fall back to a scan or a sort
+  (SONNY-6347; a seek over such an index returned no rows). A fulltext one
+  refuses `geode.fts.search` / `phrase` / `proximity` (0A000) instead of
+  matching nothing. Its files may hold values written before the field was
+  encrypted: drop it (`DROP INDEX`).
 
-Searchable (blind-index) fields exist in the FLE catalog and the read
-path (`@searchable`, `lookupEncryptedField`), but no `CALL` procedure can
-declare one (`configureField` always configures `searchable: false`), and the
-blind-index equality search is not wired to `WHERE` or to inline maps
-(SONNY-6335 item 5).
+Searchable (blind-index) fields exist only in the FLE catalog (a field a
+catalog file marks `searchable`): no `CALL` procedure can declare one
+(`configureField` refuses a `searchable` key), a write adds its blind-index
+entry, and nothing reads the blind index, so there is no equality search on
+an encrypted field (see "Searchable fields today" above; SONNY-6335 item 5).
 
 #### `CALL geode.fle.getFieldConfig(type_name, field_name)`
 

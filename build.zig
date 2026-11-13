@@ -12301,6 +12301,19 @@ pub fn build(b: *std.Build) void {
     const sonny2656_step = b.step("test-sonny2656-extended-value-leaks", "Run SONNY-2656 regression (the node-scan fast path frees a projected typed extended value with its row, and the clone a WHERE reads at every predicate site, for every extended kind)");
     sonny2656_step.dependOn(&run_sonny2656_tests.step);
 
+    // SONNY-2670: the FLE key-manager and blind-index singletons live on the
+    // process allocator, and the node-scan WHERE runs on its scratch arena on
+    // FLE deployments too.
+    const sonny2670_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2670_fle_singletons_process_allocator.zig"), .target = target, .optimize = optimize });
+    sonny2670_test_mod.link_libc = true; // setenv/unsetenv
+    sonny2670_test_mod.addImport("geode", root_mod);
+    sonny2670_test_mod.addImport("logging", logging_mod);
+    const sonny2670_tests = b.addTest(.{ .root_module = sonny2670_test_mod });
+    const run_sonny2670_tests = b.addRunArtifact(sonny2670_tests);
+    shardDep(test_step, &run_sonny2670_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2670_step = b.step("test-sonny2670-fle-singletons-process-allocator", "Run SONNY-2670 regression (the FLE key manager and blind index made by a first encrypt under a transient arena outlive it; on an FLE deployment the node-scan WHERE frees what it reads)");
+    sonny2670_step.dependOn(&run_sonny2670_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
@@ -15199,6 +15212,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6362m_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6362m_step = b.step("test-sonny6362-merge-index-residuals", "Run SONNY-6362 regression, items 2-5 (a node id with bit 63 set is refused at creation on every path that takes one; the all-properties resolver checks the seed filter against the node it returns; MERGE on an FLE-encrypted property is refused 0A000 with nothing written; a MERGE index entry that could not be added leaves the index unable to answer instead of answering a miss)");
     sonny6362m_step.dependOn(&run_sonny6362m_tests.step);
+
+    const sonny6347_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6347_fle_envelope_identity.zig"), .target = target, .optimize = optimize });
+    sonny6347_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6347_test_mod.addImport("geode", root_mod);
+    sonny6347_test_mod.addImport("schema", schema_mod);
+    sonny6347_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6347_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6347_test_mod.addImport("logging", logging_mod);
+    sonny6347_test_mod.addImport("rls", rls_mod);
+    sonny6347_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6347_tests = b.addTest(.{ .root_module = sonny6347_test_mod });
+    const run_sonny6347_tests = b.addRunArtifact(sonny6347_tests);
+    shardDep(test_step, &run_sonny6347_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6347_step = b.step("test-sonny6347-fle-envelope-identity", "Run SONNY-6347 regression (a string shaped like an FLE envelope reaching a graph-store write primitive is encrypted unless it authenticates as the record's envelope; the encryption identity is the record's stored tenant, so a parent tenant reads its child's encrypted row, and values written under the writer's request tenant still decrypt)");
+    sonny6347_step.dependOn(&run_sonny6347_tests.step);
 
     const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
     sonny6294_test_mod.link_libc = true;

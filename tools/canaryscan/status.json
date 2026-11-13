@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:55:47.786254632Z",
+  "generated_at": "2026-11-13T10:14:39.210332887Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70235,6 +70235,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SingletonsOnProcessAllocator",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2672-READ-SEMANTICS-BATCH",
       "features": [
         {
@@ -82136,6 +82169,120 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6347-FLE-AUTHENTIC-ENVELOPE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "StoreEnvelopeAuthenticated",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-FLE-INDEX-DDL-SERIALIZED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "IndexDdlAndConfigureFieldSerialized",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-FLE-RECORD-TENANT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "RecordTenantIdentity",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-INDEX-OVER-ENCRYPTED-FIELD-REPORTED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "StartupReport",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-NO-READ-FROM-INDEX-OVER-ENCRYPTED-FIELD",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "IndexServedReadDeclines",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6348-KMS-TMP-SELFTESTS",
       "features": [
         {
@@ -93501,7 +93648,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4874
+      "TESTED": 4882
     },
     "by_aspect": {
       "2PC": 3,
@@ -95249,6 +95396,7 @@
       "IncrementalSnapshot": 1,
       "Index": 3,
       "IndexDDL": 1,
+      "IndexDdlAndConfigureFieldSerialized": 1,
       "IndexGraphField": 1,
       "IndexGraphScope": 1,
       "IndexIndep": 1,
@@ -95271,6 +95419,7 @@
       "IndexRepairCollector": 1,
       "IndexResultsScoped": 1,
       "IndexSeekOpKind": 1,
+      "IndexServedReadDeclines": 1,
       "IndexStorage": 2,
       "IndexTests": 1,
       "IndexVector": 1,
@@ -96604,6 +96753,7 @@
       "RecordFallback": 1,
       "RecordKind": 1,
       "RecordKinds": 1,
+      "RecordTenantIdentity": 1,
       "Recovery": 1,
       "RecoveryReplay": 1,
       "RecursiveCheck": 1,
@@ -96627,7 +96777,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 302,
+      "Regression": 304,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97046,6 +97196,7 @@
       "SingleSourceOfTruth": 1,
       "SingleStreamLoop": 1,
       "SingleStreamStressMode": 1,
+      "SingletonsOnProcessAllocator": 1,
       "Sinks": 1,
       "SizeCap": 1,
       "SizeCheck": 1,
@@ -97113,6 +97264,7 @@
       "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupReport": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
       "State": 2,
@@ -97173,6 +97325,7 @@
       "StoreAliasNotDoubleFreed": 1,
       "StoreConfig": 1,
       "StoreCount": 1,
+      "StoreEnvelopeAuthenticated": 1,
       "StoreLockReentrancy": 1,
       "StoreStats": 1,
       "StoreUndoCapture": 1,
