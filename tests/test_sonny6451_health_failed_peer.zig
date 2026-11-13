@@ -119,3 +119,32 @@ test "SONNY-6451: a failed peer that is heard from again is active again" {
     try std.testing.expectEqual(ClusterCoordinator.NodeState.active, stateOf(coord, 2).?);
     try std.testing.expectEqual(ClusterCoordinator.NodeState.failed, stateOf(coord, 3).?);
 }
+
+// SONNY-6456 item 1: `promoteReplica` fails with `NoReplicasAvailable` for a
+// shard whose primary failed and that has no replica. That error used to
+// propagate out of `healthPass` (and so out of `healthLoop`, ending the
+// health thread for good, with the inbound-occupancy sweeper it also drives).
+// The pass must log it, still mark the peer failed, and go on to the next
+// peer.
+test "SONNY-6456: a failover error in a health pass is not returned and the pass goes on" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const coord = try newCoordinator(a, 23130);
+    defer {
+        coord.deinit();
+        a.destroy(coord);
+    }
+    try coord.cluster_state.shards.append(a, .{
+        .id = 1,
+        .primary_node = 2,
+        .replica_nodes = &.{},
+        .key_range = .{ .start = "", .end = "" },
+        .size_bytes = 0,
+        .record_count = 0,
+    });
+    for (coord.cluster_state.nodes.items) |*node| node.last_heartbeat = 0;
+
+    try cluster.testing_surface.healthPass(coord);
+    try std.testing.expectEqual(ClusterCoordinator.NodeState.failed, stateOf(coord, 2).?);
+    try std.testing.expectEqual(ClusterCoordinator.NodeState.failed, stateOf(coord, 3).?);
+}
