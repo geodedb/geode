@@ -23,8 +23,8 @@ test "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_001_ModuleStructure" {
     _ = geode.graph_common.BindingValue;
     _ = geode.graph_common.Column; // Added to resolve circular dependencies
 
-    // Verify exec module doesn't conflict with server/graph/exec
-    _ = geode.exec; // This should be src/exec.zig, not server/graph/exec.zig
+    // The exec module is src/exec.zig
+    _ = geode.exec;
 
     // Test that materialized_views can access required types
     _ = geode.materialized_views.MaterializedViewManager;
@@ -158,7 +158,6 @@ test "Build system module conflict prevention" {
     // Test that the specific conflicts we resolved don't reoccur
 
     // Verify that we can access graph execution functionality through proper paths
-    // This test ensures server/graph/exec.zig doesn't conflict with geode module
 
     // Test that MaterializedViewManager can access its dependencies
     const allocator = testing.allocator;

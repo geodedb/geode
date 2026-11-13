@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:24:19.027455457Z",
+  "generated_at": "2026-11-13T02:24:59.761792649Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -11770,44 +11770,6 @@
       ]
     },
     {
-      "id": "REQ-DECIMAL-OVERFLOW-001",
-      "features": [
-        {
-          "feature": "Decimal Overflow Guard",
-          "aspect": "DataIntegrity",
-          "status": "TESTED",
-          "files": [
-            "src/exec.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_decimal_operations.yml"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DECIMAL-OVERFLOW-002",
-      "features": [
-        {
-          "feature": "Decimal Avg Overflow Guard",
-          "aspect": "DataIntegrity",
-          "status": "TESTED",
-          "files": [
-            "src/exec.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_decimal_operations.yml"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
       "id": "REQ-DEFAULT-PASSWORD-001",
       "features": [
         {
@@ -17863,25 +17825,6 @@
           "status": "TESTED",
           "files": [
             "src/exec.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_type_system.yml"
-          ],
-          "benches": [],
-          "owner": "exec",
-          "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
-      "id": "REQ-EXPR-TYPE-003",
-      "features": [
-        {
-          "feature": "ExprTypeCoverage",
-          "aspect": "Types",
-          "status": "TESTED",
-          "files": [
-            "src/server/graph/exec.zig"
           ],
           "tests": [
             "geodetestlab/specs/gql_type_system.yml"
@@ -28381,20 +28324,6 @@
           "updated": "2025-09-21"
         },
         {
-          "feature": "Aggregation COUNT DISTINCT",
-          "aspect": "HashAggDistinctSpillEvictVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_distinct_spill_evict_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctSpillEvictVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
           "feature": "GROUP BY/Aggregation",
           "aspect": "AvgVarianceEnvelope",
           "status": "BENCHED",
@@ -28466,34 +28395,6 @@
         },
         {
           "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDecimalEarlyState",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_decimal_early_state.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggDecimalEarlyState"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDecimalSpillMerge",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_decimal_spill_merge.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggDecimalSpillMerge"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
           "aspect": "HashAggDistinctHighCardVarianceEnvelope",
           "status": "BENCHED",
           "files": [
@@ -28501,90 +28402,6 @@
           ],
           "tests": [
             "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDistinctMergeVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_distinct_merge_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctMergeVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDistinctSpillAccurateMerge",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_distinct_spill_accurate_merge.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggDistinctSpillAccurateMerge"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDistinctSpillPersistence",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_distinct_spill_persistence.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggDistinctSpillPersistence"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggSpillEvict",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_spill_evict.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggSpillEvict"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggSpillEvictVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_spill_evict_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggSpillEvictVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggSpillFlag",
-          "status": "TESTED",
-          "files": [
-            "tests/test_hashagg_spill_flag.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_HashAggSpillFlag"
           ],
           "benches": [],
           "owner": "engine",
@@ -28613,34 +28430,6 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "MixedAggregateVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_mixed_agg_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_MixedAggregateVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "MixedAggregationBreadth",
-          "status": "TESTED",
-          "files": [
-            "tests/test_groupby_mixed_aggregations.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_MixedAggregationBreadth"
           ],
           "benches": [],
           "owner": "engine",
@@ -29222,20 +29011,6 @@
           "updated": "2025-09-24"
         },
         {
-          "feature": "Match Label+Property Predicate",
-          "aspect": "MatchLabelPropertyVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_match_label_property_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_017_MatchLabelPropertyVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
           "feature": "MatchGuardStatusWireMapping",
           "aspect": "Wire",
           "status": "TESTED",
@@ -29250,20 +29025,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-25"
-        },
-        {
-          "feature": "MatchSafetyGuards",
-          "aspect": "EngineGuardInit",
-          "status": "TESTED",
-          "files": [
-            "src/server/graph/exec.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_InvalidHopBounds"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-24"
         },
         {
           "feature": "OPTIONAL MATCH + VarLen NullPreserve",
@@ -29312,8 +29073,7 @@
           "aspect": "Engine",
           "status": "TESTED",
           "files": [
-            "src/canary.zig",
-            "src/server/graph/exec.zig"
+            "src/canary.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_017_PropertyAccess",
@@ -85400,6 +85160,110 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "CompositeSoleHolderEndpoint",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6436-FIXTURE-SECRETS",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6436-QUIC-RETRY-STOPS",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "QuicRetryStopsWithSummary",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6436-RLS-RAW-TRUTHINESS",
+      "features": [
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "OnlyTrueAdmits",
+          "status": "TESTED",
+          "files": [
+            "src/security/rls_core.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS",
       "features": [
         {
@@ -85463,6 +85327,148 @@
           ],
           "tests": [
             "tests/test_sonny6442_tde_measure_overhead.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-DATADIR-LOCK-ABORT",
+      "features": [
+        {
+          "feature": "DataDirLock",
+          "aspect": "AbortedHolderReleases",
+          "status": "TESTED",
+          "files": [
+            "tests/test_datadir_lock_subprocess.zig"
+          ],
+          "tests": [
+            "tests/test_datadir_lock_subprocess.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-FIXTURE-SECRETS",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "ClientsAndUserPasswords",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-LEAN-KEY-OVERFLOW",
+      "features": [
+        {
+          "feature": "LeanMergeKeyIndexing",
+          "aspect": "GrowableRegistry",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "LeanMergeKeyIndexing",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-NUMERIC-KEY-PARITY",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "IntFloatEqualEndpointKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6447-RLS-RAW-TOKENIZE",
+      "features": [
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "QuoteAndParenAwareSplit",
+          "status": "TESTED",
+          "files": [
+            "src/security/rls_core.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -92712,25 +92718,6 @@
       ]
     },
     {
-      "id": "REQ-WHERE-EVAL-001",
-      "features": [
-        {
-          "feature": "WHERE Condition Evaluation",
-          "aspect": "Filtering",
-          "status": "TESTED",
-          "files": [
-            "src/server/graph/exec.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-WHERE-EXISTS-001",
       "features": [
         {
@@ -93004,25 +92991,6 @@
       ]
     },
     {
-      "id": "REQ-WITH-WHERE-001",
-      "features": [
-        {
-          "feature": "WITH WHERE Filtering",
-          "aspect": "QueryExecution",
-          "status": "TESTED",
-          "files": [
-            "src/server/graph/exec.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-ZERO-LEN-PATH-002",
       "features": [
         {
@@ -93135,11 +93103,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 215,
+      "BENCHED": 210,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4848
+      "TESTED": 4849
     },
     "by_aspect": {
       "2PC": 3,
@@ -93168,6 +93136,7 @@
       "ATAN": 1,
       "ATAN2": 1,
       "Abort": 1,
+      "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
@@ -93663,6 +93632,7 @@
       "ClientTimeoutBranch": 1,
       "ClientVerifiesPinnedFreshAttestation": 1,
       "ClientWriteCongestionDeadline": 1,
+      "ClientsAndUserPasswords": 1,
       "ClosedConnectionFailFast": 1,
       "Closeness": 1,
       "ClosenessCentrality": 2,
@@ -93726,6 +93696,7 @@
       "ComplianceLog": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
+      "CompositeSoleHolderEndpoint": 1,
       "ComprehensiveBatch3": 1,
       "ComprehensiveBatch4": 1,
       "ComprehensiveBatch5": 1,
@@ -93946,7 +93917,7 @@
       "DataExport": 1,
       "DataGeneration": 1,
       "DataIngestion": 2,
-      "DataIntegrity": 4,
+      "DataIntegrity": 2,
       "DataMasking": 2,
       "DataPageSerialization": 1,
       "DataSecurity": 1,
@@ -94269,7 +94240,6 @@
       "EndpointUnification": 1,
       "Engine": 13,
       "EngineBatch2": 1,
-      "EngineGuardInit": 1,
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
       "Entry": 1,
@@ -94496,7 +94466,7 @@
       "FilterFix": 2,
       "FilterYieldColumns": 1,
       "FilteredTarget": 1,
-      "Filtering": 4,
+      "Filtering": 3,
       "FinalAggregate": 1,
       "FinalBatch": 1,
       "FinalPagination": 1,
@@ -94717,6 +94687,7 @@
       "GroupValidationHookImplementation": 1,
       "GroupValidationHookPipelineIntegration": 1,
       "GroupingLogic": 2,
+      "GrowableRegistry": 1,
       "GrpcAlterUserParse": 1,
       "GrpcCleanup": 1,
       "GrpcCommit": 1,
@@ -94781,16 +94752,7 @@
       "HarnessRuntimeMetricsScrape": 1,
       "HasGraphGrant": 2,
       "HasGraphGrantLocked": 1,
-      "HashAggDecimalEarlyState": 1,
-      "HashAggDecimalSpillMerge": 1,
       "HashAggDistinctHighCardVarianceEnvelope": 1,
-      "HashAggDistinctMergeVarianceEnvelope": 1,
-      "HashAggDistinctSpillAccurateMerge": 1,
-      "HashAggDistinctSpillEvictVarianceEnvelope": 1,
-      "HashAggDistinctSpillPersistence": 1,
-      "HashAggSpillEvict": 1,
-      "HashAggSpillEvictVarianceEnvelope": 1,
-      "HashAggSpillFlag": 1,
       "HashAggSpillVarianceEnvelope": 1,
       "HashBeforeStore": 1,
       "Hashing": 1,
@@ -94934,6 +94896,7 @@
       "InstallUnderStoreLock": 1,
       "Instrumentation": 1,
       "IntComparison": 1,
+      "IntFloatEqualEndpointKeys": 1,
       "IntOverflow": 1,
       "IntWidths": 1,
       "IntegerType": 1,
@@ -95224,7 +95187,6 @@
       "MatchGuard": 1,
       "MatchHandler": 1,
       "MatchLabelDeny": 1,
-      "MatchLabelPropertyVarianceEnvelope": 1,
       "MatchLoopSkip": 1,
       "MatchPath": 1,
       "MatchPhaseVisibility": 1,
@@ -95316,8 +95278,6 @@
       "MiscBatch2": 1,
       "MismatchFalsePositiveGuard": 1,
       "MissCounter": 1,
-      "MixedAggregateVarianceEnvelope": 1,
-      "MixedAggregationBreadth": 1,
       "MixedVersionFailLoud": 1,
       "MixedWorkload": 1,
       "MockFramework": 1,
@@ -95546,6 +95506,7 @@
       "OneResolver": 1,
       "OneResourceRule": 1,
       "OneSetPath": 1,
+      "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
@@ -96095,7 +96056,7 @@
       "QueryDispatch": 3,
       "QueryExec": 1,
       "QueryExecuteSpan": 1,
-      "QueryExecution": 7,
+      "QueryExecution": 6,
       "QueryExecutor": 1,
       "QueryExecutorImport": 1,
       "QueryFederation": 1,
@@ -96145,11 +96106,13 @@
       "QuicReadGate": 1,
       "QuicReadLineInterrupt": 1,
       "QuicReadLineTimeout": 1,
+      "QuicRetryStopsWithSummary": 1,
       "QuicRollbackTo": 1,
       "QuicSavepoint": 1,
       "QuicTransportAdapter": 1,
       "QuicWriteGate": 1,
       "QuotaManager": 1,
+      "QuoteAndParenAwareSplit": 1,
       "QuoteEscape": 1,
       "RADIANS": 1,
       "RBAC": 2,
@@ -96253,7 +96216,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 288,
+      "Regression": 294,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97016,7 +96979,7 @@
       "TypeSystemIsolation": 1,
       "TypeValidation": 1,
       "TypeValidators": 1,
-      "Types": 11,
+      "Types": 10,
       "TypesIndep": 1,
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,

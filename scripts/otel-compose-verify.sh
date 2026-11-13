@@ -16,7 +16,9 @@ REQUIRE_SPANS="${REQUIRE_SPANS:-0}"
 # No secret is committed: generate a random per-run password (od reads exactly 16
 # bytes and exits, avoiding the tr|head SIGPIPE trap under `set -o pipefail`).
 # Exported so docker compose substitutes ${GEODE_OTEL_PASSWORD} in the stack.
-export GEODE_OTEL_PASSWORD="${GEODE_OTEL_PASSWORD:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}"
+# SONNY-6436: wrapped in words, so it is a passphrase the password policy
+# accepts (a bare hex string forced a reset at the first login).
+export GEODE_OTEL_PASSWORD="${GEODE_OTEL_PASSWORD:-Otel Compose $(od -An -tx1 -N16 /dev/urandom | tr -d ' \n') Passphrase}"
 PW="$GEODE_OTEL_PASSWORD"
 
 cleanup() { $COMPOSE down -v >/dev/null 2>&1 || true; }

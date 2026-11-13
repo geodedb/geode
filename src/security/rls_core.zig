@@ -2364,16 +2364,33 @@ pub const ContextEvaluator = struct {
     }
 
     // CANARY: REQ=REQ-RLS-EVAL-001; FEATURE="RLSExpressionEvaluation"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SONNY-6436-RLS-RAW-TRUTHINESS; FEATURE="RLSExpressionEvaluation"; ASPECT=OnlyTrueAdmits; STATUS=TESTED; TEST=tests/test_sonny6436_rls_raw_truthiness.zig; OWNER=security; UPDATED=2026-11-12
+    // CANARY: REQ=REQ-SONNY-6447-RLS-RAW-TOKENIZE; FEATURE="RLSExpressionEvaluation"; ASPECT=QuoteAndParenAwareSplit; STATUS=TESTED; TEST=tests/test_sonny6447_rls_raw_tokenize.zig; OWNER=security; UPDATED=2026-11-12
     /// Evaluate an RLS expression string against row data and security context.
     /// Supports patterns: `column = value`, `column = current_user()`, `has_role('name')`, AND/OR combinations
+    ///
+    /// SONNY-6436: the row is admitted only when the predicate is True (ISO/IEC
+    /// 39075:2024 19.1 GR 2), as the compiled VM admits only a boolean TRUE
+    /// (SONNY-2732): a value that is not a boolean (a non-zero integer, a
+    /// non-empty string, a float, a timestamp, the integer `current_user()`
+    /// returns) is not True, `a = b` / `a <> b` is UNKNOWN (not True) when a
+    /// side is null or the two do not compare (`equalValues`), a call followed
+    /// by a comparison is that comparison, and an empty sub-expression is not
+    /// True. The language has no NOT, so taking UNKNOWN as false under AND /
+    /// OR gives the three-valued result's "is it True" answer.
     pub fn evaluate(
         self: *ContextEvaluator,
         expression: []const u8,
         row: *const std.StringHashMap(Value),
         context: *auth.SecurityContext,
     ) !bool {
-        // Empty expression defaults to true (permissive)
-        if (expression.len == 0) return true;
+        // Empty (or blank) expression defaults to true (permissive)
+        if (std.mem.trim(u8, expression, " \t\n\r").len == 0) return true;
+
+        // SONNY-6447: a policy whose quotes or parentheses do not balance
+        // does not parse. Refuse it (every caller turns an error into a
+        // deny) rather than evaluate it up to the first OR that holds.
+        if (!balanced(expression)) return error.InvalidExpression;
 
         // Parse and evaluate the expression
         return self.evaluateExpr(expression, row, context);
@@ -2386,10 +2403,13 @@ pub const ContextEvaluator = struct {
         context: *auth.SecurityContext,
     ) !bool {
         const trimmed = std.mem.trim(u8, expr, " \t\n\r");
-        if (trimmed.len == 0) return true;
+        // SONNY-6436: an empty sub-expression (`()`, `a AND ()`) is not True
+        // (it was). An empty policy is `evaluate`'s, which admits.
+        if (trimmed.len == 0) return false;
 
-        // Handle OR (lowest precedence)
-        if (std.mem.indexOf(u8, trimmed, " OR ")) |or_pos| {
+        // Handle OR (lowest precedence). SONNY-6447: only an operator outside
+        // quotes and parentheses splits (`name = 'a OR b'` is one comparison).
+        if (topLevelIndex(trimmed, " OR ")) |or_pos| {
             const left = trimmed[0..or_pos];
             const right = trimmed[or_pos + 4 ..];
             return (try self.evaluateExpr(left, row, context)) or
@@ -2397,44 +2417,41 @@ pub const ContextEvaluator = struct {
         }
 
         // Handle AND
-        if (std.mem.indexOf(u8, trimmed, " AND ")) |and_pos| {
+        if (topLevelIndex(trimmed, " AND ")) |and_pos| {
             const left = trimmed[0..and_pos];
             const right = trimmed[and_pos + 5 ..];
             return (try self.evaluateExpr(left, row, context)) and
                 (try self.evaluateExpr(right, row, context));
         }
 
-        // Handle parentheses
-        if (trimmed[0] == '(' and trimmed[trimmed.len - 1] == ')') {
+        // Handle parentheses: only one group around the whole expression
+        // (`(a) AND (b)` was split above).
+        if (trimmed[0] == '(' and matchingParen(trimmed, 0) == trimmed.len - 1) {
             return self.evaluateExpr(trimmed[1 .. trimmed.len - 1], row, context);
         }
 
-        // Handle function calls: func_name(args)
-        if (std.mem.indexOf(u8, trimmed, "(")) |paren_pos| {
+        // Handle function calls: func_name(args). SONNY-6447: the call's
+        // parenthesis is the first one outside quotes, closed by its match.
+        if (firstUnquotedParen(trimmed)) |paren_pos| {
             const func_name = trimmed[0..paren_pos];
-            const args_end = std.mem.lastIndexOf(u8, trimmed, ")") orelse return error.InvalidExpression;
+            const args_end = matchingParen(trimmed, paren_pos) orelse return error.InvalidExpression;
             const args_str = trimmed[paren_pos + 1 .. args_end];
 
-            // Check for built-in functions
-            if (self.functions.get(func_name)) |func| {
-                var args_list = std.ArrayList(Value).empty;
-                defer args_list.deinit(self.allocator);
+            // Check for built-in functions. SONNY-6436: only when the call is
+            // the whole expression; `current_user() = 999` is a comparison
+            // (below), and was evaluated as the call alone.
+            const whole_call = args_end + 1 == trimmed.len;
+            if (whole_call) {
+                if (self.functions.get(func_name)) |func| {
+                    var args_list = std.ArrayList(Value).empty;
+                    defer args_list.deinit(self.allocator);
+                    try self.parseCallArgs(args_str, &args_list);
 
-                // Parse arguments (simple comma-separated values)
-                if (args_str.len > 0) {
-                    var args_iter = std.mem.splitSequence(u8, args_str, ",");
-                    while (args_iter.next()) |arg| {
-                        const arg_trimmed = std.mem.trim(u8, arg, " \t'\"");
-                        try args_list.append(self.allocator, .{ .string = arg_trimmed });
-                    }
+                    // SONNY-6436: only a boolean TRUE holds (any other
+                    // result, e.g. current_user()'s integer, was true).
+                    const result = try func(self.allocator, args_list.items, context);
+                    return isTrue(result);
                 }
-
-                const result = try func(self.allocator, args_list.items, context);
-                return switch (result) {
-                    .boolean => |b| b,
-                    .null => false,
-                    else => true,
-                };
             }
         }
 
@@ -2446,7 +2463,7 @@ pub const ContextEvaluator = struct {
         };
 
         for (ops) |op_info| {
-            if (std.mem.indexOf(u8, trimmed, op_info.op)) |op_pos| {
+            if (topLevelIndex(trimmed, op_info.op)) |op_pos| {
                 const left_side = std.mem.trim(u8, trimmed[0..op_pos], " \t");
                 const right_side = std.mem.trim(u8, trimmed[op_pos + op_info.op.len ..], " \t");
 
@@ -2456,21 +2473,130 @@ pub const ContextEvaluator = struct {
                 // Get right value (literal or function)
                 const right_val = try self.resolveValue(right_side, row, context);
 
-                // Compare values
-                const equal = self.valuesEqual(left_val, right_val);
+                // Compare values. SONNY-6436: UNKNOWN (a null side, values
+                // that do not compare) is not True under `=` or `<>`; `<>`
+                // was true for those.
+                const equal = equalValues(left_val, right_val) orelse return false;
                 return if (op_info.eq) equal else !equal;
             }
         }
 
-        // Treat as boolean value or column reference
-        const val = try self.resolveValue(trimmed, row, context);
-        return switch (val) {
+        // Treat as boolean value or column reference. SONNY-6436: only a
+        // boolean TRUE holds (a non-zero integer, a non-empty string, a
+        // float, a timestamp were true).
+        return isTrue(try self.resolveValue(trimmed, row, context));
+    }
+
+    /// SONNY-6436: whether `v` is the boolean TRUE.
+    fn isTrue(v: Value) bool {
+        return switch (v) {
             .boolean => |b| b,
-            .null => false,
-            .integer => |i| i != 0,
-            .string => |s| s.len > 0,
-            else => true,
+            else => false,
         };
+    }
+
+    /// SONNY-6447: whether every quoted string closes and every parenthesis
+    /// outside quotes is matched.
+    fn balanced(text: []const u8) bool {
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        for (text) |c| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => depth += 1,
+                ')' => {
+                    if (depth == 0) return false;
+                    depth -= 1;
+                },
+                else => {},
+            }
+        }
+        return quote == null and depth == 0;
+    }
+
+    /// SONNY-6447: the index of the first `needle` in `text` outside a quoted
+    /// string and at parenthesis depth 0, or null. `needle` must not start
+    /// with a quote or a parenthesis.
+    fn topLevelIndex(text: []const u8, needle: []const u8) ?usize {
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        for (text, 0..) |c, i| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => depth += 1,
+                ')' => depth -|= 1,
+                else => if (depth == 0 and std.mem.startsWith(u8, text[i..], needle)) return i,
+            }
+        }
+        return null;
+    }
+
+    /// SONNY-6447: the index of the first `(` outside a quoted string, or null.
+    fn firstUnquotedParen(text: []const u8) ?usize {
+        var quote: ?u8 = null;
+        for (text, 0..) |c, i| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => return i,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    /// SONNY-6447: a call's arguments, split at commas outside quotes and
+    /// parentheses (`has_role('a,b')` is one argument). Each is trimmed and
+    /// loses one pair of enclosing quotes; all are passed as strings.
+    fn parseCallArgs(self: *ContextEvaluator, args_str: []const u8, out: *std.ArrayList(Value)) !void {
+        if (std.mem.trim(u8, args_str, " \t").len == 0) return;
+        var rest = args_str;
+        while (true) {
+            const comma = topLevelIndex(rest, ",");
+            const arg = std.mem.trim(u8, rest[0 .. comma orelse rest.len], " \t");
+            const unquoted = if (arg.len >= 2 and (arg[0] == '\'' or arg[0] == '"') and arg[arg.len - 1] == arg[0])
+                arg[1 .. arg.len - 1]
+            else
+                arg;
+            try out.append(self.allocator, .{ .string = unquoted });
+            rest = rest[(comma orelse return) + 1 ..];
+        }
+    }
+
+    /// SONNY-6436: the index of the `)` closing the `(` at `open`, or null.
+    /// A parenthesis inside a quoted string does not count.
+    fn matchingParen(text: []const u8, open: usize) ?usize {
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        var i = open;
+        while (i < text.len) : (i += 1) {
+            const c = text[i];
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) return i;
+                },
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn resolveValue(
@@ -2494,25 +2620,20 @@ pub const ContextEvaluator = struct {
             return .{ .integer = int_val };
         } else |_| {}
 
-        // Check for function call
-        if (std.mem.indexOf(u8, trimmed, "(")) |paren_pos| {
+        // Check for function call (SONNY-6447: a whole call, its parenthesis
+        // outside quotes and its arguments split as `parseCallArgs` does)
+        if (firstUnquotedParen(trimmed)) |paren_pos| {
             const func_name = trimmed[0..paren_pos];
-            const args_end = std.mem.lastIndexOf(u8, trimmed, ")") orelse return error.InvalidExpression;
+            const args_end = matchingParen(trimmed, paren_pos) orelse return error.InvalidExpression;
             const args_str = trimmed[paren_pos + 1 .. args_end];
 
-            if (self.functions.get(func_name)) |func| {
-                var args_list = std.ArrayList(Value).empty;
-                defer args_list.deinit(self.allocator);
-
-                if (args_str.len > 0) {
-                    var args_iter = std.mem.splitSequence(u8, args_str, ",");
-                    while (args_iter.next()) |arg| {
-                        const arg_trimmed = std.mem.trim(u8, arg, " \t'\"");
-                        try args_list.append(self.allocator, .{ .string = arg_trimmed });
-                    }
+            if (args_end + 1 == trimmed.len) {
+                if (self.functions.get(func_name)) |func| {
+                    var args_list = std.ArrayList(Value).empty;
+                    defer args_list.deinit(self.allocator);
+                    try self.parseCallArgs(args_str, &args_list);
+                    return func(self.allocator, args_list.items, context);
                 }
-
-                return func(self.allocator, args_list.items, context);
             }
         }
 
@@ -2525,30 +2646,43 @@ pub const ContextEvaluator = struct {
         return .null;
     }
 
-    fn valuesEqual(self: *ContextEvaluator, a: Value, b: Value) bool {
-        _ = self;
+    /// SONNY-6436: whether two values are equal, or null (UNKNOWN) when
+    /// either is null or they do not compare, as the compiled VM's
+    /// `RLSEngine.equalValues` (SONNY-2709): two numbers (an integer and a
+    /// float compare as floats; NaN is equal to nothing, so UNKNOWN), two
+    /// strings, two booleans, two timestamps. `NULL = NULL` was true, and a
+    /// mismatched pair unequal (so `<>` held).
+    fn equalValues(a: Value, b: Value) ?bool {
         return switch (a) {
-            .null => b == .null,
-            .boolean => |av| switch (b) {
-                .boolean => |bv| av == bv,
-                else => false,
-            },
             .integer => |av| switch (b) {
                 .integer => |bv| av == bv,
-                .float => |bv| @as(f64, @floatFromInt(av)) == bv,
-                else => false,
+                .float => |bv| equalFloats(@floatFromInt(av), bv),
+                else => null,
             },
             .float => |av| switch (b) {
-                .float => |bv| av == bv,
-                .integer => |bv| av == @as(f64, @floatFromInt(bv)),
-                else => false,
+                .float => |bv| equalFloats(av, bv),
+                .integer => |bv| equalFloats(av, @floatFromInt(bv)),
+                else => null,
             },
             .string => |av| switch (b) {
                 .string => |bv| std.mem.eql(u8, av, bv),
-                else => false,
+                else => null,
             },
-            else => false,
+            .boolean => |av| switch (b) {
+                .boolean => |bv| av == bv,
+                else => null,
+            },
+            .timestamp => |av| switch (b) {
+                .timestamp => |bv| av == bv,
+                else => null,
+            },
+            else => null,
         };
+    }
+
+    fn equalFloats(a: f64, b: f64) ?bool {
+        if (std.math.isNan(a) or std.math.isNan(b)) return null;
+        return a == b;
     }
 
     fn registerBuiltinFunctions(self: *ContextEvaluator) !void {
@@ -4086,11 +4220,11 @@ test "TestCANARY_REQ_RLS_NULL_001_NullHandling" {
     const result1 = try evaluator.evaluate("name", &row, &context);
     try std.testing.expect(result1 == false);
 
-    // Test: null = null should be true
+    // Test: null = null is UNKNOWN, not True (SONNY-6436; it was true)
     const result2 = try evaluator.evaluate("name = null", &row, &context);
-    try std.testing.expect(result2 == true);
+    try std.testing.expect(result2 == false);
 
-    // Test: null <> null should be false
+    // Test: null <> null is UNKNOWN, not True
     const result3 = try evaluator.evaluate("name <> null", &row, &context);
     try std.testing.expect(result3 == false);
 

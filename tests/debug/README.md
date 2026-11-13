@@ -26,7 +26,6 @@ This directory contains debug and benchmark Zig files used for development and t
 
 ### Property Debugging
 
-- `debug_property_access.zig` - Debug property access
 - `debug_property_keyword.zig` - Debug property keywords
 
 ## Benchmark Files

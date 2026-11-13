@@ -136,6 +136,53 @@
   check value"). Regression: `zig build test-sonny6435-master-key-check`
   (the built server across restarts: same key, another key, another format,
   upgrade, no key).
+- **BREAKING (policy outcomes, `-Dallow-rls-raw-interp=true` builds only):
+  the raw-string RLS interpreter splits a policy only outside quotes and
+  parentheses, and denies a policy that does not parse (SONNY-6447 item
+  4).** `rls_core.ContextEvaluator` split at the first ` OR ` / ` AND `,
+  comparison operator and `(`, and at every `,` of a call's arguments,
+  wherever they were. `name = 'q OR true OR q'` therefore admitted every
+  row (its tail `true OR q'` held), a policy whose quotes or parentheses
+  do not balance was evaluated up to the first OR that held (`active OR (`,
+  `active OR 'unterminated` admitted), a parenthesised group inside AND /
+  OR (`(off OR active) AND active`) failed to parse, and
+  `has_role('a,b')` passed two arguments. Operators, comparisons, call
+  parentheses and argument commas now count only outside quoted strings
+  and at parenthesis depth 0, a call argument loses one pair of enclosing
+  quotes, and an unbalanced policy is refused with `InvalidExpression`,
+  which every caller turns into a deny. Default builds are unaffected (they
+  refuse a raw-only policy, GAP-0732). Regression:
+  `zig build test-sonny6447-rls-raw-tokenize`.
+- **BREAKING (policy outcomes, `-Dallow-rls-raw-interp=true` builds only):
+  a raw-string RLS policy admits a row only when its predicate is True
+  (SONNY-6436 item 5).** The raw-string interpreter
+  (`rls_core.ContextEvaluator`, used for a policy without compiled code
+  only in a build with `-Dallow-rls-raw-interp=true`; default builds
+  refuse such a policy, GAP-0732) now follows ISO/IEC 39075:2024 19.1 GR 2,
+  as the compiled VM already did (SONNY-2709, SONNY-2732). These
+  expressions change verdict:
+  - a bare value that is not a boolean, which admitted every row: a column
+    holding a non-zero integer, a non-empty string, a float or a timestamp
+    (`cnt`, `flag`), an integer or string literal (`1`, `'anything'`), and
+    a call that returns no boolean (`current_user()`,
+    `current_timestamp()`), also inside AND / OR (`cnt AND active`) - now
+    deny;
+  - `a = b` and `a <> b` with a null or missing side (`missing = NULL`,
+    `missing <> 'secret'`, `name <> NULL`; `NULL = NULL` admitted) or
+    with values that do not compare (`owner_id <> 'x'`, `name <> 1`,
+    `active <> 1`) or a NaN (`nan <> nan`) - `<>` admitted, now both
+    deny (UNKNOWN); write `row IS NULL OR ...` explicitly in a compiled
+    policy for the old meaning;
+  - a call followed by a comparison (`func() = x`) was evaluated as the
+    call alone: `current_user() = 999` admitted every row, and
+    `has_role('auditor') = false` denied a user without that role; it is
+    now the comparison (the latter admits that user);
+  - an empty sub-expression (`()`, `active AND ()`) admitted - now denies.
+  Unchanged: boolean columns and literals, comparisons of two values of
+  one kind, `column = current_user()`, `has_role()` / `has_permission()`,
+  AND / OR, and an empty policy (admits). The compiled VM's verdicts are
+  unchanged and pinned against the same cases. Regression:
+  `zig build test-sonny6436-rls-raw-truthiness`.
 - **The security graph never opens unaudited, and an unreadable graph
   registry refuses startup (SONNY-6430 items 5 and 7).**
   `StorageAdapter.initAuditForGraph` returned null for any failure other
@@ -1845,6 +1892,70 @@
   compose file's environment or one of those docs names a `GEODE_*`
   variable no source file reads (a quoted literal in `src/**/*.zig` or
   `$NAME` in `docker/*.sh`).
+- **Lean indexing registers and indexes every MERGE key, the 65th included
+  (SONNY-6447 item 3).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1` the
+  registered-key set was a fixed table of 64 keys of at most 128 bytes, and
+  `registerMergeIndexKey` dropped a 65th (or longer) key silently, although
+  its comment said such a key fell back to being indexed. The key was then
+  never indexed: `lookupMergeCandidate` answered `.not_indexable` for it for
+  the life of the process, and the server's bulk MERGE fast path refused
+  every MERGE on it (`MergeValueNotIndexable`). The set now grows (a map of
+  owned keys under the same leaf mutex), so every MERGE key is registered.
+  The `merge_index_keys.dat` sidecar keeps keys of any length (a key with a
+  line break is not persisted and registers again at its first MERGE, as a
+  late key), and its load cap is 1 MiB instead of the old table's size.
+  Regression: `zig build test-sonny6447-lean-key-overflow`.
+- **The MATCH ... MERGE edge fast path declines a composite endpoint key
+  two nodes hold, and no merge lookup answers "no node holds it" for a key
+  lean indexing left out of MERGE's index (SONNY-6436 items 2-3).**
+  `lookupPublicNodeIdByLabelAndAllProps` resolved a registered composite
+  merge key (the from-dump `{source, source_id}`) to the lowest of the
+  nodes holding it, so `MATCH (a:L {k: 1, s: 'x'}), (b:...) MERGE
+  (a)-[:R]->(b)` over two such nodes MERGEd one edge where the executor
+  MERGEs one per node; only the key's sole holder answers now
+  (`GraphStore.lookupOnlyCompositeMergeHolder`), and more declines to the
+  executor. With `GEODE_INDEX_MERGE_KEYS_ONLY=1`, `lookupMergeCandidate`
+  answered a key no MERGE registered as held by no node; it now answers
+  that the index cannot know (`.not_indexable`), as
+  `lookupOnlyMergeHolder` does since SONNY-6429. `lookupNodeByMergeKey[ForTenant]`
+  report that as `error.MergeKeyNotUnique` (decline) instead of "not
+  found", and `bulkInsertEdge` resolves endpoints as the MATCH ... CREATE
+  edge fast path does (`lookupSoleNodeByMergeKey`), so it declines instead
+  of skipping the edge. The executor's MERGE probes that run before the
+  key is registered (`preResolveMergeNode`, `clusterReplicateMerge`) now
+  fall back to the label scan for such a key instead of taking the index's
+  miss as authoritative. Regression: `zig build test-sonny6429-sole-holder-tenant-wire`
+  (in process, and over QUIC with group commit on and off and with lean
+  indexing).
+- **The Python test runners' default user password and the Zig client
+  example's password meet the password policy (SONNY-6447 item 8).**
+  `scripts/test/extended_test_runner.py`, `test_runner_core.py` and
+  `parallel_test_runner.py` defaulted `${secret:user_password}` to
+  `UserPass123!` / `password123`, which CREATE USER refuses, and
+  `clients/zig/example_minimal.zig` set the one-word
+  `GeodeTestPassword123!`; they are now `Geode Test User Passphrase` and
+  `Geode Example Client Passphrase`. `zig build
+  test-sonny6436-fixture-secrets` now also scans `clients/` (including a
+  Zig source's `password = "..."` field) and the runners' `user_password`
+  defaults.
+- **The in-repo scripts and fixtures seed an HMAC key and admin passwords
+  the server accepts (SONNY-6436 item 1).** The netns cluster scripts
+  (`tests/cluster/netns_cluster_replication_test.sh`,
+  `netns_cluster_membership_churn_test.sh`) passed a
+  `GEODE_AUTH_HMAC_KEY` that is not 64 hex characters, so no node started;
+  they now generate one with `openssl rand -hex 32`. They, the
+  `scripts/` helpers and Python test runners (default
+  `geode-test-password`), `scripts/perf-gate.sh`, the gap0894 repro, the
+  OTel compose stack (`make otel-compose-up`,
+  `scripts/otel-compose-verify.sh`: a bare random hex string) and three
+  `tests/` scripts seeded an admin password the password policy refuses,
+  which forces a reset at the first login, so every later query of the
+  script failed; each now seeds a passphrase (the generated OTel one is
+  wrapped in words), and the scripts quote it where it is passed on. The
+  default of the runners' `admin_password` secret is now `Geode Test
+  Admin Passphrase`, as in `tests/proto_test_util.zig`. Regression:
+  `zig build test-sonny6436-fixture-secrets` scans tests/**, scripts/**,
+  deployment/**, docker-compose* and the Makefile.
 - **Deployment config and docs describe only settings the server has
   (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
   `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /
@@ -1940,6 +2051,18 @@
   sent again, the run stops, and the summary and the count of statements not
   executed are printed, as for a chunk (SONNY-6384). Exit code 1 (as before).
   Regression: `zig build test-sonny6425-grpc-retry-summary`.
+- **`geode query --file` over QUIC stops with its summary when a statement
+  it retries on its own gets no answer (SONNY-6436 item 7).** The QUIC
+  retry runs a rejected chunk's statements over one connection; when one of
+  them timed out or its connection failed, it returned the error, and the
+  run went on with the NEXT chunk on a new connection: statements were
+  written after one that may still be running or have been applied, and the
+  rest of the chunk was silently dropped (counted as one error). The run
+  now stops there, as the gRPC retry does: the statement is not sent again,
+  the summary and the count of statements not executed are printed, and it
+  exits 4 for a client timeout, 1 otherwise. A failure before the statement
+  was sent says so (it was not executed) and also stops the run (exit 1).
+  Regression: `zig build test-sonny6436-quic-retry-stops`.
 - **Documented: cluster data written before SONNY-2726 stays tagged
   `default` (SONNY-6425 item 9).** The writer's tenant was never recorded
   (the raft entries carried none), so geode cannot re-tag it; the operator
@@ -3305,6 +3428,29 @@
 
 ### Removed
 
+- **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
+  (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
+  search finds only their definitions); both tagged the restored row tenant
+  `default`.
+- **Dead code: the old `src/server/graph/exec.zig` engine and
+  `src/exec.zig`'s `HashAggregator` (SONNY-6436 item 6).** No executable
+  reaches `server/graph/exec.zig` (it was re-exported as
+  `geode.graph_exec` and imported only by test files no build step
+  compiles); its `isTruthyValue` (a non-zero integer or non-empty string as
+  true) went with it, with `tests/canary_property_access.zig`,
+  `tests/debug/debug_property_access.zig`,
+  `tests/benchmark_match_label_property_variance.zig` and the one test of
+  `tests/index_optimizer_regression_test.zig` that used it. `src/exec.zig`
+  is live (the `gql` executable runs its grouping and set operations;
+  `groupAndAggregate` accumulates sums with overflow detection, and
+  `runGroupedQuery`'s HAVING keeps a group only when True),
+  but its `HashAggregator`, with the unchecked `+=` sums, was referenced by
+  nothing in `src/` and no longer compiled (Zig 0.15 ArrayList calls); it
+  and the eleven uncompiled `tests/*hashagg*` / mixed-aggregation files that
+  only exercised it are removed. Their CANARY markers
+  (REQ-WHERE-EVAL-001, REQ-WITH-WHERE-001, REQ-EXPR-TYPE-003,
+  REQ-DECIMAL-OVERFLOW-001/002 and two REQ-GQL-017 entries) described
+  only this code.
 - **Test files no build step compiled, cited by TESTED markers (SONNY-6430
   item 4).** `tests/test_mfa_policies.zig` now drives the real
   `SecurityManager` and runs as `zig build test-mfa-policies` (6/6); the

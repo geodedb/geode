@@ -14602,7 +14602,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny6429_tests = b.addRunArtifact(sonny6429_tests);
     spawnsBuiltGeode(sonny6429_tests);
     shardDep(test_step, &run_sonny6429_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does)");
+    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does; SONNY-6436: a registered composite key two nodes hold, and a key lean indexing left out of MERGE's index, decline instead of naming one node or none)");
     sonny6429_step.dependOn(&run_sonny6429_tests.step);
 
     // SONNY-6425 items 1-2: a WHERE / FILTER / HAVING keeps a row only when
@@ -15548,6 +15548,82 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6359_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6359_step = b.step("test-sonny6359-auth-residuals", "Run the SONNY-6359 regression (an Admin's ALTER USER <other> SET PASSWORD over QUIC and gRPC runs as user_reset_password with the policy; user_change_password always checks the old password; auth procedure failures are GQLSTATUS errors, not 00000 'error:' rows; one passphrase word count; hasGraphGrant and the grant listings wait for auth_ddl_lock; auth verify saves and leaks nothing; in-repo script admin seeds meet the policy; spawns a server and the CLI)");
     sonny6359_step.dependOn(&run_sonny6359_tests.step);
+
+    // SONNY-6436 item 1: every admin password and auth-chain HMAC key the
+    // in-repo scripts and fixtures seed is one the server accepts (a scan of
+    // tests/**, scripts/**, deployment/**, docker-compose*, Makefile).
+    const sonny6436_secrets_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_fixture_secrets.zig"), .target = target, .optimize = optimize });
+    sonny6436_secrets_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6436_secrets_tests = b.addTest(.{ .root_module = sonny6436_secrets_test_mod });
+    const run_sonny6436_secrets_tests = b.addRunArtifact(sonny6436_secrets_tests);
+    shardDep(test_step, &run_sonny6436_secrets_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_secrets_step = b.step("test-sonny6436-fixture-secrets", "Run the SONNY-6436 item 1 regression (every admin password and auth-chain HMAC key the in-repo scripts and fixtures seed is one the server accepts: 64 hex characters, a passphrase meeting the password policy)");
+    sonny6436_secrets_step.dependOn(&run_sonny6436_secrets_tests.step);
+
+    // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
+    // is True, in the raw-string interpreter and the compiled VM.
+    const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });
+    sonny6436_rls_test_mod.addImport("rls", rls_mod);
+    sonny6436_rls_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6436_rls_tests = b.addTest(.{ .root_module = sonny6436_rls_test_mod });
+    const run_sonny6436_rls_tests = b.addRunArtifact(sonny6436_rls_tests);
+    shardDep(test_step, &run_sonny6436_rls_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_rls_step = b.step("test-sonny6436-rls-raw-truthiness", "Run the SONNY-6436 item 5 regression (an RLS policy admits a row only when its predicate is True: a non-boolean value, a comparison with a null side or values that do not compare, and an empty sub-expression deny, in the raw-string interpreter and the compiled VM)");
+    sonny6436_rls_step.dependOn(&run_sonny6436_rls_tests.step);
+
+    // SONNY-6447 item 4: the raw-string RLS interpreter splits a policy only
+    // at operators outside quotes and parentheses, and a policy that does not
+    // parse denies.
+    const sonny6447_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_rls_raw_tokenize.zig"), .target = target, .optimize = optimize });
+    sonny6447_rls_test_mod.addImport("rls", rls_mod);
+    sonny6447_rls_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6447_rls_tests = b.addTest(.{ .root_module = sonny6447_rls_test_mod });
+    const run_sonny6447_rls_tests = b.addRunArtifact(sonny6447_rls_tests);
+    shardDep(test_step, &run_sonny6447_rls_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_rls_step = b.step("test-sonny6447-rls-raw-tokenize", "Run the SONNY-6447 item 4 regression (the raw-string RLS interpreter splits AND/OR, comparisons and call arguments only outside quotes and parentheses, and denies a policy that does not parse)");
+    sonny6447_rls_step.dependOn(&run_sonny6447_rls_tests.step);
+
+    // SONNY-6447 item 3: lean indexing registers (and indexes) every MERGE
+    // key, the 65th and a key longer than 128 bytes included.
+    const sonny6447_lean_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_lean_key_overflow.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6447_lean_test_mod.addImport("geode", root_mod);
+    const sonny6447_lean_tests = b.addTest(.{ .root_module = sonny6447_lean_test_mod });
+    const run_sonny6447_lean_tests = b.addRunArtifact(sonny6447_lean_tests);
+    shardDep(test_step, &run_sonny6447_lean_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_lean_step = b.step("test-sonny6447-lean-key-overflow", "Run the SONNY-6447 item 3 regression (lean indexing registers and indexes a MERGE key past the 64th and one longer than 128 bytes; a MERGE lookup on the 65th key is answered by the index)");
+    sonny6447_lean_step.dependOn(&run_sonny6447_lean_tests.step);
+
+    // SONNY-6436 item 7: geode query --file over QUIC stops the run, with the
+    // summary, when a statement of a rejected chunk, retried on its own, was
+    // sent and got no answer.
+    const sonny6436_retry_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_quic_retry_stops.zig"), .target = target, .optimize = optimize });
+    sonny6436_retry_test_mod.link_libc = true;
+    sonny6436_retry_test_mod.addImport("geode", root_mod);
+    sonny6436_retry_test_mod.addImport("schema", schema_mod);
+    sonny6436_retry_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6436_retry_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6436_retry_tests = b.addTest(.{ .root_module = sonny6436_retry_test_mod });
+    const run_sonny6436_retry_tests = b.addRunArtifact(sonny6436_retry_tests);
+    spawnsBuiltGeode(sonny6436_retry_tests);
+    shardDep(test_step, &run_sonny6436_retry_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_retry_step = b.step("test-sonny6436-quic-retry-stops", "Run the SONNY-6436 item 7 regression (geode query --file over QUIC: a statement of a rejected chunk, retried on its own, that was sent and timed out stops the run with the chunked summary; no later chunk is sent; spawns the CLI and a server)");
+    sonny6436_retry_step.dependOn(&run_sonny6436_retry_tests.step);
+
+    // SONNY-6447 item 7: geode query --file over QUIC stops the run, with the
+    // summary, when the statement-by-statement retry of a rejected chunk
+    // cannot connect (or HELLO); it went on with the next chunk.
+    const sonny6447_retry_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_quic_retry_connect_stops.zig"), .target = target, .optimize = optimize });
+    sonny6447_retry_test_mod.link_libc = true;
+    sonny6447_retry_test_mod.addImport("geode", root_mod);
+    sonny6447_retry_test_mod.addImport("schema", schema_mod);
+    sonny6447_retry_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6447_retry_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6447_retry_tests = b.addTest(.{ .root_module = sonny6447_retry_test_mod });
+    const run_sonny6447_retry_tests = b.addRunArtifact(sonny6447_retry_tests);
+    spawnsBuiltGeode(sonny6447_retry_tests);
+    shardDep(test_step, &run_sonny6447_retry_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_retry_step = b.step("test-sonny6447-quic-retry-connect-stops", "Run the SONNY-6447 item 7 regression (geode query --file over QUIC: when the retry of a rejected chunk cannot connect, the run stops with the chunked summary and no later chunk is sent; spawns the CLI, a server and a UDP forwarder that drops the retry's connection)");
+    sonny6447_retry_step.dependOn(&run_sonny6447_retry_tests.step);
 
     // SONNY-6358: the offline `geode user create` / `geode user update
     // --password` store an Argon2id hash and seal the chain, so the server

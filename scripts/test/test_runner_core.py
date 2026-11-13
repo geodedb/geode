@@ -251,8 +251,8 @@ def substitute_server_variables(
     if "${secret" in text:
         secrets = resolved_secrets or {}
         text = text.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
-        text = text.replace("${secret:user_password}", secrets.get("user_password", "UserPass123!"))
-        text = text.replace("${secret:admin_password}", secrets.get("admin_password", "geode-test-password"))
+        text = text.replace("${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase"))
+        text = text.replace("${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase"))
         for match in re.findall(r"\$\{secret:([^}]+)\}", text):
             text = text.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
 
@@ -265,7 +265,7 @@ def substitute_server_variables(
             elif match in os.environ:
                 val = os.environ[match]
             elif match == "GEODE_ADMIN_PASSWORD":
-                val = secrets.get("admin_password", "geode-test-password")
+                val = secrets.get("admin_password", "Geode Test Admin Passphrase")
             elif match == "GEODE_SERVER_ADDRESS":
                 sp = "8443"
                 if spec_config and isinstance(spec_config, dict):
@@ -538,7 +538,7 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
         probe_env.update(env_overrides)
     username = (env_overrides or {}).get("GEODE_ADMIN_USERNAME", os.environ.get("GEODE_ADMIN_USERNAME", "geode"))
     password = (env_overrides or {}).get(
-        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password")
+        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase")
     )
 
     while time.time() < deadline:

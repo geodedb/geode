@@ -83,19 +83,18 @@ pub fn lastLoadHadChecksumError() bool {
 // server's property-lookup point-read fast path is completely unchanged. The
 // flag is read once, lazily, on first use.
 //
-// The registered-key set is intentionally tiny and append-only: real workloads
-// MERGE on a small, fixed set of keys (here just "taxon_id"). Keys are copied
-// into a fixed static buffer under a leaf mutex; overflow simply falls back to
-// indexing the key (safe — over-indexing never breaks correctness).
-const lean_index_max_keys: usize = 64;
-const lean_index_key_cap: usize = 128;
+// The registered-key set is small in practice and append-only: real workloads
+// MERGE on a few fixed keys (here just "taxon_id"). Keys are copied
+// (process-lifetime, `lean_key_allocator`) into a map under a leaf mutex.
+// SONNY-6447: the set grows, so every MERGE key is registered and indexed. It
+// was a fixed table of 64 keys of at most 128 bytes, and a 65th (or longer)
+// key was silently dropped: never indexed, so `lookupMergeCandidate` answered
+// `.not_indexable` for it for the life of the process and the bulk MERGE fast
+// path refused every MERGE on it, although this comment said such a key fell
+// back to being indexed.
+// CANARY: REQ=REQ-SONNY-6447-LEAN-KEY-OVERFLOW; FEATURE="LeanMergeKeyIndexing"; ASPECT=GrowableRegistry; STATUS=TESTED; TEST=tests/test_sonny6447_lean_key_overflow.zig; OWNER=storage; UPDATED=2026-11-12
+const lean_key_allocator = std.heap.smp_allocator;
 
-var g_lean_index_mutex: std.Io.Mutex = std.Io.Mutex.init;
-var g_lean_index_enabled: bool = false;
-var g_lean_index_flag_loaded: bool = false;
-var g_lean_index_key_bufs: [lean_index_max_keys][lean_index_key_cap]u8 = undefined;
-var g_lean_index_key_lens: [lean_index_max_keys]usize = [_]usize{0} ** lean_index_max_keys;
-var g_lean_index_key_count: usize = 0;
 // SONNY-3056: per registered key, whether it was registered at RUNTIME (the
 // first MERGE on it in this process) rather than read from the sidecar at
 // adapter init, and the registration's generation (process-monotonic, never
@@ -105,8 +104,15 @@ var g_lean_index_key_count: usize = 0;
 // MERGE's index complete for it, per (graph, label), from the label's
 // postings, before a lookup trusts a miss. A sidecar key was registered
 // before any graph hydrated, so hydration and every later write indexed it.
-var g_lean_index_key_late: [lean_index_max_keys]bool = [_]bool{false} ** lean_index_max_keys;
-var g_lean_index_key_gen: [lean_index_max_keys]u64 = [_]u64{0} ** lean_index_max_keys;
+const LeanKeyInfo = struct {
+    late: bool,
+    gen: u64,
+};
+
+var g_lean_index_mutex: std.Io.Mutex = std.Io.Mutex.init;
+var g_lean_index_enabled: bool = false;
+var g_lean_index_flag_loaded: bool = false;
+var g_lean_keys: std.StringArrayHashMapUnmanaged(LeanKeyInfo) = .empty;
 var g_lean_registration_gen: u64 = 0;
 /// Late keys registered (lock-free fast path for every lookup: zero after a
 /// restart, when every key comes from the sidecar).
@@ -151,29 +157,36 @@ pub fn registerMergeIndexKey(key: []const u8) void {
 /// de-dups, but the file would grow on every restart). All other effects
 /// (registry membership, in-memory merge-index backfill) are identical.
 fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
+    var out_of_memory = false;
     const newly_registered = blk: {
         g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (!leanIndexEnabledLocked()) break :blk false;
-        if (key.len == 0 or key.len > lean_index_key_cap) break :blk false;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) break :blk false;
-        }
-        if (g_lean_index_key_count >= lean_index_max_keys) break :blk false; // overflow: tolerate
-        @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
-        g_lean_index_key_lens[g_lean_index_key_count] = key.len;
-        g_lean_registration_gen += 1;
-        g_lean_index_key_gen[g_lean_index_key_count] = g_lean_registration_gen;
+        if (key.len == 0) break :blk false;
+        if (g_lean_keys.contains(key)) break :blk false;
+        const owned = lean_key_allocator.dupe(u8, key) catch {
+            out_of_memory = true;
+            break :blk false;
+        };
         // `persist` is true on the runtime path, false for a sidecar key.
-        g_lean_index_key_late[g_lean_index_key_count] = persist;
-        g_lean_index_key_count += 1;
+        g_lean_keys.put(lean_key_allocator, owned, .{ .late = persist, .gen = g_lean_registration_gen + 1 }) catch {
+            lean_key_allocator.free(owned);
+            out_of_memory = true;
+            break :blk false;
+        };
+        g_lean_registration_gen += 1;
         if (persist) {
             g_lean_late_gen_max.store(g_lean_registration_gen, .release);
             _ = g_lean_late_key_count.fetchAdd(1, .release);
         }
         break :blk true;
     };
+    if (out_of_memory) {
+        // Not registered, so not indexed: a lookup on it answers
+        // `.not_indexable` (the executor scans; the bulk fast path refuses),
+        // never a wrong "absent".
+        log.err("lean indexing: out of memory registering a MERGE key; it stays unindexed", &.{Attr.string("key", key)});
+    }
 
     // GAP-0900 Layer-3 (Fix 3): a key that becomes indexable for the FIRST time
     // in lean mode may already have nodes carrying it, written or hydrated
@@ -209,6 +222,10 @@ fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
 /// per line. See `persistMergeIndexKey` / `loadPersistedMergeIndexKeys`.
 const merge_index_keys_filename = "merge_index_keys.dat";
 
+/// Read cap for the merge-key sidecar at load (SONNY-6447: was sized to the
+/// old 64 x 128-byte registry).
+const merge_index_keys_sidecar_max_bytes: usize = 1 << 20;
+
 /// Append `key` to the persisted merge-key sidecar in `data_dir`, allocating
 /// scratch with `alloc`. Idempotent at the registry level (callers only persist
 /// a key the first time it is registered), but the file itself tolerates
@@ -218,7 +235,11 @@ const merge_index_keys_filename = "merge_index_keys.dat";
 /// is empty (ad-hoc unit stores).
 pub fn persistMergeIndexKey(alloc: std.mem.Allocator, data_dir: []const u8, key: []const u8) void {
     if (data_dir.len == 0) return;
-    if (key.len == 0 or key.len > lean_index_key_cap) return;
+    // SONNY-6447: the sidecar is one key per line, so a key holding a line
+    // break is not persisted; after a restart it registers again at its first
+    // MERGE, as a late key (SONNY-3056), which is complete, just not seekable
+    // until then.
+    if (key.len == 0 or std.mem.indexOfAny(u8, key, "\r\n") != null) return;
 
     const path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ data_dir, merge_index_keys_filename }) catch return;
     defer alloc.free(path);
@@ -268,9 +289,10 @@ pub fn loadPersistedMergeIndexKeys(alloc: std.mem.Allocator, data_dir: []const u
     };
     defer file.close(io);
 
-    // Bounded read: the registry is tiny (a handful of fixed merge keys). Cap at
-    // a generous size so a corrupt/huge file can never OOM startup.
-    const max_bytes: usize = lean_index_max_keys * (lean_index_key_cap + 1) * 4;
+    // Bounded read: the registry is small (a handful of fixed merge keys). Cap
+    // at a generous size so a corrupt/huge file can never OOM startup; a key
+    // past the cap registers again at its first MERGE (as a late key).
+    const max_bytes: usize = merge_index_keys_sidecar_max_bytes;
     const st = file.stat(io) catch return;
     const want: usize = @min(@as(usize, @intCast(st.size)), max_bytes);
     if (want == 0) return;
@@ -305,7 +327,8 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     g_lean_index_flag_loaded = true;
     g_lean_index_enabled = enabled;
-    g_lean_index_key_count = 0;
+    for (g_lean_keys.keys()) |k| lean_key_allocator.free(k);
+    g_lean_keys.clearRetainingCapacity();
     g_lean_late_key_count.store(0, .release);
 }
 
@@ -341,10 +364,7 @@ pub fn exactIndexConfigHash() u64 {
     h.update(&[_]u8{@intFromBool(lean)});
     if (lean) {
         var acc: u64 = 0;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
-        }
+        for (g_lean_keys.keys()) |k| acc ^= std.hash.Wyhash.hash(1, k);
         var b: [8]u8 = undefined;
         std.mem.writeInt(u64, &b, acc, .little);
         h.update(&b);
@@ -354,20 +374,15 @@ pub fn exactIndexConfigHash() u64 {
 
 // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=LateKeyRegistry; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
 /// SONNY-3056: the registration generation of `key` when lean mode is on
-/// and `key` was registered at runtime (see `g_lean_index_key_late`), else
+/// and `key` was registered at runtime (see `LeanKeyInfo.late`), else
 /// null (lean off, the key not registered, or read from the sidecar).
 fn leanLateKeyGen(key: []const u8) ?u64 {
     if (g_lean_late_key_count.load(.acquire) == 0) return null;
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!leanIndexEnabledLocked()) return null;
-    var i: usize = 0;
-    while (i < g_lean_index_key_count) : (i += 1) {
-        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) {
-            return if (g_lean_index_key_late[i]) g_lean_index_key_gen[i] else null;
-        }
-    }
-    return null;
+    const info = g_lean_keys.get(key) orelse return null;
+    return if (info.late) info.gen else null;
 }
 
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
@@ -467,11 +482,7 @@ pub fn shouldIndexProperty(key: []const u8) bool {
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!leanIndexEnabledLocked()) return true;
-    var i: usize = 0;
-    while (i < g_lean_index_key_count) : (i += 1) {
-        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) return true;
-    }
-    return false;
+    return g_lean_keys.contains(key);
 }
 
 /// GAP-ENT-0023 P3: fingerprint of the merge-index CONFIGURATION — the lean
@@ -493,10 +504,7 @@ fn mergeIndexConfigHash() u64 {
     h.update(&[_]u8{@intFromBool(lean)});
     if (lean) {
         var acc: u64 = 0;
-        var i: usize = 0;
-        while (i < g_lean_index_key_count) : (i += 1) {
-            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
-        }
+        for (g_lean_keys.keys()) |k| acc ^= std.hash.Wyhash.hash(1, k);
         var b: [8]u8 = undefined;
         std.mem.writeInt(u64, &b, acc, .little);
         h.update(&b);
@@ -7092,8 +7100,14 @@ pub const GraphStore = struct {
     /// (`resolveMergeHolder`), so every caller (the executor, the server's
     /// bulk MERGE, edge endpoint resolution) gets the same authoritative
     /// answer.
+    ///
+    /// SONNY-6436: under lean indexing (GEODE_INDEX_MERGE_KEYS_ONLY) a key no
+    /// MERGE registered is not in the index at all, so `.not_indexable`, never
+    /// `.not_found`: the bulk edge path answered such a key as held by no
+    /// node and skipped an edge the executor makes.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        if (!shouldIndexProperty(prop_key)) return .not_indexable; // SONNY-6436
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         // SONNY-3056: a lean key registered at runtime is complete for this
         // label only after its backfill; a failed one leaves the index unable
@@ -7502,29 +7516,16 @@ pub const GraphStore = struct {
     ) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
-        const spec = blk: {
-            g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            if (composite_idx >= g_composite_key_count) break :blk null;
-            break :blk &g_composite_keys[composite_idx];
-        } orelse return .not_indexable;
+        const spec = compositeSpecAt(composite_idx) orelse return .not_indexable;
 
         if (filters.len != spec.prop_count) return .not_indexable;
         // SONNY-6354: a composite registered at runtime is complete for this
         // label only after its backfill; a failed one cannot answer.
         self.ensureCompositeMergeBackfill(graph_name, label, composite_idx) catch return .not_indexable;
 
-        // Gather values in the spec's (sorted) prop order by matching names.
         var values: [composite_index_max_props]PropertyValue = undefined;
-        var i: usize = 0;
-        while (i < spec.prop_count) : (i += 1) {
-            const name = spec.prop_bufs[i][0..spec.prop_lens[i]];
-            const v = findFilterValue(filters, name) orelse return .not_indexable;
-            values[i] = v;
-        }
-
         var buf: [1024]u8 = undefined;
-        const probe = buildCompositeMergeIndexKey(&buf, graph_name, label, spec, values[0..spec.prop_count]) orelse return .not_indexable;
+        const probe = compositeProbe(graph_name, label, spec, filters, &values, &buf) orelse return .not_indexable;
         const seen = self.merge_prop_index.getSeen(probe) orelse return .not_found;
 
         // Eviction-independent existence + graph validation (mirrors
@@ -7535,6 +7536,63 @@ pub const GraphStore = struct {
             return .found;
         }
         return self.resolveMergeHolder(graph_name, label, probe, seen, .{ .composite = .{ .spec = spec, .values = values[0..spec.prop_count], .probe = probe } }, out_node_id);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER; FEATURE="WriteFastPathParity"; ASPECT=CompositeSoleHolderEndpoint; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6436: the node holding a registered composite merge key when it
+    /// is the key's ONLY holder (the entry was never shared), for an endpoint
+    /// MATCH, which binds every node holding the key; as
+    /// `lookupOnlyMergeHolder` for one property, the caller first settles the
+    /// entry with `lookupCompositeMergeCandidate`. `.not_found`: no node
+    /// holds it. `.not_indexable`: more nodes may hold it, or the index
+    /// cannot answer (the caller declines to the executor). The MATCH ...
+    /// MERGE edge fast path took the lowest holder as the only one, and
+    /// MERGEd one edge where the executor MERGEs one per holder.
+    pub fn lookupOnlyCompositeMergeHolder(
+        self: *GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        composite_idx: usize,
+        filters: []const graph_storage_adapter.StorageAdapter.PropKV,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        const spec = compositeSpecAt(composite_idx) orelse return .not_indexable;
+        if (filters.len != spec.prop_count) return .not_indexable;
+        var values: [composite_index_max_props]PropertyValue = undefined;
+        var buf: [1024]u8 = undefined;
+        const probe = compositeProbe(graph_name, label, spec, filters, &values, &buf) orelse return .not_indexable;
+        const entry = self.merge_prop_index.get(probe) orelse return .not_found;
+        if (entry & merge_entry_shared != 0) return .not_indexable;
+        out_node_id.* = self.liveMergeHolder(entry, graph_name) orelse return .not_indexable;
+        return .found;
+    }
+
+    /// The registered composite merge key `composite_idx`, if there is one.
+    fn compositeSpecAt(composite_idx: usize) ?*const CompositeKeySpec {
+        g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (composite_idx >= g_composite_key_count) return null;
+        return &g_composite_keys[composite_idx];
+    }
+
+    /// The merge-index key `filters` give for composite `spec`, built in
+    /// `buf`, with the values gathered into `values` in the spec's (sorted)
+    /// property order by matching names; null when a filter is missing or a
+    /// value cannot be encoded.
+    fn compositeProbe(
+        graph_name: []const u8,
+        label: []const u8,
+        spec: *const CompositeKeySpec,
+        filters: []const graph_storage_adapter.StorageAdapter.PropKV,
+        values: *[composite_index_max_props]PropertyValue,
+        buf: *[1024]u8,
+    ) ?[]const u8 {
+        var i: usize = 0;
+        while (i < spec.prop_count) : (i += 1) {
+            values[i] = findFilterValue(filters, spec.prop_bufs[i][0..spec.prop_lens[i]]) orelse return null;
+        }
+        return buildCompositeMergeIndexKey(buf, graph_name, label, spec, values[0..spec.prop_count]);
     }
 
     fn findFilterValue(filters: []const graph_storage_adapter.StorageAdapter.PropKV, key: []const u8) ?PropertyValue {
@@ -16343,69 +16401,6 @@ pub const GraphStore = struct {
                 freePropertyValue(self, kv.value);
             }
         }
-    }
-
-    /// Restore a deleted node without saving (used during rollback)
-    pub fn restoreNodeNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
-        // Copy labels
-        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-        for (labels, 0..) |label, i| {
-            labels_copy[i] = try self.allocator.dupe(u8, label);
-        }
-
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-
-        const node = Node{
-            .id = node_id,
-            .labels = labels_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
-        };
-
-        try self.nodes.put(node_id, node);
-
-        try self.ensureGraph(graph_name);
-        for (labels) |label| {
-            try self.addToLabelIndex(graph_name, label, node_id);
-        }
-        // PERF-B/C (issues #811, #814): restoreNodeNoSave is the rollback
-        // counterpart to createNode — mirror the index bumps. The restored
-        // node carries no properties (rollback re-runs SetProperty ops
-        // separately), so only label-level counters fire here.
-        try self.addNodeToGraphIndex(graph_name, node_id);
-        for (labels) |label| {
-            try self.bumpLabelCount(graph_name, DEFAULT_TENANT_ID, label);
-        }
-    }
-
-    /// Restore a deleted edge without saving (used during rollback)
-    pub fn restoreEdgeNoSave(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, label: []const u8, graph_name: []const u8) !void {
-        const label_copy = try self.allocator.dupe(u8, label);
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-
-        const edge = Edge{
-            .id = edge_id,
-            .from_id = from_id,
-            .to_id = to_id,
-            .label = label_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
-        };
-
-        try self.edges.put(edge_id, edge);
-
-        try self.ensureGraph(graph_name);
-        try self.addToAdjacencyIndex(from_id, to_id, edge_id);
-        // PERF-P0-001: Maintain edge-type index during rollback restore
-        try self.addToEdgeTypeIndex(graph_name, label, edge_id);
-        // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
-        try self.bumpEdgeTypeCount(graph_name, DEFAULT_TENANT_ID, label);
-        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-        self.bumpGraphEdgeTypeCount(graph_name, label);
     }
 
     /// Add a label to a node without saving (used during rollback)

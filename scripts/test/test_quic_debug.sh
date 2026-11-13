@@ -72,7 +72,7 @@ cp /tmp/geode_test_certs/ca-cert.pem certs/ca.crt
 
 echo "Starting Geode server with debug logging..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 # Start Geode server in background
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \

@@ -182,10 +182,10 @@ def run_test(
             # Use spec-resolved secrets first, then hardcoded fallbacks
             processed_arg = processed_arg.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
             processed_arg = processed_arg.replace(
-                "${secret:user_password}", secrets.get("user_password", "UserPass123!")
+                "${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase")
             )
             processed_arg = processed_arg.replace(
-                "${secret:admin_password}", secrets.get("admin_password", "geode-test-password")
+                "${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase")
             )
             # Generic secret replacement for any other ${secret:NAME} patterns
             import re as _re
@@ -206,7 +206,7 @@ def run_test(
                 elif match in os.environ:
                     val = os.environ[match]
                 elif match == "GEODE_ADMIN_PASSWORD":
-                    val = secrets.get("admin_password", "geode-test-password")
+                    val = secrets.get("admin_password", "Geode Test Admin Passphrase")
                 elif match == "GEODE_SERVER_ADDRESS":
                     # Derive from spec config
                     sp = "8443"
@@ -601,7 +601,7 @@ def run_test(
                             setup_processed.insert(5, "-U")
                             setup_processed.insert(6, "geode")
                             setup_processed.insert(7, "-P")
-                            setup_processed.insert(7, _secrets.get("admin_password", "geode-test-password"))
+                            setup_processed.insert(7, _secrets.get("admin_password", "Geode Test Admin Passphrase"))
 
                 # Add --non-interactive for shell commands when stdin is used
                 if len(setup_processed) > 0 and setup_processed[0] == "shell" and setup_stdin:
@@ -741,7 +741,7 @@ def run_test(
                 modified_args.insert(5, "-U")
                 modified_args.insert(6, "geode")
                 modified_args.insert(7, "-P")
-                modified_args.insert(8, _secrets.get("admin_password", "geode-test-password"))
+                modified_args.insert(8, _secrets.get("admin_password", "Geode Test Admin Passphrase"))
             # Inject --timeout so the CLI's internal watchdog matches the test runner's
             # subprocess timeout. Without this, the CLI's default 10s watchdog may kill
             # the process before the test runner's timeout expires, causing false failures.
@@ -1337,7 +1337,7 @@ def main():
                     resolved_secrets[secret_name] = secret_config
 
         # Use resolved admin_password for GEODE_ADMIN_PASSWORD (ensures server and CLI use same password)
-        admin_pw = resolved_secrets.get("admin_password", "geode-test-password")
+        admin_pw = resolved_secrets.get("admin_password", "Geode Test Admin Passphrase")
 
         # Ensure default credentials are available for test clients
         # Note: user_management.zig reads GEODE_ADMIN_PASSWORD while
@@ -1500,7 +1500,7 @@ def main():
                             )
                             password = server_env_overrides.get(
                                 "GEODE_DEFAULT_PASSWORD",
-                                os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password"),
+                                os.environ.get("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase"),
                             )
                             # Insert server connection after the command
                             setup_cmd = [
