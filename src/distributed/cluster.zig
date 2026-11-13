@@ -1827,7 +1827,17 @@ pub const ClusterCoordinator = struct {
             // byte of a 4-byte big-endian length prefix and fed into
             // the existing raft frame reader.  We peek by reading
             // exactly one byte first, then dispatch.
-            self.dispatchInboundStream(stream) catch |err| {
+            const watch: InboundStreamWatch = .{ .conn = conn, .rec = rec, .idle_deadline_ms = idle_deadline_ms };
+            self.dispatchInboundStream(stream, &watch) catch |err| {
+                if (err == error.InboundStreamAbandoned) {
+                    // SONNY-6451: release the worker. Close the connection
+                    // too, so a sender that is still alive (a quiet peer,
+                    // not a dead one) sees it end and reconnects instead of
+                    // writing into a connection nobody reads any more.
+                    conn.destroyStream(stream);
+                    conn.requestShutdown(quic.app_error.server_teardown);
+                    return;
+                }
                 log.debug("dispatchInboundStream error", &.{
                     Attr.string("error", @errorName(err)),
                 });
@@ -1846,7 +1856,34 @@ pub const ClusterCoordinator = struct {
     /// raft frame reader (existing behaviour) or the cluster RPC
     /// handler (A3e, this commit).  See the `CLUSTER_RPC_MAGIC`
     /// comment for the wire format and rationale.
-    fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
+    /// SONNY-6451: what a handler parked on a quiet multiplexed raft stream
+    /// watches, so that it gives the stream (and its worker) up.
+    const InboundStreamWatch = struct {
+        conn: *quic.QuicConnection,
+        /// The handler's RC-A occupancy record (null on OOM at register).
+        rec: ?*InboundConnRecord,
+        /// The RC1 inbound idle deadline.
+        idle_deadline_ms: i64,
+    };
+
+    /// SONNY-6451: true when a handler parked on a quiet inbound raft stream
+    /// must give it up: the coordinator is stopping, the connection is gone,
+    /// the RC-A sweeper asked for the worker back, or no frame has arrived for
+    /// the RC1 idle deadline. A sender that dies without FIN or
+    /// CONNECTION_CLOSE (a killed or force-exited process, a blackholed old
+    /// IP) leaves its stream open, and the vendor `readStream` answers
+    /// `WouldBlock` for it forever, so without this the handler kept its
+    /// worker for the life of the process.
+    fn inboundStreamAbandoned(self: *ClusterCoordinator, watch: *const InboundStreamWatch, last_frame_ms: i64) bool {
+        if (self.shutdown.load(.acquire)) return true;
+        if (watch.conn.isDrained()) return true;
+        if (watch.rec) |r| {
+            if (r.reap_requested.load(.acquire)) return true;
+        }
+        return shouldReapIdleInboundConnection(compat_milliTimestamp(), last_frame_ms, watch.idle_deadline_ms);
+    }
+
+    fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream, watch: *const InboundStreamWatch) !void {
         var first: [1]u8 = undefined;
         readExactCluster(stream, first[0..]) catch |err| {
             // EndOfStream means the peer FIN'd before sending any
@@ -1867,7 +1904,7 @@ pub const ClusterCoordinator = struct {
         // small adapter that prepends the byte we already consumed
         // and feed it into the existing raft frame reader.
         var prefix = PrefixedStream(*quic.QuicStream){ .inner = stream, .prefix = first[0], .have_prefix = true };
-        try self.dispatchRaftFrameFromAdaptedStream(&prefix);
+        try self.dispatchRaftFrameFromAdaptedStream(&prefix, watch);
     }
 
     /// Run the cluster RPC request/response cycle on `stream`.  The
@@ -1964,7 +2001,7 @@ pub const ClusterCoordinator = struct {
         stream.finish() catch {};
     }
 
-    fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype) !void {
+    fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype, watch: *const InboundStreamWatch) !void {
         // 2026-06-08 raft multiplexed streams: a peer now sends ALL raft frames
         // over ONE long-lived bidi stream (bounded per-peer stream usage, so
         // heartbeats/votes are never dropped on OutOfStreams under write load).
@@ -1980,17 +2017,27 @@ pub const ClusterCoordinator = struct {
         // torn-down-then-re-queued stream_id would otherwise be dropped as a
         // duplicate, wedging replication). The sender allocates a fresh
         // stream_id when it reopens after a real error, so reopen is unaffected.
+        //
+        // SONNY-6451: the park is bounded. `inboundStreamAbandoned` ends it
+        // (error.InboundStreamAbandoned: the handler releases its worker and
+        // closes the connection) on shutdown, a gone connection, an RC-A
+        // sweeper request, or no frame for the RC1 idle deadline. Each frame
+        // restamps the RC-A record so the sweeper never flags a live stream.
+        var last_frame_ms = compat_milliTimestamp();
         while (true) {
             const frame_res = raft_consensus.readRaftFrame(self.allocator, prefix) catch |err| switch (err) {
                 error.EndOfStream => return, // peer closed/reopened the stream — normal
                 error.WouldBlock => {
                     // Stream still open, just momentarily idle. Re-park.
+                    if (self.inboundStreamAbandoned(watch, last_frame_ms)) return error.InboundStreamAbandoned;
                     compat_sleepNs(2 * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
             };
             defer frame_res.deinit(self.allocator);
+            last_frame_ms = compat_milliTimestamp();
+            if (watch.rec) |r| r.last_activity_ms.store(last_frame_ms, .release);
             self.applyDecodedRaftFrame(frame_res) catch |err| {
                 // A single bad/late frame must not tear the whole stream down;
                 // log and keep reading (raft re-sends on its own cadence).

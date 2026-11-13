@@ -1844,6 +1844,27 @@
 
 ### Fixed
 
+- **A cluster node keeps receiving raft traffic after its peers restart
+  or move (SONNY-6451 item 1).** Raft frames ride one long-lived stream per
+  peer, and the inbound handler on the receiver parked on that stream in a
+  loop that only re-read it while it was quiet. A peer that went away
+  without FIN or CONNECTION_CLOSE (a killed or force-exited process, a
+  rescheduled pod whose old IP is gone) left the stream open, the QUIC
+  library answers `WouldBlock` for it forever, and the RC1 idle reap, the
+  RC-A occupancy sweeper and the shutdown flag were checked only between
+  streams. Each such peer therefore held one of the receiver's 4 cluster
+  connection workers for the life of the process; after four, the node
+  serviced no inbound raft connection at all, so it never received the
+  leader's appends while the leader logged "peer stalled ... evicting
+  stale connection" over and over (the netns membership-churn M6-M8
+  failures). The handler now gives a quiet stream up on shutdown, a closed
+  connection, a sweeper request, or no frame for the inbound idle deadline
+  (`GEODE_CLUSTER_INBOUND_IDLE_MS`, default 30 s; a live peer sends a
+  heartbeat or response every ~50 ms), releases its worker and closes the
+  connection; each frame refreshes the sweeper's activity clock. A raft
+  sender whose connection the peer closed now rebuilds it on the next send
+  instead of writing into it. Regression:
+  `zig build test-sonny6451-raft-restarted-peer`.
 - **The cluster health loop fails over only configured peers and keeps a
   failed peer's address (SONNY-6451 item 2).** `healthLoop` iterated
   `cluster_state.nodes` while `handleNodeFailure` `swapRemove`d the failed
