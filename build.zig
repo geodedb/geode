@@ -14842,6 +14842,20 @@ pub fn build(b: *std.Build) void {
     const sonny6450_step = b.step("test-sonny6450-ownership-residuals", "Run SONNY-6450 item 6 regression (a key held twice in a stored property chain keeps the later value and frees the earlier one; a later null removes it; no leak under allocation failure)");
     sonny6450_step.dependOn(&run_sonny6450_tests.step);
 
+    // SONNY-6437 items 3, 4, 5 and 7: the gql engine's overflowing SUM/AVG
+    // is NULL; the shapes of the removed legacy executors are answered by the
+    // live ones; db.relationshipTypes() and db.propertyKeys() apply the RLS
+    // label policies; a WHERE after YIELD is a 42000 naming ISO FILTER.
+    const sonny6437_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6437_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6437_test_mod.addImport("geode", root_mod);
+    sonny6437_test_mod.addImport("logging", logging_mod);
+    sonny6437_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6437_tests = b.addTest(.{ .root_module = sonny6437_test_mod });
+    const run_sonny6437_tests = b.addRunArtifact(sonny6437_tests);
+    shardDep(test_step, &run_sonny6437_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6437_step = b.step("test-sonny6437-query-residuals", "Run SONNY-6437 regressions (the gql engine's SUM/AVG past i64 is NULL, not a panic; OPTIONAL MATCH, SET and WITH shapes of the removed legacy executors are answered by the live ones; db.relationshipTypes() and db.propertyKeys() omit what the session's RLS label policies hide; a WHERE after YIELD is refused with 42000 naming the ISO FILTER statement)");
+    sonny6437_step.dependOn(&run_sonny6437_tests.step);
+
     const sonny6334_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6334_fle_authorization.zig"), .target = target, .optimize = optimize });
     sonny6334_test_mod.link_libc = true; // setenv/unsetenv/chmod
     sonny6334_test_mod.addImport("geode", root_mod);

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:44:48.129435893Z",
+  "generated_at": "2026-11-13T04:46:44.581244583Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85479,6 +85479,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6437-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS",
       "features": [
         {
@@ -93440,7 +93459,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4869
+      "TESTED": 4870
     },
     "by_aspect": {
       "2PC": 3,
@@ -96563,7 +96582,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 296,
+      "Regression": 297,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
