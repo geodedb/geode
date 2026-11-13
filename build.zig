@@ -9886,6 +9886,7 @@ pub fn build(b: *std.Build) void {
     sonny2441_kms_mod.addImport("json", json_mod);
     sonny2441_kms_mod.addImport("transport/quic", transport_quic_mod);
     sonny2441_kms_mod.addImport("feature_flags", runtime_flags_mod);
+    sonny2441_kms_mod.addImport("s3_sigv4", s3_sigv4_mod);
     {
         const opts = b.addOptions();
         opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
@@ -10072,6 +10073,9 @@ pub fn build(b: *std.Build) void {
         ext_kms_mod.addImport("crypto_backend", crypto_backend_mod);
         ext_kms_mod.addImport("logging", logging_mod);
         ext_kms_mod.addImport("json", json_mod);
+        ext_kms_mod.addImport("s3_sigv4", s3_sigv4_mod);
+        // The inline integration tests read the environment (std.c.getenv).
+        ext_kms_mod.link_libc = true;
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_external_kms_provider.zig"), .target = target, .optimize = optimize });
         mod.addImport("external_kms_client", ext_kms_mod);
         const tests = b.addTest(.{ .root_module = mod });
@@ -10088,6 +10092,23 @@ pub fn build(b: *std.Build) void {
             const run_ekc_tests = b.addRunArtifact(ekc_tests);
             shardDep(test_step, &run_ekc_tests.step, 1, test_shard_loads, test_shard_index);
             b.step("test-sonny6457-external-kms-compile", "Run SONNY-6457 item 4 regression (the Vault Transit and AWS KMS clients compile: every network entry point is analysed; an incomplete configuration is refused before any request; Vault Transit URLs, request body and headers, and Vault / AWS KMS responses in their documented JSON shapes; no network call)").dependOn(&run_ekc_tests.step);
+        }
+
+        // SONNY-6465: the Vault / AWS KMS clients sign AWS requests (SigV4),
+        // honour or refuse the TLS options, unwrap from the envelope; and
+        // the client file's own inline tests run.
+        {
+            const s6465_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6465_external_kms.zig"), .target = target, .optimize = optimize });
+            s6465_mod.addImport("external_kms_client", ext_kms_mod);
+            const s6465_tests = b.addTest(.{ .root_module = s6465_mod });
+            const run_s6465_tests = b.addRunArtifact(s6465_tests);
+            shardDep(test_step, &run_s6465_tests.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6465-external-kms", "Run SONNY-6465 regression (AWS KMS requests are SigV4-signed for service kms: signing key per the AWS example, signature per an independent computation; static credentials required; tls_ca_cert is the only trust anchor and tls_skip_verify is refused; Vault and AWS envelopes carry their KMS ciphertext and a fresh client builds the decrypt request from it; a missing or swapped ciphertext is refused; AWS rotateKey refuses; no network call)").dependOn(&run_s6465_tests.step);
+
+            const inline_tests = b.addTest(.{ .root_module = ext_kms_mod });
+            const run_inline = b.addRunArtifact(inline_tests);
+            shardDep(test_step, &run_inline.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6465-external-kms-inline", "Run SONNY-6465 item 4: src/security/external_kms_client.zig's inline tests (simulated AEAD round trip and tamper, provider factory, configuration refusals; the live Vault / AWS KMS tests run only when VAULT_ADDR / AWS_KMS_ENDPOINT and credentials are set, else skip)").dependOn(&run_inline.step);
         }
 
         // SONNY-6386 item 5: no uncompiled KeyRegistry persistence or
