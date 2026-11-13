@@ -5915,6 +5915,22 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny1336-grpc-bind-address", "Run SONNY-1336 regression (the real geode serve listens for gRPC on the --listen-grpc address per /proc/net/tcp and answers HELLO there: 127.0.0.2, 0.0.0.0, a port alone takes the QUIC listener's address or 0.0.0.0; the banner names the bound address; IPv6, a host name or a bad port is refused with exit 2)").dependOn(&run_tests.step);
     }
 
+    // SONNY-3390: a QUIC client disconnect stops the read it left running
+    // promptly, not at the 60 s per-connection stall watchdog.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3390_quic_disconnect_cancels_read.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3390-quic-disconnect-cancels-read", "Run SONNY-3390 regression (a real geode serve: a client that closes its QUIC connection (CONNECTION_CLOSE) 1 s into a comma join whose WHERE keeps nothing leaves the server idle within 20 s, well before the 60 s stall watchdog, and the server answers a new connection)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
     // insecure-TLS rule (refused under production posture, warned otherwise).
     {
