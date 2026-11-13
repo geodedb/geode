@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:57:17.562597616Z",
+  "generated_at": "2026-11-13T08:59:52.543116618Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -12071,40 +12071,6 @@
         {
           "feature": "DistributedCluster",
           "aspect": "Replication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-01"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-CLUSTER-003",
-      "features": [
-        {
-          "feature": "DistributedCluster",
-          "aspect": "Rebalance",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-01"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-CLUSTER-004",
-      "features": [
-        {
-          "feature": "DistributedCluster",
-          "aspect": "Topology",
           "status": "IMPL",
           "files": [
             "src/distributed/cluster.zig"
@@ -93599,7 +93565,7 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 335,
+      "IMPL": 333,
       "TESTED": 4879
     },
     "by_aspect": {
@@ -96694,7 +96660,6 @@
       "RealStoreMeasurement": 1,
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
-      "Rebalance": 1,
       "RebuildAgainAfterSwap": 1,
       "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
@@ -97438,7 +97403,7 @@
       "ToolsThreading": 1,
       "TopLevelAgg": 1,
       "TopologicalSortKahn": 1,
-      "Topology": 2,
+      "Topology": 1,
       "Training": 1,
       "Transaction": 1,
       "TransactionCoord": 1,

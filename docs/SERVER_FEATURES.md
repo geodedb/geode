@@ -1038,11 +1038,12 @@ pub const AuditRecord = struct {
 - Memory: Tested up to 512GB
 - Disk: 10-50TB single instance
 
-**Horizontal Scaling** (Federation):
-
-- Shards: Tested up to 32 shards
-- Replication: 3-5 replicas typical
-- Query routing: <100μs overhead
+**Horizontal Scaling**: not implemented. A cluster (`GEODE_CLUSTER_TOKEN`)
+replicates the documented write slice to every node through Raft; it does
+not shard data, route queries to shards, or promote shard replicas (nothing
+in production fills the coordinator's shard table; SONNY-6459), and its
+membership is the static `--peers` list. See
+[DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md).
 
 **Concurrent Users**:
 

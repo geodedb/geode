@@ -462,9 +462,8 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     // Emit one row for this node, plus one per peer in coord.raft.peers.
     // raft.peers is the authoritative cluster membership populated from
     // PeerConfig at init time (resolvePeers in cluster.zig). The previous
-    // implementation read cluster_state.nodes, which is mutated at runtime
-    // by handleJoinCluster and was observed empty in subprocess runs even
-    // though raft.peers was populated correctly. Using raft.peers guarantees
+    // implementation read cluster_state.nodes, which was observed empty in
+    // subprocess runs even though raft.peers was populated correctly. Using raft.peers guarantees
     // SHOW CLUSTER STATUS reflects the configured membership immediately.
     // Self is intentionally NOT in that list so we emit it explicitly.
     const peer_count = coord.raft.peers.len;

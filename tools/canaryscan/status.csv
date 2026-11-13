@@ -715,8 +715,6 @@ REQ-DIST-CLI-001,DistributedClusterCLI,ServerConfig,TESTED,src/server/cli_args.z
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
 REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,TESTED,src/graph_store.zig,,,distributed,2026-04-05
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
-REQ-DIST-CLUSTER-003,DistributedCluster,Rebalance,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
-REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
 REQ-DIST-CLUSTER-3NODE-ELECTION,DistributedClusterCoordinator,LeaderElection3Node,TESTED,tests/test_cluster_3node_election.zig,tests/test_cluster_3node_election.zig,,distributed,2026-05-25
 REQ-DIST-CLUSTER-3NODE-SUBPROC,DistributedClusterCoordinator,SubprocessClusterFormation,TESTED,tests/test_cluster_3node_subprocess.zig,tests/test_cluster_3node_subprocess.zig,,distributed,2026-05-26
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommitAwarePostProposeWait,TESTED,src/distributed/cluster.zig,tests/test_cluster_commit_aware_wait.zig,,distributed,2026-06-12

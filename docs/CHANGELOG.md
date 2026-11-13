@@ -2048,6 +2048,22 @@
   because that function cannot compile (protobuf 0.1.6 cannot decode the
   union submessages of `TwoPhaseMessage`); nothing outside twophase.zig
   uses `TwoPCCoordinator`.
+- **Docs: a cluster has no dynamic join and no shard failover (SONNY-6459
+  items 4 and 8).** `ClusterCoordinator.handleJoinCluster` and
+  `serializeClusterTopology` had no caller (the inbound cluster RPC
+  dispatcher answers JOIN_CLUSTER with ERR) and did not compile
+  (`nodes.append` without an allocator, `ArrayList(...).init`); Zig never
+  analysed them, so nothing noticed. They are removed with what only they
+  used (`parseNodeInfo`, `rebalanceShards`, `serializeMinimalJoinResponse`,
+  `NodeInfoProto`, `JoinResponsePayload` and its inline test, the
+  `Topology*` payloads). Membership is the static `--peers` list. Nothing
+  in production fills the coordinator's shard table, so `forwardToShard`,
+  `promoteReplica` and `ensureReplicationFactor` run only in tests; the
+  code stays pending a decision. `src/distributed/README.md` no longer
+  says the coordinator handles node join/leave, `docs/SERVER_FEATURES.md`
+  no longer lists 32-shard, 3-5-replica horizontal scaling, and
+  `docs/DISTRIBUTED_QUALITY_GAP_ANALYSIS.md` records the shard surface as
+  an open residual. Regression: `zig build test-sonny6459-hygiene`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so
