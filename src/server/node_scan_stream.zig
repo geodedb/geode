@@ -439,8 +439,14 @@ pub const NodeScanStream = struct {
                 }
             }
 
+            // CANARY: REQ=REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReserveBeforeBuild; STATUS=TESTED; TEST=tests/test_sonny2671_scan_page_append_oom.zig; OWNER=engine; UPDATED=2026-11-13
+            // SONNY-2671: the row's slot is reserved before the row is built.
+            // Past the 256 rows reserved up front the append grows the list,
+            // and a failed grow dropped the built row (its cells and its
+            // node's tracking) in no list the page's errdefer frees.
+            try rows.ensureUnusedCapacity(allocator, 1);
             const row = try self.buildRow(allocator, node, owned_entities, &node_tracked);
-            try rows.append(allocator, row);
+            rows.appendAssumeCapacity(row);
             self.rows_emitted += 1;
         }
         graph_store.releaseGraphLock(lock);
@@ -519,6 +525,11 @@ pub const NodeScanStream = struct {
     ) !ExecutionResult {
         var rows_mut = rows;
         const columns = try self.buildColumns(allocator);
+        // SONNY-2671: the columns are freed when the rows' slice cannot be.
+        errdefer {
+            for (columns) |c| allocator.free(c);
+            allocator.free(columns);
+        }
         const owned = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
         const result = ExecutionResult{
             .columns = columns,
@@ -627,14 +638,17 @@ pub const NodeScanStream = struct {
             },
             .projection => {
                 var columns = try allocator.alloc([]const u8, self.columns.len);
+                // SONNY-2671: only the names copied so far are freed; every
+                // slot was, the ones not yet filled holding garbage (a crash
+                // on an allocation failure).
+                var filled: usize = 0;
                 errdefer {
-                    for (columns, 0..) |c, i| {
-                        if (i < self.columns.len) allocator.free(c);
-                    }
+                    for (columns[0..filled]) |c| allocator.free(c);
                     allocator.free(columns);
                 }
                 for (self.columns, 0..) |name, i| {
                     columns[i] = try allocator.dupe(u8, name);
+                    filled += 1;
                 }
                 return columns;
             },

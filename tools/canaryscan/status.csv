@@ -4503,8 +4503,11 @@ REQ-SONNY-2656-EXTENDED-VALUE-LEAKS,EngineDirectExtendedValueOwnership,Regressio
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,PostProjectionFilter,TESTED,src/execution.zig,tests/test_sonny2667_return_where.zig,,engine,2026-09-25
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,Regression,TESTED,tests/test_sonny2667_return_where.zig,tests/test_sonny2667_return_where.zig,,engine,2026-09-25
 REQ-SONNY-2668-HAVING-GROUP-KEY,GroupedHaving,Regression,TESTED,tests/test_sonny2668_having_group_key.zig,tests/test_sonny2668_having_group_key.zig,,engine,2026-09-25
+REQ-SONNY-2669-PLANNED-EXT-PROPERTY-LEAK,PlannedReadStorageReads,Regression,TESTED,tests/test_sonny2669_planned_ext_property_leak.zig,tests/test_sonny2669_planned_ext_property_leak.zig,,engine,2026-11-13
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,Regression,TESTED,tests/test_sonny2670_fle_singletons_process_allocator.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,SingletonsOnProcessAllocator,TESTED,src/fle_integration.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
+REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny2671_scan_page_append_oom.zig,tests/test_sonny2671_scan_page_append_oom.zig,,engine,2026-11-13
+REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM,EngineDirectNodeOwnership,ReserveBeforeBuild,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2671_scan_page_append_oom.zig,,engine,2026-11-13
 REQ-SONNY-2672-READ-SEMANTICS-BATCH,ReadSemanticsBatch,Regression,TESTED,tests/test_sonny2672_read_semantics_batch.zig,tests/test_sonny2672_read_semantics_batch.zig,,engine,2026-11-12
 REQ-SONNY-2674-LEGACY-RETURN,LegacyReturnProjection,Regression,TESTED,tests/test_sonny2674_legacy_return.zig,tests/test_sonny2674_legacy_return.zig,,engine,2026-09-25
 REQ-SONNY-2674-LEGACY-RETURN,LegacyReturnProjection,SharedProjection,TESTED,src/execution/match_operations.zig,tests/test_sonny2674_legacy_return.zig,,engine,2026-09-25
@@ -4531,6 +4534,8 @@ REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TES
 REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TESTED,src/server/rls_filter.zig,tests/test_sonny2679_rls_hop_targets.zig,,security,2026-09-25
 REQ-SONNY-2679-RLS-HOP-TARGETS,TraversalRowVisibility,Regression,TESTED,tests/test_sonny2679_rls_hop_targets.zig,tests/test_sonny2679_rls_hop_targets.zig,,security,2026-09-25
 REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,src/security/rls_core.zig,src/security/rls_core.zig,,security,2026-09-25
+REQ-SONNY-2681-READ-VIEW-LIFETIME,LegacyMatchExecutor,NoFallbackSnapshot,TESTED,src/execution/match_operations.zig,tests/test_sonny2681_read_view_snapshot_lifetime.zig,,engine,2026-11-13
+REQ-SONNY-2681-READ-VIEW-LIFETIME,LegacyMatchExecutor,Regression,TESTED,tests/test_sonny2681_read_view_snapshot_lifetime.zig,tests/test_sonny2681_read_view_snapshot_lifetime.zig,,engine,2026-11-13
 REQ-SONNY-2683-RETURN-SHAPES,ForStatement,NoGroupedReturn,TESTED,src/gql/parser.zig,tests/test_sonny2683_return_shapes.zig,,parser,2026-09-25
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,ExcludedShapes,TESTED,src/execution/match_operations.zig,tests/test_sonny2683_return_shapes.zig,,engine,2026-09-25
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,Regression,TESTED,tests/test_sonny2683_return_shapes.zig,tests/test_sonny2683_return_shapes.zig,,engine,2026-09-25
@@ -4914,6 +4919,8 @@ REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,Regression,TESTED,tests/test_
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,MaterializeKnownOnly,TESTED,src/graph_store.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3122_dropped_graph_not_recreated.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3125-SHARED-NODE-SET,SetClauseSemantics,PerRowReread,TESTED,tests/test_sonny3125_shared_node_set.zig,tests/test_sonny3125_shared_node_set.zig,,engine,2026-11-12
+REQ-SONNY-3126-LIST-PROJECTION-LEAKS,PlannedReadProjection,BracketListLiteralKeys,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny3126_list_projection_leaks.zig,,engine,2026-11-13
+REQ-SONNY-3126-LIST-PROJECTION-LEAKS,SharedProjection,Regression,TESTED,tests/test_sonny3126_list_projection_leaks.zig,tests/test_sonny3126_list_projection_leaks.zig,,engine,2026-11-13
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GraphDdlAlone,TESTED,src/query/query_traits.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,QuicHandler,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27
@@ -4961,6 +4968,8 @@ REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,EvaluatedValueOwnership,TESTE
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,Regression,TESTED,tests/test_sonny3148_write_leaks.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,TraversalBuffers,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,WithStageItems,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
+REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,RefreshOncePerWrite,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_step_amplification.zig,,engine,2026-11-13
+REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,Regression,TESTED,tests/test_sonny3148_write_step_amplification.zig,tests/test_sonny3148_write_step_amplification.zig,,engine,2026-11-13
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,Parser,TESTED,src/gql/parser.zig,tests/test_sonny_write_allowlist.zig,,parser,2026-09-27
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,src/execution.zig,tests/test_sonny_write_allowlist.zig,,engine,2026-09-27
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,src/execution/write_shape.zig,,,engine,2026-09-27
@@ -5115,6 +5124,7 @@ REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,NodeCache,TESTED,src/exe
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ReadBudgetOverGrpc,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,engine,2026-09-28
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,StreamingJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
 REQ-SONNY-3377-EDGE-SCAN-RELOAD,StorageNativeReads,Regression,TESTED,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,,storage,2026-11-13
+REQ-SONNY-3378-MAP-PROJECTION-LEAK,SharedProjection,Regression,TESTED,tests/test_sonny3378_map_projection_leak.zig,tests/test_sonny3378_map_projection_leak.zig,,engine,2026-11-13
 REQ-SONNY-3379-GRPC-VECTOR-TEARDOWN,Test Fixtures,GrpcFixtureIndexManagerTeardown,TESTED,tests/test_sonny3379_grpc_vector_index_teardown.zig,tests/test_sonny3379_grpc_vector_index_teardown.zig,,index,2026-11-12
 REQ-SONNY-3380-MERGE-ALIAS-SET,Execution,DuplicateSetUndo,TESTED,tests/test_sonny3380_merge_alias_duplicate_set.zig,tests/test_sonny3380_merge_alias_duplicate_set.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRegression,TESTED,tests/test_sonny3381_undo_index_entries.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
@@ -5187,6 +5197,8 @@ REQ-SONNY-6295-CREATE-PATH-MIDDLE-NODE,CreatePath,Regression,TESTED,tests/test_s
 REQ-SONNY-6296-LEGACY-READ-GAPS,ReadSemantics,Regression,TESTED,tests/test_sonny6296_legacy_read_gaps.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
 REQ-SONNY-6296-PLANNED-WHERE-ERRORS,PlannedRead,WhereErrorsFailTheQuery,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
 REQ-SONNY-6296-REL-MAP-PARAMS,PatternMatching,RelationshipMapParameters,TESTED,src/execution/pattern_helpers.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
+REQ-SONNY-6297-ALLOCATION-FAILURE-SWEEP,ExecutionResultOwnership,ErrorPathOwnership,TESTED,tests/test_sonny6297_allocation_failure_sweep.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,engine,2026-11-13
+REQ-SONNY-6297-PER-ROW-ITEM-LEAKS,LegacyReturnProjection,Regression,TESTED,tests/test_sonny6297_per_row_item_leaks.zig,tests/test_sonny6297_per_row_item_leaks.zig,,engine,2026-11-13
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,src/storage/backup.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,S3RestoreIsStaged,IMPL,src/storage/s3_backup.zig,,,storage,2026-11-12
@@ -5547,6 +5559,10 @@ REQ-SONNY-6480-READLINE-NO-ALLOC,QuicClient,ReadLineAllocatesOnlyForALine,TESTED
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,src/server/acceptor_watchdog.zig,tests/test_sonny6480_acceptor_watchdog.zig,,transport,2026-11-13
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,src/server/main.zig,,,transport,2026-11-13
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,tests/test_sonny6480_acceptor_watchdog.zig,,,transport,2026-11-13
+REQ-SONNY-6483-QUERY-RESIDUALS,QueryChain,AggregateWithoutMatch,TESTED,src/execution/query_execution.zig,tests/test_sonny6483_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6483-QUERY-RESIDUALS,QueryChain,ChainingReturnOverWithStage,TESTED,src/execution/match_operations.zig,tests/test_sonny6483_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6483-QUERY-RESIDUALS,QueryChain,Regression,TESTED,tests/test_sonny6483_query_residuals.zig,tests/test_sonny6483_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6483-QUERY-RESIDUALS,UndirectedPatternMatch,SelfLoopOnce,TESTED,src/execution/match_operations.zig,tests/test_sonny6483_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

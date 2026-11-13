@@ -2878,8 +2878,10 @@ pub const GraphStore = struct {
     }
 
     pub fn deinit(self: *GraphStore) void {
-        // Clear nodes and edges (which also frees memory)
-        self.clearNodes();
+        // Clear nodes and edges (which also frees memory). SONNY-6297: without
+        // re-registering the default graph, which allocates and panicked on
+        // OutOfMemory (a snapshot torn down after a failed clone).
+        self.clearNodesReseeding(false);
         // Deinit the hashmaps
         self.nodes.deinit();
         self.edges.deinit();
@@ -2974,6 +2976,12 @@ pub const GraphStore = struct {
     }
 
     pub fn clearNodes(self: *GraphStore) void {
+        self.clearNodesReseeding(true);
+    }
+
+    /// `clearNodes`; `reseed`: register the default graph again (a reset),
+    /// or leave the registries empty (teardown frees them next).
+    fn clearNodesReseeding(self: *GraphStore, reseed: bool) void {
         // Free and clear all nodes. The BoundedNodeCache frees every resident
         // value via its free_fn (freeNodeValue) AND drains the retire list, so
         // the manual per-node free loop is no longer needed here.
@@ -3004,8 +3012,10 @@ pub const GraphStore = struct {
             }
             self.graphs.deinit();
             self.graphs = std.StringHashMap(void).init(self.allocator);
-            const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
-            self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
+            if (reseed) {
+                const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
+                self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
+            }
         }
 
         // GAP-0839: Reset persistent-UUID map alongside the graph registry and
@@ -3017,8 +3027,10 @@ pub const GraphStore = struct {
         }
         self.graph_uuids.deinit();
         self.graph_uuids = std.StringHashMap([16]u8).init(self.allocator);
-        const default_uuid_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph uuid key during clearNodes");
-        self.graph_uuids.put(default_uuid_name, generatePersistentUuid()) catch @panic("OOM: failed to register default graph uuid during clearNodes");
+        if (reseed) {
+            const default_uuid_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph uuid key during clearNodes");
+            self.graph_uuids.put(default_uuid_name, generatePersistentUuid()) catch @panic("OOM: failed to register default graph uuid during clearNodes");
+        }
 
         // Reset label index
         var label_iter = self.label_index.iterator();

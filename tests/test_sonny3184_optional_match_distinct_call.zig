@@ -184,11 +184,6 @@ const Case = struct {
     ordered: bool = false,
     /// The statement must fail with this error instead.
     err: ?anyerror = null,
-    /// Runs on an arena, its answer checked but not its memory: RETURN
-    /// DISTINCT drops a duplicate row's computed list without freeing it, on
-    /// every session (pre-existing, reported separately; not this test's
-    /// subject).
-    known_leak: bool = false,
 };
 
 const Failures = struct {
@@ -214,9 +209,7 @@ const Failures = struct {
 fn runCase(s: *Session, f: *Failures, c: Case) !void {
     const aa = s.arena.allocator();
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    var leak_arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer leak_arena.deinit();
-    const result_allocator = if (c.known_leak) leak_arena.allocator() else gpa.allocator();
+    const result_allocator = gpa.allocator();
     var scratch = std.heap.ArenaAllocator.init(testing.allocator);
     defer scratch.deinit();
     const got: ?[]const []const u8 = blk: {
@@ -354,7 +347,9 @@ const sonny3167_distinct = [_]Case{
     .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN DISTINCT q.f AS f", .want = &.{ "1", "null" } },
     .{ .q = "MATCH (q:Q),(z:Z) WITH DISTINCT q ORDER BY q.k DESC LIMIT 2 RETURN q.k AS k", .want = &.{ "3", "2" }, .ordered = true },
     .{ .q = "MATCH (y:Y)-[:R]->(q:Q)-[:R]->(x) WITH DISTINCT 1 AS one RETURN one", .want = &.{"1"} },
-    .{ .q = "MATCH (q:Q) RETURN DISTINCT [q.f] AS l", .want = &.{ "[1]", "[null]" }, .known_leak = true },
+    // SONNY-6297: a duplicate row's computed list is freed (it ran on an
+    // arena for that leak).
+    .{ .q = "MATCH (q:Q) RETURN DISTINCT [q.f] AS l", .want = &.{ "[1]", "[null]" } },
     // A hidden or foreign :X never counts.
     .{ .q = "MATCH (q:Q)-[:R]->(x) WITH DISTINCT x RETURN count(*) AS c", .want = &.{"4"} },
 };

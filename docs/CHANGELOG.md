@@ -2653,6 +2653,98 @@
   shape, outside and inside a transaction, same- and cross-shard, with and
   without TDE; read back outgoing, incoming and by an unlabeled scan after
   the restart).
+- **Memory safety: an allocation failure no longer crashes a read, and
+  fewer error paths leak (SONNY-6297).** Running statements with each of
+  their allocations failing in turn found two crashes: tearing down a
+  half-built read snapshot (`CALL db.labels()`) re-registered the default
+  graph and panicked when that allocation failed, and the planned read's
+  projection plan freed its key lists twice when a slice could not be
+  made. Both are fixed, and a failed copy no longer leaves the copies made
+  before it unowned (`duplicateValue`, `ownResultValues`,
+  `adoptProjectionRowValues`), nor the shared projection a group key, a
+  group's list or a column list, nor the planned read its final
+  projection. Other error paths still leak; `zig build
+  test-sonny6297-allocation-failure-sweep` reproduces them (an
+  intentionally red step, see `docs/KNOWN_TEST_ISSUES.md`).
+- **Per-row items of the legacy traversals are freed, and an item that
+  fails fails the statement (SONNY-6297).** The variable-length traversal,
+  the multi-pattern executors and the WITH stage's RETURN computed their
+  items on the result's allocator while their rows borrow their cells
+  (`a.s || '>' || b.s` leaked once per row on the in-memory, tenant-scoped
+  and RLS sessions); they are lent from the statement's scratch arena. The
+  multi-pattern executor answered an item that fails as NULL
+  (`RETURN a.s || toString(c.i / 0)` gave NULL rows); it raises the error
+  now (ISO/IEC 39075 19.1 GR 1). Regression: `zig build
+  test-sonny6297-per-row-item-leaks`.
+- **The write step keeps one detached copy of a written node per write
+  (SONNY-3148).** Each refresh of a written node took a fresh detached copy
+  (kept until the graph's next checkpoint and charged to the write budget):
+  4.0 copies (1411 bytes) per row for `MATCH (n:W) SET n.x = n.i + 1 RETURN
+  n.x`, 5.0 (2148 bytes) with two SET clauses. A refresh reuses its copy
+  until the node is written again. A computed SET value (`SET n.t = n.s ||
+  '-x'`, a list, a map) is lent from the statement's scratch arena; it
+  leaked per row. Regression: `zig build
+  test-sonny3148-write-step-amplification`.
+- **Memory safety: the engine-direct node scan frees what a page built when
+  an allocation fails (SONNY-2671).** A page over 256 rows dropped the row it
+  had just built when growing its row list failed, and a failure while
+  copying the column names freed column slots never filled (a crash). The
+  row's slot is reserved before the row is built and only copied names are
+  freed. Regression: `zig build test-sonny2671-scan-page-append-oom`.
+- **A list literal over a relationship pattern reads its members on the
+  planned read (SONNY-3126).** `MATCH (a:P)-[:R]->(b:Q) RETURN [a.s, b.s]`
+  answered `[null, null]` on a persisted session: a bracket list literal
+  parses as an array literal, which the planned read's projection analysis
+  took for a constant, so the properties its elements read were not
+  fetched for the projected nodes. Regression: `zig build
+  test-sonny3126-list-projection-leaks` (keys(), collect() and list literals
+  on every session, leak-checked).
+- **A MERGE's or CREATE's RETURN map is freed with the result
+  (SONNY-3378).** A write step's RETURN items (and a CREATE's WITH items)
+  were evaluated on the result's allocator while the result borrows its
+  cells, so `MERGE (m:M {k: 1}) RETURN {k: m.k}` leaked the map on every
+  statement. They are lent from the statement's scratch arena, as every
+  other projection's are. Regression: `zig build
+  test-sonny3378-map-projection-leak`; the m-4 case of `zig build
+  test-sonny-write-allowlist-r4b` runs on the testing allocator.
+- **Query residuals: an aggregating WITH followed by another WITH, aggregates
+  without MATCH under RLS, undirected self-loops, failing property maps
+  (SONNY-6483).** (1) `MATCH (z:Z) WITH z.g AS g, sum(z.k) AS s WITH g, s
+  RETURN g, s` answered NULL rows on the in-memory, tenant-scoped and RLS
+  sessions (`WITH count(*) AS c WITH c` answered 1): the chained part's
+  RETURN, which is the WITH's own items, was projected again over the rows
+  the WITH had produced. The WITH stage's rows are now the part's answer.
+  The per-row bindings the next part built, and the planned read's
+  materialized nodes on the intermediate-aggregation path, leaked on every
+  session; they are freed. (2) `RETURN count(1), sum(2)` answered `1, null`
+  (and `collect(6)` UnknownFunction) on an RLS session, where the planned
+  read is skipped: an aggregating RETURN without MATCH now aggregates over
+  its one empty record in the shared projection. (3) `MATCH (a)-[r]-(b)`
+  matched a self-loop twice on the legacy sessions; it is one path binding
+  (ISO/IEC 39075:2024 22.3 GR, 4.11.6) and now matches once, as on the
+  planned read. (4) A pattern's property map whose value fails to evaluate
+  (`{i: 1 / 0}`) matched nothing on the planned read, and on every session
+  for a relationship's map or the start node of a relationship pattern; it
+  now fails the statement (ISO/IEC 39075 19.1 GR 1), as a node map did on
+  the legacy sessions. (5) The `gql` developer tool's `--demo-eval` printed
+  a RETURN label it had already freed (a crash) and leaked every row's
+  computed values and every HAVING rewrite; `generateUniqueColumnNames` and
+  the no-MATCH RETURN freed nothing when an allocation or an item failed.
+  Regression: `zig build test-sonny6483-query-residuals`; the three
+  `match_wrong` exemptions of `test-sonny2707-count-direction` are gone.
+- **Memory safety: the legacy MATCH executor no longer returns rows that
+  point into a freed snapshot (SONNY-2681).** The in-memory, tenant-scoped
+  and RLS-policy sessions read through a `ReadView` that deep-copied the
+  store whenever any write (to any graph or tenant) bumped the mutation
+  epoch between its creation and its first read, and freed the copy when
+  the read returned while its rows still held the copy's nodes and
+  strings (a use-after-free: a crash or garbage cells under concurrent
+  writes). The copy gave no isolation either (the epoch was checked once),
+  so the executor now reads the store `getGlobalStore` gives it. The
+  single-hop traversal also computed its RETURN items on the result's
+  allocator, which no one freed (`a.s || '/' || b.s` leaked per row); they
+  are lent from the statement's scratch arena as the other projections'
+  are. Regression: `zig build test-sonny2681-read-view-snapshot-lifetime`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

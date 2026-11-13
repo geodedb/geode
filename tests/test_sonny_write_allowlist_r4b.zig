@@ -852,12 +852,10 @@ test "SONNY-3319 (I-4): a label SET checks the node's vectors against the new la
 test "SONNY-3322 (m-4): a MERGE's RETURN {rel: r} holds the store's relationship, not the scope's freed copy" {
     var s = try openSession(.in_memory);
     defer s.deinit();
-    // An arena: the map a RETURN builds is not freed with the result (a
-    // separate, pre-existing leak), and this test is about the edge in it.
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var merged = try runProgram(&s, arena.allocator(), "MERGE (a:W {k: 1}) MERGE (a)-[r:T]->(b:W {k: 2}) RETURN {rel: r} AS m, r AS r");
-    defer merged.deinit(arena.allocator());
+    // On the testing allocator: the map a RETURN builds is freed with the
+    // result (SONNY-3378; this ran on an arena for that leak).
+    var merged = try runProgram(&s, testing.allocator, "MERGE (a:W {k: 1}) MERGE (a)-[r:T]->(b:W {k: 2}) RETURN {rel: r} AS m, r AS r");
+    defer merged.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), merged.rows.len);
     const map = merged.rows[0][0];
     try testing.expect(map == .Map);

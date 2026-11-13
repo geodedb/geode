@@ -54,6 +54,7 @@ const write_shape = @import("write_shape.zig");
 // FOR body does.
 const statement_handlers = @import("statement_handlers.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
+const freeColumnNames = match_operations.freeColumnNames;
 
 // Local type aliases
 const Value = value_types.Value;
@@ -545,6 +546,11 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
             var final_rows = try std.ArrayList([]Value).initCapacity(allocator, grouped_result.rows.len);
             defer final_rows.deinit(allocator);
             var final_columns: [][]const u8 = &.{};
+            // SONNY-6483 (1): the rows hold values of the first part's rows
+            // and of each part after it; the nodes and relationships those
+            // results track (a planned read's materialized nodes) are the
+            // result's. They were dropped with the rows (a leak per node).
+            var final_entities: ?*execution.OwnedGraphEntities = current_result.owned_graph_entities;
 
             for (grouped_result.rows) |grouped_row| {
                 // Execute remaining query with grouped row as bindings
@@ -574,6 +580,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                     allocator.free(row);
                 }
                 allocator.free(next_result.rows);
+                try adoptEntities(&final_entities, next_result.owned_graph_entities);
             }
 
             // Clean up grouped result
@@ -590,6 +597,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 .columns = final_columns,
                 .rows = try final_rows.toOwnedSlice(allocator),
                 .flags = std.ArrayList([]const u8).empty,
+                .owned_graph_entities = final_entities,
             };
         } else {
             // This is the final query, apply ORDER BY if present
@@ -597,6 +605,8 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 .columns = grouped_columns,
                 .rows = try grouped_rows.toOwnedSlice(allocator),
                 .flags = std.ArrayList([]const u8).empty,
+                // SONNY-6483 (1): see above.
+                .owned_graph_entities = current_result.owned_graph_entities,
             };
 
             if (agg_query.ret.items.len > 0) {
@@ -1327,14 +1337,15 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         // Start with input bindings
         var current_names: []const []const u8 = binding_names;
         var current_values: []const Value = binding_values;
-        // SONNY-6343: the WITH's bindings below are this part's own arrays;
-        // they were never freed, so every row through a WITH ... WITH chain
-        // (and NEXT, which runs as one) leaked two allocations. The values
-        // are copied into the row this returns, not freed here.
-        var with_names: ?[]const []const u8 = null;
-        var with_values: ?[]const Value = null;
-        defer if (with_names) |n| allocator.free(n);
-        defer if (with_values) |v| allocator.free(v);
+        // SONNY-6483 (1): the WITH's bindings are this call's; they were
+        // never freed (once per incoming row of a chain).
+        var with_names: std.ArrayList([]const u8) = .empty;
+        defer with_names.deinit(allocator);
+        var with_values: std.ArrayList(Value) = .empty;
+        defer with_values.deinit(allocator);
+        // SONNY-6483 (1): the result borrows its cells, so what an item
+        // computes is lent from the statement's scratch arena.
+        const lent = value_utilities.lentAllocator(allocator);
 
         // CANARY: REQ=REQ-GQL-WITH-CHAIN-002; FEATURE="ChainedWithClauseExecution"; ASPECT=BindingTransform; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
         // If there's a WITH clause, first transform bindings by evaluating WITH items
@@ -1349,13 +1360,11 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             };
 
             // Evaluate WITH items to create new bindings
-            var new_names = try std.ArrayList([]const u8).initCapacity(allocator, with_clause.items.len);
-            errdefer new_names.deinit(allocator);
-            var new_values = try std.ArrayList(Value).initCapacity(allocator, with_clause.items.len);
-            errdefer new_values.deinit(allocator);
+            try with_names.ensureTotalCapacity(allocator, with_clause.items.len);
+            try with_values.ensureTotalCapacity(allocator, with_clause.items.len);
 
             for (with_clause.items) |item| {
-                const val = try eval.evalExpr(allocator, item.expr, env_for_with);
+                const val = try eval.evalExpr(lent, item.expr, env_for_with);
                 // Use alias if present, otherwise try to get identifier name from expression
                 const name = if (item.alias) |alias|
                     alias
@@ -1363,15 +1372,12 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
                     item.expr.Ident.orig
                 else
                     "?column?";
-                try new_names.append(allocator, name);
-                try new_values.append(allocator, val);
+                with_names.appendAssumeCapacity(name);
+                with_values.appendAssumeCapacity(val);
             }
 
-            // Convert to owned slices to persist beyond this block
-            current_names = try new_names.toOwnedSlice(allocator);
-            with_names = current_names;
-            current_values = try new_values.toOwnedSlice(allocator);
-            with_values = current_values;
+            current_names = with_names.items;
+            current_values = with_values.items;
         }
 
         const env = Env{
@@ -1403,12 +1409,13 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 
         // Create a single row by evaluating RETURN expressions with (transformed) bindings
         const items = q.ret.items;
-        const columns = try generateUniqueColumnNames(allocator, items);
-        var row = try allocator.alloc(Value, items.len);
-
+        const row = try allocator.alloc(Value, items.len);
+        errdefer allocator.free(row);
         for (items, 0..) |item, i| {
-            row[i] = try eval.evalExpr(allocator, item.expr, env);
+            row[i] = try eval.evalExpr(lent, item.expr, env);
         }
+        const columns = try generateUniqueColumnNames(allocator, items);
+        errdefer freeColumnNames(allocator, columns);
 
         var rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
@@ -2544,6 +2551,15 @@ pub fn executeLegacyQueryWithResolvedParams(
 
         // Otherwise just execute the return clause
         .return_only => {
+            // CANARY: REQ=REQ-SONNY-6483-QUERY-RESIDUALS; FEATURE="QueryChain"; ASPECT=AggregateWithoutMatch; STATUS=TESTED; TEST=tests/test_sonny6483_query_residuals.zig; OWNER=engine; UPDATED=2026-11-13
+            // SONNY-6483 (2): an aggregating RETURN with no MATCH aggregates
+            // over the one empty record it reads, in the shared projection,
+            // as the planned read computes it. The planned read is skipped
+            // under an RLS policy, and evaluated per item here `count(1)`
+            // was 1, `sum(2)` NULL and `collect(6)` UnknownFunction.
+            for (q.ret.items) |item| {
+                if (return_and_sorting.isAggregationExpr(item.expr)) return projectReturnOverOneEmptyRow(allocator, q, param_names.items, param_values.items);
+            }
             var result = try executeReturnClauseWithParams(allocator, q.ret, context, param_names.items, param_values.items);
 
             // Apply ORDER BY if present
@@ -2561,6 +2577,22 @@ pub fn executeLegacyQueryWithResolvedParams(
         // A chain is dispatched above; the rest run no query part here.
         .chain, .read_part, .values_match, .values_return, .create_statement, .insert_statement, .merge_statement, .delete_statement => unreachable,
     }
+}
+
+/// SONNY-6483 (2): a RETURN with no MATCH projected by the shared projection
+/// over its one empty record (its aggregates, GROUP BY, HAVING, DISTINCT and
+/// ORDER BY included).
+fn projectReturnOverOneEmptyRow(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value) !ExecutionResult {
+    var record = ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = &.{},
+        .flags = .empty,
+    };
+    defer record.deinit(allocator);
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = &.{};
+    record.rows = rows;
+    return match_operations.projectReturnOverRows(allocator, q, &record, param_names, param_values);
 }
 
 /// Whether a predicate's value lets a row through.

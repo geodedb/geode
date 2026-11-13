@@ -474,6 +474,8 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                     const de_io = std.Io.Threaded.global_single_threaded.io();
                     var de_wbuf: [8192]u8 = undefined;
                     var de_gfw = GqlFileWriter.init(getStdoutFile(), de_io, &de_wbuf);
+                    // SONNY-6483 (5): the demo's output was never flushed.
+                    defer de_gfw.flush() catch {};
                     const w = de_gfw.writer();
                     const pr = gql.printer;
                     if (q.group_by != null) {
@@ -503,14 +505,17 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                         // Header from RETURN
                         try w.print("demo-eval(grouped): projected RETURN columns\n", .{});
                         for (q.ret.items, 0..) |it, i| {
-                            const label = blk: {
-                                if (it.alias) |al| break :blk al;
+                            if (i > 0) try w.print("\t", .{});
+                            // SONNY-6483 (5): the label is printed before it
+                            // is freed; the block returned it already freed
+                            // (a use-after-free that crashed the tool).
+                            if (it.alias) |al| {
+                                try w.print("{s}", .{al});
+                            } else {
                                 const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
                                 defer if (s.len > 0) ally.free(s);
-                                break :blk if (s.len > 0) s else "expr";
-                            };
-                            if (i > 0) try w.print("\t", .{});
-                            try w.print("{s}", .{label});
+                                try w.print("{s}", .{if (s.len > 0) s else "expr"});
+                            }
                         }
                         try w.print("\n", .{});
                         for (out) |r| {
@@ -540,22 +545,31 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                         try w.print("demo-eval: rows where WHERE predicate (if present) holds; columns are RETURN items.\n", .{});
                         try w.print("row\t", .{});
                         for (q.ret.items, 0..) |it, i| {
-                            const label = blk: {
-                                if (it.alias) |al| break :blk al;
+                            if (i > 0) try w.print("\t", .{});
+                            // SONNY-6483 (5): printed before it is freed (see
+                            // the grouped demo above).
+                            if (it.alias) |al| {
+                                try w.print("{s}", .{al});
+                            } else {
                                 const s = pr.stringifyExprAlloc(ally, it.expr, .{}) catch "";
                                 defer if (s.len > 0) ally.free(s);
-                                break :blk if (s.len > 0) s else "expr";
-                            };
-                            if (i > 0) try w.print("\t", .{});
-                            try w.print("{s}", .{label});
+                                try w.print("{s}", .{if (s.len > 0) s else "expr"});
+                            }
                         }
                         try w.print("\n", .{});
                         var i: usize = 0;
                         while (i < Avals.len and i < Svals.len) : (i += 1) {
-                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items, .allocator = ally, .timeseries_store = &ts_store };
+                            // SONNY-6483 (5): what a row's WHERE and items
+                            // compute lives on the row's arena; on the
+                            // process allocator it leaked (no statement
+                            // scratch arena is installed here).
+                            var row_arena = std.heap.ArenaAllocator.init(ally);
+                            defer row_arena.deinit();
+                            const ra = row_arena.allocator();
+                            const env = eval.Env{ .names = names, .values = &.{ Avals[i], Svals[i] }, .param_names = param_names.items, .param_values = param_values.items, .allocator = ra, .timeseries_store = &ts_store };
                             var pass = true;
                             if (q.where_clause) |wc| {
-                                const v = eval.evalExpr(ally, wc, env) catch |e| {
+                                const v = eval.evalExpr(ra, wc, env) catch |e| {
                                     if (diagnostics.mapEvalError(e)) |code| {
                                         try w.print("diagnostic: {s} (eval WHERE on row {d})\n", .{ diagnostics.codeName(code), i });
                                     } else {
@@ -568,7 +582,7 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                             if (!pass) continue;
                             try w.print("{d}\t", .{i});
                             for (q.ret.items, 0..) |it, j| {
-                                const v = eval.evalExpr(ally, it.expr, env) catch |e| {
+                                const v = eval.evalExpr(ra, it.expr, env) catch |e| {
                                     if (diagnostics.mapEvalError(e)) |code| {
                                         try w.print("<diag:{s}>", .{diagnostics.codeName(code)});
                                     } else {
@@ -785,6 +799,8 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                     const ag_io = std.Io.Threaded.global_single_threaded.io();
                     var ag_wbuf: [8192]u8 = undefined;
                     var ag_gfw = GqlFileWriter.init(getStdoutFile(), ag_io, &ag_wbuf);
+                    // SONNY-6483 (5): the demo's output was never flushed.
+                    defer ag_gfw.flush() catch {};
                     const w = ag_gfw.writer();
                     try w.print("demo-agg: groups over (name, val)\n", .{});
                     try w.print("group\t", .{});
@@ -796,11 +812,16 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                     // Emit rows with HAVING evaluation by rewriting expression
                     for (out_rows) |r| {
                         if (q.having) |hv| {
-                            const rewritten = exec.rewriteExprWithAggregates(gpa, hv, &key_map, &agg_map, r, spec.key_idxs.len) catch ast.Expr{ .Null = {} };
+                            // SONNY-6483 (5): the rewritten HAVING and its
+                            // value live on the row's arena (both leaked).
+                            var having_arena = std.heap.ArenaAllocator.init(gpa);
+                            defer having_arena.deinit();
+                            const ha = having_arena.allocator();
+                            const rewritten = exec.rewriteExprWithAggregates(ha, hv, &key_map, &agg_map, r, spec.key_idxs.len) catch ast.Expr{ .Null = {} };
                             const v = eval.evalExpr(
-                                gpa,
+                                ha,
                                 rewritten,
-                                eval.Env{ .names = &.{}, .values = &.{}, .param_names = &.{}, .param_values = &.{}, .allocator = gpa },
+                                eval.Env{ .names = &.{}, .values = &.{}, .param_names = &.{}, .param_values = &.{}, .allocator = ha },
                             ) catch eval.Value{ .Null = {} };
                             if (!(v == .Bool and v.Bool)) continue;
                         }

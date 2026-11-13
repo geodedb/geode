@@ -536,6 +536,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6297-allocation-failure-sweep", .reason = "intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): statement shapes still leak on allocation-failure paths; compiled by test-compile; register it through shardDep in the commit that makes every shape clean" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -12424,6 +12425,91 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2696_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2696_step = b.step("test-sonny2696-aggregate-expressions", "Run SONNY-2696 / SONNY-2734 regression (an aggregate inside a RETURN or WITH item is computed once per group, and an aggregate's computed argument per input row, with grouping errors kept and hidden rows excluded: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny2696_step.dependOn(&run_sonny2696_tests.step);
+
+    const sonny2681_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2681_read_view_snapshot_lifetime.zig"), .target = target, .optimize = optimize });
+    sonny2681_test_mod.addImport("geode", root_mod);
+    sonny2681_test_mod.addImport("logging", logging_mod);
+    sonny2681_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2681_tests = b.addTest(.{ .root_module = sonny2681_test_mod });
+    const run_sonny2681_tests = b.addRunArtifact(sonny2681_tests);
+    shardDep(test_step, &run_sonny2681_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2681_step = b.step("test-sonny2681-read-view-snapshot-lifetime", "Run SONNY-2681 regression (the legacy MATCH executor's rows stay valid while writes elsewhere bump the mutation epoch: in-memory, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2681_step.dependOn(&run_sonny2681_tests.step);
+    const sonny6483_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6483_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6483_test_mod.addImport("geode", root_mod);
+    sonny6483_test_mod.addImport("logging", logging_mod);
+    sonny6483_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6483_tests = b.addTest(.{ .root_module = sonny6483_test_mod });
+    const run_sonny6483_tests = b.addRunArtifact(sonny6483_tests);
+    shardDep(test_step, &run_sonny6483_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6483_step = b.step("test-sonny6483-query-residuals", "Run SONNY-6483 regression (an aggregating WITH followed by another WITH, aggregates over no MATCH under RLS, an any-direction pattern matching a self-loop once, a failing property map failing the statement: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6483_step.dependOn(&run_sonny6483_tests.step);
+    const sonny6297_rows_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6297_per_row_item_leaks.zig"), .target = target, .optimize = optimize });
+    sonny6297_rows_test_mod.addImport("geode", root_mod);
+    sonny6297_rows_test_mod.addImport("logging", logging_mod);
+    sonny6297_rows_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6297_rows_tests = b.addTest(.{ .root_module = sonny6297_rows_test_mod });
+    const run_sonny6297_rows_tests = b.addRunArtifact(sonny6297_rows_tests);
+    shardDep(test_step, &run_sonny6297_rows_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6297_rows_step = b.step("test-sonny6297-per-row-item-leaks", "Run SONNY-6297 regression (allocating per-row WITH and RETURN items of the shared projection and of the legacy traversals are freed, on success and on error: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6297_rows_step.dependOn(&run_sonny6297_rows_tests.step);
+    const sonny6297_sweep_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6297_allocation_failure_sweep.zig"), .target = target, .optimize = optimize });
+    sonny6297_sweep_test_mod.addImport("geode", root_mod);
+    sonny6297_sweep_test_mod.addImport("logging", logging_mod);
+    sonny6297_sweep_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6297_sweep_tests = b.addTest(.{ .root_module = sonny6297_sweep_test_mod });
+    const run_sonny6297_sweep_tests = b.addRunArtifact(sonny6297_sweep_tests);
+    // Intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): kept
+    // out of `shardDep` and compiled by test-compile until every shape is
+    // leak-free under allocation failure.
+    if (g_test_compile_step) |c| c.dependOn(&sonny6297_sweep_tests.step);
+    const sonny6297_sweep_step = b.step("test-sonny6297-allocation-failure-sweep", "Run SONNY-6297 allocation-failure sweep (every representative statement shape with its N-th allocation failing, N = 0, 1, ...: no leak, no crash, OutOfMemory answered as OutOfMemory, on the four session kinds)");
+    sonny6297_sweep_step.dependOn(&run_sonny6297_sweep_tests.step);
+    const sonny3126_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3126_list_projection_leaks.zig"), .target = target, .optimize = optimize });
+    sonny3126_test_mod.addImport("geode", root_mod);
+    sonny3126_test_mod.addImport("logging", logging_mod);
+    sonny3126_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3126_tests = b.addTest(.{ .root_module = sonny3126_test_mod });
+    const run_sonny3126_tests = b.addRunArtifact(sonny3126_tests);
+    shardDep(test_step, &run_sonny3126_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3126_step = b.step("test-sonny3126-list-projection-leaks", "Run SONNY-3126 regression (keys(), collect() and list literals on an ordinary RETURN or WITH own their lists: four session kinds, leak-checked)");
+    sonny3126_step.dependOn(&run_sonny3126_tests.step);
+    const sonny3378_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3378_map_projection_leak.zig"), .target = target, .optimize = optimize });
+    sonny3378_test_mod.addImport("geode", root_mod);
+    sonny3378_test_mod.addImport("logging", logging_mod);
+    sonny3378_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3378_tests = b.addTest(.{ .root_module = sonny3378_test_mod });
+    const run_sonny3378_tests = b.addRunArtifact(sonny3378_tests);
+    shardDep(test_step, &run_sonny3378_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3378_step = b.step("test-sonny3378-map-projection-leak", "Run SONNY-3378 regression (a map built in a RETURN or WITH is freed with the result: four session kinds, leak-checked)");
+    sonny3378_step.dependOn(&run_sonny3378_tests.step);
+    const sonny2669_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2669_planned_ext_property_leak.zig"), .target = target, .optimize = optimize });
+    sonny2669_test_mod.addImport("geode", root_mod);
+    sonny2669_test_mod.addImport("logging", logging_mod);
+    sonny2669_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2669_tests = b.addTest(.{ .root_module = sonny2669_test_mod });
+    const run_sonny2669_tests = b.addRunArtifact(sonny2669_tests);
+    shardDep(test_step, &run_sonny2669_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2669_step = b.step("test-sonny2669-planned-ext-property-leak", "Run SONNY-2669 regression (extended property reads, WHERE, inline maps, ORDER BY and a HAVING's hidden collect free their evaluated copies: planned read and legacy executor, leak-checked)");
+    sonny2669_step.dependOn(&run_sonny2669_tests.step);
+    const sonny2671_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2671_scan_page_append_oom.zig"), .target = target, .optimize = optimize });
+    sonny2671_test_mod.addImport("geode", root_mod);
+    sonny2671_test_mod.addImport("logging", logging_mod);
+    sonny2671_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2671_tests = b.addTest(.{ .root_module = sonny2671_test_mod });
+    const run_sonny2671_tests = b.addRunArtifact(sonny2671_tests);
+    shardDep(test_step, &run_sonny2671_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2671_step = b.step("test-sonny2671-scan-page-append-oom", "Run SONNY-2671 regression (the engine-direct node scan frees the row it built when the page's append fails past 256 rows, and a small page frees everything at every allocation failure)");
+    sonny2671_step.dependOn(&run_sonny2671_tests.step);
+    const sonny3148_amp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3148_write_step_amplification.zig"), .target = target, .optimize = optimize });
+    sonny3148_amp_test_mod.addImport("geode", root_mod);
+    sonny3148_amp_test_mod.addImport("logging", logging_mod);
+    sonny3148_amp_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3148_amp_tests = b.addTest(.{ .root_module = sonny3148_amp_test_mod });
+    const run_sonny3148_amp_tests = b.addRunArtifact(sonny3148_amp_tests);
+    shardDep(test_step, &run_sonny3148_amp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3148_amp_step = b.step("test-sonny3148-write-step-amplification", "Run SONNY-3148 regression (the write step keeps one detached node copy per write, not one per refresh: boxes and bytes per written row measured)");
+    sonny3148_amp_step.dependOn(&run_sonny3148_amp_tests.step);
 
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,

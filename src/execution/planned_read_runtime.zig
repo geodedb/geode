@@ -635,6 +635,7 @@ fn executeProfiledInScope(
         // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
         // belongs to the RETURN stage below, not to this one.
         var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.withStageGroupBy(), execution.withStageHaving(q.*), param_names, param_values);
+        // (Nothing below can fail before `result` takes it over.)
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -701,6 +702,10 @@ fn executeProfiledInScope(
         const input_rows = result.rows.len;
         const start_ns = nowNs();
         var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
+        // SONNY-6297: freed when making it own its values fails (it leaked);
+        // `result` takes it over below.
+        var projected_taken = false;
+        errdefer if (!projected_taken) projected.deinit(allocator);
         // GAP-0535: the final projection is the result handed to the caller —
         // make it fully OWN its row values (adopt provably-fresh call results,
         // deep-duplicate everything else) so ExecutionResult.deinit is
@@ -717,6 +722,7 @@ fn executeProfiledInScope(
         trace.ops[return_op_index].time_ns = elapsedSince(start_ns);
 
         result = projected;
+        projected_taken = true;
 
         if (q.ret.distinct) {
             const op_index = nextOpIndex(trace.ops, .Distinct, &distinct_occurrence) orelse unreachable;
@@ -2170,43 +2176,37 @@ fn buildProjectionPlan(
     // transfer ownership of the slice.
     for (projections, 0..) |*proj, idx| {
         switch (proj.*) {
+            // SONNY-6297: a list is left empty (`clearAndFree`), never
+            // undefined, and a failed `toOwnedSlice` frees only the slices
+            // already committed: the errdefers above free the lists and
+            // `projections`. The lists were freed here and again by them (a
+            // double free, a crash on an allocation failure).
             .unused => {
                 // Defensive: analyzer only promotes to .keys on member
                 // accesses; .unused + non-empty list shouldn't happen,
                 // but clean up just in case.
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
             .keys => {
                 const deduped = dedupInPlace(key_lists[idx].items, allocator);
                 // Truncate the list to the dedup length before transferring.
                 key_lists[idx].items = key_lists[idx].items[0..deduped];
                 const owned = key_lists[idx].toOwnedSlice(allocator) catch |err| {
-                    // toOwnedSlice on Zig 0.16 can OOM — treat as bail.
-                    // Free remaining keys and unwind.
-                    for (key_lists[idx].items) |k| allocator.free(k);
-                    key_lists[idx].deinit(allocator);
-                    // Free everything we already committed.
                     for (projections[0..idx]) |p| switch (p) {
                         .keys => |k| {
-                            for (k) |s| allocator.free(s);
+                            for (k) |key| allocator.free(key);
                             allocator.free(k);
                         },
                         else => {},
                     };
-                    // And the remaining scratch lists.
-                    for (key_lists[idx + 1 ..]) |*rest| {
-                        for (rest.items) |s| allocator.free(s);
-                        rest.deinit(allocator);
-                    }
-                    allocator.free(projections);
                     return err;
                 };
                 proj.* = .{ .keys = owned };
             },
             .full => {
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
         }
     }
@@ -2483,7 +2483,12 @@ fn analyzeLeafForProjection(
                 if (failed.*) return;
             }
         },
-        .List => |items| {
+        // CANARY: REQ=REQ-SONNY-3126-LIST-PROJECTION-LEAKS; FEATURE="PlannedReadProjection"; ASPECT=BracketListLiteralKeys; STATUS=TESTED; TEST=tests/test_sonny3126_list_projection_leaks.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-3126: a bracket list literal parses as `.ArrayLit`, whose
+        // elements are expressions; it was taken for a pure literal, so the
+        // keys its elements read were never fetched for a projected node
+        // and `RETURN [a.s, b.s]` over a relationship answered [null, null].
+        .List, .ArrayLit => |items| {
             for (items) |item| {
                 analyzeExprForProjection(allocator, item.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
@@ -2541,7 +2546,6 @@ fn analyzeLeafForProjection(
         .DomainLit,
         .UuidLit,
         .EnumLit,
-        .ArrayLit,
         .BitLit,
         .VarBitLit,
         .Date,
@@ -3110,14 +3114,17 @@ fn propsMatch(
     context: ExecutionContext,
 ) !bool {
     for (props) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, Env{
+        // SONNY-6483 (4): a value that fails to evaluate fails the read
+        // (ISO/IEC 39075 19.1 GR 1); it was no match. What it computes is
+        // lent from the statement's scratch arena.
+        const expected = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, Env{
             .names = &.{},
             .values = &.{},
             .param_names = param_names,
             .param_values = param_values,
             .allocator = allocator,
             .exec_context = @constCast(&context),
-        }) catch return false;
+        });
         const actual = actual_props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the legacy executor compares (a decimal by
         // representation, a DOUBLE and every extended value never). A stored
@@ -3534,18 +3541,6 @@ fn resolveWindowValue(
         }
     }
     return null;
-}
-
-fn passesPredicates(allocator: std.mem.Allocator, q: *const ast.Query, env: Env) bool {
-    if (q.where_clause) |where_expr| {
-        const value = eval.evalExpr(allocator, where_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    if (q.filter_clause) |filter_expr| {
-        const value = eval.evalExpr(allocator, filter_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    return true;
 }
 
 /// SONNY-6425: only the Boolean True keeps a row (ISO/IEC 39075 19.1 GR2);

@@ -174,6 +174,7 @@ const result_utils = @import("result_utils.zig");
 // read's does (`adoptProjectionRowValues`).
 const value_utilities = @import("value_utilities.zig");
 pub const generateUniqueColumnNames = result_utils.generateUniqueColumnNames;
+pub const freeColumnNames = result_utils.freeColumnNames;
 const applyDistinct = result_utils.applyDistinct;
 
 // Local type aliases
@@ -3937,18 +3938,21 @@ pub fn handleShortestPathAssignment(
 // contains an unresolved variable reference are skipped (they'll be checked
 // later by the executor when the full env is available).  Returns true when
 // `pattern_props` is null/empty (no constraint).
+/// SONNY-6483 (4): a value of the map that fails to evaluate fails the
+/// statement (ISO/IEC 39075 19.1 GR 1); it was no match. What it computes is
+/// lent from the statement's scratch arena (`lentAllocator`).
 fn nodeMatchesProps(
     allocator: std.mem.Allocator,
     node: *graph_store.Node,
     pattern_props: ?[]ast.Property,
     prop_env: Env,
-) bool {
+) !bool {
     const props = pattern_props orelse return true;
     for (props) |prop| {
         if (containsVariableReference(prop.value.*)) continue;
         if (node.properties.get(prop.key)) |node_prop_val| {
             const node_val = propertyValueToValue(node_prop_val);
-            const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch return false;
+            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
             if (!valuesEqual(node_val, expected_val)) return false;
         } else {
             return false;
@@ -4844,11 +4848,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 } else {
                     // RETURN clause exists - evaluate expressions
+                    // SONNY-6297: lent from the statement's scratch arena
+                    // (the rows borrow their cells; it leaked), and the row
+                    // is freed when an item fails.
                     row = try self.allocator.alloc(Value, self.items.len);
+                    errdefer self.allocator.free(row);
                     for (self.items, 0..) |item, i| {
-                        row[i] = try eval.evalExpr(self.allocator, item.expr, env);
+                        row[i] = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), item.expr, env);
                     }
                 }
+                errdefer self.allocator.free(row);
                 try self.rows.append(self.allocator, row);
                 return;
             }
@@ -5315,7 +5324,7 @@ fn expandVarLengthHop(
         // seeding site in this executor.
         if (!scope.nodeVisibleCached(end_node)) continue;
         if (!matchesLabels(end_node, hop.right.labels)) continue;
-        if (!nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
+        if (!try nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
 
         var edge_values = try allocator.alloc(Value, path.edges.items.len);
         var edges_ok = true;
@@ -5330,7 +5339,7 @@ fn expandVarLengthHop(
                 edges_ok = false;
                 break;
             }
-            if (!matchesEdgeProperties(allocator, ep.*, hop.rel.props) or !MultiChainJoin.typeFits(hop.rel.types, ep.label)) {
+            if (!try matchesEdgeProperties(allocator, ep.*, hop.rel.props) or !MultiChainJoin.typeFits(hop.rel.types, ep.label)) {
                 edges_ok = false;
                 break;
             }
@@ -5495,12 +5504,12 @@ const MultiChainJoin = struct {
 
     /// May the statement bind `node` to `pattern`? `scratch` holds what
     /// evaluating the pattern's property values allocates.
-    fn nodeFits(self: MultiChainJoin, scratch: std.mem.Allocator, node: *graph_store.Node, pattern: ast.NodePattern) bool {
+    fn nodeFits(self: MultiChainJoin, scratch: std.mem.Allocator, node: *graph_store.Node, pattern: ast.NodePattern) !bool {
         if (!std.mem.eql(u8, node.graph_name, self.filter_graph)) return false;
         if (!passesTenantFilter(node.*, self.filter_tenant)) return false;
         if (!passesRLSFilter(self.rls_row, node.*)) return false;
         if (!matchesLabels(node, pattern.labels)) return false;
-        return nodeMatchesProps(scratch, node, pattern.props, self.prop_env);
+        return try nodeMatchesProps(scratch, node, pattern.props, self.prop_env);
     }
 
     /// Every node the session may see that `pattern` matches.
@@ -5518,7 +5527,7 @@ const MultiChainJoin = struct {
                     _ = scratch.reset(.retain_capacity);
                 }
                 const node = self.store.getNodePtrForScan(id) orelse continue;
-                if (self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
+                if (try self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
             }
         } else {
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
@@ -5529,7 +5538,7 @@ const MultiChainJoin = struct {
                     try poll();
                     _ = scratch.reset(.retain_capacity);
                 }
-                if (self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
+                if (try self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
             }
         }
     }
@@ -5613,7 +5622,7 @@ const MultiChainJoin = struct {
             .start => |start| {
                 if (boundAsRelationship(B, b, start.name)) return;
                 if (start.name) |v| if (b.vars.get(v)) |bound| {
-                    if (self.nodeFits(scratch, bound, start)) try out.append(self.allocator, .{ .node = bound });
+                    if (try self.nodeFits(scratch, bound, start)) try out.append(self.allocator, .{ .node = bound });
                     return;
                 };
                 if (start_cands.* == null) {
@@ -5643,13 +5652,13 @@ const MultiChainJoin = struct {
                 for (ids[0..n]) |id| {
                     const node = try self.nodes.get(id) orelse continue;
                     if (end.node.name) |v| if (b.vars.get(v)) |bound| if (bound.id != node.id) continue;
-                    if (self.nodeFits(scratch, node, end.node)) try out.append(self.allocator, .{ .node = node });
+                    if (try self.nodeFits(scratch, node, end.node)) try out.append(self.allocator, .{ .node = node });
                 }
             },
             .hop => |hop| {
                 const left = b.vars.get(tracker) orelse return;
                 if (!matchesLabels(left, hop.left.labels)) return;
-                if (!nodeMatchesProps(scratch, left, hop.left.props, self.prop_env)) return;
+                if (!try nodeMatchesProps(scratch, left, hop.left.props, self.prop_env)) return;
                 const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
                 // SONNY-3367: a far node named like a relationship, or a
                 // relationship named like a node (or like the other kind of
@@ -5680,11 +5689,11 @@ const MultiChainJoin = struct {
                         const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
                         if (!typeFits(hop.rel.types, edge.label)) continue;
                         if (!self.scope.edgeVisible(edge)) continue;
-                        if (!matchesEdgeProperties(scratch, edge.*, hop.rel.props)) continue;
+                        if (!try matchesEdgeProperties(scratch, edge.*, hop.rel.props)) continue;
                         if (hop.rel.name) |rn| if (b.edge_vars.get(rn)) |bound| if (bound.id != edge.id) continue;
                         const far_id = if (side == 0) edge.to_id else edge.from_id;
                         const right = try self.nodes.get(far_id) orelse continue;
-                        if (!self.nodeFits(scratch, right, hop.right)) continue;
+                        if (!try self.nodeFits(scratch, right, hop.right)) continue;
                         if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != right.id) continue;
                         try out.append(self.allocator, .{ .node = right, .edge = edge });
                     }
@@ -6270,7 +6279,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     const left_node = store.getNodePtrForScan(node_id) orelse continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
-                    if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                    if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                     try left_candidates.append(allocator, left_node);
                 }
             } else {
@@ -6278,7 +6287,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 while (node_iter.next()) |left_node| {
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
-                    if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                    if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                     try left_candidates.append(allocator, left_node);
                 }
             }
@@ -6312,7 +6321,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                 // BUG-731: honor the anchor's inline property predicate.
-                if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
                 // Zero-copy edge iteration: use getOutgoingEdgeIds/getIncomingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
@@ -6325,14 +6334,14 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
                         // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6348,14 +6357,14 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         if (!matchesLabels(right_node, right_labels)) continue;
                         // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6377,7 +6386,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                 // BUG-731: honor the right pattern's inline property predicate.
-                if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
+                if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
 
                 // Zero-copy edge iteration: use getIncomingEdgeIds/getOutgoingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
@@ -6391,13 +6400,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // just its endpoints (symmetry with the left-anchor branch at
                     // ~2813/2834). Fail-closed, cheap string compare.
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                         // BUG-731: honor the anchor's inline property predicate.
-                        if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6413,13 +6422,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself
                     // (symmetry with the left-anchor branch). Fail-closed.
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                         // BUG-731: honor the anchor's inline property predicate.
-                        if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6450,7 +6459,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
                 for (typed_edge_ids) |edge_id| {
                     const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                    if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
                     const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
                     const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
 
@@ -6467,7 +6476,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // undirected pattern evaluates this edge again below with the
                         // endpoints swapped — skipping the iteration would drop the
                         // reversed orientation that may well satisfy the predicate.
-                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, from_node, left_props, prop_env) and nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
+                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and try nodeMatchesProps(allocator, from_node, left_props, prop_env) and try nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
                             var binding = MatchBinding.init(allocator);
                             if (hop.left.name) |v| try binding.vars.put(v, from_node);
                             if (hop.right.name) |v| try binding.vars.put(v, to_node);
@@ -6482,7 +6491,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // GAP-0846 hardening: edge-object tenant check (symmetry).
                         // BUG-731: endpoints' inline property predicates folded into the
                         // guard — see the note on the .right/.undirected branch above.
-                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and nodeMatchesProps(allocator, to_node, left_props, prop_env) and nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
+                        if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and try nodeMatchesProps(allocator, to_node, left_props, prop_env) and try nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
                             var binding = MatchBinding.init(allocator);
                             if (hop.left.name) |v| try binding.vars.put(v, to_node);
                             if (hop.right.name) |v| try binding.vars.put(v, from_node);
@@ -6505,7 +6514,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                 // BUG-731: honor the anchor's inline property predicate.
-                if (!nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
+                if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
                 const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
                 const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
@@ -6513,13 +6522,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 for (outgoing_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6532,13 +6541,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 for (incoming_edge_ids) |edge_id| {
                     const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
-                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
+                    if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
                         // BUG-731: honor the right pattern's inline property predicate.
-                        if (!nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
+                        if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
@@ -6567,7 +6576,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // RLS denied-labels check missing on this index fast path.
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
+                if (!try nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -6581,7 +6590,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             while (node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-                if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
+                if (!try nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
@@ -6794,10 +6803,18 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Determine which items to evaluate per binding: WITH items if present, else RETURN items
     const eval_items = if (q.with_clause) |wc| wc.items else q.ret.items;
     const eval_columns = try generateUniqueColumnNames(allocator, eval_items);
+    // SONNY-6297: an error below (an item that fails, now raised) frees the
+    // columns and the rows built so far.
+    var columns_owned = true;
+    errdefer if (columns_owned) freeColumnNames(allocator, eval_columns);
 
     // Evaluate expressions for each binding
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
+    errdefer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
     // A path variable's arrays, per binding: a row that returns the path
     // keeps a copy (`keepPaths`), as the single-chain traversals keep theirs
     // (SONNY-3148); the rest are released with the binding.
@@ -6894,20 +6911,29 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         }
 
         // Evaluate items (WITH items if present, RETURN items otherwise)
-        var row = try allocator.alloc(Value, eval_items.len);
+        // SONNY-6297: the rows borrow their cells, so what an item computes
+        // is lent from the statement's scratch arena (on `allocator` nothing
+        // freed it), and an item that fails fails the statement (ISO/IEC
+        // 39075 19.1 GR 1; it was NULL).
+        try rows.ensureUnusedCapacity(allocator, 1);
+        const row = try allocator.alloc(Value, eval_items.len);
+        errdefer allocator.free(row);
         for (eval_items, 0..) |item, i| {
-            row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+            row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
             if (path_specs.items.len > 0) try keepPaths(allocator, &row[i]);
         }
-        try rows.append(allocator, row);
+        rows.appendAssumeCapacity(row);
     }
 
     // Build intermediate result
+    const result_rows = try rows.toOwnedSlice(allocator);
+    columns_owned = false;
     var result = ExecutionResult{
         .columns = eval_columns,
-        .rows = try rows.toOwnedSlice(allocator),
+        .rows = result_rows,
         .flags = std.ArrayList([]const u8).empty,
     };
+    errdefer result.deinit(allocator);
 
     // If WITH clause exists, apply RETURN projection on the WITH result
     if (q.with_clause != null) {
@@ -6916,7 +6942,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         const same_items = q.with_clause.?.items.ptr == items.ptr and q.with_clause.?.items.len == items.len;
         if (!same_items and items.len > 0) {
             const ret_columns = try generateUniqueColumnNames(allocator, items);
+            errdefer freeColumnNames(allocator, ret_columns);
             var ret_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
+            errdefer {
+                for (ret_rows.items) |row| allocator.free(row);
+                ret_rows.deinit(allocator);
+            }
             for (result.rows) |row| {
                 const ret_env = Env{
                     .names = result.columns,
@@ -6925,12 +6956,15 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                var ret_row = try allocator.alloc(Value, items.len);
+                // SONNY-6297: lent and raised, as the WITH items above.
+                const ret_row = try allocator.alloc(Value, items.len);
+                errdefer allocator.free(ret_row);
                 for (items, 0..) |item, i| {
-                    ret_row[i] = eval.evalExpr(allocator, item.expr, ret_env) catch Value{ .Null = {} };
+                    ret_row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, ret_env);
                 }
                 try ret_rows.append(allocator, ret_row);
             }
+            const new_rows = try ret_rows.toOwnedSlice(allocator);
             // Free old columns
             for (result.columns) |col| allocator.free(col);
             allocator.free(result.columns);
@@ -6938,7 +6972,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             // Free old rows
             for (result.rows) |row| allocator.free(row);
             allocator.free(result.rows);
-            result.rows = try ret_rows.toOwnedSlice(allocator);
+            result.rows = new_rows;
         }
     }
 
@@ -6946,11 +6980,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
 
     if (q.order_by) |order| {
-        sortRows(allocator, &result, order) catch |err| {
-            // SONNY-2811: a key that fails to evaluate fails the sort.
-            result.deinit(allocator);
-            return err;
-        };
+        // SONNY-2811: a key that fails to evaluate fails the sort (the
+        // result is freed by the errdefer above).
+        try sortRows(allocator, &result, order);
     }
 
     if (q.ret.distinct) {
@@ -7331,7 +7363,9 @@ fn executeVariableLengthPathTraversal(
             row = try allocator.alloc(Value, items.len);
             for (items, 0..) |item, i| {
                 // SONNY-6351 item 1: an item that fails frees the row.
-                row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                // SONNY-6297: lent from the statement's scratch arena (the
+                // rows borrow their cells; on `allocator` it leaked).
+                row[i] = eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env) catch |err| {
                     allocator.free(row);
                     return err;
                 };
@@ -7599,6 +7633,14 @@ fn executeSingleHopEdgeTraversal(
     for (edge_id_sets) |edge_set| {
         for (edge_set.edge_ids) |edge_id| {
             const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+            // CANARY: REQ=REQ-SONNY-6483-QUERY-RESIDUALS; FEATURE="UndirectedPatternMatch"; ASPECT=SelfLoopOnce; STATUS=TESTED; TEST=tests/test_sonny6483_query_residuals.zig; OWNER=engine; UPDATED=2026-11-13
+            // SONNY-6483 (3): a self-loop is in the node's outgoing and its
+            // incoming edges; an any-direction pattern matched it from both.
+            // It is one path binding (a, r, a) (ISO/IEC 39075:2024 22.3 GR:
+            // the set of path bindings satisfying the directionality
+            // constraint; 4.11.6: reduced matches are a set), so it matches
+            // once, from the outgoing side.
+            if (rel_direction == 'u' and edge_set.use_from and edge.from_id == edge.to_id) continue;
             // Filter by relationship type if specified
             if (rel_type) |rt| {
                 if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -7606,7 +7648,7 @@ fn executeSingleHopEdgeTraversal(
             // GAP-0509 / SONNY-2679: the edge's graph and tenant.
             if (!scope.edgeVisible(edge)) continue;
             // Filter by relationship properties if specified
-            if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
+            if (!try matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
             // Get the target node
             const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
@@ -7859,7 +7901,11 @@ fn executeSingleHopEdgeTraversal(
                 row = try allocator.alloc(Value, items.len);
                 for (items, 0..) |item, i| {
                     // SONNY-6351 item 1: an item that fails frees the row.
-                    row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                    // SONNY-2681: the rows borrow their cells, so what an
+                    // item computes (`a.s || '/' || b.s`) is lent from the
+                    // statement's scratch arena (`lentAllocator`); on
+                    // `allocator` nothing freed it.
+                    row[i] = eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env) catch |err| {
                         allocator.free(row);
                         return err;
                     };
@@ -8008,8 +8054,25 @@ fn executeReturnOverBindings(
     // (An explicit error set: this and executeMatchQueryImpl call each other.)
     _ = g_return_over_bindings_total.fetchAdd(1, .monotonic);
     var bindings = try readPatternBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    // CANARY: REQ=REQ-SONNY-6483-QUERY-RESIDUALS; FEATURE="QueryChain"; ASPECT=ChainingReturnOverWithStage; STATUS=TESTED; TEST=tests/test_sonny6483_query_residuals.zig; OWNER=engine; UPDATED=2026-11-13
+    // SONNY-6483 (1): a chained part's RETURN is its WITH's own items (the
+    // columns the next part reads), which the WITH stage already projected:
+    // its rows are the answer. Projected again, `z.g` and `sum(z.k)` read a
+    // `z` the stage no longer binds, so every row was NULL (`WITH count(*)
+    // AS c WITH c` answered 1), as `executeWithStageOrReturn` already knew.
+    if (isChainingReturn(q)) {
+        allocator.free(bindings.items);
+        return bindings.rows;
+    }
     defer bindings.deinit(allocator);
     return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
+}
+
+/// A chained part's RETURN: its WITH's items themselves (the parser's
+/// stand-in for the columns the next part reads).
+fn isChainingReturn(q: ast.Query) bool {
+    const wc = q.with_clause orelse return false;
+    return q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len;
 }
 
 /// SONNY-3167, SONNY-3184: a part whose WITH runs in the shared WITH stage
@@ -8481,9 +8544,13 @@ pub fn applySetRemoveOverRows(
             for (group) |sc| {
                 const cell = row[columnIndex(rows.columns, setTarget(sc)).?];
                 const bound = cell == .Node or cell == .Edge;
+                // SONNY-3148: lent from the statement's scratch arena; the
+                // store copies what it keeps, and on `allocator` a computed
+                // value (`n.s || '-x'`, a list, a map) leaked per row.
+                const lent = value_utilities.lentAllocator(allocator);
                 try values.append(allocator, if (!bound) .Null else switch (sc) {
-                    .Property => |prop| try eval.evalExpr(allocator, prop.value, env),
-                    .AllProperties => |ap| try eval.evalExpr(allocator, ap.properties, env),
+                    .Property => |prop| try eval.evalExpr(lent, prop.value, env),
+                    .AllProperties => |ap| try eval.evalExpr(lent, ap.properties, env),
                     .Labels => .Null,
                 });
             }
@@ -8548,33 +8615,68 @@ pub fn applySetRemoveOverRows(
 const WrittenElements = struct {
     nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
     edges: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    // CANARY: REQ=REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION; FEATURE="WriteStep"; ASPECT=RefreshOncePerWrite; STATUS=TESTED; TEST=tests/test_sonny3148_write_step_amplification.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-3148: the copy a refresh took of each written node and edge,
+    /// reused by every later refresh until the element is written again.
+    /// Each refresh took a fresh detached copy (`getNodePtrForScan`, kept
+    /// until the graph's next grace boundary and charged to the write
+    /// budget): at the start of every later row, after every clause group,
+    /// and for the RETURN, so a written row kept several copies of its node
+    /// and a node every row binds one copy per row per refresh.
+    fresh_nodes: std.AutoHashMapUnmanaged(u64, *graph_store.Node) = .empty,
+    fresh_edges: std.AutoHashMapUnmanaged(u64, *const graph_store.Edge) = .empty,
 
     fn deinit(self: *WrittenElements, allocator: std.mem.Allocator) void {
         self.nodes.deinit(allocator);
         self.edges.deinit(allocator);
+        self.fresh_nodes.deinit(allocator);
+        self.fresh_edges.deinit(allocator);
     }
 
     fn add(self: *WrittenElements, allocator: std.mem.Allocator, value: Value) !void {
         switch (value) {
-            .Node => |node| try self.nodes.put(allocator, node.id, {}),
-            .Edge => |edge| try self.edges.put(allocator, edge.id, {}),
+            .Node => |node| {
+                try self.nodes.put(allocator, node.id, {});
+                _ = self.fresh_nodes.remove(node.id);
+            },
+            .Edge => |edge| {
+                try self.edges.put(allocator, edge.id, {});
+                _ = self.fresh_edges.remove(edge.id);
+            },
             else => {},
         }
     }
 
-    /// `value` with each written node a fresh detached box
-    /// (`getNodePtrForScan`) and each written edge a fresh copy `rows` owns;
-    /// lists, maps and paths are walked.
-    fn refresh(self: *const WrittenElements, allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
+    /// The node `id` as written so far: a detached box, one per write.
+    fn freshNode(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, id: u64) !*graph_store.Node {
+        if (self.fresh_nodes.get(id)) |node| return node;
+        try self.fresh_nodes.ensureUnusedCapacity(allocator, 1);
+        const node = store.getNodePtrForScan(id) orelse return error.NodeNotFound;
+        self.fresh_nodes.putAssumeCapacity(id, node);
+        return node;
+    }
+
+    /// The edge `id` as written so far: a copy `rows` owns, one per write.
+    fn freshEdge(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, rows: *ExecutionResult, id: u64) !*const graph_store.Edge {
+        if (self.fresh_edges.get(id)) |edge| return edge;
+        try self.fresh_edges.ensureUnusedCapacity(allocator, 1);
+        const stored = store.getEdgePtrHydrated(id) orelse return error.EdgeBodyUnresolvable;
+        const edge = try boxEdge(allocator, rows, stored);
+        self.fresh_edges.putAssumeCapacity(id, edge);
+        return edge;
+    }
+
+    /// `value` with each written node and edge as written so far
+    /// (`freshNode`, `freshEdge`); lists, maps and paths are walked.
+    fn refresh(self: *WrittenElements, allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
         if (self.nodes.count() == 0 and self.edges.count() == 0) return;
         const store = graph_store.getWritableGlobalStore(allocator);
         switch (value.*) {
             .Node => |node| if (self.nodes.contains(node.id)) {
-                value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+                value.* = .{ .Node = try self.freshNode(allocator, store, node.id) };
             },
             .Edge => |edge| if (self.edges.contains(edge.id)) {
-                const fresh = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
-                value.* = .{ .Edge = try boxEdge(allocator, rows, fresh) };
+                value.* = .{ .Edge = try self.freshEdge(allocator, store, rows, edge.id) };
             },
             .List => |items| for (items) |*item| try self.refresh(allocator, rows, item),
             .Map => |map| {
@@ -8583,13 +8685,10 @@ const WrittenElements = struct {
             },
             .Path => |path| {
                 for (@constCast(path.nodes)) |*node| {
-                    if (self.nodes.contains(node.*.id)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+                    if (self.nodes.contains(node.*.id)) node.* = try self.freshNode(allocator, store, node.*.id);
                 }
                 for (@constCast(path.edges)) |*edge| {
-                    if (self.edges.contains(edge.*.id)) {
-                        const fresh = store.getEdgePtrHydrated(edge.*.id) orelse return error.EdgeBodyUnresolvable;
-                        edge.* = try boxEdge(allocator, rows, fresh);
-                    }
+                    if (self.edges.contains(edge.*.id)) edge.* = try self.freshEdge(allocator, store, rows, edge.*.id);
                 }
             },
             else => {},
@@ -9068,16 +9167,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // instead of the live store. The handler takes the graph read lock only
     // long enough to snapshot; by the time we get here the lock is dropped
     // and we read from the session's arena-owned store. When no session is
-    // installed this falls back to the live store + ReadView as before.
-    const writable_store = graph_store.getGlobalStore(allocator);
-
-    // Lightweight read view with epoch-based invalidation.
-    // Zero overhead when no concurrent writes (common case).
-    // Lazy deep-clone fallback when mutations detected (rare case).
-    var read_view = graph_store.ReadView.init(allocator, writable_store);
-    defer read_view.deinit();
-
-    const store = read_view.getReadStore();
+    // installed this reads the live store.
+    //
+    // CANARY: REQ=REQ-SONNY-2681-READ-VIEW-LIFETIME; FEATURE="LegacyMatchExecutor"; ASPECT=NoFallbackSnapshot; STATUS=TESTED; TEST=tests/test_sonny2681_read_view_snapshot_lifetime.zig; OWNER=engine; UPDATED=2026-11-13
+    // SONNY-2681: no `ReadView` here. Its fallback deep-copied the store
+    // whenever a write anywhere bumped the mutation epoch between its init
+    // and `getReadStore`, and freed the copy when this function returned,
+    // while the rows still held its nodes and property strings (and the
+    // shared projection and every caller read them afterwards). The copy
+    // gave no isolation either: the epoch is checked once, so a write after
+    // the check reached the live store's read all the same.
+    const store = graph_store.getGlobalStore(allocator);
     // SONNY-2679: the graph, tenant and RLS scope every traversal below applies
     // to each edge it walks and each node it reaches, not only to the start
     // node it scans.
@@ -9365,7 +9465,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                         if (!hop_scope.edgeVisible(edge)) continue;
                         // Filter by relationship properties
-                        if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
+                        if (!try matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
@@ -9458,7 +9558,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // GAP-0509 / SONNY-2679: the edge's graph and tenant.
                         if (!hop_scope.edgeVisible(edge)) continue;
                         // Filter by relationship properties
-                        if (!matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
+                        if (!try matchesEdgeProperties(allocator, edge.*, rel_props_filter)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
@@ -10133,10 +10233,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .param_values = param_values,
                                 .allocator = allocator,
                             };
-                            const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                passes_props = false;
-                                break;
-                            };
+                            // SONNY-6483 (4): a value that fails to
+                            // evaluate fails the statement; it was no match.
+                            const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, prop_val)) {
                                 passes_props = false;
                                 break;
@@ -10764,7 +10863,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     for (q.ret.items, 0..) |item, i| {
-                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                        // SONNY-6297: lent (the rows borrow their cells).
+                        return_row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
                     }
 
                     return_rows[row_idx] = return_row;

@@ -389,10 +389,6 @@ const Case = struct {
     /// the expected answer, and MATCH must agree with it too.
     walk: ?Walk = null,
     rows: Rows = .total,
-    /// MATCH is itself wrong for this shape in some session (each is named
-    /// in the case's comment and reported separately): the subquery is held
-    /// to the walk, and MATCH is not compared.
-    match_wrong: bool = false,
 };
 
 fn sameRows(a: []const []const u8, b: []const []const u8) bool {
@@ -409,14 +405,12 @@ fn runCase(s: *Session, stage: []const u8, c: Case, f: *Failures) !void {
     if (c.walk != null) {
         expected = try walkRows(aa, c.walk.?, s.visible(), c.rows);
         source = "the walk";
-        if (!c.match_wrong) {
-            const from_match = rowsOf(s, c.oracle, false) catch |err| {
-                try f.add("[{s}/{s}] oracle {s}: error {s}", .{ mode, stage, c.oracle, @errorName(err) });
-                return;
-            };
-            if (!sameRows(from_match, expected)) {
-                try f.add("[{s}/{s}] MATCH disagrees with the walk: {s}: walk {{{s}}}, MATCH {{{s}}}", .{ mode, stage, c.oracle, try std.mem.join(aa, ",", expected), try std.mem.join(aa, ",", from_match) });
-            }
+        const from_match = rowsOf(s, c.oracle, false) catch |err| {
+            try f.add("[{s}/{s}] oracle {s}: error {s}", .{ mode, stage, c.oracle, @errorName(err) });
+            return;
+        };
+        if (!sameRows(from_match, expected)) {
+            try f.add("[{s}/{s}] MATCH disagrees with the walk: {s}: walk {{{s}}}, MATCH {{{s}}}", .{ mode, stage, c.oracle, try std.mem.join(aa, ",", expected), try std.mem.join(aa, ",", from_match) });
         }
     } else {
         expected = rowsOf(s, c.oracle, false) catch |err| {
@@ -463,12 +457,12 @@ fn runCases(title: []const u8, cases: []const Case) !void {
 
 const unbound_relationship_cases = [_]Case{
     // Uncorrelated: untyped, each direction. The undirected count holds the
-    // self-loop on 3 once; the legacy MATCH executor (in-memory, tenant and
-    // RLS sessions) counts it twice, the persisted planned read once.
+    // self-loop on 3 once, on every session (SONNY-6483 item 3: the legacy
+    // MATCH executor counted it twice).
     .{ .q = "RETURN COUNT { ()-[]->() } AS c", .oracle = "MATCH ()-[]->() RETURN count(*) AS c", .walk = .{ .dir = .out } },
     .{ .q = "RETURN COUNT { (a)-[r]->(b) } AS c", .oracle = "MATCH (a)-[r]->(b) RETURN count(*) AS c", .walk = .{ .dir = .out } },
     .{ .q = "RETURN COUNT { (a)<-[r]-(b) } AS c", .oracle = "MATCH (a)<-[r]-(b) RETURN count(*) AS c", .walk = .{ .dir = .in } },
-    .{ .q = "RETURN COUNT { (a)-[r]-(b) } AS c", .oracle = "MATCH (a)-[r]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both }, .match_wrong = true },
+    .{ .q = "RETURN COUNT { (a)-[r]-(b) } AS c", .oracle = "MATCH (a)-[r]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both } },
     // Typed, labels on either end.
     .{ .q = "RETURN COUNT { (a:A)-[:R]->(b) } AS c", .oracle = "MATCH (a:A)-[:R]->(b) RETURN count(*) AS c", .walk = .{ .dir = .out, .rel = "R", .start_label = "A" } },
     .{ .q = "RETURN COUNT { (a:A)<-[:R]-(b:B) } AS c", .oracle = "MATCH (a:A)<-[:R]-(b:B) RETURN count(*) AS c", .walk = .{ .dir = .in, .rel = "R", .start_label = "A", .end_label = "B" } },
@@ -493,11 +487,11 @@ const unbound_relationship_cases = [_]Case{
     .{ .q = "RETURN EXISTS { (a:A)<-[:S]-(b:B) } AS e", .oracle = "MATCH (a:A)<-[:S]-(b:B) RETURN count(*) AS c", .kind = .exists, .walk = .{ .dir = .in, .rel = "S", .start_label = "A", .end_label = "B" } },
     // Correlated to an outer variable: the start, the end, and both.
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)<-[r]-(b) } AS c", .oracle = "MATCH (a:V)<-[r]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in }, .rows = .by_start },
-    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) } AS c", .oracle = "MATCH (a:V)-[r]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start, .match_wrong = true },
+    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) } AS c", .oracle = "MATCH (a:V)-[r]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[:R {w: 1}]->() } AS c", .oracle = "MATCH (a:V)-[:R {w: 1}]->() RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .out, .rel = "R", .w = 1 }, .rows = .by_start },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) WHERE r.w = 2 } AS c", .oracle = "MATCH (a:V)-[r]-(b) WHERE r.w = 2 RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .w = 2 }, .rows = .by_start },
     .{ .q = "MATCH (b:V) RETURN b.k, COUNT { (a:A)<-[:R]-(b) } AS c", .oracle = "MATCH (a:A)<-[:R]-(b:V) RETURN b.k, count(*) AS c GROUP BY b.k", .drop_zero = true, .walk = .{ .dir = .in, .rel = "R", .start_label = "A" }, .rows = .by_end },
-    .{ .q = "MATCH (a:V), (b:V) RETURN a.k, b.k, COUNT { (a)-[]-(b) } AS c", .oracle = "MATCH (a:V)-[]-(b:V) RETURN a.k, b.k, count(*) AS c GROUP BY a.k, b.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start_end, .match_wrong = true },
+    .{ .q = "MATCH (a:V), (b:V) RETURN a.k, b.k, COUNT { (a)-[]-(b) } AS c", .oracle = "MATCH (a:V)-[]-(b:V) RETURN a.k, b.k, count(*) AS c GROUP BY a.k, b.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start_end },
     .{ .q = "MATCH (a:V) WHERE EXISTS { (a)<-[:S]-() } RETURN a.k", .oracle = "MATCH (a:V)<-[:S]-() RETURN DISTINCT a.k", .walk = .{ .dir = .in, .rel = "S" }, .rows = .starts },
     .{ .q = "MATCH (a:V) WHERE EXISTS { (a)-[:S]-(:A) } RETURN a.k", .oracle = "MATCH (a:V)-[:S]-(:A) RETURN DISTINCT a.k", .walk = .{ .dir = .both, .rel = "S", .end_label = "A" }, .rows = .starts },
     // A pattern comprehension, incoming and undirected. The persisted planned
