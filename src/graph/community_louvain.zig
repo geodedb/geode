@@ -158,12 +158,12 @@ test "Louvain detects simple community structure" {
     // Simple test graph with two obvious communities:
     // 0-1-2 (clique 1), 3-4-5 (clique 2), connected by edge 2-3
     var graph_data = [_][]u64{
-        &[_]u64{ 1, 2 }, // 0: connected to 1, 2
-        &[_]u64{ 0, 2 }, // 1: connected to 0, 2
-        &[_]u64{ 0, 1, 3 }, // 2: connected to 0, 1, 3 (bridge)
-        &[_]u64{ 2, 4, 5 }, // 3: connected to 2, 4, 5 (bridge)
-        &[_]u64{ 3, 5 }, // 4: connected to 3, 5
-        &[_]u64{ 3, 4 }, // 5: connected to 3, 4
+        @constCast(&[_]u64{ 1, 2 }), // 0: connected to 1, 2
+        @constCast(&[_]u64{ 0, 2 }), // 1: connected to 0, 2
+        @constCast(&[_]u64{ 0, 1, 3 }), // 2: connected to 0, 1, 3 (bridge)
+        @constCast(&[_]u64{ 2, 4, 5 }), // 3: connected to 2, 4, 5 (bridge)
+        @constCast(&[_]u64{ 3, 5 }), // 4: connected to 3, 5
+        @constCast(&[_]u64{ 3, 4 }), // 5: connected to 3, 4
     };
 
     const communities = try detect(allocator, &graph_data, 1.0, 0.0001);

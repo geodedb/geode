@@ -2235,6 +2235,23 @@
 
 ### Fixed
 
+- **The inline tests of ten live files run again (SONNY-6511 item 1).**
+  `zig build test-sonny6511-lib-inline` (in the aggregate) runs the inline
+  tests of `security/multi_graph_security`, `client/quic_query_runner`,
+  `client/repl/spinner`, `performance/memory_mapped_io`,
+  `ml/graph_embeddings`, `planner/cost_calibration`, `planner/pipeline`,
+  `graph/community_louvain`, `graph/community_label_propagation` and
+  `graph/containers/lfu` (55 tests). None compiled on Zig 0.16 and no step
+  ran them. The shell spinner writes through a `Spinner.out` writer when one
+  is set (the process's stdout otherwise), so its tests no longer write
+  frames into the test runner's control channel. Two query-runner tests
+  still expected a PULL after an inline page; since the server sends every
+  page inline (2026-04, "send all result pages inline") the client sends
+  none, which they now assert. The plan-calibration variance envelope
+  follows the shared perf-gate policy (reported, enforced under
+  `GEODE_PERF_GATES=enforce`), and the duplicate degree-bucket envelope in
+  `pipeline.zig` was dropped (the `bench_pathcache_degree_util` benchmark
+  measures it).
 - **`geode shell` handles long input (SONNY-6494 item 3).** The
   meta-commands formatted replies that echo user text into fixed stack
   buffers, so `\echo`, `\set <option>`, `\use`, `\graph`, `\connect`,
@@ -5348,6 +5365,18 @@
 
 ### Removed
 
+- **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
+  `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
+  `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)
+  did not compile on Zig 0.16 (`getEndPos`, `seekTo`, `writeAll`,
+  `sync()` on `std.Io.File`); only their own tests and an unbuilt test file
+  named them. `GraphAuditEvent` / `GraphAuditLog` and
+  `GraphRBACPolicy.getRolesForGraph` (`src/security/multi_graph_security.zig`)
+  did not compile either and nothing called them; graph-scoped audit
+  events go through `src/security/audit.zig` (`resource_graph`). The
+  per-graph grant model the server uses (`grantGraphPermission`,
+  `hasGraphGrant`, `loadGraphGrants`, the global policy) is unchanged and
+  its inline tests now run.
 - **Dead code: the synthetic planner pipeline and the modules only it drove
   (SONNY-6511 item 1).** `src/planner/{wcoj,adaptive_replan,phase_timing,rewrite,path_cache}.zig`,
   `pipeline.runPipeline` / `planQueryWithPipeline` / `plannerPathCacheLookup`

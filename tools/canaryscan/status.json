@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:41:16.571977929Z",
+  "generated_at": "2026-11-13T18:51:54.090735057Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -29060,7 +29060,6 @@
           "aspect": "PathCacheDegreeBucketUtilizationVarianceEnvelope",
           "status": "BENCHED",
           "files": [
-            "src/planner/pipeline.zig",
             "tests/benchmark_path_cache_degree_bucket_utilization.zig"
           ],
           "tests": [
@@ -54199,25 +54198,6 @@
           "benches": [],
           "owner": "perf",
           "updated": "2026-01-16"
-        }
-      ]
-    },
-    {
-      "id": "REQ-PERF-CACHE-RATIO-001",
-      "features": [
-        {
-          "feature": "CacheHitRatioTracking",
-          "aspect": "UnitTest",
-          "status": "TESTED",
-          "files": [
-            "src/performance/memory_mapped_io.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_performance_stress.yml"
-          ],
-          "benches": [],
-          "owner": "performance",
-          "updated": "2026-01-10"
         }
       ]
     },
@@ -93032,7 +93012,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4906
+      "TESTED": 4905
     },
     "by_aspect": {
       "2PC": 3,
@@ -96923,7 +96903,7 @@
       "UniqueViolationCode": 1,
       "UnitAssertions": 1,
       "UnitGroupsAndOverflowCodes": 1,
-      "UnitTest": 13,
+      "UnitTest": 12,
       "UnitTestCoverage": 1,
       "UnitTestExecution": 1,
       "UnitTestFramework": 1,

@@ -254,7 +254,7 @@ REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,ListRoles,TESTED,,,security,2026-0
 REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,RevokeGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,181
 REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,CustomRoleHydration,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1831
 REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,HasGraphGrant,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,182
-REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,IMPL,,,security,2026-05-11,src/security/multi_graph_security.zig,374
+REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,IMPL,,,security,2026-05-11,src/security/multi_graph_security.zig,336
 REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,207
 REQ-AUTH-GRAPH-PERSIST-026,AuthDDLPersistence,GrantPersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,160
 REQ-AUTH-GRAPH-PERSIST-027,AuthDDLPersistence,HandleGrantRevoke,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1454
@@ -267,10 +267,10 @@ REQ-AUTH-GRAPH-PERSIST-035,AuthDDLPersistence,StartupWiring,TESTED,,,security,20
 REQ-AUTH-GRAPH-PERSIST-036,AuthDDLPersistence,StartupWiring,TESTED,,,security,2026-06-11,src/server/main.zig,1901
 REQ-AUTH-GRAPH-PERSIST-037,AuthDDLPersistence,GraphGrantKey,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,84
 REQ-AUTH-GRAPH-PERSIST-038,AuthDDLPersistence,GraphUserGrantsField,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,125
-REQ-AUTH-GRAPH-PERSIST-039,AuthDDLPersistence,GrantGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,321
+REQ-AUTH-GRAPH-PERSIST-039,AuthDDLPersistence,GrantGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,283
 REQ-AUTH-GRAPH-PERSIST-040,AuthDDLPersistence,GrantChangeInvalidatesDecisionCache,TESTED,,,security,2026-10-11,tests/test_gps_policy_version.zig,115
-REQ-AUTH-GRAPH-PERSIST-040,AuthDDLPersistence,RevokeGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,336
-REQ-AUTH-GRAPH-PERSIST-041,AuthDDLPersistence,HasGraphGrant,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,356
+REQ-AUTH-GRAPH-PERSIST-040,AuthDDLPersistence,RevokeGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,298
+REQ-AUTH-GRAPH-PERSIST-041,AuthDDLPersistence,HasGraphGrant,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig,318
 REQ-AUTH-GRAPH-WIRE-001,AuthGraphManager Integration,SecurityManager,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,815
 REQ-AUTH-GRAPH-WIRE-002,AuthGraphManager Integration,InitEmpty,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,867
 REQ-AUTH-GRAPH-WIRE-003,AuthGraphManager Integration,HydrateUser,TESTED,,,security,2026-06-11,src/security/geode_auth_lib.zig,887
@@ -1991,15 +1991,14 @@ REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,,,engine,2025-10-03,tests/
 REQ-GQL-021,Bench Variance Infra,VarianceConfigHelper,TESTED,,,tooling,2025-09-22,src/benchmarks/variance_config.zig,13
 REQ-GQL-021,Bench Variance Infra,VarianceConfigStats,TESTED,,,tooling,2025-09-22,tests/test_variance_config.zig,5
 REQ-GQL-021,Cluster Message Handler,OnMessage,IMPL,,,distributed,2026-04-05,src/distributed/cluster.zig,2638
-REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,310
-REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,,,planner,2025-09-21,src/planner/pipeline.zig,345
+REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,300
 REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,,,planner,2025-09-21,tests/benchmark_path_cache_degree_bucket_utilization.zig,22
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionEnvelope,BENCHED,,,planner,2025-09-21,tests/benchmark_path_cache_structural_collision.zig,7
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionTightened,BENCHED,,,planner,2025-09-21,tests/benchmark_path_cache_structural_collision.zig,8
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,291
+REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,281
 REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,,,planner,2025-09-21,src/planner/structural_key.zig,33
 REQ-GQL-021,PathCache,PathCacheStructuralKeyEnrichment,TESTED,,,planner,2025-09-21,src/planner/structural_key.zig,30
-REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,232
+REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,,,planner,2025-09-21,src/planner/pipeline.zig,222
 REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,,,planner,2025-09-21,src/planner/structural_key.zig,32
 REQ-GQL-021,PathCache,PathCacheStructuralKeyValueShapeEnrichment,TESTED,,,planner,2025-09-21,src/planner/structural_key.zig,31
 REQ-GQL-021,Query Planner,PlannerCardinalityEstimateVarianceEnvelope,BENCHED,,,planner,2025-09-21,tests/benchmark_planner_cardinality_estimate_variance.zig,3
@@ -2021,7 +2020,7 @@ REQ-GQL-024,Conformance Flagger,ImplDefinedCollationAndNullOrdering,TESTED,,,eng
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,,,engine,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md,691
 REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md,3
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,,,planner,2025-09-22,src/planner/cost_calibration.zig,6
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig,117
+REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig,107
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,,,planner,2025-09-22,src/planner/cost_calibration.zig,7
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,TESTED,,,planner,2025-09-25,src/planner/cost_model.zig,8
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,TESTED,,,planner,2025-09-22,tests/canary_planner_cost_model.zig,6
@@ -2033,7 +2032,7 @@ REQ-GQL-024,Cost Based Optimizer,PlanEnumerationVarianceEnvelope,BENCHED,,,plann
 REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderDiversity,TESTED,,,planner,2025-09-22,tests/canary_planner_join_reorder.zig,6
 REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/canary_planner_join_reorder.zig,7
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionIntegration,TESTED,,,planner,2025-09-22,tests/canary_planner_plan_selection.zig,44
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig,32
+REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig,22
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,,,planner,2025-09-22,tests/canary_planner_pipeline_selection.zig,45
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/canary_planner_pipeline_selection.zig,46
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/canary_planner_plan_selection.zig,45
@@ -3592,7 +3591,7 @@ REQ-MULTI-GRAPH-EDGE-ISOLATION,GraphIsolationEdgeScan,GetEdgesByType,TESTED,,,en
 REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig,434
 REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,TESTED,,,security,2026-06-27,src/server/quic_connection_handler.zig,7193
 REQ-MULTI-GRAPH-RBAC-WIRE-003,GraphRBACEnforcement,GrpcGraphAuth,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig,2584
-REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,src/security/multi_graph_security.zig,631
+REQ-MULTI-GRAPH-RBAC-WIRE-005,GraphRBACEnforcement,GlobalSingleton,IMPL,,,security,2026-04-01,src/security/multi_graph_security.zig,497
 REQ-MULTI-GRAPH-SECURITY-001,MultiGraphSecurity,RBACGraphScope,TESTED,,,security,2025-12-20,src/security/multi_graph_security.zig,1
 REQ-MULTI-GRAPH-SECURITY-TEST,MultiGraphSecurityTests,Security,IMPL,,,testing,2025-12-20,tests/e2e_multi_graph_security.zig,1
 REQ-MULTI-GRAPH-UNION-001,MultiGraphIsolation,UnionQueryContext,TESTED,,,engine,2025-12-23,src/execution.zig,5214
@@ -3750,7 +3749,6 @@ REQ-PERF-BOUNDED-HYDRATE-RECLAIM-0901,BoundedCacheHydrateReclaim,Regression,TEST
 REQ-PERF-BULK-EDGE-ENDPOINT-SEEK,BulkEdgeEndpointSeek,Regression,TESTED,,,performance,2026-06-24,tests/test_bulk_edge_endpoint_seek.zig,39
 REQ-PERF-CACHE-001,Performance,CachePerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,117
 REQ-PERF-CACHE-OPT-001,Performance,CacheOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,184
-REQ-PERF-CACHE-RATIO-001,CacheHitRatioTracking,UnitTest,TESTED,,,performance,2026-01-10,src/performance/memory_mapped_io.zig,706
 REQ-PERF-CATALOG-FASTPATH-001,CatalogFastPath,AtomicLoad,TESTED,,,execution,2026-06-11,src/execution.zig,376
 REQ-PERF-COLLECTION-001,CollectionOptimization,Benchmarking,EXEMPT,,,performance,2025-10-04,tests/benchmark_collection_optimization.zig,6
 REQ-PERF-COLLECTION-001,CollectionOptimization,Integration,TESTED,,,performance,2025-10-04,tests/benchmark_collection_optimization.zig,417

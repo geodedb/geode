@@ -1905,8 +1905,7 @@ REQ-GQL-021,Bench Variance Infra,VarianceConfigHelper,TESTED,src/benchmarks/vari
 REQ-GQL-021,Bench Variance Infra,VarianceConfigStats,TESTED,tests/test_variance_config.zig,TestCANARY_REQ_GQL_021_VarianceConfigStats,,tooling,2025-09-22
 REQ-GQL-021,Cluster Message Handler,OnMessage,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,tests/benchmark_path_cache_degree_bucket_utilization.zig,,,planner,2025-09-21
+REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,tests/benchmark_path_cache_degree_bucket_utilization.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionEnvelope,BENCHED,tests/benchmark_path_cache_structural_collision.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionTightened,BENCHED,tests/benchmark_path_cache_structural_collision.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
@@ -3533,7 +3532,6 @@ REQ-PERF-BOUNDED-HYDRATE-RECLAIM-0901,BoundedCacheHydrateReclaim,Regression,TEST
 REQ-PERF-BULK-EDGE-ENDPOINT-SEEK,BulkEdgeEndpointSeek,Regression,TESTED,tests/test_bulk_edge_endpoint_seek.zig,tests/test_bulk_edge_endpoint_seek.zig,,performance,2026-06-24
 REQ-PERF-CACHE-001,Performance,CachePerformance,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,perf,2026-01-16
 REQ-PERF-CACHE-OPT-001,Performance,CacheOptimization,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,perf,2026-01-16
-REQ-PERF-CACHE-RATIO-001,CacheHitRatioTracking,UnitTest,TESTED,src/performance/memory_mapped_io.zig,geodetestlab/specs/geode_performance_stress.yml,,performance,2026-01-10
 REQ-PERF-CATALOG-FASTPATH-001,CatalogFastPath,AtomicLoad,TESTED,src/execution.zig,"""GAP-0514 P3: ensureCatalogInstance fast path returns the same singleton""",,execution,2026-06-11
 REQ-PERF-COLLECTION-001,CollectionOptimization,Benchmarking,EXEMPT,tests/benchmark_collection_optimization.zig,TestCANARY_CollectionOptimization,,performance,2025-10-04
 REQ-PERF-COLLECTION-001,CollectionOptimization,Integration,TESTED,tests/benchmark_collection_optimization.zig,TestCANARY_REQ_PERF_COLLECTION_001,,performance,2025-10-04

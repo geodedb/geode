@@ -263,44 +263,6 @@ pub const GraphRBACPolicy = struct {
         return false;
     }
 
-    /// Get all roles for a user in a specific graph (including global)
-    pub fn getRolesForGraph(
-        self: *Self,
-        allocator: Allocator,
-        user_id: auth.UserId,
-        graph_name: []const u8,
-    ) ![]auth.RoleId {
-        var result = std.ArrayList(auth.RoleId).init(allocator);
-        errdefer result.deinit();
-
-        // Add graph-specific roles
-        const key = GraphRoleKey.init(user_id, graph_name);
-        if (self.graph_user_roles.get(key)) |roles| {
-            for (roles.items) |rid| {
-                try result.append(rid);
-            }
-        }
-
-        // Add global roles
-        if (self.global_user_roles.get(user_id)) |roles| {
-            for (roles.items) |rid| {
-                // Avoid duplicates
-                var found = false;
-                for (result.items) |existing| {
-                    if (existing == rid) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try result.append(rid);
-                }
-            }
-        }
-
-        return result.toOwnedSlice();
-    }
-
     fn checkRolePermission(self: *Self, role_id: auth.RoleId, resource: []const u8, action: auth.Action) bool {
         if (self.role_permissions.get(role_id)) |perms| {
             for (perms.items) |perm| {
@@ -523,106 +485,10 @@ pub const GraphSchemaCatalog = struct {
     }
 };
 
-// ============================================================================
-// Graph-Scoped Audit Events
-// ============================================================================
-
-/// Extended audit event with graph context
-pub const GraphAuditEvent = struct {
-    timestamp: i64,
-    event_type: auth.AuditEventType,
-    user_id: auth.UserId,
-    graph_name: ?[]const u8, // Graph context for the event
-    details: []const u8,
-    ip_address: ?[]const u8,
-    session_id: ?[]const u8,
-};
-
-/// Graph-aware audit logger
-pub const GraphAuditLog = struct {
-    allocator: Allocator,
-    entries: std.ArrayList(GraphAuditEvent),
-
-    const Self = @This();
-
-    pub fn init(allocator: Allocator) Self {
-        return .{
-            .allocator = allocator,
-            .entries = std.ArrayList(GraphAuditEvent).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        for (self.entries.items) |entry| {
-            self.allocator.free(entry.details);
-            if (entry.graph_name) |g| self.allocator.free(g);
-            if (entry.ip_address) |ip| self.allocator.free(ip);
-            if (entry.session_id) |sid| self.allocator.free(sid);
-        }
-        self.entries.deinit();
-    }
-
-    /// Log an event with graph context
-    pub fn logWithGraph(
-        self: *Self,
-        event_type: auth.AuditEventType,
-        user_id: auth.UserId,
-        graph_name: ?[]const u8,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) !void {
-        const details = try std.fmt.allocPrint(self.allocator, fmt, args);
-        errdefer self.allocator.free(details);
-
-        const graph_copy = if (graph_name) |g| try self.allocator.dupe(u8, g) else null;
-
-        try self.entries.append(.{
-            .timestamp = compat_milliTimestamp(),
-            .event_type = event_type,
-            .user_id = user_id,
-            .graph_name = graph_copy,
-            .details = details,
-            .ip_address = null,
-            .session_id = null,
-        });
-    }
-
-    /// Log role assignment for a specific graph
-    pub fn logRoleAssignedForGraph(self: *Self, user_id: auth.UserId, role_id: auth.RoleId, graph_name: []const u8) !void {
-        try self.logWithGraph(.role_assigned, user_id, graph_name, "Role {} assigned for graph {s}", .{ role_id, graph_name });
-    }
-
-    /// Log role revocation for a specific graph
-    pub fn logRoleRevokedForGraph(self: *Self, user_id: auth.UserId, role_id: auth.RoleId, graph_name: []const u8) !void {
-        try self.logWithGraph(.role_revoked, user_id, graph_name, "Role {} revoked from graph {s}", .{ role_id, graph_name });
-    }
-
-    /// Log access granted for a specific graph
-    pub fn logAccessGrantedForGraph(self: *Self, user_id: auth.UserId, graph_name: []const u8, resource: []const u8, action: auth.Action) !void {
-        try self.logWithGraph(.access_granted, user_id, graph_name, "Access granted: {s} on {s} in graph {s}", .{ @tagName(action), resource, graph_name });
-    }
-
-    /// Log access denied for a specific graph
-    pub fn logAccessDeniedForGraph(self: *Self, user_id: auth.UserId, graph_name: []const u8, resource: []const u8, action: auth.Action, reason: []const u8) !void {
-        try self.logWithGraph(.access_denied, user_id, graph_name, "Access denied: {s} on {s} in graph {s} - {s}", .{ @tagName(action), resource, graph_name, reason });
-    }
-
-    /// Get audit events for a specific graph
-    pub fn getEventsForGraph(self: *Self, allocator: Allocator, graph_name: []const u8) ![]GraphAuditEvent {
-        var result = std.ArrayList(GraphAuditEvent).init(allocator);
-        errdefer result.deinit();
-
-        for (self.entries.items) |entry| {
-            if (entry.graph_name) |g| {
-                if (std.mem.eql(u8, g, graph_name)) {
-                    try result.append(entry);
-                }
-            }
-        }
-
-        return result.toOwnedSlice();
-    }
-};
+// SONNY-6511: GraphAuditEvent / GraphAuditLog (a graph-scoped audit log) and
+// GraphRBACPolicy.getRolesForGraph were deleted: they did not compile on Zig
+// 0.16 and nothing called them. Graph-scoped audit events go through the
+// server audit logger (src/security/audit.zig).
 
 // ============================================================================
 // Global RBAC Policy Instance
@@ -704,25 +570,6 @@ test "GraphRBACPolicy - global roles apply to all graphs" {
     try testing.expect(rbac.hasPermission(1, "any_graph", "node", .delete));
 }
 
-test "GraphAuditLog - log events with graph context" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var audit = GraphAuditLog.init(allocator);
-    defer audit.deinit();
-
-    // Log events for different graphs
-    try audit.logRoleAssignedForGraph(1, 100, "graph1");
-    try audit.logAccessDeniedForGraph(2, "graph2", "edge", .delete, "insufficient permissions");
-
-    // Get events for graph1
-    const graph1_events = try audit.getEventsForGraph(allocator, "graph1");
-    defer allocator.free(graph1_events);
-
-    try testing.expectEqual(@as(usize, 1), graph1_events.len);
-    try testing.expectEqual(auth.AuditEventType.role_assigned, graph1_events[0].event_type);
-}
-
 test "GraphRBACPolicy - revoke graph role" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -749,24 +596,6 @@ test "GraphRBACPolicy - revoke graph role" {
     try rbac.revokeRoleForGraph(1, 100, "graph1");
 
     try testing.expect(!rbac.hasPermission(1, "graph1", "node", .read));
-}
-
-test "GraphRBACPolicy - get all roles for graph" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var rbac = GraphRBACPolicy.init(allocator);
-    defer rbac.deinit();
-
-    // Assign graph-specific and global roles
-    try rbac.assignRoleForGraph(1, 100, "graph1");
-    try rbac.assignRoleForGraph(1, 101, "graph1");
-    try rbac.assignGlobalRole(1, 999);
-
-    const roles = try rbac.getRolesForGraph(allocator, 1, "graph1");
-    defer allocator.free(roles);
-
-    try testing.expectEqual(@as(usize, 3), roles.len);
 }
 
 test "GraphRBACPolicy - global policy singleton" {

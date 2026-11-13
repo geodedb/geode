@@ -1,15 +1,5 @@
 const std = @import("std");
 
-// Zig 0.16 compat helper for the variance test below
-fn compat_nanoTimestamp() i128 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = if (comptime @import("builtin").os.tag == .linux)
-        std.os.linux.clock_gettime(.REALTIME, &ts)
-    else
-        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
-}
-
 // NOTE: Use root planner module via relative import. This file is only compiled
 // through a module whose root is src/planner, so the parent reference is stable.
 // Tests that compile this file as its own root must import it through the same
@@ -119,10 +109,10 @@ test "TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking" {
     const factors: cost_model.CostFactors = .{};
     // Lightweight synthetic plans built inline (no enumeration):
     const scan_leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &.{} };
-    const project = enumerator_mod.LogicalPlan{ .op = .project, .children = &.{scan_leaf} };
+    const project = enumerator_mod.LogicalPlan{ .op = .project, .children = @constCast(&[_]enumerator_mod.LogicalPlan{scan_leaf}) };
     const scan2 = enumerator_mod.LogicalPlan{ .op = .scan, .children = &.{} };
-    const join_node = enumerator_mod.LogicalPlan{ .op = .join, .children = &.{ scan_leaf, scan2 } };
-    const sort_node = enumerator_mod.LogicalPlan{ .op = .sort, .children = &.{join_node} };
+    const join_node = enumerator_mod.LogicalPlan{ .op = .join, .children = @constCast(&[_]enumerator_mod.LogicalPlan{ scan_leaf, scan2 }) };
+    const sort_node = enumerator_mod.LogicalPlan{ .op = .sort, .children = @constCast(&[_]enumerator_mod.LogicalPlan{join_node}) };
     const baseA = cost_model.estimatePlanCost(project, factors);
     const baseB = cost_model.estimatePlanCost(sort_node, factors);
     try std.testing.expect(baseB > baseA);
@@ -158,16 +148,16 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {
     var prop_val2 = planner_root.ast.Expr{ .Int = 999 };
     const prop1 = planner_root.ast.Property{ .key = "p", .value = &prop_val1 };
     const prop2 = planner_root.ast.Property{ .key = "p", .value = &prop_val2 };
-    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{prop1} };
-    const left2 = planner_root.ast.NodePattern{ .name = "n2", .labels = &.{"L"}, .props = &.{prop2} };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{prop1}) };
+    const left2 = planner_root.ast.NodePattern{ .name = "n2", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{prop2}) };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
     const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .undirected, .min_len = 1, .max_len = 3 };
     const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
     const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
-    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
-    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
-    q1.match = .{ .chains = &.{chain1} };
-    q2.match = .{ .chains = &.{chain2} };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop1}) };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop2}) };
+    q1.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain1}) };
+    q2.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain2}) };
     const key1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
     defer gpa.allocator().free(key1);
     const key2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
@@ -185,16 +175,16 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation" {
     var valB = planner_root.ast.Expr{ .Int = 2 };
     const pa = planner_root.ast.Property{ .key = "a", .value = &valA };
     const pb = planner_root.ast.Property{ .key = "b", .value = &valB };
-    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pa} };
-    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ pa, pb } };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{pa}) };
+    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{ pa, pb }) };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
     const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
     const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
     const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
-    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
-    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
-    q1.match = .{ .chains = &.{chain1} };
-    q2.match = .{ .chains = &.{chain2} };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop1}) };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop2}) };
+    q1.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain1}) };
+    q2.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain2}) };
     const k1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
     defer gpa.allocator().free(k1);
     const k2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
@@ -212,16 +202,16 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation" {
     var valStr = planner_root.ast.Expr{ .String = "7" };
     const pInt = planner_root.ast.Property{ .key = "p", .value = &valInt };
     const pStr = planner_root.ast.Property{ .key = "p", .value = &valStr };
-    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pInt} };
-    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{pStr} };
+    const left1 = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{pInt}) };
+    const left2 = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{pStr}) };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
     const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
     const hop1 = planner_root.ast.Hop{ .left = left1, .rel = rel, .right = right };
     const hop2 = planner_root.ast.Hop{ .left = left2, .rel = rel, .right = right };
-    const chain1 = planner_root.ast.Chain{ .name = null, .hops = &.{hop1} };
-    const chain2 = planner_root.ast.Chain{ .name = null, .hops = &.{hop2} };
-    q1.match = .{ .chains = &.{chain1} };
-    q2.match = .{ .chains = &.{chain2} };
+    const chain1 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop1}) };
+    const chain2 = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop2}) };
+    q1.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain1}) };
+    q2.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain2}) };
     const k1 = try structural_key.deriveStructuralKey(gpa.allocator(), q1);
     defer gpa.allocator().free(k1);
     const k2 = try structural_key.deriveStructuralKey(gpa.allocator(), q2);
@@ -248,41 +238,41 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
 
     // Z (zero props)
     var qZ = base;
-    const leftZ = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = null };
+    const leftZ = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
     const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{}, .props = null };
     const hopZ = planner_root.ast.Hop{ .left = leftZ, .rel = rel, .right = right };
-    const chainZ = planner_root.ast.Chain{ .name = null, .hops = &.{hopZ} };
-    qZ.match = .{ .chains = &.{chainZ} };
+    const chainZ = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hopZ}) };
+    qZ.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chainZ}) };
     const kZ = try structural_key.deriveStructuralKey(gpa.allocator(), qZ);
     defer gpa.allocator().free(kZ);
     try std.testing.expect(std.mem.indexOf(u8, kZ, "SZ") != null);
 
     // L (one prop)
     var qL = base;
-    const leftL = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{p1} };
+    const leftL = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{p1}) };
     const hopL = planner_root.ast.Hop{ .left = leftL, .rel = rel, .right = right };
-    const chainL = planner_root.ast.Chain{ .name = null, .hops = &.{hopL} };
-    qL.match = .{ .chains = &.{chainL} };
+    const chainL = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hopL}) };
+    qL.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chainL}) };
     const kL = try structural_key.deriveStructuralKey(gpa.allocator(), qL);
     defer gpa.allocator().free(kL);
     try std.testing.expect(std.mem.indexOf(u8, kL, "SL") != null);
 
     // M (2-3 props)
     var qM = base;
-    const leftM = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ p1, p2 } };
+    const leftM = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{ p1, p2 }) };
     const hopM = planner_root.ast.Hop{ .left = leftM, .rel = rel, .right = right };
-    const chainM = planner_root.ast.Chain{ .name = null, .hops = &.{hopM} };
-    qM.match = .{ .chains = &.{chainM} };
+    const chainM = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hopM}) };
+    qM.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chainM}) };
     const kM = try structural_key.deriveStructuralKey(gpa.allocator(), qM);
     defer gpa.allocator().free(kM);
     try std.testing.expect(std.mem.indexOf(u8, kM, "SM") != null);
 
     // H (4+ props)
     var qH = base;
-    const leftH = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = &.{ p1, p2, p3, p4 } };
+    const leftH = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = @constCast(&[_]planner_root.ast.Property{ p1, p2, p3, p4 }) };
     const hopH = planner_root.ast.Hop{ .left = leftH, .rel = rel, .right = right };
-    const chainH = planner_root.ast.Chain{ .name = null, .hops = &.{hopH} };
-    qH.match = .{ .chains = &.{chainH} };
+    const chainH = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hopH}) };
+    qH.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chainH}) };
     const kH = try structural_key.deriveStructuralKey(gpa.allocator(), qH);
     defer gpa.allocator().free(kH);
     try std.testing.expect(std.mem.indexOf(u8, kH, "SH") != null);
@@ -294,12 +284,12 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
     defer _ = gpa.deinit();
     // Single hop pattern; ensure DB<bucket> appears twice (left/right) in key (L for single occurrence).
     var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
-    const left = planner_root.ast.NodePattern{ .name = "n", .labels = &.{"L"}, .props = null };
-    const right = planner_root.ast.NodePattern{ .name = null, .labels = &.{"R"}, .props = null };
+    const left = planner_root.ast.NodePattern{ .name = "n", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
+    const right = planner_root.ast.NodePattern{ .name = null, .labels = @constCast(&[_][]const u8{"R"}), .props = null };
     const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
     const hop = planner_root.ast.Hop{ .left = left, .rel = rel, .right = right };
-    const chain = planner_root.ast.Chain{ .name = null, .hops = &.{hop} };
-    q.match = .{ .chains = &.{chain} };
+    const chain = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop}) };
+    q.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain}) };
     const key = try structural_key.deriveStructuralKey(gpa.allocator(), q);
     defer gpa.allocator().free(key);
     const first = std.mem.indexOf(u8, key, "DBL") orelse return error.NotFound;
@@ -314,23 +304,23 @@ test "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination" {
     // Build two queries: one with a node appearing once (degree=1 -> L), another where same named node appears in three hops (degree=3 -> M).
     // Query A: (a)-[]->(b)
     var qa: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
-    const a1 = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
-    const b1 = planner_root.ast.NodePattern{ .name = "b", .labels = &.{"L"}, .props = null };
+    const a1 = planner_root.ast.NodePattern{ .name = "x", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
+    const b1 = planner_root.ast.NodePattern{ .name = "b", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
     const rel_ab = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
     const hop_ab = planner_root.ast.Hop{ .left = a1, .rel = rel_ab, .right = b1 };
-    const chain_ab = planner_root.ast.Chain{ .name = null, .hops = &.{hop_ab} };
-    qa.match = .{ .chains = &.{chain_ab} };
+    const chain_ab = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{hop_ab}) };
+    qa.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain_ab}) };
 
     // Query B: (x)-[]->(b1); (x)-[]->(b2); (x)-[]->(b3) in a single chain of sequential hops referencing same left name 'x'.
     var qb = qa; // start with base structure
     const xnode = a1; // name = x
-    const b2 = planner_root.ast.NodePattern{ .name = "b2", .labels = &.{"L"}, .props = null };
-    const b3 = planner_root.ast.NodePattern{ .name = "b3", .labels = &.{"L"}, .props = null };
+    const b2 = planner_root.ast.NodePattern{ .name = "b2", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
+    const b3 = planner_root.ast.NodePattern{ .name = "b3", .labels = @constCast(&[_][]const u8{"L"}), .props = null };
     const hop1 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b1 };
     const hop2 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b2 };
     const hop3 = planner_root.ast.Hop{ .left = xnode, .rel = rel_ab, .right = b3 };
-    const chain_multi = planner_root.ast.Chain{ .name = null, .hops = &.{ hop1, hop2, hop3 } };
-    qb.match = .{ .chains = &.{chain_multi} };
+    const chain_multi = planner_root.ast.Chain{ .name = null, .hops = @constCast(&[_]planner_root.ast.Hop{ hop1, hop2, hop3 }) };
+    qb.match = .{ .chains = @constCast(&[_]planner_root.ast.Chain{chain_multi}) };
 
     const keyA = try structural_key.deriveStructuralKey(gpa.allocator(), qa);
     defer gpa.allocator().free(keyA);
@@ -342,79 +332,8 @@ test "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination" {
     try std.testing.expect(!std.mem.eql(u8, keyA, keyB));
 }
 
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheDegreeBucketUtilizationVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
-test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const ally = gpa.allocator();
-    const total_variants: usize = 96;
-    const repetitions_per_variant: usize = 6;
-    const total_samples = total_variants * repetitions_per_variant;
-    var samples = try ally.alloc(u64, total_samples);
-    defer ally.free(samples);
-    var idx: usize = 0;
-    var v: usize = 0;
-    while (v < total_variants) : (v += 1) {
-        // Fabricate a query whose repetition count influences degree distribution for named node 'x'
-        // Alternate between simple single-hop and multi-hop referencing same left node to exercise L vs M buckets.
-        var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
-        const rel = planner_root.ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = .right };
-        if ((v & 1) == 0) {
-            const left = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
-            const right = planner_root.ast.NodePattern{ .name = "y", .labels = &.{"L"}, .props = null };
-            const hop = planner_root.ast.Hop{ .left = left, .rel = rel, .right = right };
-            const chain = planner_root.ast.Chain{ .name = null, .hops = &.{hop} };
-            q.match = .{ .chains = &.{chain} };
-        } else {
-            const left = planner_root.ast.NodePattern{ .name = "x", .labels = &.{"L"}, .props = null };
-            const r1 = planner_root.ast.NodePattern{ .name = "y1", .labels = &.{"L"}, .props = null };
-            const r2 = planner_root.ast.NodePattern{ .name = "y2", .labels = &.{"L"}, .props = null };
-            const r3 = planner_root.ast.NodePattern{ .name = "y3", .labels = &.{"L"}, .props = null };
-            const h1 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r1 };
-            const h2 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r2 };
-            const h3 = planner_root.ast.Hop{ .left = left, .rel = rel, .right = r3 };
-            const chain = planner_root.ast.Chain{ .name = null, .hops = &.{ h1, h2, h3 } };
-            q.match = .{ .chains = &.{chain} };
-        }
-        var r: usize = 0;
-        while (r < repetitions_per_variant) : (r += 1) {
-            const t0 = compat_nanoTimestamp();
-            const key = structural_key.deriveStructuralKey(ally, q) catch break;
-            // Scan for DB markers
-            var acc: usize = 0;
-            var pos: usize = 0;
-            while (pos + 1 < key.len) : (pos += 1) {
-                if (key[pos] == 'D' and key[pos + 1] == 'B') acc +%= 1;
-            }
-            if (acc == 0xFFFF) std.mem.doNotOptimizeAway(&acc);
-            ally.free(key);
-            const t1 = compat_nanoTimestamp();
-            samples[idx] = @intCast(t1 - t0);
-            idx += 1;
-        }
-    }
-    // Stats
-    var sum: u128 = 0;
-    for (samples) |s| sum += s;
-    const mean = @as(f128, @floatFromInt(sum)) / @as(f128, @floatFromInt(samples.len));
-    var acc: f128 = 0;
-    for (samples) |s| {
-        const sf = @as(f128, @floatFromInt(s));
-        const d = sf - mean;
-        acc += d * d;
-    }
-    const variance = acc / @as(f128, @floatFromInt(samples.len));
-    const stddev = std.math.sqrt(variance);
-    const cv = stddev / mean;
-    const tmp = try ally.alloc(u64, samples.len);
-    defer ally.free(tmp);
-    std.mem.copy(u64, tmp, samples);
-    std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
-    const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
-    const p95_ratio = @as(f128, @floatFromInt(p95)) / mean;
-    if (cv > 0.22 or p95_ratio > 2.55) return error.VarianceEnvelopeBreached;
-    std.debug.print(
-        "VARIANCE_OK PathCacheDegreeBucketUtilizationVarianceEnvelope mean={d:.2} cv={d:.4} p95_ratio={d:.2} samples={d}\n",
-        .{ mean, cv, p95_ratio, samples.len },
-    );
-}
+// SONNY-6511: the degree-bucket utilization variance envelope is measured by
+// tests/benchmark_path_cache_degree_bucket_utilization.zig (the
+// bench_pathcache_degree_util executable, `zig build test-e2e`); the copy that
+// stood here enforced a raw cv/p95 bound in Debug, outside the shared perf
+// gate (SONNY-2394), and failed on a loaded machine.
