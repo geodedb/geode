@@ -536,7 +536,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
-    .{ .name = "test-sonny6297-allocation-failure-sweep", .reason = "intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): statement shapes still leak on allocation-failure paths; compiled by test-compile; register it through shardDep in the commit that makes every shape clean" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -12503,10 +12502,8 @@ pub fn build(b: *std.Build) void {
     sonny6297_sweep_test_mod.addImport("rls_types", rls_types_mod);
     const sonny6297_sweep_tests = b.addTest(.{ .root_module = sonny6297_sweep_test_mod });
     const run_sonny6297_sweep_tests = b.addRunArtifact(sonny6297_sweep_tests);
-    // Intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): kept
-    // out of `shardDep` and compiled by test-compile until every shape is
-    // leak-free under allocation failure.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6297_sweep_tests.step);
+    // SONNY-6498 item 1: every shape is leak-free under allocation failure.
+    shardDep(test_step, &run_sonny6297_sweep_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6297_sweep_step = b.step("test-sonny6297-allocation-failure-sweep", "Run SONNY-6297 allocation-failure sweep (every representative statement shape with its N-th allocation failing, N = 0, 1, ...: no leak, no crash, OutOfMemory answered as OutOfMemory, on the four session kinds)");
     sonny6297_sweep_step.dependOn(&run_sonny6297_sweep_tests.step);
     const sonny3126_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3126_list_projection_leaks.zig"), .target = target, .optimize = optimize });

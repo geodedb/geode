@@ -3037,8 +3037,9 @@ pub fn groupByAggregateFastPath(
                     try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
                     key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
                 }
-                var key_list = key_aw.toArrayList();
-                const group_key = try key_list.toOwnedSlice(ga);
+                // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                // failed copy left them in a list nothing freed).
+                const group_key = try key_aw.toOwnedSlice();
 
                 // Upsert group
                 if (groups.getPtr(group_key) == null) {
@@ -3142,8 +3143,9 @@ pub fn groupByAggregateFastPath(
                 try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
                 key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
             }
-            var key_list = key_aw.toArrayList();
-            const group_key = try key_list.toOwnedSlice(ga);
+            // SONNY-6498: the writer keeps the bytes until they are a slice (a
+            // failed copy left them in a list nothing freed).
+            const group_key = try key_aw.toOwnedSlice();
 
             // Upsert group
             if (groups.getPtr(group_key) == null) {
@@ -4978,8 +4980,9 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
                         }
-                        var key_list = key_aw.toArrayList();
-                        const group_key = try key_list.toOwnedSlice(self.allocator);
+                        // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                        // failed copy left them in a list nothing freed).
+                        const group_key = try key_aw.toOwnedSlice();
 
                         // Add to group
                         if (self.binding_groups.getPtr(group_key)) |group_list| {
@@ -6167,6 +6170,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     if (seeded) {
         try refuseUnjoinableBoundElement(q, param_names, param_values);
         var seed = MatchBinding.init(allocator);
+        // SONNY-6498: the seed, until the bindings hold it.
+        var seed_owned = true;
+        errdefer if (seed_owned) seed.deinit();
         var resolvable = true;
         for (q.match.chains, 0..) |chain, ci| {
             if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
@@ -6200,6 +6206,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             }
         }
         if (resolvable) try bindings.append(allocator, seed) else seed.deinit();
+        seed_owned = false;
     }
 
     const first_chain = q.match.chains[0];
@@ -7345,7 +7352,11 @@ fn executeVariableLengthPathTraversal(
         // too; see `releaseEnvBuffers`.
         releaseEnvBuffers(allocator, row, stack_env_values[0..env_idx]);
 
-        try rows.append(allocator, row);
+        // SONNY-6498: the row, when the list cannot take it.
+        rows.append(allocator, row) catch |err| {
+            allocator.free(row);
+            return err;
+        };
     }
 }
 
@@ -7883,7 +7894,11 @@ fn executeSingleHopEdgeTraversal(
             // path (`RETURN p`, a WITH row) keeps them.
             if (path_alive) releaseEnvBuffers(allocator, row, &.{Value{ .Path = .{ .nodes = path_nodes_buf, .edges = path_edges_buf } }});
 
-            try rows.append(allocator, row);
+            // SONNY-6498: the row, when the list cannot take it.
+            rows.append(allocator, row) catch |err| {
+                allocator.free(row);
+                return err;
+            };
         }
     }
 }
@@ -8180,6 +8195,16 @@ fn readBindings(
 
     const rows = try executeMatchQueryImpl(allocator, bindings_query, param_names, param_values, inline_let_bindings, current_graph);
     return .{ .rows = rows, .items = items };
+}
+
+/// SONNY-6498: a copy of `name` appended to `names`, freed if the append
+/// fails.
+fn appendOwnedName(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
+    const owned = try allocator.dupe(u8, name);
+    names.append(allocator, owned) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
 }
 
 // CANARY: REQ=REQ-SONNY-3140-WITH-STAGE; FEATURE="WriteStep"; ASPECT=WithStageRows; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
@@ -10435,7 +10460,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 if (match_variable) |var_name| {
                     env_names = try allocator.alloc([]const u8, 1);
-                    env_values = try allocator.alloc(Value, 1);
+                    // SONNY-6498: the names, when the values cannot be had.
+                    env_values = allocator.alloc(Value, 1) catch |err| {
+                        allocator.free(env_names);
+                        return err;
+                    };
                     env_names[0] = var_name;
                     env_values[0] = Value{ .Node = node };
                 }
@@ -10578,7 +10607,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Create extended environment with both matched variables and inline LET bindings
                 if (inline_let_bindings.len > 0) {
                     var all_names = try allocator.alloc([]const u8, env_names.len + inline_let_names.items.len);
-                    var all_values = try allocator.alloc(Value, env_values.len + inline_let_values.items.len);
+                    var all_values = allocator.alloc(Value, env_values.len + inline_let_values.items.len) catch |err| {
+                        allocator.free(all_names);
+                        return err;
+                    };
 
                     // Copy original env
                     for (env_names, 0..) |name, idx| {
@@ -10614,6 +10646,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Otherwise, evaluate RETURN expressions directly
                 var row: []Value = undefined;
 
+                // SONNY-6498: the extended environment, when its row cannot
+                // be had.
+                var extended_live = inline_let_bindings.len > 0;
+                errdefer if (extended_live) {
+                    allocator.free(extended_env.names);
+                    allocator.free(extended_env.values);
+                };
                 if (q.with_clause != null) {
                     // Build row with matched variables for WITH clause processing
                     row = try allocator.alloc(Value, extended_env.values.len);
@@ -10630,6 +10669,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 } else {
                     // Explicit RETURN clause - evaluate RETURN expressions directly
                     row = try allocator.alloc(Value, items.len);
+                    errdefer allocator.free(row);
                     // SONNY-6449: the rows borrow what the items compute, so
                     // it is the statement's scratch arena's
                     // (`value_utilities.lentAllocator`); on `allocator` it
@@ -10637,21 +10677,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const lent = value_utilities.lentAllocator(allocator);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment
-                        row[i] = eval.evalExpr(lent, item.expr, extended_env) catch |err| {
-                            allocator.free(row);
-                            if (inline_let_bindings.len > 0) {
-                                allocator.free(extended_env.names);
-                                allocator.free(extended_env.values);
-                            }
-                            return err;
-                        };
+                        row[i] = try eval.evalExpr(lent, item.expr, extended_env);
                     }
                 }
 
                 // Free extended environment memory
-                if (inline_let_bindings.len > 0) {
+                if (extended_live) {
                     allocator.free(extended_env.names);
                     allocator.free(extended_env.values);
+                    extended_live = false;
                 }
 
                 // env_names/env_values are released by this iteration's
@@ -10659,7 +10693,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // so there is nothing left to guard against here.
                 // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=TESTED; TEST=tests/test_create_vector_value_leak.zig; OWNER=execution; UPDATED=2026-09-01
 
-                try rows.append(allocator, row);
+                rows.append(allocator, row) catch |err| {
+                    allocator.free(row);
+                    return err;
+                };
             }
         }
 
@@ -10669,7 +10706,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             for (items, 0..) |_, i| {
                 null_row[i] = Value{ .Null = {} };
             }
-            try rows.append(allocator, null_row);
+            rows.append(allocator, null_row) catch |err| {
+                allocator.free(null_row);
+                return err;
+            };
         }
 
         // If WITH clause exists OR no RETURN clause, determine columns from matched variables
@@ -10688,6 +10728,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // GAP-0220 FIX: Use try for proper error propagation
             var col_list = std.ArrayList([]const u8).empty;
             defer col_list.deinit(allocator);
+            // SONNY-6498: the names copied so far, on an error.
+            errdefer for (col_list.items) |col| allocator.free(col);
 
             if (has_relationship) {
                 // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="WithClauseRelationshipVars"; ASPECT=ColumnOrder; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=execution; UPDATED=2026-07-31
@@ -10696,15 +10738,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // `length(path)` through a WITH) and rel/right cannot transpose.
                 const layout = RelEnvLayout.init(left_node_var, rel_var, right_node_var, chain_path_var);
                 for (layout.names[0..layout.len]) |v| {
-                    try col_list.append(allocator, try allocator.dupe(u8, v));
+                    try appendOwnedName(allocator, &col_list, v);
                 }
             } else {
-                if (match_variable) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+                if (match_variable) |v| try appendOwnedName(allocator, &col_list, v);
             }
 
             // Add inline LET bindings if present
             for (inline_let_bindings) |binding| {
-                try col_list.append(allocator, try allocator.dupe(u8, binding.variable));
+                try appendOwnedName(allocator, &col_list, binding.variable);
             }
 
             columns = try col_list.toOwnedSlice(allocator);

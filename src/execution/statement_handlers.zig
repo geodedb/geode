@@ -1209,6 +1209,8 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     // Generate plan steps with cost information (pre-size for typical query)
     var plan_steps = try std.ArrayList(struct { op: []const u8, cost: i64 }).initCapacity(allocator, 10);
     defer plan_steps.deinit(allocator);
+    // SONNY-6498: the rows copy each step's text; it was never freed.
+    defer for (plan_steps.items) |step| allocator.free(step.op);
 
     // Track cumulative cost
     var total_cost: i64 = 0;
@@ -1301,35 +1303,22 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
         },
     }
 
-    // Create result with plan column
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "plan");
-
-    // Create rows with operation descriptions and add total cost at the end
-    const rows = try allocator.alloc([]Value, plan_steps.items.len + 2);
-
+    // Create result with plan column. SONNY-6498: built so that a failed
+    // allocation frees what was made (`ResultBuilder`); the result owns its
+    // cells (they leaked with it).
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("plan");
     // Add header row
-    const header_row = try allocator.alloc(Value, 1);
-    header_row[0] = Value{ .Str = try allocator.dupe(u8, "EXPLAIN") };
-    rows[0] = header_row;
-
+    try b.textRow(&.{"EXPLAIN"});
     // Add operation rows
-    for (plan_steps.items, 0..) |step, i| {
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = try formatPlanOp(allocator, "  {s}", .{step.op}) };
-        rows[i + 1] = row;
+    var line_buf: [512]u8 = undefined;
+    for (plan_steps.items) |step| {
+        try b.textRow(&.{try std.fmt.bufPrint(&line_buf, "  {s}", .{step.op})});
     }
-
     // Add total cost row
-    const total_row = try allocator.alloc(Value, 1);
-    total_row[0] = Value{ .Str = try formatPlanOp(allocator, "Total cost: {}", .{total_cost}) };
-    rows[plan_steps.items.len + 1] = total_row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
+    try b.textRow(&.{try std.fmt.bufPrint(&line_buf, "Total cost: {}", .{total_cost})});
+    return b.finish();
 }
 
 // CANARY: REQ=GAP-0868; FEATURE="PROFILE runtime telemetry"; ASPECT=WallClockTiming; STATUS=TESTED; TEST=tests/test_gap0868_profile_timing.zig; OWNER=execution; UPDATED=2026-06-10
@@ -1375,58 +1364,26 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     const profile_elapsed_ns = monoNanosNow() -| profile_start_ns;
     defer query_result.deinit(allocator);
 
-    // Return profiling statistics
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "metric");
-    columns[1] = try allocator.dupe(u8, "value");
-
-    // Create statistics rows
-    var stats = std.ArrayList([]Value).empty;
-    defer stats.deinit(allocator);
-
+    // Return profiling statistics. SONNY-6498: built so that a failed
+    // allocation frees what was made (`ResultBuilder`).
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("metric");
+    try b.column("value");
     // Profile type indicator
-    {
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, "profile") };
-        row[1] = Value{ .Str = try allocator.dupe(u8, "query_profile") };
-        try stats.append(allocator, row);
-    }
-
+    try b.textRow(&.{ "profile", "query_profile" });
     // Row count
-    {
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, "rows") };
-        row[1] = Value{ .Int = @intCast(query_result.rows.len) };
-        try stats.append(allocator, row);
-    }
-
+    try profileMetric(&b, "rows", .{ .Int = @intCast(query_result.rows.len) });
     // Column count
-    {
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, "columns") };
-        row[1] = Value{ .Int = @intCast(query_result.columns.len) };
-        try stats.append(allocator, row);
-    }
-
+    try profileMetric(&b, "columns", .{ .Int = @intCast(query_result.columns.len) });
     // Execution time: real wall-clock milliseconds measured around the
     // wrapped statement (GAP-0868; replaces the old `time = 1` placeholder).
-    {
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, "time_ms") };
-        row[1] = Value{ .Int = @intCast(profile_elapsed_ns / std.time.ns_per_ms) };
-        try stats.append(allocator, row);
-    }
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = try stats.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        // GAP-0535: every row value above is a fresh dupe (metric-name
-        // strings) or a scalar — the result fully owns its value memory, so
-        // deinit is leak-free under a strict allocator (this was the leak
-        // the GAP-0868 test originally had to hide behind an arena).
-        .owns_value_memory = true,
-    };
+    try profileMetric(&b, "time_ms", .{ .Int = @intCast(profile_elapsed_ns / std.time.ns_per_ms) });
+    // GAP-0535: every row value above is a fresh dupe (metric-name strings)
+    // or a scalar — the result fully owns its value memory, so deinit is
+    // leak-free under a strict allocator (this was the leak the GAP-0868
+    // test originally had to hide behind an arena).
+    return b.finish();
 }
 
 // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ExecutorFunction; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
@@ -1718,62 +1675,35 @@ fn classifyQueryAction(q: *const ast.Query) @import("../security/gps.zig").Actio
 }
 
 fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_runtime.Plan) !ExecutionResult {
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "plan");
+    // SONNY-6498: built so that a failed allocation frees what was made.
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("plan");
+    for (plan.ops) |op| try b.textRow(&.{plannedOpName(op.kind)});
+    // GAP-0535: all row values are fresh dupes — fully owned.
+    return b.finish();
+}
 
-    const rows = try allocator.alloc([]Value, plan.ops.len);
-    errdefer allocator.free(rows);
-
-    for (plan.ops, 0..) |op, idx| {
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = try allocator.dupe(u8, plannedOpName(op.kind)) };
-        rows[idx] = row;
-    }
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-        // GAP-0535: all row values are fresh dupes — fully owned.
-        .owns_value_memory = true,
-    };
+/// One `metric, value` row of a PROFILE result.
+fn profileMetric(b: *result_utils.ResultBuilder, metric: []const u8, value: Value) !void {
+    const r = try b.row(2);
+    r[0] = try b.text(metric);
+    r[1] = value;
 }
 
 fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read_runtime.ProfiledExecution) !ExecutionResult {
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "metric");
-    columns[1] = try allocator.dupe(u8, "value");
-
-    const rows = try allocator.alloc([]Value, 5);
-    errdefer allocator.free(rows);
-
-    rows[0] = try allocator.alloc(Value, 2);
-    rows[0][0] = Value{ .Str = try allocator.dupe(u8, "profile") };
-    rows[0][1] = Value{ .Str = try allocator.dupe(u8, "planned_query_profile") };
-
-    rows[1] = try allocator.alloc(Value, 2);
-    rows[1][0] = Value{ .Str = try allocator.dupe(u8, "rows") };
-    rows[1][1] = Value{ .Int = @intCast(planned.result.rows.len) };
-
-    rows[2] = try allocator.alloc(Value, 2);
-    rows[2][0] = Value{ .Str = try allocator.dupe(u8, "columns") };
-    rows[2][1] = Value{ .Int = @intCast(planned.result.columns.len) };
-
-    rows[3] = try allocator.alloc(Value, 2);
-    rows[3][0] = Value{ .Str = try allocator.dupe(u8, "time_ns") };
-    rows[3][1] = Value{ .Int = @intCast(planned.trace.totalTimeNs()) };
-
-    rows[4] = try allocator.alloc(Value, 2);
-    rows[4][0] = Value{ .Str = try allocator.dupe(u8, "operators") };
-    rows[4][1] = Value{ .Int = @intCast(planned.trace.ops.len) };
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-        // GAP-0535: all row values are fresh dupes or scalars — fully owned.
-        .owns_value_memory = true,
-    };
+    // SONNY-6498: built so that a failed allocation frees what was made.
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("metric");
+    try b.column("value");
+    try b.textRow(&.{ "profile", "planned_query_profile" });
+    try profileMetric(&b, "rows", .{ .Int = @intCast(planned.result.rows.len) });
+    try profileMetric(&b, "columns", .{ .Int = @intCast(planned.result.columns.len) });
+    try profileMetric(&b, "time_ns", .{ .Int = @intCast(planned.trace.totalTimeNs()) });
+    try profileMetric(&b, "operators", .{ .Int = @intCast(planned.trace.ops.len) });
+    // GAP-0535: all row values are fresh dupes or scalars — fully owned.
+    return b.finish();
 }
 
 fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {

@@ -117,18 +117,16 @@ fn forAfterPart(allocator: std.mem.Allocator, next: ast.Query, prev: ExecutionRe
     var result = try statement_handlers.executeForReturn(allocator, fr.*, prev.columns, prev.rows, context);
     // The rows may hold `prev`'s values: its graph entities go with them,
     // and values it owns stay allocated (as the chain's other paths leave
-    // them). Its columns and row slices are freed.
-    if (prev.owned_graph_entities) |entities| {
-        if (result.owned_graph_entities == null) result.owned_graph_entities = entities;
-    }
-    if (prev.column_buffer) |buffer| {
-        allocator.free(buffer);
-    } else {
-        for (prev.columns) |col| allocator.free(col);
-    }
-    allocator.free(prev.columns);
-    for (prev.rows) |row| allocator.free(row);
-    allocator.free(prev.rows);
+    // them). Its columns and row slices are freed. SONNY-6498: `prev` stays
+    // the caller's until here (its entities were dropped when the result
+    // tracked some of its own).
+    var spent = prev;
+    adoptEntities(&result.owned_graph_entities, spent.owned_graph_entities) catch |err| {
+        result.deinit(allocator);
+        return err;
+    };
+    spent.owned_graph_entities = null;
+    releasePart(allocator, &spent);
     return result;
 }
 
@@ -148,11 +146,94 @@ fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGra
     if (d == s) return;
     if (d.destroy_node != s.destroy_node or d.destroy_edge != s.destroy_edge or
         d.allocator.ptr != s.allocator.ptr or d.allocator.vtable != s.allocator.vtable) return;
-    try d.nodes.appendSlice(d.allocator, s.nodes.items);
-    try d.edges.appendSlice(d.allocator, s.edges.items);
+    // SONNY-6498: both lists grow first; a failure leaves `src` whole (it
+    // was half copied, then freed by both trackers).
+    try d.nodes.ensureUnusedCapacity(d.allocator, s.nodes.items.len);
+    try d.edges.ensureUnusedCapacity(d.allocator, s.edges.items.len);
+    d.nodes.appendSliceAssumeCapacity(s.nodes.items);
+    d.edges.appendSliceAssumeCapacity(s.edges.items);
     s.nodes.deinit(s.allocator);
     s.edges.deinit(s.allocator);
     s.allocator.destroy(s);
+}
+
+// CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ChainParts; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6498: free what a chained part's result holds once the chain is
+/// done with it: its column names, row arrays, flag list and tracked
+/// entities (null when taken). Not its values: the chain's rows still read
+/// them, and every path freed exactly the arrays (by hand, and only on
+/// success).
+fn releasePart(allocator: std.mem.Allocator, part: *ExecutionResult) void {
+    part.owns_value_memory = false;
+    part.deinit(allocator);
+}
+
+/// SONNY-6498: the rows a chain collects from the part it runs for each
+/// incoming row. Owns them, the column names, the flags and the tracked
+/// entities until `finish`, and `deinit` frees them on an error; a part's
+/// rows are moved, not copied. The chains built these by hand, and every
+/// error after the first part leaked them and the part results in flight.
+const ChainRows = struct {
+    allocator: std.mem.Allocator,
+    columns: ?[][]const u8 = null,
+    rows: std.ArrayList([]Value) = .empty,
+    flags: std.ArrayList([]const u8) = .empty,
+    entities: ?*execution.OwnedGraphEntities = null,
+
+    fn deinit(self: *ChainRows) void {
+        if (self.columns) |cols| {
+            for (cols) |c| self.allocator.free(c);
+            self.allocator.free(cols);
+        }
+        for (self.rows.items) |r| self.allocator.free(r);
+        self.rows.deinit(self.allocator);
+        self.flags.deinit(self.allocator);
+        if (self.entities) |e| e.deinit();
+    }
+
+    /// Take `part_in`'s rows, flags and entities, and the first part's
+    /// column names; `part_in` is consumed either way.
+    fn take(self: *ChainRows, part_in: ExecutionResult) !void {
+        var part = part_in;
+        defer releasePart(self.allocator, &part);
+        try self.rows.ensureUnusedCapacity(self.allocator, part.rows.len);
+        try self.flags.ensureUnusedCapacity(self.allocator, part.flags.items.len);
+        if (self.columns == null) self.columns = try dupeColumns(self.allocator, part.columns);
+        try adoptEntities(&self.entities, part.owned_graph_entities);
+        part.owned_graph_entities = null;
+        // Nothing below fails.
+        self.rows.appendSliceAssumeCapacity(part.rows);
+        self.allocator.free(part.rows);
+        part.rows = &.{};
+        self.flags.appendSliceAssumeCapacity(part.flags.items);
+    }
+
+    /// The result; `self` is empty after.
+    fn finish(self: *ChainRows) !ExecutionResult {
+        const rows = try self.rows.toOwnedSlice(self.allocator);
+        const result = ExecutionResult{
+            .columns = self.columns orelse &.{},
+            .rows = rows,
+            .flags = self.flags,
+            .owned_graph_entities = self.entities,
+        };
+        self.* = .{ .allocator = self.allocator };
+        return result;
+    }
+};
+
+fn dupeColumns(allocator: std.mem.Allocator, columns: []const []const u8) ![][]const u8 {
+    const out = try allocator.alloc([]const u8, columns.len);
+    var filled: usize = 0;
+    errdefer {
+        for (out[0..filled]) |c| allocator.free(c);
+        allocator.free(out);
+    }
+    for (columns, out) |c, *o| {
+        o.* = try allocator.dupe(u8, c);
+        filled += 1;
+    }
+    return out;
 }
 
 fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
@@ -355,8 +436,14 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     var current_query_standalone = try expandWithStar(star_arena.allocator(), current_query, &.{});
     current_query_standalone.next_query = null;
 
-    const current_result = try executeQueryWithContext(allocator, current_query_standalone, context);
-    if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| return result;
+    var current_result = try executeQueryWithContext(allocator, current_query_standalone, context);
+    // SONNY-6498: the first part's result, until a path below consumes it.
+    var current_live = true;
+    errdefer if (current_live) current_result.deinit(allocator);
+    if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| {
+        current_live = false;
+        return result;
+    }
 
     // CANARY(memory-safety): Validate current_result structure before accessing
     // Prevent corrupted column length from causing OutOfMemory errors
@@ -532,15 +619,15 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 .flags = std.ArrayList([]const u8).empty,
             };
 
-            // Clean up current_result
-            for (current_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(current_result.columns);
-            for (current_result.rows) |r| {
-                allocator.free(r);
-            }
-            allocator.free(current_result.rows);
+            // Clean up current_result (its entities went with the rows)
+
+            current_live = false;
+
+            var spent_first = current_result;
+
+            spent_first.owned_graph_entities = null;
+
+            releasePart(allocator, &spent_first);
 
             // Process remaining query using the grouped result rows as input
             var final_rows = try std.ArrayList([]Value).initCapacity(allocator, grouped_result.rows.len);
@@ -653,15 +740,15 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 try return_and_sorting.sortRows(allocator, &result, order_by);
             }
 
-            // Clean up current_result
-            for (current_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(current_result.columns);
-            for (current_result.rows) |r| {
-                allocator.free(r);
-            }
-            allocator.free(current_result.rows);
+            // Clean up current_result (its entities went with the rows)
+
+            current_live = false;
+
+            var spent_first = current_result;
+
+            spent_first.owned_graph_entities = null;
+
+            releasePart(allocator, &spent_first);
 
             return result;
         }
@@ -670,31 +757,24 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=FinalAggregate; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
     // SONNY-3046: the last part's aggregate over every row the chain's parts
     // produce, each part joined to the row before it (`chainFinalAggregate`).
-    if (final_has_aggregation) return chainFinalAggregate(allocator, current_result, next_query_ptr, context);
-
-    // Now execute the next query with the current result as bindings
-    // For each row in current_result, execute next_query with those bindings
-    // GAP-0220 FIX: Use try for proper error propagation
-    var final_rows = try std.ArrayList([]Value).initCapacity(allocator, current_result.rows.len);
-    var final_columns: [][]const u8 = &.{};
-    // GAP-0220 FIX: Use try for proper error propagation
-    var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, current_result.flags.items.len);
-    var final_entities: ?*execution.OwnedGraphEntities = null;
+    if (final_has_aggregation) {
+        current_live = false;
+        return chainFinalAggregate(allocator, current_result, next_query_ptr, context);
+    }
 
     // If current result has no rows, still execute next query once with empty bindings
     if (current_result.rows.len == 0) {
         const next_result = try executeQueryChainWithBindings(allocator, next_query_ptr.*, context, &.{}, &.{});
-
-        // Clean up current_result properly - columns, rows array, and row contents
-        for (current_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(current_result.columns);
-        // Note: rows.len is 0, so no row contents to free
-        allocator.free(current_result.rows);
-
+        current_live = false;
+        releasePart(allocator, &current_result);
         return next_result;
     }
+
+    // Now execute the next query with the current result as bindings
+    // For each row in current_result, execute next_query with those bindings
+    // SONNY-6498: collected by `ChainRows`, which owns what it took.
+    var collected: ChainRows = .{ .allocator = allocator };
+    defer collected.deinit();
 
     for (current_result.rows) |current_row| {
         // Create parameter bindings from current row
@@ -724,64 +804,17 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         }
 
         // Execute the next query with these bindings as an initial environment
-        const next_result = try executeQueryChainWithBindings(allocator, next_query_with_bindings, context, param_names.items, param_values.items);
-
-        // Collect results
-        if (final_columns.len == 0) {
-            // First iteration: set up columns
-            final_columns = try allocator.alloc([]const u8, next_result.columns.len);
-            for (next_result.columns, 0..) |col, i| {
-                final_columns[i] = try allocator.dupe(u8, col);
-            }
-        }
-
-        // Add all rows from next_result
-        for (next_result.rows) |row| {
-            // Duplicate the row to avoid ownership issues
-            const row_copy = try allocator.alloc(Value, row.len);
-            for (row, 0..) |val, i| {
-                row_copy[i] = val;
-            }
-            try final_rows.append(allocator, row_copy);
-        }
-
-        // Collect flags
-        for (next_result.flags.items) |flag| {
-            try final_flags.append(allocator, flag);
-        }
-
-        // Clean up next_result (we copied what we needed)
-        for (next_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(next_result.columns);
-        for (next_result.rows) |row| {
-            allocator.free(row);
-        }
-        allocator.free(next_result.rows);
-        // next_result.flags owned by result, no need to deinit
-        // SONNY-3046: the rows hold the nodes and relationships it tracks.
-        try adoptEntities(&final_entities, next_result.owned_graph_entities);
+        try collected.take(try executeQueryChainWithBindings(allocator, next_query_with_bindings, context, param_names.items, param_values.items));
     }
 
-    // Clean up current_result
-    for (current_result.columns) |col| {
-        allocator.free(col);
-    }
-    allocator.free(current_result.columns);
-    for (current_result.rows) |row| {
-        allocator.free(row);
-    }
-    allocator.free(current_result.rows);
-    // current_result.flags owned by result, no need to deinit
-    try adoptEntities(&final_entities, current_result.owned_graph_entities);
+    // The rows hold the first part's nodes and relationships too.
+    try adoptEntities(&collected.entities, current_result.owned_graph_entities);
+    current_result.owned_graph_entities = null;
+    current_live = false;
+    releasePart(allocator, &current_result);
 
-    var result = ExecutionResult{
-        .columns = final_columns,
-        .rows = try final_rows.toOwnedSlice(allocator),
-        .flags = final_flags,
-        .owned_graph_entities = final_entities,
-    };
+    var result = try collected.finish();
+    errdefer result.deinit(allocator);
 
     // CANARY: REQ=REQ-GQL-CHAIN-ORDERBY-001; FEATURE="ChainOrderBy"; ASPECT=FinalSorting; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
     // Apply ORDER BY from the final query in the chain to the combined result
@@ -791,11 +824,9 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         final_query = next.*;
     }
     if (final_query.order_by) |order| {
-        sortRows(allocator, &result, order) catch |err| {
-            // SONNY-2811: a key that fails to evaluate fails the sort.
-            result.deinit(allocator);
-            return err;
-        };
+        // SONNY-2811: a key that fails to evaluate fails the sort (and the
+        // errdefer above frees the result).
+        try sortRows(allocator, &result, order);
     }
 
     // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-10-10
@@ -822,8 +853,14 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         current_query_standalone.next_query = null;
 
         qe_log.debug("executing chained query standalone", &.{});
-        const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
-        if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| return result;
+        var current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
+        // SONNY-6498: as in `executeQueryChain`.
+        var current_live = true;
+        errdefer if (current_live) current_result.deinit(allocator);
+        if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| {
+            current_live = false;
+            return result;
+        }
         qe_log.debug("chained query result", &.{
             Attr.int("columns", @intCast(current_result.columns.len)),
             Attr.int("rows", @intCast(current_result.rows.len)),
@@ -966,15 +1003,15 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
             var rows = try allocator.alloc([]Value, 1);
             rows[0] = row;
 
-            // Clean up current_result
-            for (current_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(current_result.columns);
-            for (current_result.rows) |r| {
-                allocator.free(r);
-            }
-            allocator.free(current_result.rows);
+            // Clean up current_result (its entities went with the rows)
+
+            current_live = false;
+
+            var spent_first = current_result;
+
+            spent_first.owned_graph_entities = null;
+
+            releasePart(allocator, &spent_first);
 
             return ExecutionResult{
                 .columns = columns,
@@ -984,12 +1021,9 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         }
 
         // Chain to next query using the result as bindings (original per-row logic)
-        // GAP-0220 FIX: Use try for proper error propagation
-        var final_rows = try std.ArrayList([]Value).initCapacity(allocator, current_result.rows.len);
-        var final_columns: [][]const u8 = &.{};
-        // GAP-0220 FIX: Use try for proper error propagation
-        var final_flags = try std.ArrayList([]const u8).initCapacity(allocator, current_result.flags.items.len);
-        var final_entities: ?*execution.OwnedGraphEntities = null;
+        // SONNY-6498: collected by `ChainRows`, which owns what it took.
+        var collected: ChainRows = .{ .allocator = allocator };
+        defer collected.deinit();
 
         for (current_result.rows) |current_row| {
             // Validate that current_row length matches columns length
@@ -1013,57 +1047,15 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
                 try param_values.append(allocator, col_value);
             }
 
-            const next_result = try executeQueryChainWithBindings(allocator, next_query_ptr.*, context, param_names.items, param_values.items);
-
-            if (final_columns.len == 0) {
-                final_columns = try allocator.alloc([]const u8, next_result.columns.len);
-                for (next_result.columns, 0..) |col, i| {
-                    final_columns[i] = try allocator.dupe(u8, col);
-                }
-            }
-
-            for (next_result.rows) |row| {
-                const row_copy = try allocator.alloc(Value, row.len);
-                for (row, 0..) |val, i| {
-                    row_copy[i] = val;
-                }
-                try final_rows.append(allocator, row_copy);
-            }
-
-            for (next_result.flags.items) |flag| {
-                try final_flags.append(allocator, flag);
-            }
-
-            for (next_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(next_result.columns);
-            for (next_result.rows) |row| {
-                allocator.free(row);
-            }
-            allocator.free(next_result.rows);
-            // next_result.flags owned by result, no need to deinit
-            // SONNY-3046: the rows hold the nodes and relationships it tracks.
-            try adoptEntities(&final_entities, next_result.owned_graph_entities);
+            try collected.take(try executeQueryChainWithBindings(allocator, next_query_ptr.*, context, param_names.items, param_values.items));
         }
 
-        for (current_result.columns) |col| {
-            allocator.free(col);
-        }
-        allocator.free(current_result.columns);
-        for (current_result.rows) |row| {
-            allocator.free(row);
-        }
-        allocator.free(current_result.rows);
-        // current_result.flags owned by result, no need to deinit
-        try adoptEntities(&final_entities, current_result.owned_graph_entities);
-
-        return ExecutionResult{
-            .columns = final_columns,
-            .rows = try final_rows.toOwnedSlice(allocator),
-            .flags = final_flags,
-            .owned_graph_entities = final_entities,
-        };
+        // The rows hold this part's nodes and relationships too.
+        try adoptEntities(&collected.entities, current_result.owned_graph_entities);
+        current_result.owned_graph_entities = null;
+        current_live = false;
+        releasePart(allocator, &current_result);
+        return collected.finish();
     }
 
     // No further chaining, just execute with bindings
@@ -1399,6 +1391,8 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
             if (!passes_filter) {
                 const items = q.ret.items;
                 const columns = try generateUniqueColumnNames(allocator, items);
+                // SONNY-6498: the names, when the rows cannot be had.
+                errdefer freeColumnNames(allocator, columns);
                 return ExecutionResult{
                     .columns = columns,
                     .rows = try allocator.alloc([]Value, 0),

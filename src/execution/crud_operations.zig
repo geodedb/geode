@@ -4098,10 +4098,14 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // no merged node chain, and its RETURN was skipped: no row.
     if (m.return_clause) |ret| {
         {
+            // SONNY-6498: each is freed when a later step fails.
             const columns = try generateUniqueColumnNames(allocator, ret.items);
+            errdefer match_operations.freeColumnNames(allocator, columns);
 
             var rows = try allocator.alloc([]Value, 1);
+            errdefer allocator.free(rows);
             var row = try allocator.alloc(Value, ret.items.len);
+            errdefer allocator.free(row);
 
             // The environment: the 'created' flag, then every variable the
             // pattern bound, as written (SONNY-3240), then the parameters.

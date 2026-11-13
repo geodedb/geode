@@ -104,6 +104,69 @@ pub fn freeColumnNames(allocator: std.mem.Allocator, columns: []const []const u8
     allocator.free(columns);
 }
 
+// CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ResultBuilder; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6498: a result built row by row (EXPLAIN, PROFILE, a procedure's
+/// rows), owning every column name, row and cell made so far: `deinit` frees
+/// them when building fails, `finish` hands them to the result. A row is in
+/// the result as soon as it is made (its cells NULL), so a cell that cannot
+/// be made leaves nothing behind. The hand-built results leaked whatever
+/// they had made when an allocation failed.
+pub const ResultBuilder = struct {
+    allocator: std.mem.Allocator,
+    columns: std.ArrayList([]const u8) = .empty,
+    rows: std.ArrayList([]Value) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) ResultBuilder {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ResultBuilder) void {
+        for (self.columns.items) |c| self.allocator.free(c);
+        self.columns.deinit(self.allocator);
+        for (self.rows.items) |r| {
+            for (r) |cell| value_utilities.freeValue(self.allocator, cell);
+            self.allocator.free(r);
+        }
+        self.rows.deinit(self.allocator);
+    }
+
+    /// A column named `name` (copied).
+    pub fn column(self: *ResultBuilder, name: []const u8) !void {
+        try self.columns.ensureUnusedCapacity(self.allocator, 1);
+        self.columns.appendAssumeCapacity(try self.allocator.dupe(u8, name));
+    }
+
+    /// A new row of `width` NULL cells, already the result's.
+    pub fn row(self: *ResultBuilder, width: usize) ![]Value {
+        try self.rows.ensureUnusedCapacity(self.allocator, 1);
+        const r = try self.allocator.alloc(Value, width);
+        @memset(r, Value{ .Null = {} });
+        self.rows.appendAssumeCapacity(r);
+        return r;
+    }
+
+    /// A string cell (a copy of `text`).
+    pub fn text(self: *ResultBuilder, s: []const u8) !Value {
+        return .{ .Str = try self.allocator.dupe(u8, s) };
+    }
+
+    /// A row of string cells.
+    pub fn textRow(self: *ResultBuilder, cells: []const []const u8) !void {
+        const r = try self.row(cells.len);
+        for (cells, r) |c, *cell| cell.* = try self.text(c);
+    }
+
+    /// The result: it owns its cells (`owns_value_memory`).
+    pub fn finish(self: *ResultBuilder) !ExecutionResult {
+        const rows = try self.rows.toOwnedSlice(self.allocator);
+        const columns = self.columns.toOwnedSlice(self.allocator) catch |err| {
+            self.rows = std.ArrayList([]Value).fromOwnedSlice(rows);
+            return err;
+        };
+        return .{ .columns = columns, .rows = rows, .flags = .empty, .owns_value_memory = true };
+    }
+};
+
 // ============================================================================
 // DISTINCT Deduplication
 // ============================================================================

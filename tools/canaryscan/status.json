@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:24:09.9377442Z",
+  "generated_at": "2026-11-13T19:50:47.191436993Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87556,6 +87556,53 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6498-ERROR-PATH-OWNERSHIP",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ChainParts",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "PlannedReadRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ResultBuilder",
+          "status": "TESTED",
+          "files": [
+            "src/execution/result_utils.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95277,7 +95324,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4976
+      "TESTED": 4979
     },
     "by_aspect": {
       "2PC": 3,
@@ -95735,6 +95782,7 @@
       "ChainLimit": 1,
       "ChainMarking": 1,
       "ChainOrder": 1,
+      "ChainParts": 1,
       "ChainProcessing": 1,
       "ChainVariable": 1,
       "ChainVerification": 2,
@@ -98035,6 +98083,7 @@
       "PlanSelectionPipelineVarianceEnvelope": 1,
       "PlanSelectionVarianceEnvelope": 1,
       "PlannedFinalProjection": 1,
+      "PlannedReadRows": 1,
       "PlannedRuntimeDeclinesWrites": 1,
       "Planner": 8,
       "PlannerAdaptiveBiasApplication": 1,
@@ -98542,6 +98591,7 @@
       "RestartSameMeaning": 1,
       "RestoreDataIntegrity": 1,
       "RestoresAdjacencyEntriesFromMirror": 1,
+      "ResultBuilder": 1,
       "ResultGuard": 1,
       "ResultSerialization": 1,
       "ResultStreaming": 2,

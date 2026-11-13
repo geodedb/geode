@@ -317,7 +317,9 @@ pub fn visibleTenantTagsAlloc(allocator: std.mem.Allocator, filter_tenant: ?[]co
         for (tags.items) |t| allocator.free(t);
         tags.deinit(allocator);
     }
-    try tags.append(allocator, try allocator.dupe(u8, tid));
+    // SONNY-6498: the list grows first, so the copy is never dropped.
+    try tags.ensureUnusedCapacity(allocator, 1);
+    tags.appendAssumeCapacity(try allocator.dupe(u8, tid));
     if (hierarchyForFilter(tid)) |hm| {
         // Breadth-first over the children lists; `tags` doubles as the queue.
         var next: usize = 0;

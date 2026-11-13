@@ -6660,34 +6660,31 @@ pub const StorageAdapter = struct {
 
     /// Get all outgoing edges from a node.
     /// Returns a caller-owned slice built from the engine's edge iterator.
+    ///
+    /// SONNY-6498: the engine's own slice. Through the type-erased
+    /// `GraphStorage.expandOut` the engine's slice was boxed in an iterator
+    /// state and then copied, and it leaked when the box could not be
+    /// allocated (graph_storage 0.4.13 `interface.zig` `sliceToEdgeIterator`
+    /// has no errdefer for it).
     pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
-        errdefer result.deinit(allocator);
-
-        var iter = try self.iterateOutgoingEdges(graph_name, node_id, allocator);
-        defer iter.deinit();
-
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-
-        return try result.toOwnedSlice(allocator);
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.expandOut(node_id, null, allocator);
     }
 
     /// Get all incoming edges to a node.
     /// Returns a caller-owned slice built from the engine's edge iterator.
     pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
-        errdefer result.deinit(allocator);
-
-        var iter = try self.iterateIncomingEdges(graph_name, node_id, allocator);
-        defer iter.deinit();
-
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-
-        return try result.toOwnedSlice(allocator);
+        // SONNY-6498: as `getOutgoingEdges`.
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.expandIn(node_id, null, allocator);
     }
 
     // ------------------------------------------------------------------

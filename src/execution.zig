@@ -869,6 +869,26 @@ pub const OwnedGraphEntities = struct {
         try self.edges.append(self.allocator, edge);
     }
 
+    /// SONNY-6498: track `node`, made for this tracker, destroying it when
+    /// it cannot be tracked: a node materialized for a row is never left
+    /// unowned when the row cannot be built (the row builders tracked their
+    /// nodes only after the row was in its list, and leaked them on any
+    /// failure before).
+    pub fn adoptNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
+        self.nodes.append(self.allocator, node) catch |err| {
+            if (self.destroy_node) |destroy| destroy(self.allocator, node) else self.allocator.destroy(node);
+            return err;
+        };
+    }
+
+    /// As `adoptNode`, for a relationship.
+    pub fn adoptEdge(self: *OwnedGraphEntities, edge: *graph_store.Edge) !void {
+        self.edges.append(self.allocator, edge) catch |err| {
+            if (self.destroy_edge) |destroy| destroy(self.allocator, edge) else self.allocator.destroy(edge);
+            return err;
+        };
+    }
+
     /// Release the tracked entities AND the tracker itself (always
     /// heap-allocated by `init`). SONNY-2394: this used to leave the tracker
     /// allocated, so every call site that only called deinit() -- each planned
@@ -3539,6 +3559,8 @@ pub const VariableLengthPath = struct {
 
     fn clone(self: *const VariableLengthPath, allocator: std.mem.Allocator) !VariableLengthPath {
         var new_path = VariableLengthPath.init(allocator);
+        // SONNY-6498: what was copied, when the rest cannot be.
+        errdefer new_path.deinit(allocator);
         try new_path.nodes.appendSlice(allocator, self.nodes.items);
         try new_path.edges.appendSlice(allocator, self.edges.items);
         // Clone the membership sets
@@ -3645,6 +3667,8 @@ pub const PathIterator = struct {
 
         // Seed the BFS queue with the start node
         var initial_path = VariableLengthPath.init(allocator);
+        // SONNY-6498: until the queue holds it.
+        errdefer initial_path.deinit(allocator);
         try initial_path.nodes.append(allocator, start_node_id);
         try initial_path.node_set.put(allocator, start_node_id, {});
         try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
@@ -3773,6 +3797,9 @@ pub const PathIterator = struct {
         depth: u32,
     ) !void {
         var new_path = try current_path.clone(self.allocator);
+        // SONNY-6498: until the queue holds it or it is freed below.
+        var new_path_live = true;
+        errdefer if (new_path_live) new_path.deinit(self.allocator);
         try new_path.edges.append(self.allocator, edge_id);
         try new_path.edge_set.put(self.allocator, edge_id, {});
         try new_path.nodes.append(self.allocator, next_node_id);
@@ -3784,14 +3811,19 @@ pub const PathIterator = struct {
 
         if (meets_min) {
             // Path qualifies - add a clone to pending results
-            const result_path = try new_path.clone(self.allocator);
-            try self.pending_results.append(self.allocator, result_path);
+            var result_path = try new_path.clone(self.allocator);
+            self.pending_results.append(self.allocator, result_path) catch |err| {
+                result_path.deinit(self.allocator);
+                return err;
+            };
         }
 
         // Continue expanding if we haven't reached max length
         if (!reached_max) {
             try self.queue.append(self.allocator, .{ .path = new_path, .depth = new_depth });
+            new_path_live = false;
         } else {
+            new_path_live = false;
             new_path.deinit(self.allocator);
         }
     }
@@ -3808,6 +3840,7 @@ pub const PathIterator = struct {
         if (self.pending_zero_path) {
             self.pending_zero_path = false;
             var zero_path = VariableLengthPath.init(self.allocator);
+            errdefer zero_path.deinit(self.allocator);
             try zero_path.nodes.append(self.allocator, self.start_node_id);
             try zero_path.node_set.put(self.allocator, self.start_node_id, {});
             return zero_path;
@@ -3836,11 +3869,15 @@ pub const PathIterator = struct {
             // Dequeue first item (BFS order) - O(1) via front-index
             const current = self.queueDequeue();
             var current_path = current.path;
+            // SONNY-6498: the dequeued path, when expanding it fails.
+            var current_live = true;
+            errdefer if (current_live) current_path.deinit(self.allocator);
             const depth = current.depth;
 
             // If we've reached max_len, don't expand further
             if (self.max_len) |max| {
                 if (depth >= max) {
+                    current_live = false;
                     if (depth >= self.min_len) {
                         return current_path;
                     } else {
@@ -3893,6 +3930,7 @@ pub const PathIterator = struct {
             }
 
             // Clean up the current path (we've cloned it for any expansions)
+            current_live = false;
             current_path.deinit(self.allocator);
 
             // If we found qualifying paths this expansion, yield the first one (O(1) dequeue)
@@ -4960,8 +4998,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 // SONNY-2675: the key's typed canonical encoding.
                 try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
-            var key_buf = key_aw.toArrayList();
-            const group_key = try key_buf.toOwnedSlice(allocator);
+            // SONNY-6498: the writer keeps the bytes until they are a slice (a
+            // failed copy left them in a list nothing freed).
+            const group_key = try key_aw.toOwnedSlice();
 
             // Add row to its group
             // SONNY-6297: on a failed allocation the key and a new group's
@@ -5038,8 +5077,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                             try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                     }
-                    var key_buf = key_aw.toArrayList();
-                    const group_key = try key_buf.toOwnedSlice(allocator);
+                    // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                    // failed copy left them in a list nothing freed).
+                    const group_key = try key_aw.toOwnedSlice();
                     try addToGroup(allocator, &groups, &group_keys_list, group_key, input_row);
                 }
 

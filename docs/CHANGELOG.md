@@ -2235,6 +2235,32 @@
 
 ### Fixed
 
+- **A statement whose allocation fails frees what it built, on every
+  executor (SONNY-6498 item 1).** With its N-th allocation failing, for
+  every N, 64 of the 68 runs of `test-sonny6297-allocation-failure-sweep`
+  (17 statement shapes x the in-memory, persisted, tenant-scoped and RLS
+  sessions) leaked. Fixed at each site: the chained-part executors
+  (`query_execution.zig` `executeQueryChain`, `executeQueryChainWithBindings`,
+  `forAfterPart`) now collect the parts' rows in `ChainRows`, which owns
+  them and the part results in flight (they were freed by hand, only on
+  success); `adoptEntities` merges atomically; the planned read adopts each
+  materialized node and relationship into the result's tracker as it is
+  made (`OwnedGraphEntities.adoptNode` / `adoptEdge`) and builds its result
+  with `bindingResult`, its rows freed on any error; `buildPlanIfSupported`
+  and `ensureBinding` keep every slice and copied name owned; EXPLAIN,
+  PROFILE and `db.labels()` build their results with
+  `result_utils.ResultBuilder` (the legacy EXPLAIN's cells and step texts
+  were never freed, even on success); the variable-length `PathIterator`
+  frees a path it cloned or dequeued; the legacy traversals free a row, an
+  environment or a seed binding they could not keep; a group key moves
+  from its writer without a lost copy; the MERGE RETURN, the bound-variable
+  RETURN and the tenant tag list free what they made. The planned read's
+  hops read the engine's own edge slice (`getOutgoingEdges` /
+  `getIncomingEdges`): the type-erased `expandOut` boxed it and leaked it
+  when the box could not be allocated (graph_storage 0.4.13
+  `interface.zig` `sliceToEdgeIterator`). The sweep is green on every shape
+  and session (about 40 s) and runs in the aggregate now. Regression:
+  `zig build test-sonny6297-allocation-failure-sweep`.
 - **After WITH or NEXT only the projected variables are in scope
   (SONNY-6496 item 1, BREAKING).** A reference to a variable the WITH (or
   the RETURN before a NEXT) does not project read NULL on every executor:
