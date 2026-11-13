@@ -14,6 +14,13 @@
 //     hierarchy, GAP-0846) failed to decrypt (58030). The identity now uses
 //     the record's stored tenant; values written under the writer's request
 //     tenant still decrypt.
+// (3) CREATE INDEX / CREATE CONSTRAINT UNIQUE and geode.fle.configureField
+//     each checked the other under its own lock, with nothing held between
+//     check and write: racing, both ran and left a UNIQUE constraint over an
+//     encrypted field.
+// (4) An index (not fulltext) made before its field was encrypted was not
+//     detected, and an equality read served by it returned no rows (it
+//     holds ciphertext).
 //
 // Through the executor (executeStatementWithContext) and the graph-store
 // primitives on the in-process persisted store.
@@ -260,4 +267,116 @@ test "SONNY-6347 (5): a value encrypted under the writer's request tenant (befor
     fle_integration.setCurrentTenantId(null);
     try testing.expectEqualSlices(u8, old, e.f.st.getNodeProperty(id, "ssn").?.String);
     try expectStr(secret, try e.str("org6347", "MATCH (n:T6347 {k: 1}) RETURN n.ssn"), "request-tenant identity");
+}
+
+// ---------------------------------------------------------------------------
+// (3) CREATE INDEX / CREATE CONSTRAINT and configureField do not race
+// ---------------------------------------------------------------------------
+
+/// A second executor on its own thread: its own session and arena.
+const Racer = struct {
+    query: []const u8,
+    ok: bool = false,
+    err: ?anyerror = null,
+
+    fn go(self: *Racer) void {
+        var session = execution.SessionState.init(testing.allocator);
+        defer session.deinit();
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const catalog = execution.ensureCatalogInstance(testing.allocator) catch |err| {
+            self.err = err;
+            return;
+        };
+        const ctx = execution.ExecutionContext{ .catalog = catalog, .session_state = &session, .fle_role = "pii" };
+        var parsed = geode.parseGqlOptions(self.query, arena.allocator(), .{}) catch |err| {
+            self.err = err;
+            return;
+        };
+        defer parsed.deinit();
+        if (execution.executeStatementWithContext(arena.allocator(), parsed.program.statements[0], ctx)) |_| {
+            self.ok = true;
+        } else |err| self.err = err;
+    }
+};
+
+test "SONNY-6347 (3): configureField during a CREATE CONSTRAINT UNIQUE that already passed its encryption check is refused; never both" {
+    var e: Env = undefined;
+    try e.init();
+    defer e.deinit();
+    // Enough nodes that the constraint's duplicate scan takes a while.
+    {
+        const aa = e.arena.allocator();
+        var batch: usize = 0;
+        while (batch < 40) : (batch += 1) {
+            var q: std.ArrayList(u8) = .empty;
+            try q.appendSlice(aa, "CREATE ");
+            for (0..500) |i| {
+                if (i > 0) try q.appendSlice(aa, ", ");
+                try q.print(aa, "(:L6347 {{p: 'v{d}'}})", .{batch * 500 + i});
+            }
+            try e.run(null, q.items);
+        }
+    }
+    // Another field encrypted, so FLE is on.
+    try e.encrypt("Other6347", "x");
+
+    var racer = Racer{ .query = "CREATE CONSTRAINT c6347 FOR (n:L6347) REQUIRE n.p IS UNIQUE" };
+    const t = try std.Thread.spawn(.{}, Racer.go, .{&racer});
+    // The fence goes up after the constraint's encryption check and before
+    // its scan: from here the constraint is past the check.
+    var spins: usize = 0;
+    while (!graph_store.uniqueFenced(graph_store.DEFAULT_GRAPH_NAME) and racer.err == null and !racer.ok) : (spins += 1) {
+        if (spins > 2_000_000) break;
+        std.atomic.spinLoopHint();
+    }
+    const configured = if (e.exec("pii", null, "CALL geode.fle.configureField('L6347', 'p', {visibility: ['pii']})")) |_| true else |_| false;
+    t.join();
+
+    const catalog = try fle_catalog.globalCatalog(testing.allocator);
+    const encrypted = catalog.isFieldEncrypted("L6347", "p");
+    const constrained = (try (try execution.ensureCatalogInstance(testing.allocator)).indexOrUniqueOnField(e.arena.allocator(), "L6347", "p")) != null;
+    if (encrypted and constrained) {
+        std.debug.print("both ran: L6347.p is encrypted AND has a UNIQUE constraint (configureField ok={}, constraint ok={})\n", .{ configured, racer.ok });
+        return error.BothRan;
+    }
+    try testing.expect(racer.ok);
+    try testing.expect(!configured);
+    try testing.expect(!encrypted);
+}
+
+// ---------------------------------------------------------------------------
+// (4) an index made before its field was encrypted
+// ---------------------------------------------------------------------------
+
+test "SONNY-6347 (4): an index of any type over a field encrypted after it was made is reported, and reads over the field still answer from the values" {
+    var e: Env = undefined;
+    try e.init();
+    defer e.deinit();
+    try e.run(null, "CREATE INDEX b6347 FOR (n:W6347) ON (n.body)");
+    try e.run(null, "CREATE INDEX h6347 FOR (n:W6347) ON (n.body) USING hash");
+    try e.run(null, "CREATE INDEX k6347 FOR (n:W6347) ON (n.k)");
+    // The field encrypted behind the indexes' backs (the catalog API, as a
+    // deployment upgraded with both in place).
+    try e.encrypt("W6347", "body");
+    try e.run(null, "CREATE (:W6347 {k: 1, body: 'zebra'})");
+    try e.run(null, "CREATE (:W6347 {k: 2, body: 'yak'})");
+
+    const res = try e.exec("pii", null, "MATCH (n:W6347) WHERE n.body = 'zebra' RETURN n.k");
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(i64, 1), res.rows[0][0].Int);
+
+    if (comptime !@hasDecl(execution, "indexesOverEncryptedFields")) {
+        std.debug.print("no index over an encrypted field is detected\n", .{});
+        return error.NotDetected;
+    }
+    const names = try execution.indexesOverEncryptedFields(e.arena.allocator());
+    var found_b = false;
+    var found_h = false;
+    for (names) |n| {
+        if (std.mem.eql(u8, n, "b6347")) found_b = true;
+        if (std.mem.eql(u8, n, "h6347")) found_h = true;
+        try testing.expect(!std.mem.eql(u8, n, "k6347"));
+    }
+    try testing.expect(found_b and found_h);
 }

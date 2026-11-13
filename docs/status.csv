@@ -5573,7 +5573,7 @@ REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,EveryDetailKey,TESTED,,,securit
 REQ-SONNY-6346-NO-SILENT-DEGRADE,Server Startup,TenantRegistryDurableOrRefuse,TESTED,,,security,2026-11-12,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,1
 REQ-SONNY-6346-NO-SILENT-DEGRADE,TenantRegistry,DurableOrError,TESTED,,,security,2026-11-12,src/security/tenant_registry.zig,104
 REQ-SONNY-6347-FLE-AUTHENTIC-ENVELOPE,FieldLevelEncryption,StoreEnvelopeAuthenticated,TESTED,,,security,2026-11-13,src/fle_integration.zig,885
-REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY,FieldLevelEncryption,Regression,TESTED,,,security,2026-11-13,tests/test_sonny6347_fle_envelope_identity.zig,21
+REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY,FieldLevelEncryption,Regression,TESTED,,,security,2026-11-13,tests/test_sonny6347_fle_envelope_identity.zig,28
 REQ-SONNY-6347-FLE-RECORD-TENANT,FieldLevelEncryption,RecordTenantIdentity,TESTED,,,security,2026-11-13,src/fle_integration.zig,810
 REQ-SONNY-6348-KMS-TMP-SELFTESTS,TDE Procedures,NoFabricatedKmsSelfTestTruth,TESTED,,,security,2026-11-12,tests/test_sonny6348_kms_tmp_selftests_stale.zig,19
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,ChecksOnThrowawayCopy,TESTED,,,storage,2026-11-12,src/storage/backup.zig,1105
