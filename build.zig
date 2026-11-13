@@ -16157,6 +16157,15 @@ pub fn build(b: *std.Build) void {
     const bug731_pwreset_tests = b.addTest(.{ .root_module = bug731_pwreset_test_mod });
     const run_bug731_pwreset_tests = b.addRunArtifact(bug731_pwreset_tests);
     shardDep(test_step, &run_bug731_pwreset_tests.step, 0, test_shard_loads, test_shard_index);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_server_state_mvcc_fields.zig"), .target = target, .optimize = optimize });
+        test_mod.addImport("geode", root_mod);
+        test_mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 0, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-server-state-mvcc-fields", "Run SONNY-6487 item 6 regression (ServerState no longer carries the never-set, never-read mvcc_manager / current_mvcc_txn fields)").dependOn(&run_tests.step);
+    }
     const bug731_pwreset_step = b.step("test-bug731-pwreset", "Run bug-731 ALTER USER password_reset_required lockout regressions");
     bug731_pwreset_step.dependOn(&run_bug731_pwreset_tests.step);
 
