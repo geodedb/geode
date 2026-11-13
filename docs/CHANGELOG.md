@@ -1993,6 +1993,31 @@
 
 ### Fixed
 
+- **Operator-visible: one checkpoint per persistence tick and one per clean
+  shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
+  persistence tick ran the light checkpoint twice (the checkpoint hook,
+  then `adapter.checkpointAllLight()` again), so `checkpoints_total` rose
+  by 2 per tick. A SIGTERM ran a light checkpoint while stopping the
+  persistence thread, then the clean-shutdown FULL checkpoint, then a
+  second FULL checkpoint in `deinitGlobalAdapter` after "[shutdown] data
+  flush complete", which re-wrote every graph's exact property index and
+  the graph registry ("full checkpoint: exact-index persist decision"
+  logged twice per graph). A tick now runs one light checkpoint, and a
+  clean shutdown runs the FULL checkpoint only. Durability is unchanged:
+  every commit is fsynced to the engine WAL, and closing an engine still
+  checkpoints any pages written after the flush. The shutdown log now
+  reads "[shutdown] data flush complete (<n>ms, checkpoint runs since the
+  signal: <k>)", "[shutdown] store closed (<n>ms)" and "[shutdown]
+  teardown complete (<n>ms after the signal)". Measured on a busy disk
+  (Debug build, one node written): SIGTERM-to-exit is about 8.5 s on the
+  first shutdown after a graph is created and about 3 s afterwards. The
+  rest is in dependencies: graph-storage's first FULL checkpoint of a new
+  graph writes the derived indexes of all 16 shards (tmp file, fsync,
+  rename, directory fsync per file; 5.8 s, then 155 ms on later
+  shutdowns), each shard's WAL writes `graph.wal.ckpt` with fsyncs on close
+  even when nothing changed (1.1-1.3 s for two graphs), and about 225 pool
+  worker threads are joined one at a time (about 1 s). Regression:
+  `zig build test-sonny6459-checkpoint-once`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

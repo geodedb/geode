@@ -269,13 +269,14 @@ test "SONNY-6459 item 2: a clean shutdown runs the full checkpoint once, reports
     const data_dir = try makeDataDir(&tmp, aa, io);
 
     {
-        var server = try spawnServer(aa, io, data_dir, "1000");
+        // A persistence interval longer than the test: no tick is in flight
+        // at the SIGTERM, so every checkpoint run after it is the shutdown's.
+        var server = try spawnServer(aa, io, data_dir, "600000");
         defer server.deinit(gpa, io);
         const port = try waitReady(&server, gpa, io);
         _ = try runQuery(aa, port, "CREATE (:Sonny6459Shutdown {x: 1})");
-        // A few persistence ticks so the shutdown lands on a running loop.
         var settle: usize = 0;
-        while (settle < 25) : (settle += 1) {
+        while (settle < 10) : (settle += 1) {
             server.drain(gpa, io);
             sleepMs(100);
         }
