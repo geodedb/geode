@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:14:10.734539028Z",
+  "generated_at": "2026-11-13T01:41:38.870494558Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84505,6 +84505,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-RLS-RAW-TOKENIZE",
+      "features": [
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92152,7 +92171,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4795
+      "TESTED": 4796
     },
     "by_aspect": {
       "2PC": 3,
@@ -95228,7 +95247,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 282,
+      "Regression": 283,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

@@ -15255,6 +15255,18 @@ pub fn build(b: *std.Build) void {
     const sonny6436_rls_step = b.step("test-sonny6436-rls-raw-truthiness", "Run the SONNY-6436 item 5 regression (an RLS policy admits a row only when its predicate is True: a non-boolean value, a comparison with a null side or values that do not compare, and an empty sub-expression deny, in the raw-string interpreter and the compiled VM)");
     sonny6436_rls_step.dependOn(&run_sonny6436_rls_tests.step);
 
+    // SONNY-6447 item 4: the raw-string RLS interpreter splits a policy only
+    // at operators outside quotes and parentheses, and a policy that does not
+    // parse denies.
+    const sonny6447_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_rls_raw_tokenize.zig"), .target = target, .optimize = optimize });
+    sonny6447_rls_test_mod.addImport("rls", rls_mod);
+    sonny6447_rls_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6447_rls_tests = b.addTest(.{ .root_module = sonny6447_rls_test_mod });
+    const run_sonny6447_rls_tests = b.addRunArtifact(sonny6447_rls_tests);
+    shardDep(test_step, &run_sonny6447_rls_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_rls_step = b.step("test-sonny6447-rls-raw-tokenize", "Run the SONNY-6447 item 4 regression (the raw-string RLS interpreter splits AND/OR, comparisons and call arguments only outside quotes and parentheses, and denies a policy that does not parse)");
+    sonny6447_rls_step.dependOn(&run_sonny6447_rls_tests.step);
+
     // SONNY-6436 item 7: geode query --file over QUIC stops the run, with the
     // summary, when a statement of a rejected chunk, retried on its own, was
     // sent and got no answer.
