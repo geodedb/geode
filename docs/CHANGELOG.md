@@ -1844,6 +1844,18 @@
 
 ### Fixed
 
+- **The cluster health loop fails over only configured peers and keeps a
+  failed peer's address (SONNY-6451 item 2).** `healthLoop` iterated
+  `cluster_state.nodes` while `handleNodeFailure` `swapRemove`d the failed
+  peer from it, so the same pass skipped the peer moved into its slot and
+  read the vacated (`undefined`) slot as a node: the log's "Node detected
+  as failed node_id=12297829382473034410" (0xAAAAAAAAAAAAAAAA), recorded in
+  the health monitor and failed over. Removing the peer also dropped its
+  endpoint from the address book for good (shard forwarding and
+  `sendToNode` to it failed with `NodeNotFound` after it came back) and
+  leaked the entry. A failed peer now stays in the list marked `failed`, is
+  failed over once when it turns unhealthy, and is `active` again when it
+  is heard from. Regression: `zig build test-sonny6451-health-failed-peer`.
 - **The Python test runners fail a test that uses an undeclared secret
   (SONNY-6451 item 5).** `scripts/test/extended_test_runner.py` and
   `scripts/test/test_runner_core.py` substituted any `${secret:NAME}` other

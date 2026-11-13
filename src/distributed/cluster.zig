@@ -1532,7 +1532,10 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    /// One health-check pass over the peers in `cluster_state.nodes`.
+    /// One health-check pass over the peers in `cluster_state.nodes`. A peer
+    /// is failed over once, when it turns unhealthy, and is active again when
+    /// it is heard from. SONNY-6451: nothing in the pass adds to or removes
+    /// from `cluster_state.nodes` (the slice iterated here).
     fn healthPass(self: *ClusterCoordinator) !void {
         for (self.cluster_state.nodes.items) |*node| {
             if (node.id == self.node_id) continue;
@@ -1541,7 +1544,9 @@ pub const ClusterCoordinator = struct {
             try self.updateHealthStatus(node.id, health_status);
 
             if (health_status == .unhealthy) {
-                try self.handleNodeFailure(node.id);
+                if (node.state != .failed) try self.handleNodeFailure(node.id);
+            } else if (node.state == .failed) {
+                node.state = .active;
             }
         }
     }
@@ -2145,6 +2150,16 @@ pub const ClusterCoordinator = struct {
             Attr.uint("node_id", failed_node),
         });
 
+        // SONNY-6451: mark the peer failed in place. It used to be
+        // swapRemove'd here, under healthPass's iteration of this same list
+        // (the pass then read the slot swapRemove left `undefined` as a node,
+        // id 0xAAAAAAAAAAAAAAAA), which also dropped its endpoint from the
+        // address book for good and leaked the entry. A failed peer that
+        // comes back must still be reachable.
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == failed_node) node.state = .failed;
+        }
+
         if (!self.failover_config.auto_failover) return;
 
         // Find shards affected by the failure
@@ -2175,15 +2190,6 @@ pub const ClusterCoordinator = struct {
                 self.allocator.free(shard.replica_nodes);
             }
             shard.replica_nodes = new_replicas;
-        }
-
-        // Update cluster state
-        for (self.cluster_state.nodes.items, 0..) |*node, i| {
-            if (node.id == failed_node) {
-                node.state = .failed;
-                _ = self.cluster_state.nodes.swapRemove(i);
-                break;
-            }
         }
 
         // Trigger re-replication to maintain replication factor
