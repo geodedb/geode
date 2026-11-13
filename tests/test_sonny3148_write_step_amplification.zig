@@ -8,6 +8,12 @@
 // node, and a node every row binds one copy per row per refresh. A refresh
 // now reuses the copy it took for a node until the node is written again.
 //
+// Before (each statement run twice over 32 rows, in-memory): one SET group
+// 4.00 copies (1411 bytes) per row, two SET groups 5.00 (2148), a node every
+// row writes 6.00 (2004). After: 3.00 (1038), 4.00 (1694), 4.03 (1464). The
+// read side still takes two copies of each row's node (the scan's detached
+// box, and `stabilizeBindings` boxing it again for the write step).
+//
 // Measured on an in-memory session (no background checkpoint frees the
 // boxes mid-statement): the detached boxes a statement leaves and their
 // approximate bytes (the write budget's own estimate), per written row. Each
@@ -75,8 +81,19 @@ test "SONNY-3148: a written row keeps one detached copy per write, not one per r
     std.debug.print("\nSONNY-3148: one SET group: {d} boxes ({d:.2}/row), {d} bytes ({d}/row)\n", .{ one_group.boxes, per_row_one, one_group.bytes, one_group.bytes / (2 * rows) });
     std.debug.print("SONNY-3148: two SET groups: {d} boxes ({d:.2}/row), {d} bytes ({d}/row)\n", .{ two_groups.boxes, per_row_two, two_groups.bytes, two_groups.bytes / (2 * rows) });
 
-    // One copy when the row is read, one per clause group that writes it;
-    // the RETURN reuses the last.
-    try testing.expect(per_row_one <= 2.0);
-    try testing.expect(per_row_two <= 3.0);
+    // A node every row binds and writes: one copy per write.
+    var want_m: std.ArrayList([]const u8) = .empty;
+    for (0..rows) |_| try want_m.append(aa, "31");
+    const shared = try measure(&s, "MATCH (n:W), (m:M) SET m.c = n.i RETURN m.c", want_m.items);
+    const per_row_shared = @as(f64, @floatFromInt(shared.boxes)) / @as(f64, @floatFromInt(2 * rows));
+    std.debug.print("SONNY-3148: a shared written node: {d} boxes ({d:.2}/row), {d} bytes ({d}/row)\n", .{ shared.boxes, per_row_shared, shared.bytes, shared.bytes / (2 * rows) });
+
+    // Per row: the read's copies (the scan's and the write step's
+    // stabilizing one, SONNY-2694) and one per clause group that writes it;
+    // the RETURN reuses the last. A refresh took a copy each time it ran.
+    try testing.expect(per_row_one <= 3.0);
+    try testing.expect(per_row_two <= 4.0);
+    // Each row's write of the shared node takes one copy; a refresh took
+    // one per row again at the start of the next row (6.00 per row).
+    try testing.expect(per_row_shared < 4.5);
 }

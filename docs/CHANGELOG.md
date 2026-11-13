@@ -2161,6 +2161,15 @@
 
 ### Fixed
 
+- **The write step keeps one detached copy of a written node per write
+  (SONNY-3148).** Each refresh of a written node took a fresh detached copy
+  (kept until the graph's next checkpoint and charged to the write budget):
+  4.0 copies (1411 bytes) per row for `MATCH (n:W) SET n.x = n.i + 1 RETURN
+  n.x`, 5.0 (2148 bytes) with two SET clauses. A refresh reuses its copy
+  until the node is written again. A computed SET value (`SET n.t = n.s ||
+  '-x'`, a list, a map) is lent from the statement's scratch arena; it
+  leaked per row. Regression: `zig build
+  test-sonny3148-write-step-amplification`.
 - **Memory safety: the engine-direct node scan frees what a page built when
   an allocation fails (SONNY-2671).** A page over 256 rows dropped the row it
   had just built when growing its row list failed, and a failure while

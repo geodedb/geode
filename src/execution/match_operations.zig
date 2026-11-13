@@ -8514,9 +8514,13 @@ pub fn applySetRemoveOverRows(
             for (group) |sc| {
                 const cell = row[columnIndex(rows.columns, setTarget(sc)).?];
                 const bound = cell == .Node or cell == .Edge;
+                // SONNY-3148: lent from the statement's scratch arena; the
+                // store copies what it keeps, and on `allocator` a computed
+                // value (`n.s || '-x'`, a list, a map) leaked per row.
+                const lent = value_utilities.lentAllocator(allocator);
                 try values.append(allocator, if (!bound) .Null else switch (sc) {
-                    .Property => |prop| try eval.evalExpr(allocator, prop.value, env),
-                    .AllProperties => |ap| try eval.evalExpr(allocator, ap.properties, env),
+                    .Property => |prop| try eval.evalExpr(lent, prop.value, env),
+                    .AllProperties => |ap| try eval.evalExpr(lent, ap.properties, env),
                     .Labels => .Null,
                 });
             }
@@ -8581,33 +8585,68 @@ pub fn applySetRemoveOverRows(
 const WrittenElements = struct {
     nodes: std.AutoHashMapUnmanaged(u64, void) = .empty,
     edges: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    // CANARY: REQ=REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION; FEATURE="WriteStep"; ASPECT=RefreshOncePerWrite; STATUS=TESTED; TEST=tests/test_sonny3148_write_step_amplification.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-3148: the copy a refresh took of each written node and edge,
+    /// reused by every later refresh until the element is written again.
+    /// Each refresh took a fresh detached copy (`getNodePtrForScan`, kept
+    /// until the graph's next grace boundary and charged to the write
+    /// budget): at the start of every later row, after every clause group,
+    /// and for the RETURN, so a written row kept several copies of its node
+    /// and a node every row binds one copy per row per refresh.
+    fresh_nodes: std.AutoHashMapUnmanaged(u64, *graph_store.Node) = .empty,
+    fresh_edges: std.AutoHashMapUnmanaged(u64, *const graph_store.Edge) = .empty,
 
     fn deinit(self: *WrittenElements, allocator: std.mem.Allocator) void {
         self.nodes.deinit(allocator);
         self.edges.deinit(allocator);
+        self.fresh_nodes.deinit(allocator);
+        self.fresh_edges.deinit(allocator);
     }
 
     fn add(self: *WrittenElements, allocator: std.mem.Allocator, value: Value) !void {
         switch (value) {
-            .Node => |node| try self.nodes.put(allocator, node.id, {}),
-            .Edge => |edge| try self.edges.put(allocator, edge.id, {}),
+            .Node => |node| {
+                try self.nodes.put(allocator, node.id, {});
+                _ = self.fresh_nodes.remove(node.id);
+            },
+            .Edge => |edge| {
+                try self.edges.put(allocator, edge.id, {});
+                _ = self.fresh_edges.remove(edge.id);
+            },
             else => {},
         }
     }
 
-    /// `value` with each written node a fresh detached box
-    /// (`getNodePtrForScan`) and each written edge a fresh copy `rows` owns;
-    /// lists, maps and paths are walked.
-    fn refresh(self: *const WrittenElements, allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
+    /// The node `id` as written so far: a detached box, one per write.
+    fn freshNode(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, id: u64) !*graph_store.Node {
+        if (self.fresh_nodes.get(id)) |node| return node;
+        try self.fresh_nodes.ensureUnusedCapacity(allocator, 1);
+        const node = store.getNodePtrForScan(id) orelse return error.NodeNotFound;
+        self.fresh_nodes.putAssumeCapacity(id, node);
+        return node;
+    }
+
+    /// The edge `id` as written so far: a copy `rows` owns, one per write.
+    fn freshEdge(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, rows: *ExecutionResult, id: u64) !*const graph_store.Edge {
+        if (self.fresh_edges.get(id)) |edge| return edge;
+        try self.fresh_edges.ensureUnusedCapacity(allocator, 1);
+        const stored = store.getEdgePtrHydrated(id) orelse return error.EdgeBodyUnresolvable;
+        const edge = try boxEdge(allocator, rows, stored);
+        self.fresh_edges.putAssumeCapacity(id, edge);
+        return edge;
+    }
+
+    /// `value` with each written node and edge as written so far
+    /// (`freshNode`, `freshEdge`); lists, maps and paths are walked.
+    fn refresh(self: *WrittenElements, allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
         if (self.nodes.count() == 0 and self.edges.count() == 0) return;
         const store = graph_store.getWritableGlobalStore(allocator);
         switch (value.*) {
             .Node => |node| if (self.nodes.contains(node.id)) {
-                value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+                value.* = .{ .Node = try self.freshNode(allocator, store, node.id) };
             },
             .Edge => |edge| if (self.edges.contains(edge.id)) {
-                const fresh = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
-                value.* = .{ .Edge = try boxEdge(allocator, rows, fresh) };
+                value.* = .{ .Edge = try self.freshEdge(allocator, store, rows, edge.id) };
             },
             .List => |items| for (items) |*item| try self.refresh(allocator, rows, item),
             .Map => |map| {
@@ -8616,13 +8655,10 @@ const WrittenElements = struct {
             },
             .Path => |path| {
                 for (@constCast(path.nodes)) |*node| {
-                    if (self.nodes.contains(node.*.id)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+                    if (self.nodes.contains(node.*.id)) node.* = try self.freshNode(allocator, store, node.*.id);
                 }
                 for (@constCast(path.edges)) |*edge| {
-                    if (self.edges.contains(edge.*.id)) {
-                        const fresh = store.getEdgePtrHydrated(edge.*.id) orelse return error.EdgeBodyUnresolvable;
-                        edge.* = try boxEdge(allocator, rows, fresh);
-                    }
+                    if (self.edges.contains(edge.*.id)) edge.* = try self.freshEdge(allocator, store, rows, edge.*.id);
                 }
             },
             else => {},

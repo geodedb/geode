@@ -4971,6 +4971,7 @@ REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,EvaluatedValueOwnership,TESTE
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,Regression,TESTED,tests/test_sonny3148_write_leaks.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,TraversalBuffers,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,WithStageItems,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
+REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,RefreshOncePerWrite,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_step_amplification.zig,,engine,2026-11-13
 REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,Regression,TESTED,tests/test_sonny3148_write_step_amplification.zig,tests/test_sonny3148_write_step_amplification.zig,,engine,2026-11-13
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,Parser,TESTED,src/gql/parser.zig,tests/test_sonny_write_allowlist.zig,,parser,2026-09-27
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,src/execution.zig,tests/test_sonny_write_allowlist.zig,,engine,2026-09-27

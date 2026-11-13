@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:44:32.217351275Z",
+  "generated_at": "2026-11-13T15:44:50.269632315Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77559,6 +77559,20 @@
       "features": [
         {
           "feature": "WriteStep",
+          "aspect": "RefreshOncePerWrite",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3148_write_step_amplification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "WriteStep",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94647,7 +94661,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4938
+      "TESTED": 4939
     },
     "by_aspect": {
       "2PC": 3,
@@ -97786,6 +97800,7 @@
       "RefactoredFunction": 1,
       "RefcountMaintenance": 1,
       "RefreshLogic": 1,
+      "RefreshOncePerWrite": 1,
       "RefreshScheduler": 1,
       "RefreshStrategy": 1,
       "RefusalAudit": 1,
