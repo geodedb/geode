@@ -425,8 +425,11 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
 
     const graph_name: []const u8 = if (gm.graph.len > 0) gm.graph else "default";
 
-    // Ensure the target graph exists (idempotent).
-    store.createGraph(graph_name) catch |err| switch (err) {
+    // Ensure the target graph exists (idempotent). SONNY-6492 (3): never
+    // creates a graph dropped since the store opened (a replicated DROP
+    // GRAPH earlier in the log, or a local drop): GraphNotFound, on every
+    // replica alike. Only a replicated CREATE GRAPH (schema_change) does.
+    store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
         error.GraphAlreadyExists => {}, // fine — idempotent
         else => return err,
     };

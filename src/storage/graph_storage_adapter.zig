@@ -4337,7 +4337,14 @@ pub const StorageAdapter = struct {
             const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12)) / @as(f64, std.time.ns_per_s);
             _om12.recordStorageOp(.write_node, _dur, if (_ok_12) .success else .error_, null);
         }
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-6492 (3): pinned for the create, as the bulk helpers do
+        // (SONNY-3121). An embedding caller may hold no graph lock (which
+        // pins): a DROP GRAPH after the lookup freed the graph under the
+        // create. The lookup and the pin share one hold of the adapter's
+        // mutex, so a dropped graph is never found (GraphNotFound); a drop
+        // after it waits for this pin before freeing the graph.
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
         // into a SINGLE storage-engine transaction so we incur exactly one
@@ -4411,6 +4418,9 @@ pub const StorageAdapter = struct {
         // relogSecurityLabelPageTxn) — no-op outside __geode_security.
         try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
+        // SONNY-6492 (3): dropped while this create ran (its pin kept the
+        // graph): the node is not reported created in a graph that is gone.
+        if (mg.isDropped()) return error.GraphNotFound;
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
         // OTel Task 13: graph data model mutation counter.

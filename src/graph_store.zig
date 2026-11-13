@@ -4945,7 +4945,22 @@ pub const GraphStore = struct {
         try self.graph_uuids.put(name_copy, resolved);
     }
 
-    pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
+    pub fn createGraph(self: *GraphStore, graph_name: []const u8) anyerror!void {
+        return self.createGraphMode(graph_name, .ddl);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT; FEATURE="DistributedCluster"; ASPECT=ApplyDoesNotRecreateDroppedGraph; STATUS=TESTED; TEST=tests/test_sonny6492_replicated_write_dropped_graph.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6492 (3): the graph a replicated data write (a Raft apply)
+    /// lands in. As `createGraph`, except that a name dropped since the
+    /// adapter opened is not created again: `error.GraphNotFound`, exactly as
+    /// a local write to it (SONNY-6472 (2)). A graph that exists is used; a
+    /// name never dropped is created lazily, as a first local write does.
+    /// Only CREATE GRAPH (`createGraph`) creates a dropped name again.
+    pub fn ensureGraphForReplicatedWrite(self: *GraphStore, graph_name: []const u8) anyerror!void {
+        return self.createGraphMode(graph_name, .replicated_write);
+    }
+
+    fn createGraphMode(self: *GraphStore, graph_name: []const u8, comptime mode: enum { ddl, replicated_write }) anyerror!void {
         // SONNY-3191 (N-7): nor through a HELLO's graph, or any other caller:
         // the current- and home-graph names are not graph names.
         if (isReservedGraphName(graph_name)) return error.ReservedGraphName;
@@ -4964,8 +4979,17 @@ pub const GraphStore = struct {
         // getOrCreate is itself idempotent (StorageAdapter.getOrCreateGraph
         // returns the existing handle if the registry already has the name),
         // so this call is safe to repeat across the race window.
-        if (global_vtable) |vt| {
-            _ = try vt.getOrCreateGraphFn(vt.ctx, graph_name);
+        switch (mode) {
+            .ddl => if (global_vtable) |vt| {
+                _ = try vt.getOrCreateGraphFn(vt.ctx, graph_name);
+            },
+            // SONNY-6492 (3): the write paths' lookup, which answers
+            // GraphNotFound for a dropped name. Under `graphs_mutex`, which
+            // DROP GRAPH holds across its drop, so a drop cannot land
+            // between this lookup and the registration below.
+            .replicated_write => if (global_adapter) |adapter| {
+                _ = try adapter.getOrCreateGraph(graph_name);
+            },
         }
 
         // Idempotency: if a sibling caller already registered this graph

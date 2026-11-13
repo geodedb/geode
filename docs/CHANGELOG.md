@@ -2257,6 +2257,23 @@
   unlabeled scan does; with none in flight it stays exact. Regression: `zig
   build test-sonny6492-hydration-live-count-race`; the detection itself:
   `test-sonny2409-zeroed-page-header`, `test-canary-recovery-corrupt-latency`.
+- **A replicated write no longer creates a dropped graph again (SONNY-6492
+  item 3).** The Raft apply of a data write (`raft_apply`, the
+  `cluster_replication` apply helpers, the 2PC write-set apply) ensured its
+  graph with `GraphStore.createGraph`, CREATE GRAPH, which creates a dropped
+  name afresh: a write later in the log than a replicated DROP GRAPH brought
+  the graph back with the write in it. They now use
+  `GraphStore.ensureGraphForReplicatedWrite`, which answers `GraphNotFound`
+  for a name dropped since the store opened, on every replica alike, and
+  creates a never-dropped name lazily as before; a replicated CREATE GRAPH
+  (schema_change) still creates the name again. `StorageAdapter.createNode`,
+  which embedding code may call with no graph lock, now pins the graph for
+  the create (a DROP GRAPH between its lookup and its write freed the graph
+  under it) and fails with `GraphNotFound` when the graph was dropped before
+  the create committed. Limit: the dropped names are kept in memory, so after
+  a restart a replayed write of a name dropped before the restart is created
+  lazily again. Regression: `zig build
+  test-sonny6492-replicated-write-dropped-graph`.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

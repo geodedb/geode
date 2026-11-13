@@ -549,7 +549,7 @@ pub const TxnCoordinator = struct {
             .node_op => |node_op| {
                 const graph_name = if (node_op.graph.len > 0) node_op.graph else graph_store.DEFAULT_GRAPH_NAME;
                 // Ensure the target graph exists (idempotent, mirrors raft_apply).
-                self.store.createGraph(graph_name) catch |err| switch (err) {
+                self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
                     error.GraphAlreadyExists => {},
                     else => return err,
                 };
@@ -593,7 +593,7 @@ pub const TxnCoordinator = struct {
             },
             .edge_op => |edge_op| {
                 const graph_name = if (edge_op.graph.len > 0) edge_op.graph else graph_store.DEFAULT_GRAPH_NAME;
-                self.store.createGraph(graph_name) catch |err| switch (err) {
+                self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
                     error.GraphAlreadyExists => {},
                     else => return err,
                 };
