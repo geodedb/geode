@@ -1392,6 +1392,8 @@ pub fn main() !void {
     // which argument.
     const config_opt = cli_args.parseArgs(gpa) catch |err| switch (err) {
         error.UnknownServeOption, error.MissingArgument => std.process.exit(2),
+        // SONNY-1336: a --listen-grpc address the listener cannot bind as given.
+        error.InvalidGrpcListenPort, error.GrpcListenAddressNotIpv4 => std.process.exit(2),
         else => return err,
     };
     if (config_opt == null) return; // Help was shown, exit
@@ -2455,17 +2457,12 @@ pub fn main() !void {
     }
 
     if (listen_grpc) |grpc_addr| {
-        const colon = std.mem.lastIndexOfScalar(u8, grpc_addr, ':');
-        var grpc_port: u16 = 3142;
-        var grpc_address: []const u8 = "0.0.0.0";
-
-        if (colon) |ci| {
-            grpc_address = grpc_addr[0..ci];
-            const p = grpc_addr[ci + 1 ..];
-            grpc_port = std.fmt.parseUnsigned(u16, p, 10) catch 3142;
-        } else {
-            grpc_port = std.fmt.parseUnsigned(u16, grpc_addr, 10) catch 3142;
-        }
+        // SONNY-1336: bind the --listen-grpc address itself (it used to reach
+        // only the log line, and grpc-zig bound 127.0.0.1). cli_args already
+        // refused an address that cannot be bound as given.
+        const grpc_bind = try cli_args.resolveGrpcBind(grpc_addr, listen_quic);
+        const grpc_port = grpc_bind.port;
+        const grpc_address = grpc_bind.address;
 
         const grpc_config = grpc_transport.GrpcConfig{
             .spill_threshold = env_spill_threshold,
@@ -2485,8 +2482,12 @@ pub fn main() !void {
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
         errdefer gpa.destroy(grpc_server);
-        grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_port, cert_path, key_path, grpc_config);
+        grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_address, grpc_port, cert_path, key_path, grpc_config);
         grpc_server_owner = grpc_server;
+        // Startup banner for operational tooling (JSON on stderr), naming the
+        // address and port the listener actually bound (the QUIC twin is in
+        // QuicTransport.start).
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"grpc\",\"address\":\"{s}\",\"port\":{d},\"status\":\"listening\"}}\n", .{ grpc_address, grpc_server.boundPort() });
 
         if (listen_quic == null) {
             log.info("gRPC server started", &.{

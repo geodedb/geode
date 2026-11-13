@@ -2035,6 +2035,20 @@
 
 ### Fixed
 
+- **`--listen-grpc` binds the address it is given (SONNY-1336).** The
+  address in `geode serve --listen-grpc <addr:port>` reached only a log line:
+  the listener was created from the port alone and grpc-zig bound
+  `127.0.0.1` (or `GRPC_ZIG_BIND_ADDR`), so `--listen-grpc 0.0.0.0:50051` in a
+  container listened on loopback and a published port reached nothing; a
+  port that did not parse silently became 3142. The listener now binds the
+  given IPv4 address through grpc-zig's `initWithBind`; a port alone binds
+  the `--listen` address (or `0.0.0.0`); a startup banner names the address
+  and port bound. **Breaking:** an IPv6 address, a host name or a bad port in
+  `--listen-grpc` is refused at startup (exit 2) instead of silently binding
+  loopback. See `docs/GRPC_TRANSPORT.md` "Listen address". Regression
+  `zig build test-sonny1336-grpc-bind-address` reads the bound socket from
+  `/proc/net/tcp` and answers a real gRPC HELLO at the address.
+
 - **`geode shell --plain` exits at end of input (SONNY-3060).** Piping a
   file or a here-doc into `geode shell --plain` used to run the statements
   and then print `geode>` prompts forever: the plain-mode reader treated

@@ -8,6 +8,29 @@ Geode serves two transports:
   3.x, both at build time (to compile `src/transport/grpc_tls.zig`'s OpenSSL
   binding) and at run time (`libssl.so.3`).
 
+## Listen address
+
+`--listen-grpc` takes `<ipv4>:<port>`, `localhost:<port>` or a port alone, and
+the listener binds exactly that address (SONNY-1336; before it the address
+reached only a log line and the vendored grpc-zig bound `127.0.0.1`, so a
+published container port reached nothing):
+
+| `--listen-grpc` | Binds |
+|---|---|
+| `0.0.0.0:50051` | every IPv4 interface |
+| `127.0.0.1:50051` / `localhost:50051` | loopback only |
+| `50051` | the `--listen` (QUIC) address, or `0.0.0.0` when there is no IPv4 QUIC address (QUIC's own port-only default) |
+
+The gRPC listener binds **IPv4 only**: grpc-zig's `GrpcServer.initWithBind`
+parses an IPv4 literal. An IPv6 address (`[::]:50051`), a host name, or a
+missing or out-of-range port is refused at startup with exit status 2 and a
+message naming `--listen-grpc`; it is never replaced by another address.
+`GRPC_ZIG_BIND_ADDR` no longer decides the bind (setting it, as older driver
+harnesses did, is harmless). On startup the server prints a JSON banner on
+stderr with the address and port bound, for example
+`{"component":"transport","transport":"grpc","address":"0.0.0.0","port":50051,"status":"listening"}`.
+The listener is TLS-only outside Debug builds (see Fail-closed behaviour below).
+
 ## Runtime requirement (new)
 
 Prior to this change every cross-compiled release binary shipped **without**

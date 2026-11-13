@@ -1252,8 +1252,12 @@ pub const GeodeGrpcServer = struct {
     /// GAP-0518: Heap-allocated random session key (freed in deinit).
     grpc_session_key: ?[]u8 = null,
 
+    /// SONNY-1336: `bind_address` is the IPv4 address to listen on
+    /// (`cli_args.resolveGrpcBind`); it is passed to grpc-zig's
+    /// `initWithBind`, so GRPC_ZIG_BIND_ADDR no longer decides the bind.
     pub fn init(
         allocator: std.mem.Allocator,
+        bind_address: []const u8,
         port: u16,
         cert_path: ?[]const u8,
         key_path: ?[]const u8,
@@ -1267,7 +1271,7 @@ pub const GeodeGrpcServer = struct {
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);
-        var server = try GrpcServer.init(allocator, std.Io.Threaded.global_single_threaded.io(), port, grpc_session_key);
+        var server = try GrpcServer.initWithBind(allocator, std.Io.Threaded.global_single_threaded.io(), bind_address, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         if (allow_plaintext_fallback) {
@@ -1325,6 +1329,12 @@ pub const GeodeGrpcServer = struct {
 
         try self.registerHandlers();
         return self;
+    }
+
+    /// The TCP port the listener is bound to (the requested one, or the
+    /// kernel's choice for port 0).
+    pub fn boundPort(self: *const GeodeGrpcServer) u16 {
+        return self.server.server.socket.address.getPort();
     }
 
     pub fn deinit(self: *GeodeGrpcServer) void {

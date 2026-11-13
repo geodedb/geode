@@ -4484,6 +4484,7 @@ REQ-SONNY-1333-SHOW-GRANTS,GQL Auth DDL,ShowGrants,TESTED,src/execution/admin_dd
 REQ-SONNY-1335-PROFILE-ACCESS-PATH,PROFILE,CatalogIndexForSeek,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny1335_profile_access_path.zig,,engine,2026-11-11
 REQ-SONNY-1335-PROFILE-ACCESS-PATH,PROFILE,NoFabricatedIndexScan,TESTED,src/server/profile_payload.zig,tests/test_sonny1335_profile_access_path.zig,,engine,2026-11-11
 REQ-SONNY-1335-PROFILE-ACCESS-PATH,PROFILE,Regression,TESTED,tests/test_sonny1335_profile_access_path.zig,tests/test_sonny1335_profile_access_path.zig,,engine,2026-11-11
+REQ-SONNY-1336-GRPC-BIND,GrpcListenAddress,ResolveBind,TESTED,src/server/cli_args.zig,tests/test_sonny1336_grpc_bind_address.zig,,transport,2026-11-13
 REQ-SONNY-1562-COLD-SUBQUERY-SCAN,ExpressionPathColdScan,ResidencyIndependentCounts,TESTED,tests/test_sonny1562_cold_subquery_scan.zig,tests/test_sonny1562_cold_subquery_scan.zig,,execution,2026-11-11
 REQ-SONNY-1562-COLD-SUBQUERY-SCAN,ExpressionPathColdScan,ScanSource,TESTED,src/execution/graph_algorithms.zig,tests/test_sonny1562_cold_subquery_scan.zig,,execution,2026-11-11
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,tests/test_sonny2394_varlen_rel_list_ownership.zig,tests/test_sonny2394_varlen_rel_list_ownership.zig,,engine,2026-09-23

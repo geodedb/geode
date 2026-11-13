@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:32:03.481477106Z",
+  "generated_at": "2026-11-13T10:01:02.870392928Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69854,6 +69854,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-1336-GRPC-BIND",
+      "features": [
+        {
+          "feature": "GrpcListenAddress",
+          "aspect": "ResolveBind",
+          "status": "TESTED",
+          "files": [
+            "src/server/cli_args.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1336_grpc_bind_address.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-1562-COLD-SUBQUERY-SCAN",
       "features": [
         {
@@ -93237,7 +93256,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4857
+      "TESTED": 4858
     },
     "by_aspect": {
       "2PC": 3,
@@ -96426,6 +96445,7 @@
       "ResidentEdgesNested": 1,
       "ResolvConfSearchExpansion": 1,
       "ResolveAfterInserts": 1,
+      "ResolveBind": 1,
       "ResolveInboundIdleDeadline": 1,
       "ResolvedDataDirEverywhere": 1,
       "ResolverIgnoresReadSnapshot": 1,
