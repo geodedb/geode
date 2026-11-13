@@ -2162,6 +2162,22 @@
   "curated dataset" was never seeded, so it compared two empty answers. It
   now seeds its dataset into a fresh temporary directory and asserts the
   rows.
+- **Inline tests of 15 more live files now run (SONNY-6463 item 5).** The
+  build imports them only as named modules or compiles them into an
+  executable, so no test root collected their tests. `zig build
+  test-sonny6463-inline-wired` (in the aggregate) roots each with the import
+  table the build gives it: the thread pool and its parallel wrapper,
+  logging, the FLE HKDF/HMAC/key-manager/blind-index wrappers, the storage
+  backup module, the CLI auth helpers and auth init, `backup_cli.zig` and
+  `cli_dispatcher.zig` (through `src/sonny6463_cli_test_root.zig`), and the
+  fuzz harness; `test-sonny6463-inline` gains `std_shim.zig` (with
+  `policy.zig`) and the GPU profiler. Fixed on the way: the profiler and the
+  thread pool's tests used `std.time.nanoTimestamp` / `std.Thread.sleep`
+  (removed in Zig 0.16), and `keys/manager.zig cacheStats` declared its own
+  anonymous return type instead of the fle KeyManager's, so it did not
+  compile once used. Still unwired, with failing tests: the MCP files (3
+  failures, 1 leak), `storage/user_storage.zig` (1) and
+  `transactions/manager.zig` (2).
 - **Operator-visible: SHOW CLUSTER STATUS `last_contact_ms` is NULL for a
   peer never heard from (SONNY-6463 item 4).** A peer's `last_contact`
   started at the node's start time, so "never heard from" and "heard from

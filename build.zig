@@ -6008,6 +6008,8 @@ pub fn build(b: *std.Build) void {
             "src/tools/bulk_loader.zig",
             "src/cli/tenant_cli.zig",
             "src/transactions/range_tracker.zig",
+            "src/std_shim.zig", // with src/policy.zig, which only it imports
+            "src/gpu/performance_profiler.zig",
         }) |path| {
             const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
             const tests = b.addTest(.{ .root_module = mod });
@@ -14872,6 +14874,63 @@ pub fn build(b: *std.Build) void {
     const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id) and the proto-reader registry's cases (per-connection stall grouping by connection identity, SONNY-6466; the per-connection and process-wide cancels)");
     sonny_quic_stream_step.dependOn(&run_sonny_quic_stream_tests.step);
     shardDep(test_step, &run_sonny_quic_stream_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6463 (5), second batch: live files whose inline tests no step
+    // ran because the build only ever imports them as NAMED modules or
+    // compiles them into an executable (Zig collects a test block from the
+    // test root's own module only). Each gets a test root that copies the
+    // import table the build already gives the file, so it compiles exactly
+    // as it ships; the CLI files and the fuzz harness copy geode_exe's.
+    // Not yet here (their inline tests fail; SONNY-6463 follow-up): the MCP
+    // files (src/sonny6463_mcp_test_root.zig: 52 pass, 3 fail, 1 leak),
+    // src/storage/user_storage.zig (7 pass, 1 fail) and
+    // src/transactions/manager.zig (6 pass, 2 fail).
+    {
+        const sonny6463b_step = b.step("test-sonny6463-inline-wired", "Run SONNY-6463 item 5 (second batch): the inline tests of live files the build imports only as named modules or executable sources, each rooted with the import table the build gives it");
+        const Root = struct { name: []const u8, path: ?[]const u8 = null, from: *std.Build.Module, exe: bool = false };
+        for ([_]Root{
+            .{ .name = "thread-pool", .from = thread_pool_mod },
+            .{ .name = "thread-pool-parallel", .from = parallel_wrapper_mod },
+            .{ .name = "logging", .from = logging_mod },
+            .{ .name = "fle-hkdf", .from = fle_hkdf_mod },
+            .{ .name = "fle-hmac", .from = fle_hmac_mod },
+            .{ .name = "fle-key-manager", .from = fle_key_manager_mod },
+            .{ .name = "fle-blind-index", .from = fle_blind_index_mod },
+            .{ .name = "cli-auth-helpers", .path = "src/cli/cli_auth_helpers.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "auth-init-cli", .path = "src/cli/auth_init_cli.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "cli-backup-dispatcher", .path = "src/sonny6463_cli_test_root.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "fuzz-main", .path = "src/fuzz/main.zig", .from = geode_exe.root_module, .exe = true },
+        }) |entry| {
+            const mod = b.createModule(.{
+                .root_source_file = if (entry.path) |p| b.path(p) else entry.from.root_source_file,
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+            var it = entry.from.import_table.iterator();
+            while (it.next()) |imp| mod.addImport(imp.key_ptr.*, imp.value_ptr.*);
+            if (entry.exe) {
+                if (enable_openssl) {
+                    mod.linkSystemLibrary("ssl", .{});
+                    mod.linkSystemLibrary("crypto", .{});
+                }
+                if (target.result.os.tag == .linux and (is_native or enable_openssl)) mod.linkSystemLibrary("dl", .{});
+            }
+            const tests = b.addTest(.{ .name = b.fmt("sonny6463-{s}", .{entry.name}), .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463b_step.dependOn(&run_tests.step);
+        }
+        // backup.zig is imported by the geode module it itself imports, so a
+        // second module rooted at it would own the file twice: its own module
+        // is the test root.
+        for ([_]*std.Build.Module{storage_backup_mod}) |mod| {
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463b_step.dependOn(&run_tests.step);
+        }
+    }
 
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
     const gap0929_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0929_geode_port.zig"), .target = target, .optimize = optimize });

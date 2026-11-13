@@ -484,7 +484,7 @@ test "ThreadPool: submit and execute work" {
     // Wait for completion
     var timeout: u32 = 0;
     while (counter.load(.acquire) < 10 and timeout < 1000) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {}; // SONNY-6463: Zig 0.16 has no std.Thread.sleep
         timeout += 1;
     }
 
@@ -522,7 +522,7 @@ test "ThreadPool: statistics tracking" {
     // Wait for completion
     var timeout: u32 = 0;
     while (!completed.load(.acquire) and timeout < 1000) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {}; // SONNY-6463: Zig 0.16 has no std.Thread.sleep
         timeout += 1;
     }
 
