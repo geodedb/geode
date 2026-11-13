@@ -5709,11 +5709,12 @@ REQ-SONNY-6430-REGISTRY-FAIL-CLOSED,Storage Adapter,UnloadableRegistryRefuses,TE
 REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED,Security Graph Audit,NoUnauditedOpen,TESTED,,,security,2026-11-12,src/storage/graph_storage_adapter.zig,10468
 REQ-SONNY-6430-STORAGE-VERIFY-DATA-DIR,Storage CLI,VerifiesTheServersDataDir,TESTED,,,storage,2026-11-12,src/cli/storage_cli.zig,91
 REQ-SONNY-6436-COMPOSITE-SOLE-HOLDER,WriteFastPathParity,CompositeSoleHolderEndpoint,TESTED,,,storage,2026-11-12,src/graph_store.zig,7533
-REQ-SONNY-6436-FIXTURE-SECRETS,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,27
+REQ-SONNY-6436-FIXTURE-SECRETS,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,36
 REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,QuicRetryStopsWithSummary,TESTED,,,cli,2026-11-12,src/cli/main.zig,3006
 REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,Regression,TESTED,,,cli,2026-11-12,tests/test_sonny6436_quic_retry_stops.zig,20
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,OnlyTrueAdmits,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2367
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6436_rls_raw_truthiness.zig,24
+REQ-SONNY-6447-FIXTURE-SECRETS,GQL Auth DDL,ClientsAndUserPasswords,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,35
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2368
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6447_rls_raw_tokenize.zig,17
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,293

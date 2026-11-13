@@ -24,6 +24,15 @@
 // `NAME="$OTHER"` hand-off to the value `OTHER` is assigned in the same file,
 // and checks generated values with the command output at its weakest.
 //
+// SONNY-6447 item 8: the scan also covers clients/ (the shipped client
+// examples, including their Zig sources: a `password = "..."` field) and a
+// Python runner's default for a non-admin user's password
+// (`${secret:user_password}`, which the server checks against the same
+// policy on CREATE USER). Found: scripts/test/extended_test_runner.py
+// defaulted it to "UserPass123!" and clients/zig/example_minimal.zig set
+// "GeodeTestPassword123!" (one word).
+//
+// CANARY: REQ=REQ-SONNY-6447-FIXTURE-SECRETS; FEATURE="GQL Auth DDL"; ASPECT=ClientsAndUserPasswords; STATUS=TESTED; TEST=tests/test_sonny6436_fixture_secrets.zig; OWNER=security; UPDATED=2026-11-12
 // CANARY: REQ=REQ-SONNY-6436-FIXTURE-SECRETS; FEATURE="GQL Auth DDL"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6436_fixture_secrets.zig; OWNER=security; UPDATED=2026-11-12
 
 const std = @import("std");
@@ -42,8 +51,10 @@ const password_keys = [_][]const u8{ "GEODE_ADMIN_PASSWORD", "GEODE_DEFAULT_PASS
 const hmac_keys = [_][]const u8{ "GEODE_AUTH_HMAC_KEY", "GEODE_TDE_KEY" };
 /// The one generator accepted for an HMAC key: 32 random bytes, hex.
 const hmac_generator = "$(openssl rand -hex 32)";
-/// Python dictionary / environment keys naming the admin password.
-const python_keys = [_][]const u8{ "admin_password", "GEODE_DEFAULT_PASSWORD", "GEODE_ADMIN_PASSWORD", "${secret:admin_password}" };
+/// Python dictionary / environment keys naming the admin password or, for
+/// `user_password`, a user's password (SONNY-6447: CREATE USER checks it
+/// against the same policy).
+const python_keys = [_][]const u8{ "admin_password", "GEODE_DEFAULT_PASSWORD", "GEODE_ADMIN_PASSWORD", "${secret:admin_password}", "user_password", "${secret:user_password}" };
 
 fn readFileAlloc(aa: std.mem.Allocator, path: []const u8) ![]u8 {
     const f = try std.Io.Dir.cwd().openFile(io(), path, .{});
@@ -315,6 +326,20 @@ const Scan = struct {
         }
     }
 
+    /// SONNY-6447: a Zig client example's `password = "literal"` field.
+    fn zigPasswords(self: *Scan, path: []const u8, text: []const u8) !void {
+        const marker = "password = \"";
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, text, pos, marker)) |i| {
+            pos = i + marker.len;
+            if (i > 0 and isIdentChar(text[i - 1])) continue;
+            const sol = if (std.mem.lastIndexOfScalar(u8, text[0..i], '\n')) |p| p + 1 else 0;
+            if (std.mem.startsWith(u8, std.mem.trimStart(u8, text[sol..i], " \t"), "//")) continue;
+            const end = std.mem.indexOfScalarPos(u8, text, pos, '"') orelse continue;
+            try self.checkPassword(path, text, i, text[pos..end]);
+        }
+    }
+
     fn file(self: *Scan, path: []const u8) !void {
         const raw = readFileAlloc(self.aa, path) catch return;
         const base = std.fs.path.basename(path);
@@ -324,6 +349,10 @@ const Scan = struct {
         else
             raw;
         self.files += 1;
+        if (std.mem.endsWith(u8, base, ".zig")) {
+            try self.zigPasswords(path, text);
+            return;
+        }
         if (std.mem.endsWith(u8, base, ".py")) {
             try self.pythonDefaults(path, text);
         } else {
@@ -341,6 +370,20 @@ const Scan = struct {
             if (std.mem.endsWith(u8, base, ext)) return true;
         }
         return false;
+    }
+
+    /// `tree`, plus Zig sources (SONNY-6447: only for clients/, whose examples
+    /// users copy; tests/ deliberately holds passwords the policy refuses).
+    fn treeWithZig(self: *Scan, root: []const u8) !void {
+        var dir = std.Io.Dir.cwd().openDir(io(), root, .{ .iterate = true }) catch return;
+        defer dir.close(io());
+        var walker = try dir.walk(self.aa);
+        defer walker.deinit();
+        while (try walker.next(io())) |entry| {
+            if (entry.kind != .file) continue;
+            if (!wanted(entry.path) and !std.mem.endsWith(u8, entry.path, ".zig")) continue;
+            try self.file(try std.fs.path.join(self.aa, &.{ root, entry.path }));
+        }
     }
 
     fn tree(self: *Scan, root: []const u8) !void {
@@ -374,12 +417,36 @@ test "SONNY-6436: every admin password and auth-chain key the in-repo scripts an
     try scan.tree("tests");
     try scan.tree("scripts");
     try scan.tree("deployment");
+    try scan.treeWithZig("clients");
     try scan.top();
     // Not vacuous: the netns cluster scripts' seeds were found and checked.
     try testing.expect(scan.files > 0);
     try testing.expect(scan.hmac_checked >= 2);
     try testing.expect(scan.passwords_checked > 10);
     try testing.expectEqual(@as(usize, 0), scan.bad);
+}
+
+test "SONNY-6447: the scan reads a Zig client's password field and a Python user-password default" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var scan: Scan = .{ .aa = aa, .policy = PasswordPolicy.geodeSecure() };
+    try scan.zigPasswords("fixture.zig",
+        \\    cfg.password = "GeodeTestPassword123!";
+        \\    // cfg.password = "short";
+        \\    .password = "Geode Example Client Passphrase",
+        \\    const old_password = "x";
+        \\
+    );
+    try scan.pythonDefaults("fixture.py",
+        \\secrets.get("user_password", "UserPass123!")
+        \\secrets.get("admin_password", "Geode Test Admin Passphrase")
+        \\
+    );
+    // The two fields and the two Python defaults are checked; the one-word
+    // field and "UserPass123!" are refused.
+    try testing.expectEqual(@as(usize, 4), scan.passwords_checked);
+    try testing.expectEqual(@as(usize, 2), scan.bad);
 }
 
 test "SONNY-6436: the scan resolves hand-offs and generated values" {
