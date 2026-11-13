@@ -2290,10 +2290,30 @@ test "quic app pto retransmit state advances only after full sends" {
     try testing.expect(std.mem.indexOf(u8, methods_b, "tracked.retransmit_count >= 8") == null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "recordAppStreamRetransmitAttempt") != null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "const sent = self.send(pkt) catch") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "if (sent != pkt.len)") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "self.app_stream_retx.put(lost_pn, tracked)") != null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "if (sent == pkt.len)") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "self.app_stream_retx.put(probe_pn, tracked)") != null);
+    // A failed PTO send restores the probe entry under its original PN.
+    try testing.expect(std.mem.indexOf(u8, methods_b, "putAppStreamRetx(self, probe_pn, tracked)") != null);
+
+    // ACK-path loss retransmit (quic v0.1.49, SONNY-6434): the lost entry
+    // stays tracked while it is sent and is removed and re-keyed only after
+    // the whole datagram went out; a failed or short send ends the pass with
+    // the entry still tracked under its original PN.
+    const send_retx = try sliceBetween(methods_b, "fn sendStreamRetransmission(", "fn retransmitLostStreamPackets(");
+    try testing.expect(std.mem.indexOf(u8, send_retx, "const sent = self.send(pkt) catch return null;") != null);
+    try testing.expect(std.mem.indexOf(u8, send_retx, "if (sent != pkt.len) return null;") != null);
+    const ack_retx = try sliceBetween(methods_b, "fn retransmitLostStreamPackets(", "pruneAppStreamRetxOrder(self);\n");
+    const send_idx = std.mem.indexOf(u8, ack_retx, "sendStreamRetransmission(self, tx, tracked_ptr.*) orelse break;") orelse
+        return error.MissingAckRetxSendBeforeRemove;
+    const remove_idx = std.mem.indexOf(u8, ack_retx, "self.app_stream_retx.fetchRemove(lost_pn)") orelse
+        return error.MissingAckRetxRemove;
+    const sent_idx = std.mem.indexOf(u8, ack_retx, "self.onShortHeaderPacketSent(pkt_len, true)") orelse
+        return error.MissingAckRetxSentAccounting;
+    const rekey_idx = std.mem.indexOf(u8, ack_retx, "putAppStreamRetx(self, next_pn, tracked)") orelse
+        return error.MissingAckRetxRekey;
+    try testing.expect(send_idx < remove_idx);
+    try testing.expect(remove_idx < sent_idx);
+    try testing.expect(sent_idx < rekey_idx);
+    try testing.expect(std.mem.indexOf(u8, ack_retx[0..send_idx], "fetchRemove") == null);
 
     const pto_canary = std.mem.indexOf(u8, methods_b, "REQ=REQ-QUIC-HC-079") orelse return error.MissingAppPtoAccountingCanary;
     const pto_block = methods_b[pto_canary..@min(methods_b.len, pto_canary + 8000)];
