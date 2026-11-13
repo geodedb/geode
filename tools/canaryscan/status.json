@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:45:28.035753676Z",
+  "generated_at": "2026-11-13T12:45:43.959448305Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80556,6 +80556,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6296-PLANNED-WHERE-ERRORS",
+      "features": [
+        {
+          "feature": "PlannedRead",
+          "aspect": "WhereErrorsFailTheQuery",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6296-REL-MAP-PARAMS",
+      "features": [
+        {
+          "feature": "PatternMatching",
+          "aspect": "RelationshipMapParameters",
+          "status": "TESTED",
+          "files": [
+            "src/execution/pattern_helpers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6300-STAGED-RESTORE-ONLY",
       "features": [
         {
@@ -93733,7 +93771,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4887
+      "TESTED": 4889
     },
     "by_aspect": {
       "2PC": 3,
@@ -96876,6 +96914,7 @@
       "RelationshipDeferToPostWith": 1,
       "RelationshipDeleteEndpointLookup": 1,
       "RelationshipLabelIndexScan": 1,
+      "RelationshipMapParameters": 1,
       "RelationshipMatchEdgeRls": 1,
       "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
@@ -97810,6 +97849,7 @@
       "WhereClause": 4,
       "WhereClauseIndexCheck": 1,
       "WhereEnvLifetime": 1,
+      "WhereErrorsFailTheQuery": 1,
       "WhereEvaluation": 2,
       "WhereFilterHonored": 1,
       "WherePassthrough": 1,

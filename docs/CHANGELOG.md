@@ -2036,6 +2036,20 @@
 
 ### Fixed
 
+- **A relationship property map with a parameter matches on every
+  session, and an error in a WHERE fails the persisted read (SONNY-6296
+  items 2 and 5). User-visible: a query whose WHERE raises now fails.**
+  The legacy executor (in-memory, tenant-scoped and RLS sessions)
+  evaluated a relationship's property map without the query parameters, so
+  `-[:R {w: $p}]->` matched nothing, and a value it could not evaluate
+  matched every edge; it now reads the statement's parameters, and such a
+  value matches nothing. The persisted planned read turned an error in a
+  row's WHERE or FILTER (22003 overflow, 22012 division by zero, a type
+  mismatch, ...) into a dropped row and answered over the rest; it now
+  fails the query, as the other executors do (ISO/IEC 39075:2024 19.1 GR 1
+  evaluates the condition for every row; its exception is the
+  statement's). Regression: `zig build test-sonny6296-legacy-read-gaps`
+  (new).
 - **`NOT (k = 1)` is a negated comparison, not a pattern; a CALL in a
   transaction body honours RETURN, ORDER BY, SKIP and LIMIT; FILTER after
   an inline LET and between MATCH statements (SONNY-6467 items 1-3).**

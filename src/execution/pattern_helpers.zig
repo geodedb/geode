@@ -310,17 +310,26 @@ pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u
 
 /// Check if an edge's properties match the required property constraints from a RelPattern.
 /// Returns true if all required properties exist and match, or if no properties are required.
+// CANARY: REQ=REQ-SONNY-6296-REL-MAP-PARAMS; FEATURE="PatternMatching"; ASPECT=RelationshipMapParameters; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6296 (2): the map's values are evaluated with the statement's query
+/// parameters (the active context's), so `-[:R {w: $p}]->` matches; they were
+/// evaluated with none, so a parameter never matched. A value that cannot be
+/// evaluated matches nothing, as on a node (`nodeMatchesProps`); it matched
+/// every edge.
 pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) bool {
     const props = required_props orelse return true;
+    const ctx = execution.getActiveContext();
     const empty_env = Env{
         .names = &.{},
         .values = &.{},
         .allocator = allocator,
+        .param_names = if (ctx) |c| c.query_param_names else &.{},
+        .param_values = if (ctx) |c| c.query_param_values else &.{},
     };
     for (props) |prop| {
         if (edge.properties.get(prop.key)) |edge_prop_val| {
             const edge_val = propertyValueToValue(edge_prop_val);
-            const expected_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch return true;
+            const expected_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch return false;
             if (!valuesEqual(edge_val, expected_val)) return false;
         } else {
             return false;

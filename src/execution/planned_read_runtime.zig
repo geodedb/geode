@@ -3408,7 +3408,19 @@ fn applyResultFilters(
     var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
     defer filtered_rows.deinit(allocator);
 
-    for (result.rows) |row| {
+    // CANARY: REQ=REQ-SONNY-6296-PLANNED-WHERE-ERRORS; FEATURE="PlannedRead"; ASPECT=WhereErrorsFailTheQuery; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
+    // SONNY-6296 (5): an error evaluating the WHERE or the FILTER for a row
+    // fails the query (ISO/IEC 39075:2024 19.1 GR 1 evaluates the search
+    // condition for every row; an exception it raises is the statement's),
+    // as on the other executors. Only a limit (SONNY-3251) and an FLE read
+    // refusal (SONNY-6327) did; any other error was the row's false, so
+    // `WHERE t.k + 9223372036854775807 > 0` answered over the rows that did
+    // not overflow. Every row is decided before any is freed: an error
+    // leaves `result` whole for the caller to free once (a row freed here
+    // before a later row's error was freed again).
+    const keep = try allocator.alloc(bool, result.rows.len);
+    defer allocator.free(keep);
+    for (result.rows, keep) |row, *k| {
         const env = Env{
             .names = result.columns,
             .values = row,
@@ -3417,29 +3429,11 @@ fn applyResultFilters(
             .allocator = allocator,
             .exec_context = @constCast(&context),
         };
-
-        // SONNY-3251 (round 15, F6): a limit (54001, 53200, 57014) is the
-        // query's; SONNY-6327: so is an FLE read refusal; any other error is
-        // the row's false, as it was.
-        const passes_where = if (where_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err) or eval.isFleReadRefusal(err)) return err else Value{ .Bool = false })
-        else
-            true;
-        if (!passes_where) {
-            allocator.free(row);
-            continue;
-        }
-
-        const passes_filter = if (filter_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err) or eval.isFleReadRefusal(err)) return err else Value{ .Bool = false })
-        else
-            true;
-        if (!passes_filter) {
-            allocator.free(row);
-            continue;
-        }
-
-        try filtered_rows.append(allocator, row);
+        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
+        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
+    }
+    for (result.rows, keep) |row, k| {
+        if (k) filtered_rows.appendAssumeCapacity(row) else allocator.free(row);
     }
 
     const old_rows = result.rows;
