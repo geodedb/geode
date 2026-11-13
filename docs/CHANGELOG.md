@@ -1844,6 +1844,16 @@
 
 ### Fixed
 
+- **The 3-node cluster tests take their client and cluster ports from
+  `tests/test_ports.zig` (SONNY-6450 item 2).**
+  `test-cluster-replicable-mutations` and `test-cluster-steady-state`
+  bound 127.0.0.11-13 on the fixed ports 3141 and 4242, so a second run on
+  the host, or any geode on those ports, answered them. Each node keeps its
+  own loopback address (the peer TLS certificate names them) and binds two
+  free UDP ports chosen when the cluster starts. Both pass
+  (9/9 and 3/3), and `docs/KNOWN_TEST_ISSUES.md` no longer lists
+  `test-cluster-replicable-mutations` as an intentionally red timeout
+  (SONNY-6450 item 1).
 - **A stored property chain that holds the same key twice no longer leaks
   when it is read (SONNY-6450 item 6).** `getAllNodeProperties` /
   `getAllEdgeProperties` decode each entry of a chain into a map
