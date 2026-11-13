@@ -306,7 +306,7 @@ REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,TESTED,,,security,2026-06-1
 REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig,134
 REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,TESTED,,,security,2026-06-11,src/server/main.zig,2602
 REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,,,security,2026-11-13,src/server/main.zig,1317
-REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,,,security,2026-11-13,tests/test_sonny6453_mtls_client_ca.zig,23
+REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,,,security,2026-11-13,tests/test_sonny6453_mtls_client_ca.zig,29
 REQ-AUTH-MTLS-QUIC-007,mTLS over QUIC,ClientCertPresentation,TESTED,,,security,2026-11-13,src/transport/quic.zig,2526
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,10
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,85
