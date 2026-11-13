@@ -5373,6 +5373,19 @@
 
 ### Removed
 
+- **`src/fts/advanced.zig`, `src/fts/bm25.zig` and
+  `NetworkTransport.sendToNode` (SONNY-6499 item 4).** Nothing reached them
+  and they did not compile: `LanguageAnalyzer.analyze` used the managed
+  `std.ArrayList(T).init` that Zig 0.16 removed (its CANARY marker said
+  TESTED; it was re-exported as `lib.fts_advanced` and never referenced),
+  bm25.zig was imported only by it and by an unregistered skeleton test,
+  and `sendToNode` called `std.time.sleep` and a `QuicTransport.connect`
+  that do not exist. `EnhancedQueryTransport.sendWithRetry`, its only
+  caller (itself unreached), now refuses (`InterNodeSendNotImplemented`)
+  instead of claiming a send. docs/SERVER_FEATURES.md no longer claims
+  Porter stemming, a configurable stop-word list or Levenshtein fuzzy
+  matching for full-text search: none exists.
+
 - **Dead benchmark: `tests/benchmark_hashagg_distinct_variance.zig`
   (SONNY-6456 item 5).** No build step compiled it and it could not
   compile: it imports `exec.zig`, `eval.zig` and `gql/ast.zig` relative to

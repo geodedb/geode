@@ -99,77 +99,10 @@ pub const NetworkTransport = struct {
         });
     }
 
-    pub fn sendToNode(self: *NetworkTransport, node_id: u32, msg: *const ClusterMessage) !void {
-        // Serialize message with length-prefixed protobuf framing (no lock needed)
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 512);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, msg.*);
-        const body = aw.writer.buffer[0..aw.writer.end];
-
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
-        try buffer.writer().writeInt(u32, @intCast(body.len), .big);
-        try buffer.writer().writeAll(body);
-
-        // Look up peer info and existing connection under lock
-        var existing_conn: ?*quic.QuicConnection = null;
-        var peer_address: []const u8 = undefined;
-        {
-            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            const peer = self.peers.get(node_id) orelse return error.PeerNotFound;
-            existing_conn = peer.connection;
-            peer_address = peer.address;
-        }
-
-        // Retry logic: 3 attempts with exponential backoff (no lock held during I/O)
-        const retry_delays = [_]u64{ 50, 100, 200 }; // milliseconds
-        var retry: usize = 0;
-        while (retry < 3) : (retry += 1) {
-            if (existing_conn) |conn| {
-                conn.send(buffer.items) catch |err| {
-                    if (retry < 2) {
-                        std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
-                        continue;
-                    }
-                    return err;
-                };
-                return;
-            } else {
-                // Establish connection without holding lock
-                const conn = self.quic_transport.connect(peer_address) catch |err| {
-                    if (retry < 2) {
-                        std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
-                        continue;
-                    }
-                    return err;
-                };
-
-                // Update peer connection state under lock
-                {
-                    self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                    defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                    if (self.peers.getPtr(node_id)) |updated_peer| {
-                        updated_peer.connection = conn;
-                        updated_peer.last_seen = compat_milliTimestamp();
-                    }
-                }
-                existing_conn = conn;
-
-                // Send message without lock
-                conn.send(buffer.items) catch |err| {
-                    if (retry < 2) {
-                        std.time.sleep(retry_delays[retry] * std.time.ns_per_ms);
-                        continue;
-                    }
-                    return err;
-                };
-                return;
-            }
-        }
-
-        return error.SendFailed;
-    }
+    // SONNY-6499: `sendToNode` was removed. It did not compile (the managed
+    // ArrayList API, std.time.sleep and a QuicTransport.connect that do not
+    // exist) and nothing reached it; EnhancedQueryTransport.sendWithRetry,
+    // its only caller, refuses instead (InterNodeSendNotImplemented).
 
     pub fn onMessage(self: *NetworkTransport, handler: MessageHandler) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());

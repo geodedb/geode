@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:28:46.044274528Z",
+  "generated_at": "2026-11-13T19:31:40.028783097Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -38039,36 +38039,6 @@
           "benches": [],
           "owner": "index",
           "updated": "2026-05-30"
-        },
-        {
-          "feature": "BM25 Scoring",
-          "aspect": "SEARCH",
-          "status": "BENCHED",
-          "files": [
-            "src/fts/bm25.zig"
-          ],
-          "tests": [
-            "tests/e2e_fts_advanced.zig:1"
-          ],
-          "benches": [
-            "tests/benchmark_fts_bm25_scoring.zig:1"
-          ],
-          "owner": "search",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "BM25 skeleton",
-          "aspect": "SEARCH",
-          "status": "TESTED",
-          "files": [
-            "tests/unit_bm25_skeleton.zig"
-          ],
-          "tests": [
-            "tests/unit_bm25_skeleton.zig:1"
-          ],
-          "benches": [],
-          "owner": "search",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -38296,22 +38266,6 @@
           ],
           "benches": [],
           "owner": "index",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "Advanced FTS",
-          "aspect": "QUERY",
-          "status": "BENCHED",
-          "files": [
-            "src/fts/advanced.zig"
-          ],
-          "tests": [
-            "tests/e2e_fts_advanced.zig:1"
-          ],
-          "benches": [
-            "tests/benchmark_fts_analyzer_perf.zig:1"
-          ],
-          "owner": "search",
           "updated": "2026-06-10"
         },
         {
@@ -43789,12 +43743,10 @@
           "aspect": "AnalyzerLower",
           "status": "TESTED",
           "files": [
-            "src/fts/advanced.zig",
             "tests/canary_unicode_fts.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower",
-            "TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer"
+            "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower"
           ],
           "benches": [],
           "owner": "unicode",
@@ -95358,11 +95310,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 208,
+      "BENCHED": 206,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4981
+      "TESTED": 4980
     },
     "by_aspect": {
       "2PC": 3,
@@ -98325,7 +98277,6 @@
       "PunycodeHandling": 1,
       "PureFunction": 1,
       "PureValidation": 1,
-      "QUERY": 1,
       "QUICAccept": 1,
       "QUICAlgorithms": 1,
       "QUICBasicE2E": 1,
@@ -98709,7 +98660,6 @@
       "S3RestoreIsStaged": 1,
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
-      "SEARCH": 2,
       "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,

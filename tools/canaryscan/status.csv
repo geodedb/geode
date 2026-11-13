@@ -2529,8 +2529,6 @@ REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,GpsActionClassification,TESTED,
 REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,MutationClassification,TESTED,tests/test_for_write_body.zig,tests/test_for_write_body.zig:1,,query_traits,2026-08-29
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,src/index/fulltext.zig,TestCANARY_FTS_Suite_multiterm_no_leak,,index,2026-05-30
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,tests/test_fulltext_bm25.zig,test_fulltext_facade,,index,2026-05-30
-REQ-GQL-FTS-001,BM25 Scoring,SEARCH,BENCHED,src/fts/bm25.zig,tests/e2e_fts_advanced.zig:1,tests/benchmark_fts_bm25_scoring.zig:1,search,2025-09-26
-REQ-GQL-FTS-001,BM25 skeleton,SEARCH,TESTED,tests/unit_bm25_skeleton.zig,tests/unit_bm25_skeleton.zig:1,,search,2025-09-26
 REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,src/index/fulltext.zig,test_fulltext_facade,,index,2026-05-30
 REQ-GQL-FTS-002,FTS Tokenizer,Tokenize,TESTED,src/index/fts_tokenizer.zig,test_fts_tokenizer,,index,2026-05-30
 REQ-GQL-FTS-003,FTS,IndexOptimizer,IMPL,tests/test_gap_0193_batch2_testing.zig,,,search,2026-11-12
@@ -2546,7 +2544,6 @@ REQ-GQL-FTS-ADV-001,Advanced FTS,PhraseSearch,TESTED,src/index/fulltext.zig,test
 REQ-GQL-FTS-ADV-001,Advanced FTS,PositionalSearch,TESTED,src/storage/fts_storage_adapter.zig,tests/test_fts_storage_adapter.zig,,index,2026-06-10
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximityProc,TESTED,src/execution/fts_dispatch.zig,tests/test_gap0869_fts_advanced.zig,,index,2026-06-10
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximitySearch,TESTED,src/index/fulltext.zig,tests/e2e_fts_advanced.zig,,index,2026-06-10
-REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,BENCHED,src/fts/advanced.zig,tests/e2e_fts_advanced.zig:1,tests/benchmark_fts_analyzer_perf.zig:1,search,2026-06-10
 REQ-GQL-FTS-ADV-001,Advanced FTS,ReadOnlyClassification,TESTED,src/execution/procedure_access.zig,tests/test_gap0869_fts_advanced.zig,,index,2026-06-10
 REQ-GQL-FTS-ADV-002,Advanced Text Analyzers,TESTING,TESTED,tests/test_fts_advanced_analyzers.zig,TestCANARY_Advanced_Text_Analyzers,,search,2025-10-04
 REQ-GQL-FTS-COVERAGE-001,Fulltext GQL coverage gaps,E2E,TESTED,tests/test_fts_coverage.zig,self,,index,2026-05-31
@@ -2877,8 +2874,7 @@ REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,TESTED,tests/canary_unicod
 REQ-GQL-UNICODE-007,UnicodeBuildEnforcement,Verification,EXEMPT,build.zig,,,unicode,2026-01-14
 REQ-GQL-UNICODE-007,UnicodeFtsIntegration,IndexerNormalize,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize,,unicode,2025-09-27
 REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,build.zig,,,unicode,2026-01-14
-REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,src/fts/advanced.zig,TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower,,unicode,2025-09-27
-REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer,,unicode,2025-09-27
+REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower,,unicode,2025-09-27
 REQ-GQL-UNICODE-009,UnicodeEval,CompareNfc,TESTED,src/eval.zig,TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc,,unicode,2025-09-27
 REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,tests/canary_unicode_orderby.zig,TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc,,unicode,2025-09-27
 REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,src/exec.zig,tests/test_sonny6499_exec_order_nfc.zig,,unicode,2026-11-13

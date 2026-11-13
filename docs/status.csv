@@ -846,12 +846,12 @@ REQ-DIST-CLUSTER-WRITE-OUTCOME-SQLSTATE,DistributedCluster,ClusterErrorSqlstateM
 REQ-DIST-CLUSTER-WRITE-OUTCOME-SQLSTATE,DistributedCluster,ClusterErrorSqlstateMapping,TESTED,,,transport,2026-06-12,tests/test_proto_util_cluster_error_mapping.zig,39
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig,27
 REQ-DIST-EDGE-DURABILITY-CHURN,DistributedCluster,EdgeReApplyIdempotency,TESTED,,,distributed,2026-06-12,tests/test_edge_durability_churn_repro.zig,1
-REQ-DIST-FRAG-001,Fragment Serialization,Core,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,584
-REQ-DIST-FRAG-002,Fragment Deserialization,Core,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,608
-REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,1104
+REQ-DIST-FRAG-001,Fragment Serialization,Core,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,562
+REQ-DIST-FRAG-002,Fragment Deserialization,Core,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,586
+REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,1082
 REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,856
 REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,823
-REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,727
+REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,705
 REQ-DIST-MIGRATE-002,Shard Data Migration,PartialMigration,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,710
 REQ-DIST-MIGRATE-003,Shard Data Migration,FullMigration,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,754
 REQ-DIST-MIGRATION-001,Shard Data Migration,Migration,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,501
@@ -907,9 +907,9 @@ REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowDispatch,TESTED,,,distribut
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowTypeClusterStatus,TESTED,,,distributed,2026-05-26,src/gql/ast.zig,731
 REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,645
 REQ-DIST-TRACKER-001,Query Tracker Storage,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,77
-REQ-DIST-TRACKER-002,Query Tracking,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,646
-REQ-DIST-TRACKER-003,Query Tracker Lookup,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,674
-REQ-DIST-TRACKER-004,Query Tracker Cleanup,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,681
+REQ-DIST-TRACKER-002,Query Tracking,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,624
+REQ-DIST-TRACKER-003,Query Tracker Lookup,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,652
+REQ-DIST-TRACKER-004,Query Tracker Cleanup,Query,TESTED,,,distributed,2026-06-11,src/distributed/enhanced_query_transport.zig,659
 REQ-DIST-TRANSPORT-001,Migration Transport,NetworkCallback,TESTED,,,distributed,2026-06-11,src/distributed/sharding.zig,149
 REQ-DISTRIBUTED-001,DistributedFeatures,RemoteQuery,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig,602
 REQ-DISTRIBUTED-002,DistributedFeatures,Replication,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig,609
@@ -2144,7 +2144,7 @@ REQ-GQL-032-RANGE,Constraints,RangeRefused,TESTED,,,schema,2026-11-12,tests/test
 REQ-GQL-032-UNIQUE,Constraints,Unique,IMPL,,,schema,2026-11-12,tests/test_gap_0193_batch2_engine.zig,74
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,tests/test_temporal_extreme_offsets.zig,4
 REQ-GQL-041,Cluster Networking,InterNodeMessaging,IMPL,,,distributed,2026-04-05,src/distributed/network_transport.zig,41
-REQ-GQL-041,Cluster Networking,NetworkTransportTests,TESTED,,,distributed,2026-04-10,src/distributed/network_transport.zig,224
+REQ-GQL-041,Cluster Networking,NetworkTransportTests,TESTED,,,distributed,2026-04-10,src/distributed/network_transport.zig,157
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,,,streaming,2025-09-21,tests/canary_cdc_jitter_thresholds.zig,2
 REQ-GQL-042,CDC,AdaptiveStressHarness,BENCHED,,,streaming,2025-09-21,tests/benchmark_cdc_adaptive_stress.zig,2
 REQ-GQL-042,CDC,CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,BENCHED,,,cdc,2025-09-21,tests/benchmark_cdc_adaptive_decision_latency_variance.zig,3
@@ -2644,8 +2644,6 @@ REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,MutationClassification,TESTED,,
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,20
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,91
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,tests/test_fulltext_bm25.zig,259
-REQ-GQL-FTS-001,BM25 Scoring,SEARCH,TESTED,,,search,2025-09-26,src/fts/bm25.zig,4
-REQ-GQL-FTS-001,BM25 skeleton,SEARCH,TESTED,,,search,2025-09-26,tests/unit_bm25_skeleton.zig,5
 REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,72
 REQ-GQL-FTS-002,FTS Tokenizer,Tokenize,TESTED,,,index,2026-05-30,src/index/fts_tokenizer.zig,15
 REQ-GQL-FTS-003,FTS,IndexOptimizer,IMPL,,,search,2026-11-12,tests/test_gap_0193_batch2_testing.zig,264
@@ -2661,7 +2659,6 @@ REQ-GQL-FTS-ADV-001,Advanced FTS,PhraseSearch,TESTED,,,index,2026-06-10,src/inde
 REQ-GQL-FTS-ADV-001,Advanced FTS,PositionalSearch,TESTED,,,index,2026-06-10,src/storage/fts_storage_adapter.zig,858
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximityProc,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig,265
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximitySearch,TESTED,,,index,2026-06-10,src/index/fulltext.zig,207
-REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,TESTED,,,search,2026-06-10,src/fts/advanced.zig,15
 REQ-GQL-FTS-ADV-001,Advanced FTS,ReadOnlyClassification,TESTED,,,index,2026-06-10,src/execution/procedure_access.zig,89
 REQ-GQL-FTS-ADV-002,Advanced Text Analyzers,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_advanced_analyzers.zig,158
 REQ-GQL-FTS-COVERAGE-001,Fulltext GQL coverage gaps,E2E,TESTED,,,index,2026-05-31,tests/test_fts_coverage.zig,4
@@ -3036,7 +3033,6 @@ REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,TESTED,,,unicode,2025-09-2
 REQ-GQL-UNICODE-007,UnicodeBuildEnforcement,Verification,EXEMPT,,,unicode,2026-01-14,build.zig,1654
 REQ-GQL-UNICODE-007,UnicodeFtsIntegration,IndexerNormalize,TESTED,,,unicode,2025-09-27,tests/canary_unicode_fts.zig,4
 REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,,,unicode,2026-01-14,build.zig,1659
-REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,,,unicode,2025-09-27,src/fts/advanced.zig,28
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,,,unicode,2025-09-27,tests/canary_unicode_fts.zig,6
 REQ-GQL-UNICODE-009,UnicodeEval,CompareNfc,TESTED,,,unicode,2025-09-27,src/eval.zig,902
 REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,,,unicode,2026-11-13,src/exec.zig,192
