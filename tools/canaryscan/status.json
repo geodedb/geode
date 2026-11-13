@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:11:28.102451772Z",
+  "generated_at": "2026-11-13T01:14:20.313887637Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84518,6 +84518,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "EveryFleKeyPathChecksKcv",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6442-SERVE-UNKNOWN-OPTION",
       "features": [
         {
@@ -92224,7 +92243,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4796
+      "TESTED": 4797
     },
     "by_aspect": {
       "2PC": 3,
@@ -93401,6 +93420,7 @@
       "EventSimulation": 1,
       "EveryDetailKey": 1,
       "EveryExpressionVariant": 1,
+      "EveryFleKeyPathChecksKcv": 1,
       "EveryGraphDeny": 1,
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,

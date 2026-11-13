@@ -10025,6 +10025,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6442-tde-measure-overhead", "Run SONNY-6442 item 6 regression (CALL tde.measure_overhead() is refused as unsupported with TDE on or off, and the memcpy-vs-AEAD measurement is gone; the real measurement is test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
     }
+    // SONNY-6442 (8): geode fle and in-process FLE check the master key
+    // check value too, through the helper geode serve uses.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_master_key_check_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-master-key-check-paths", "Run SONNY-6442 item 8 regression (geode fle migrate-encrypt and the in-process FLE key manager refuse a GEODE_MASTER_KEY other than the recorded one, accept the recorded one and record one where none is, through the helper geode serve uses)").dependOn(&run_tests.step);
+    }
     const sonny6386_tde_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_tde_key_fail_closed.zig"), .target = target, .optimize = optimize });
     sonny6386_tde_test_mod.link_libc = true;
     sonny6386_tde_test_mod.addImport("geode", root_mod);
