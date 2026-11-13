@@ -4920,6 +4920,7 @@ REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,Regression,TESTED,tests/test_
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,MaterializeKnownOnly,TESTED,src/graph_store.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3122_dropped_graph_not_recreated.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3125-SHARED-NODE-SET,SetClauseSemantics,PerRowReread,TESTED,tests/test_sonny3125_shared_node_set.zig,tests/test_sonny3125_shared_node_set.zig,,engine,2026-11-12
+REQ-SONNY-3126-LIST-PROJECTION-LEAKS,SharedProjection,Regression,TESTED,tests/test_sonny3126_list_projection_leaks.zig,tests/test_sonny3126_list_projection_leaks.zig,,engine,2026-11-13
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GraphDdlAlone,TESTED,src/query/query_traits.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27
 REQ-SONNY-3130-GRAPH-DDL-ALONE,MultiGraphIsolation,QuicHandler,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny3130_graph_ddl_alone.zig,,storage,2026-09-27

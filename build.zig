@@ -12168,6 +12168,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6483_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6483_step = b.step("test-sonny6483-query-residuals", "Run SONNY-6483 regression (an aggregating WITH followed by another WITH, aggregates over no MATCH under RLS, an any-direction pattern matching a self-loop once, a failing property map failing the statement: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6483_step.dependOn(&run_sonny6483_tests.step);
+    const sonny3126_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3126_list_projection_leaks.zig"), .target = target, .optimize = optimize });
+    sonny3126_test_mod.addImport("geode", root_mod);
+    sonny3126_test_mod.addImport("logging", logging_mod);
+    sonny3126_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3126_tests = b.addTest(.{ .root_module = sonny3126_test_mod });
+    const run_sonny3126_tests = b.addRunArtifact(sonny3126_tests);
+    shardDep(test_step, &run_sonny3126_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3126_step = b.step("test-sonny3126-list-projection-leaks", "Run SONNY-3126 regression (keys(), collect() and list literals on an ordinary RETURN or WITH own their lists: four session kinds, leak-checked)");
+    sonny3126_step.dependOn(&run_sonny3126_tests.step);
     const sonny3378_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3378_map_projection_leak.zig"), .target = target, .optimize = optimize });
     sonny3378_test_mod.addImport("geode", root_mod);
     sonny3378_test_mod.addImport("logging", logging_mod);
