@@ -11,10 +11,9 @@ geode serve --listen-quic 0.0.0.0:3141
 # With all options
 geode serve --listen-quic 0.0.0.0:3141 \
        --data-dir /var/geode/data \
-       --tls-cert server.crt \
-       --tls-key server.key \
-       --log-json \
-       --enable-tde
+       --cert server.crt \
+       --key server.key \
+       --log-level info
 ```
 
 ### Client Operations
@@ -265,7 +264,7 @@ ls -la /var/geode/data
 
 ```bash
 # Enable verbose logging
-geode serve --log-level debug --log-json
+geode serve --log-level debug
 
 # Check query syntax
 geode query "EXPLAIN MATCH (n) RETURN n"

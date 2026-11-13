@@ -82,7 +82,7 @@ Master (provider source) -> Derivation -> { data_key, wal_key }
 
 - External KMS network client & retry semantics.
 - Secure storage of KMS credentials (vault / process isolation).
-- Published performance target validation (<5% overhead) with AEAD encryption hot path.
+- TDE overhead is measured (`zig build test-sonny6435-tde-overhead`, SONNY-6435): +0.7% with per-commit fsync, about +20% on the commit path without fsync; reads that miss the buffer pool are not measured (graph_storage small-pool node loss).
 - Backup key workflow finalization (staging keys pre-rotation).
 
 ## Status Summary

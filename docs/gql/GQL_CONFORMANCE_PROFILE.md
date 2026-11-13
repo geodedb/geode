@@ -187,9 +187,6 @@ Verified across QUIC and gRPC transports:
 
 Guard threshold overrides (test/support use only):
 
-- CLI (preferred for determinism):
-  - `geode serve --match-max-results <N>` lowers the `max_results` guard at process start.
-  - `geode serve --match-max-frontier <N>` lowers the `max_frontier` guard at process start.
-- Environment (legacy/fallback): `GEODE_MATCH_MAX_RESULTS` and `GEODE_MATCH_MAX_FRONTIER` may still be set; if both CLI and env are provided, the CLI flags win.
+- Environment: `GEODE_MATCH_MAX_RESULTS` and `GEODE_MATCH_MAX_FRONTIER` lower the `max_results` and `max_frontier` guards. `geode serve` has no `--match-max-*` options (it refuses unknown options, SONNY-6442).
 
 Production deployments SHOULD leave these unset (defaults: 100,000). Frames emitted under overridden thresholds still carry the additional status for transparency.

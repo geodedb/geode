@@ -96,7 +96,7 @@ zig build
 ./zig-out/bin/cert_gen
 
 # Start server with QUIC
-./zig-out/bin/geode serve --listen-quic 0.0.0.0:7567 --log_json --result-format json
+./zig-out/bin/geode serve --listen-quic 0.0.0.0:7567
 
 # Client (defaults to QUIC)
 ./zig-out/bin/geode query "RETURN 1 AS x ORDER BY x LIMIT 1" --server 127.0.0.1:7567 --format json

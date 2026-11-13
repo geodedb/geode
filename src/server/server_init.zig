@@ -184,6 +184,22 @@ fn refuseUnusableMasterKey() !void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6435-MASTER-KEY-CHECK; FEATURE="Key configuration"; ASPECT=StartupVerifyOrRecord; STATUS=TESTED; TEST=tests/test_sonny6435_master_key_check.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6435: refuse to start when GEODE_MASTER_KEY is not the key this
+/// data directory's encrypted fields were written with. The directory keeps
+/// the key's check value (`fle_key_manager.masterKeyCheckValue`, never the
+/// key) in `fle_master_key.kcv` beside the FLE catalog, written like the
+/// catalog (private, never through a link, under GEODE_TDE_KEY when set).
+/// Without a key nothing is read or written: a deployment without FLE is
+/// never blocked. With a key and no recorded value (a new directory, or one
+/// from before this check) the value is recorded. A recorded value that
+/// does not match, or a check file that cannot be read, refuses startup.
+/// Nothing names the key.
+pub fn refuseMismatchedMasterKey(allocator: std.mem.Allocator, data_dir: []const u8) !void {
+    // SONNY-6442: the check every FLE key path shares (geode fle, in-process FLE).
+    return geode.fle_master_key_check.verifyOrRecord(allocator, data_dir, .serve);
+}
+
 /// SONNY-6339: the startup refusal for any other failure to establish the
 /// durable auth state. No secrets.
 fn printAuthStateUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {
@@ -570,6 +586,10 @@ pub fn initialize(
     // loaded: without it the fields configured as encrypted are unknown. It
     // was loaded lazily on first use and a failure gave an empty catalog, so
     // those fields were written in plaintext.
+    // SONNY-6435: a GEODE_MASTER_KEY other than the one the encrypted
+    // fields were written with refuses startup (the value is recorded on the
+    // first start with a key).
+    try refuseMismatchedMasterKey(allocator, data_dir);
     try geode.fle_integration.catalog_mod.loadGlobalCatalogAtStartup();
 
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=storage; UPDATED=2026-06-11

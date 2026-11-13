@@ -4,6 +4,138 @@
 
 ### Security
 
+- **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
+  refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
+  8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was
+  checked by `geode serve` at startup only; `geode fle migrate-encrypt`
+  and the in-process FLE key manager built a key manager from whatever key
+  was set. Both now run the same check first, through the one helper
+  `geode serve` now uses (`src/keys/master_key_check.zig`
+  `verifyOrRecord`), against the data directory the FLE catalog lives in:
+  another key fails with `MasterKeyMismatch` before any key is derived, and
+  a directory without a value records one. Regression:
+  `zig build test-sonny6442-master-key-check-paths`.
+- **Operator-visible: compose health checks run, and geode no longer waits
+  for Vault, MinIO or Redis (SONNY-6442 item 7).**
+  `docker-compose.example.yml` and the three nodes of
+  `docker-compose.distributed.yml` health-checked with
+  `["CMD", "geode query", ...]`; exec form runs the first element as the
+  program, so the check ran a program named `geode query` and never passed.
+  They now run the image's `/usr/local/bin/health-check.sh` (GET `/health`
+  on `GEODE_METRICS_PORT`). The `QUIC_GO_DISABLE_GSO` comment (a quic-go
+  variable geode does not read) is gone from `docker-compose.yml`. The
+  geode services of `docker-compose.yml`, `docker-compose.dev.yml` and
+  `docker-compose.gpu.yml` no longer `depends_on` Vault, MinIO and Redis,
+  which geode never uses; the dev stack no longer runs them (nor needs
+  `VAULT_TOKEN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` or `REDIS_PASSWORD`). The
+  full `docker-compose.yml` stack keeps them for its other services.
+  Regression: `zig build test-sonny6430-deploy-docs-truth`.
+- **BREAKING (procedure): `CALL tde.measure_overhead()` is refused as
+  unsupported (SQLSTATE 0A000) (SONNY-6442 item 6).** It timed 1000
+  alloc+memcpy+free of 1 KiB as the "baseline" against 1000 AEAD
+  encryptions of the same buffer and answered
+  `passes_threshold` = overhead < 5 %. Neither loop touches storage, so the
+  percentage measured nothing about TDE overhead (and an AEAD call is always
+  far slower than a memcpy). The measurement is
+  `zig build test-sonny6435-tde-overhead` (the storage engine with page and
+  WAL encryption off vs on). The procedure is no longer classified
+  read-only. Regression: `zig build test-sonny6442-tde-measure-overhead`.
+- **Operator-visible: the Docker images run the server at the log level
+  they document (SONNY-6442 item 5).** `Dockerfile`, `Dockerfile.prebuilt`,
+  `Dockerfile.simple` and `Dockerfile.reliable` set `ENV LOG_LEVEL=error`
+  (as did `Dockerfile.base` and the dev images) and
+  `docs/DOCKER_LOG_LEVEL_CONFIG.md` gave it as the server's log level, but
+  geode reads no `LOG_LEVEL` (only the vendored QUIC logger does, and its
+  default is already `error`): the server ran at `info`. The variable is
+  gone and those images pass `--log-level error` in `CMD`, so their server
+  now logs at `error` by default; give `--log-level` with the other
+  arguments to change it (they replace `CMD`).
+  `docker-integration/Dockerfile.server` and its compose file dropped the
+  unread `GEODE_LOG_LEVEL` and `GEODE_LISTEN` (the compose file passes
+  `--log-level ${GEODE_LOG_LEVEL:-info}`). `docs/DOCKER_LOG_LEVEL_CONFIG.md`
+  and the log-level parts of `docs/docker/DOCKER.md` are rewritten.
+  `zig build test-sonny6430-deploy-docs-truth` now checks every Dockerfile.
+- **BREAKING (operator): `geode serve` refuses an unknown option (SONNY-6442
+  item 4).** It skipped any argument it did not know, so a misspelt option
+  (`--data-dri /srv/geode`) or a removed one started a server on the
+  defaults. An unknown option or a stray argument now exits 2 with
+  `Error: geode serve: unknown option '<arg>'`, and a known option without
+  its value exits 2 with `option '<arg>' requires a value`, as
+  `geode backup create` and `geode restore` do. Every option
+  `geode serve --help` lists still parses (`--lsp-port=<n>` and
+  `--lsp-bind-all` included), and so do the compatibility no-ops
+  `--enable-auth`, `--enable-fle`, `--enable-tde` and `--tde-provider`.
+  In-repo uses of options `geode serve` never had are gone:
+  `--gpu-acceleration` (`Dockerfile.release.gpu` and its release manifest
+  entry), `--dist-enable-raft` (`tests/e2e_dist_ping_leader.zig`),
+  `--insecure` (five `tests/*index*_test.sh` scripts), `--no-cluster`
+  (`tests/integration/test_mermaid_external.sh`), and `--log_json`,
+  `--log-json`, `--result-format`, `--tls-cert`, `--tls-key`,
+  `--kms-provider` and `--match-max-*` in the docs. Regression:
+  `zig build test-sonny6442-serve-unknown-options` (parser and the built
+  binary).
+- **BREAKING (remote KMS client): the remote KMS client verifies the
+  server, binds attestations to the TLS channel and has no local fallback
+  (SONNY-6442 items 1-3).** `RemoteKmsClient.connect` dialed with
+  `connectInsecure` (no certificate verification), so a man in the middle
+  could relay the `Attest` exchange to the real server; unconnected,
+  `generate` / `unwrap` / `privUnwrap` ran locally under a KEK derived from
+  the public seed `0x12345678`; and the attested hash was
+  SHA-256(token || kek[0..16]). The client now verifies the server's
+  certificate chain against a CA bundle (`Options.ca_cert_path`, through the
+  new `QuicClient.connectWithCa`, which fails if the bundle cannot be
+  loaded) and its name against the dialed host, and refuses to connect
+  without one (`KmsTrustAnchorMissing`); there is no unverified mode. The
+  server signs `GEODE-KMS-ATTEST-V3 || nonce || hash || channel_binding`,
+  where the binding is the RFC 8446 §7.5 exporter value
+  (`EXPORTER-geode-kms-attest-v3`) of the connection the request arrived on
+  (`QuicConnection` / `QuicClient.exportKeyingMaterial`), so a reply
+  obtained on another channel is rejected; `verifyAttestResponse` and
+  `verifyAttestation` take the caller's own binding. Generate / unwrap
+  replies are protected by the verified TLS channel. Unconnected, every
+  operation returns `NotConnected`. The attested hash is the KEK identifier
+  HKDF-SHA256(ikm = KEK, salt = `GEODE-KMS-KEK-ID-V1`) (`kekIdentifier`),
+  independent of the auth token. The seeded `external_kms_client.Client`
+  (LocalSimulated) and the factory's `LocalSimulated` branch compile into
+  test builds only; the `GEODE_ALLOW_LOCAL_KMS` override is gone.
+  Regression: `zig build test-sonny6442-kms-channel` (real server over QUIC).
+- **BREAKING (remote KMS protocol): the remote KMS client accepts only a
+  fresh attestation signed by a pinned key (SONNY-6435 item 1).**
+  `RemoteKmsClient.attest` returned whatever hash the server sent. It
+  checked no signature, and a check would have proved nothing: the server
+  signed with a key it handed out in the same reply, the client pinned no
+  key (it dials with an unverified TLS certificate), and the signed message
+  had no nonce, so a recorded reply replayed. An unconnected client made up
+  a constant hash. The server now signs `GEODE-KMS-ATTEST-V2 || nonce ||
+  hash` over the client's fresh 32-byte nonce and refuses an `Attest`
+  without one (`AttestNonceRequired`); an operator provisions its key with
+  `Server.setAttestationKeySeed` and gives clients the public key
+  (`attestationPublicKey`) to pin (`pinAttestationKey` or
+  `Options.attestation_public_key`). `attest` fails closed with no pinned
+  key (`AttestationTrustAnchorMissing`), with no connection, for another
+  key (`AttestationKeyMismatch`), another nonce
+  (`AttestationNonceMismatch`) or a bad signature
+  (`AttestationSignatureInvalid`), always verifying under the pinned key
+  and its own nonce. The attestation is not bound to the TLS channel, so it
+  authenticates the server's key, not the connection carrying later
+  unwraps. Regression: `zig build test-sonny6435-kms-attestation` (real
+  server over QUIC: no pin, unconnected, wrong-key server, tampered and
+  replayed replies, nonce-less request).
+- **BREAKING (operator): a `GEODE_MASTER_KEY` other than the one a data
+  directory's encrypted fields were written with refuses startup
+  (SONNY-6435 item 3).** Nothing recorded the key, so a server restarted
+  with another key (or the same characters in another
+  `GEODE_MASTER_KEY_FORMAT`) started, could not read the old fields and
+  wrote new ones under the new key. The first start with a key now records
+  its check value (HMAC-SHA256 of a fixed label under an HKDF-derived key,
+  never the key) in `fle_master_key.kcv` beside the FLE catalog; a later
+  start with another key refuses to start, naming the file and not the key,
+  and an unreadable or malformed check file refuses too. A directory with no
+  recorded value records one (upgrade path). Without `GEODE_MASTER_KEY`
+  nothing is read or written. `docs/FIELD_LEVEL_ENCRYPTION.md` ("Master key
+  check value"). Regression: `zig build test-sonny6435-master-key-check`
+  (the built server across restarts: same key, another key, another format,
+  upgrade, no key).
 - **The security graph never opens unaudited, and an unreadable graph
   registry refuses startup (SONNY-6430 items 5 and 7).**
   `StorageAdapter.initAuditForGraph` returned null for any failure other
@@ -17,7 +149,10 @@
   `CREATE GRAPH` rewrote the registry without them; it now fails, and the
   server exits with `Error: cannot open the data directory ...`. A missing
   registry is still a fresh data directory. Regression:
-  `zig build test-sonny6430-storage-open-fail-closed`.
+  `zig build test-sonny6430-storage-open-fail-closed`. SONNY-6435 item 4:
+  `initAuditForGraph` is now typed `!*AuditLogger` (it never returned
+  null), so no caller can read a null as "no audit logger"; regression
+  `zig build test-sonny6435-audit-init-type`.
 - **`GEODE_MASTER_KEY_FORMAT` reads a full 256-bit FLE master key, and an
   existing key never changes (SONNY-6430 item 2).** `GEODE_MASTER_KEY` was
   always used as raw bytes and only its first 32 counted, so the usual
@@ -1662,6 +1797,54 @@
 
 ### Fixed
 
+- **TDE overhead is measured, not simulated, and no doc claims "<1%" or
+  "<5%" (SONNY-6435 item 2).** `benchmarks/benchmark_tde_overhead.zig` (the
+  `zig build bench` member) hashed a buffer with Wyhash and reported
+  `overhead_pct=0.00 (simulated)`, `benchmarks/benchmark_tde_oltp_overhead
+  .zig` was built by no step and simulated TDE too, and
+  `src/security/test_tde_enforcement.zig` asserted `5 <= 5` under "TDE
+  documentation claims <1% overhead"; all three are gone. `zig build
+  test-sonny6435-tde-overhead` (also in `bench`) runs the storage engine
+  geode opens every graph with, ReleaseFast, on the same insert-and-read
+  workload with page and WAL encryption off and on, interleaved perf_gate
+  batches, and asserts the encrypted arm writes no plaintext. Measured
+  2026-11-12: +0.7% with the default per-commit fsync (four runs -1.3% to
+  +0.7%, fsync-bound on that host), +19.5% to +21.0% (three runs) on the
+  commit path without fsync. README, BENCHMARK_REPORT, FEATURES_OVERVIEW, TODO,
+  SERVER_FEATURES, KMS_PROVIDER_SYSTEM, DESIGN_TDE_KMS, SECURITY_PROGRESS
+  and the perf audit context now give those figures
+  (`docs/TDE_FILE_LEVEL_ENCRYPTION.md` "Measured overhead"). Reads that miss
+  the buffer pool are not measured: with a pool smaller than the store the
+  encrypting graph_storage 0.4.10 engine loses committed nodes
+  (`test-sonny6435-tde-small-pool-node-loss`, intentionally red).
+  Regressions: `zig build test-sonny6435-tde-claims-truth`,
+  `test-canary-tde-published-overhead-sync` (now requires the measurement
+  to be cited).
+- **The compose files and the deployment docs give geode only settings it
+  reads (SONNY-6435 item 5).** The compose files passed geode `LOG_LEVEL`,
+  `RUST_BACKTRACE`, `VAULT_ADDR` / `VAULT_TOKEN`, `REDIS_URL`, `FIPS_MODE`,
+  `GPU_ENABLED`, `GEODE_LOG_JSON`, `GEODE_CERT_PATH` and, in
+  `docker-compose.distributed.yml`, `NODE_*` / `RAFT_*` / `CLUSTER_*` /
+  `GEODE_DISTRIBUTED` / `GEODE_SHARD_COUNT` / `GEODE_REPLICATION_FACTOR`
+  plus Raft options `geode serve` does not have (it ignores unknown
+  options), so the "cluster" was three standalone nodes. They are gone; the
+  log level is now passed as `--log-level`, and the distributed file says
+  it is not a cluster and names the real `GEODE_CLUSTER_TOKEN` /
+  `GEODE_PEERS` / `GEODE_NODE_ID` variables. `docs/SERVER_FEATURES.md` 7.1
+  (XTS-AES pages, a derived key hierarchy), 7.2 (Vault / AWS / Azure / GCP
+  KMS providers, rotation) and Appendix B (`CDC_*`, `GEODE_LISTEN_*`,
+  `GEODE_TLS_*`, `GEODE_MFA_ENABLED`, `GEODE_KMS_PROVIDER`, a sectioned TOML
+  file) now describe AES-256-GCM pages under `GEODE_TDE_KEY`, no KMS key
+  source and the flat config keys `geode serve` reads;
+  `docs/DOCKER_OVERVIEW.md` drops 17 `GEODE_*` variables nothing reads, the
+  Vault-backed TDE and cluster examples and `--gpu-acceleration`, and lists
+  the real cluster variables; `docs/TDE_FILE_LEVEL_ENCRYPTION.md` no longer
+  points to automated key rotation; `docs/NIX_DEPLOYMENT.md` uses
+  `GEODE_ENV` and `--log-level`. Regression:
+  `zig build test-sonny6430-deploy-docs-truth`, which now also fails when a
+  compose file's environment or one of those docs names a `GEODE_*`
+  variable no source file reads (a quoted literal in `src/**/*.zig` or
+  `$NAME` in `docker/*.sh`).
 - **Deployment config and docs describe only settings the server has
   (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
   `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /

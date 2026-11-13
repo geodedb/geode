@@ -21,6 +21,10 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 > on top of it was never used by any executable and was removed (SONNY-6298);
 > wiring a KMS into server TDE is tracked as SONNY-6380. The remote KMS client itself
 > (`src/security/kms_remote.zig`) is covered by `zig build test-remote-kms`.
+> It verifies the server's certificate against a CA bundle and refuses to
+> connect without one, binds attestations to the TLS channel, and has no
+> local fallback (`zig build test-sonny6442-kms-channel`). The `external_kms`
+> provider's seeded stand-in compiles into test builds only (SONNY-6442).
 > `KeyRegistry` (`src/security/key_rotation.zig`) has no remote-KMS rotation:
 > `rotateWithRemoteKms` never compiled and was removed (SONNY-6378).
 
@@ -112,8 +116,8 @@ export VAULT_TOKEN="hvs.CAESI..."
 export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode/encryption"
 
-# Start Geode with Vault-backed TDE
-./zig-out/bin/geode serve --enable-tde --kms-provider vault
+# There is no --kms-provider option: geode serve refuses it (SONNY-6442).
+./zig-out/bin/geode serve --enable-tde
 ```
 
 ## Security & Compliance Features
@@ -143,15 +147,15 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Audit Logging**: All KMS operations logged for compliance
 - **Zero Plaintext**: Master keys never stored in plaintext on disk
 - **Multiple Providers**: Easy migration between KMS systems
-- **Performance**: <5% TDE overhead on OLTP workloads as a target, not yet measured by a geode test or benchmark ([BENCHMARK_REPORT.md](../BENCHMARK_REPORT.md))
+- **Performance**: TDE overhead measured by `zig build test-sonny6435-tde-overhead`: +0.7% with the default per-commit fsync, about +20% on the commit path without fsync ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 
 ## Test Coverage & Verification
 
 ### Test Suites
 
-- `zig build test-remote-kms`, `test-remote-kms-hardening` and
-  `test-sonny2394-kms-client-deadline`: the remote KMS server and client over
-  real QUIC (`src/security/kms_remote.zig`).
+- `zig build test-remote-kms`, `test-remote-kms-hardening`,
+  `test-sonny2394-kms-client-deadline` and `test-sonny6442-kms-channel`: the
+  remote KMS server and client over real QUIC (`src/security/kms_remote.zig`).
 - `zig build test-gap0890`: key rotation policy and lazy re-wrap.
 - `zig build test-kms-provider` and `test-sonny2441-kms-provider-paths`:
   `KMSProvider` wrap/unwrap for the `local_dev` and `external_kms` providers,
@@ -211,7 +215,7 @@ export GEODE_VAULT_KEY_PATH="geode"
 
 - **Key Operations**: <10ms for wrap/unwrap operations
 - **Vault Integration**: <50ms for key retrieval including network latency
-- **TDE Overhead**: <5% TDE overhead on OLTP workloads (a target; no geode test measures it)
+- **TDE Overhead**: +0.7% with the default per-commit fsync, about +20% on the commit path without fsync (`zig build test-sonny6435-tde-overhead`)
 - **Memory Efficiency**: Minimal key caching with automatic cleanup
 - **Scalability**: Supports thousands of concurrent encrypt/decrypt operations
 

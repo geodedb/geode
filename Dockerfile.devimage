@@ -36,7 +36,6 @@ RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
 
 USER geode
 WORKDIR /home/geode
-ENV LOG_LEVEL=error
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
 # GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless

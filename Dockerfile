@@ -101,8 +101,8 @@ RUN chmod +x /usr/local/bin/health-check.sh
 USER geode
 WORKDIR /home/geode
 
-# Set default log level (can be overridden with -e LOG_LEVEL=debug)
-ENV LOG_LEVEL=error
+# The log level is geode serve --log-level (in CMD below). geode reads no
+# LOG_LEVEL variable (SONNY-6442).
 
 # QUIC Performance Optimizations:
 # GSO (Generic Segmentation Offload) is enabled by default on Linux 4.18+
@@ -131,4 +131,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--enable-auth"]
+CMD ["--data-dir", "/data", "--log-level", "error", "--enable-auth"]

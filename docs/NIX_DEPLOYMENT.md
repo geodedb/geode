@@ -261,8 +261,7 @@ services.geode = {
 
   # Environment variables
   environment = {
-    GEODE_ENVIRONMENT = "production";
-    RUST_LOG = "info";
+    GEODE_ENV = "production";
   };
 
   # Additional configuration
@@ -418,8 +417,7 @@ docker run -d \
   -v ./geode.conf:/etc/geode/geode.conf:ro \
   -v geode-data:/var/lib/geode \
   -v geode-logs:/var/log/geode \
-  -e GEODE_LOG_LEVEL=debug \
-  geode:latest serve
+  geode:latest serve --log-level debug
 
 # Interactive shell
 docker run -it --rm geode:latest shell
@@ -452,9 +450,8 @@ services:
       - geode-data:/var/lib/geode
       - geode-logs:/var/log/geode
       - ./config:/etc/geode:ro
-    environment:
-      - GEODE_LOG_LEVEL=info
-      - GEODE_JSON_LOGS=true
+    # geode does not read GEODE_LOG_LEVEL or GEODE_JSON_LOGS: the log level
+    # is `serve --log-level` (SONNY-6435).
     healthcheck:
       test: ["CMD", "geode", "health-check"]
       interval: 30s
@@ -606,13 +603,9 @@ spec:
         - containerPort: 9090
           name: metrics
           protocol: TCP
+        # The server's config file is `serve --config <path>`: GEODE_CONFIG
+        # is read only by `geode shell` (SONNY-6435).
         env:
-        - name: GEODE_CONFIG
-          value: "/etc/geode/geode.conf"
-        - name: GEODE_LOG_LEVEL
-          value: "info"
-        - name: GEODE_JSON_LOGS
-          value: "true"
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -1480,11 +1473,6 @@ services.geode = {
   enable = true;
   logging.level = "debug";
 
-  environment = {
-    GEODE_DEBUG = "1";
-    RUST_LOG = "debug";
-    RUST_BACKTRACE = "1";
-  };
 
   extraArgs = [
     "--debug"

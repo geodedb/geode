@@ -127,8 +127,7 @@
         "--data-dir",
         "/data",
         "--log-level",
-        "error",
-        "--gpu-acceleration"
+        "error"
       ]
     },
     {

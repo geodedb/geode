@@ -87,28 +87,28 @@ zig build-exe benchmarks/benchmark_audit_latency.zig && ./benchmark_audit_latenc
 
 ## TDE Encryption Overhead Benchmarks
 
-**Benchmark File:** `benchmarks/benchmark_tde_overhead.zig`
+**Measurement:** `zig build test-sonny6435-tde-overhead`
+(`tests/test_sonny6435_tde_overhead.zig`; also part of `zig build bench`).
+The former `benchmarks/benchmark_tde_overhead.zig` hashed a buffer and called
+it encryption, and reported `overhead_pct=0.00 (simulated)`; it was removed
+with the unbuilt `benchmark_tde_oltp_overhead.zig` simulation (SONNY-6435).
 
-<!-- CANARY: REQ=REQ-BENCHMARK-TDE-001; FEATURE="TDE Overhead Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-14 -->
+<!-- CANARY: REQ=REQ-BENCHMARK-TDE-001; FEATURE="TDE Overhead Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-12 -->
 
-### Performance Targets
+The storage engine runs the same insert-and-read workload with page and WAL
+encryption off and on, interleaved, ReleaseFast. Measured 2026-11-12 on a
+shared, loaded dev host (details and limits in
+[docs/TDE_FILE_LEVEL_ENCRYPTION.md](docs/TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead)):
+
+| WAL sync | Overhead (median) |
+|----------|-------------------|
+| `each_commit` (default) | +0.7% (four runs: -1.3% to +0.7%) |
+| `deferred`, no checkpoint (commit path CPU cost) | +19.5% (three runs: +19.5% to +21.0%) |
 
 | Metric | Target | Evidence |
 |--------|--------|----------|
-| Page Encryption Throughput | > 30 MB/s | AES-256-GCM |
-| OLTP Overhead | < 5% | Compared to unencrypted |
-| Key Derivation | < 1 ms | Per-session |
-
-### Latest Results
-
-Run benchmark: `zig build bench`
-
-Typical output:
-
-```
-BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001: pages=10000, page_size=4096, throughput_mb_s=31.78
-TDE_SIM_OVERHEAD: overhead_pct=0.00 (simulated)
-```
+| Page Encryption Throughput | > 30 MB/s | AES-256-GCM (`benchmark_tde_encrypt_pages`) |
+| Key Derivation | < 1 ms | Per-session (target, not measured here) |
 
 ## RLS/ABAC Authorization Benchmarks
 

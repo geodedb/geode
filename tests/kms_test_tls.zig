@@ -4,10 +4,16 @@
 //! With the default paths every server self-signed into the SAME gitignored
 //! `./certs/server.{crt,key}` pair, so one binary could load a certificate that
 //! another was still writing. Each server now gets a private pair in its own
-//! tmp dir, self-signed on first listen.
+//! tmp dir.
+//!
+//! SONNY-6442: the remote KMS client verifies the server's certificate, so
+//! the pair is generated here, before the server starts, with the names the
+//! clients dial (127.0.0.1 and localhost) as subjectAltNames. The certificate
+//! is self-signed, so it is also the CA bundle a client trusts (`caPath`).
 
 const std = @import("std");
 const kms = @import("security/kms_remote"); // module provided by build.zig
+const tls_material = @import("tls_material"); // module provided by build.zig
 
 pub const TestTls = struct {
     tmp: std.testing.TmpDir,
@@ -22,6 +28,11 @@ pub const TestTls = struct {
         const cert = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
         errdefer allocator.free(cert);
         const key = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
+        errdefer allocator.free(key);
+        try tls_material.generateSelfSigned(cert, key, .{
+            .subject = "/CN=geode-kms-test",
+            .addext = "subjectAltName=IP:127.0.0.1,DNS:localhost",
+        });
         return .{ .tmp = tmp, .cert = cert, .key = key };
     }
 
@@ -33,9 +44,14 @@ pub const TestTls = struct {
     }
 
     /// Start options for a server on this pair. A test fixture, not a
-    /// production listener: self-sign the pair whatever the build posture.
+    /// production listener: the pair already exists, and is never replaced.
     pub fn startOptions(self: *const TestTls) kms.RemoteKmsServer.StartOptions {
-        return .{ .cert_path = self.cert, .key_path = self.key, .cert_auto_generate = .always };
+        return .{ .cert_path = self.cert, .key_path = self.key, .cert_auto_generate = .never };
+    }
+
+    /// The CA bundle that verifies this server (its self-signed certificate).
+    pub fn caPath(self: *const TestTls) []const u8 {
+        return self.cert;
     }
 };
 

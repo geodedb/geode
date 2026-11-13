@@ -61,7 +61,6 @@ GEODE_ADMIN_PASSWORD="$PASSWORD" \
 "$GEODE_BIN" serve \
     --listen "127.0.0.1:$PORT" \
     --data-dir "$TMPDIR/data" \
-    --no-cluster \
     --log-level warn \
     >"$TMPDIR/server.log" 2>&1 &
 SERVER_PID=$!

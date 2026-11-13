@@ -807,9 +807,9 @@ const LspBootstrapConfig = struct {
 /// Task 28: parse the two embedded-LSP options that
 /// `src/server/cli_args.zig` does NOT know about (`--lsp-port=N` and
 /// `--lsp-bind-all`). We don't extend `ServerConfig` because the plan
-/// limits this task to `src/server/main.zig` only; `parseArgs` ignores
-/// flags it doesn't recognise, so these flags pass through it
-/// untouched and we re-walk argv here.
+/// limits this task to `src/server/main.zig` only; `parseArgs` accepts
+/// these two without reading them (it refuses every other flag it does
+/// not know, SONNY-6442), and we re-walk argv here.
 ///
 /// Zig 0.16: `std.process.argsAlloc` was removed; argv is recovered from the
 /// portable `process_args` holder that `src/unified_entry.zig` captures from
@@ -1350,7 +1350,13 @@ pub fn main() !void {
     // (which unregisters itself) has been joined.
     defer quic_connection_handler.deinitProtoReaderRegistry(gpa);
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
-    const config_opt = try cli_args.parseArgs(gpa);
+    // SONNY-6442: an unknown option, or an option without its value, is a
+    // usage error (exit 2, as `geode backup create`); the parser has printed
+    // which argument.
+    const config_opt = cli_args.parseArgs(gpa) catch |err| switch (err) {
+        error.UnknownServeOption, error.MissingArgument => std.process.exit(2),
+        else => return err,
+    };
     if (config_opt == null) return; // Help was shown, exit
 
     var config = config_opt.?;

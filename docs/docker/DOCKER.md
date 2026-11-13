@@ -220,12 +220,12 @@ docker run -d \
   -p 8443:8443/udp \
   -v /var/lib/geode:/data \
   -v /etc/geode/certs:/certs:ro \
-  -e LOG_LEVEL=warn \
   geode:latest \
   --data-dir /data \
   --cert /certs/server.crt \
   --key /certs/server.key \
-  --listen 0.0.0.0:8443
+  --listen 0.0.0.0:8443 \
+  --log-level warn
 ```
 
 ### Docker Compose (Single Node)
@@ -243,9 +243,7 @@ services:
     volumes:
       - geode-data:/data
       - ./certs:/certs:ro
-    environment:
-      - GEODE_LOG_LEVEL=info
-      - GEODE_MAX_CONNECTIONS=1000
+    command: ["serve", "--data-dir", "/data", "--log-level", "info", "--max-connections", "1000"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:8443"]
@@ -315,14 +313,19 @@ GEODE_REPLICATION_FACTOR=2
 
 ### Environment Variables
 
+The log level and connection cap are `geode serve` options
+(`--log-level`, `--max-connections`), given in the image `CMD` or the
+`docker run` arguments; geode reads no `LOG_LEVEL`, log-level, cache-size,
+WAL-size or FIPS variable (SONNY-6442, see
+[DOCKER_LOG_LEVEL_CONFIG.md](../DOCKER_LOG_LEVEL_CONFIG.md)).
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GEODE_LOG_LEVEL` | Log level (debug, info, warn, error) | info |
-| `GEODE_MAX_CONNECTIONS` | Maximum concurrent connections | 1000 |
-| `GEODE_CACHE_SIZE` | Query cache size | 1GB |
-| `GEODE_WAL_SIZE_LIMIT` | WAL size limit | 10GB |
-| `LOG_LEVEL` | Alternative log level env var | error |
-| `FIPS_MODE` | Enable FIPS mode | enabled |
+| `GEODE_DATA_DIR` | Data directory (when `--data-dir` is not given) | per-user default |
+| `GEODE_METRICS_PORT` | Port of the metrics and `/health` listener (the images set it) | unset (off) |
+| `GEODE_ADMIN_PASSWORD` | Bootstrap admin password | generated |
+| `GEODE_TDE_KEY` | Storage (TDE) encryption key | unset (off) |
+| `GEODE_MASTER_KEY` | Field-level encryption master key | unset |
 
 ### Volume Mounts
 
@@ -439,8 +442,8 @@ docker build -f Dockerfile.simple -t geode:latest .
 ### Debug Mode
 
 ```bash
-# Enable debug logging
-docker run -e GEODE_LOG_LEVEL=debug ghcr.io/spyderorg/geode:latest
+# Enable debug logging (the arguments replace the image CMD)
+docker run ghcr.io/spyderorg/geode:latest serve --data-dir /data --log-level debug
 
 # Attach for debugging
 docker exec -it <container> /bin/sh

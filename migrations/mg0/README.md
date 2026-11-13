@@ -87,7 +87,7 @@ The migration files create a rich social network graph with:
 1. **Start Geode server:**
 
 ```bash
-./zig-out/bin/geode serve --data_dir ./data --log_json
+./zig-out/bin/geode serve --data_dir ./data
 ```
 
 1. **Run migrations in order:**

@@ -8,7 +8,7 @@ echo
 
 # Start server quietly
 echo "Starting server..."
-./zig-out/bin/geode serve --data_dir /tmp/idx_test_$$ --insecure > /tmp/server_$$.log 2>&1 &
+./zig-out/bin/geode serve --data_dir /tmp/idx_test_$$ > /tmp/server_$$.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

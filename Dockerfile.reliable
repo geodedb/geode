@@ -101,8 +101,8 @@ RUN chmod +x /usr/local/bin/health-check.sh
 USER geode
 WORKDIR /home/geode
 
-# Set default log level (can be overridden with -e LOG_LEVEL=debug)
-ENV LOG_LEVEL=error
+# The log level is geode serve --log-level (in CMD below). geode reads no
+# LOG_LEVEL variable (SONNY-6442).
 
 # Override health check port for this variant (default is 3141)
 ENV GEODE_HEALTH_PORT=7567
@@ -123,4 +123,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--listen", "0.0.0.0:7567", "--enable-auth"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:7567", "--log-level", "error", "--enable-auth"]

@@ -32,6 +32,15 @@ fn sleepMs(ms: i64) void {
 //   {"op":"Unwrap","envelope":{...}} -> {"status":"OK","plaintext":"<64 hex>"}
 // Errors -> {"status":"ERR","code":"AuthenticationFailed"}
 // This is a development scaffold; now includes minimal token auth (header field) on each request.
+//
+// Channel security (SONNY-6442): the client verifies the server's
+// certificate against an operator-supplied CA bundle (and its name against
+// the dialed host) and refuses to connect without one. Generate / Unwrap
+// replies carry no signature of their own: they are protected by that
+// verified TLS 1.3 channel (server authenticated by its certificate, every
+// QUIC packet AEAD-protected). The Attest reply is additionally signed by
+// the pinned attestation key over the client's nonce AND the channel's
+// RFC 8446 exporter value, so it cannot be relayed onto another channel.
 
 /// Constant-time comparison to prevent timing attacks on authentication tokens.
 /// Returns true iff `a` and `b` are equal, without leaking which byte differs.
@@ -45,7 +54,8 @@ fn timingSafeEql(a: []const u8, b: []const u8) bool {
 }
 
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth; OWNER=security; UPDATED=2026-11-12
-// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig|tests/test_sonny6442_kms_channel.zig; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-002; FEATURE="RemoteKMSVerifiedChannel"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6442_kms_channel.zig; OWNER=security; UPDATED=2026-11-12
 // CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap; OWNER=security; UPDATED=2026-11-12
 
 pub const Envelope = struct {
@@ -55,6 +65,53 @@ pub const Envelope = struct {
     tag: [16]u8,
     ct: [32]u8,
 };
+
+/// Domain of the attestation signature. The signed message is
+/// `attest_domain || nonce || hash || channel_binding`: the client's fresh
+/// 32-byte nonce binds the signature to its request, so a recorded reply
+/// cannot be replayed (SONNY-6435), and the channel binding -- the TLS
+/// exporter value under `attest_exporter_label` of the connection the
+/// request arrived on -- binds it to that TLS channel, so a reply a man in
+/// the middle obtained on his own channel to the server does not verify on
+/// the client's (SONNY-6442).
+pub const attest_domain = "GEODE-KMS-ATTEST-V3";
+
+/// RFC 8446 §7.5 exporter label of the attestation channel binding.
+pub const attest_exporter_label = "EXPORTER-geode-kms-attest-v3";
+
+pub fn attestationMessage(nonce: [32]u8, hash: [32]u8, channel_binding: [32]u8) [attest_domain.len + 96]u8 {
+    var msg: [attest_domain.len + 96]u8 = undefined;
+    @memcpy(msg[0..attest_domain.len], attest_domain);
+    @memcpy(msg[attest_domain.len..][0..32], &nonce);
+    @memcpy(msg[attest_domain.len + 32 ..][0..32], &hash);
+    @memcpy(msg[attest_domain.len + 64 ..][0..32], &channel_binding);
+    return msg;
+}
+
+/// HKDF salt of the KEK identifier.
+pub const kek_id_salt = "GEODE-KMS-KEK-ID-V1";
+
+/// The attested hash (SONNY-6442): a public identifier of the server's KEK,
+/// HKDF-SHA256(ikm = KEK, salt = `kek_id_salt`, info = ""). It tells a
+/// client WHICH key-encryption key the server holds (it changes when the KEK
+/// does) and reveals nothing about it: HKDF is a one-way PRF keyed by all 256
+/// KEK bits, so the identifier gives no KEK bytes and no offline guess short
+/// of the KEK itself. It does not depend on the auth token. (It replaced
+/// SHA-256(token || kek[0..16]), computed over raw KEK bytes.)
+pub fn kekIdentifier(kek: [32]u8) ![32]u8 {
+    var out: [32]u8 = undefined;
+    try cb.Kdf.hkdf(.sha256, &kek, kek_id_salt, "", &out);
+    return out;
+}
+
+/// Decode the 2*N hex digits that follow `key` (e.g. `"hash":"`) in `json`.
+fn hexFieldAfter(json: []const u8, key: []const u8, out: []u8) !void {
+    const at = std.mem.indexOf(u8, json, key) orelse return error.InvalidResponse;
+    const start = at + key.len;
+    const end = start + out.len * 2;
+    if (end >= json.len or json[end] != '"') return error.InvalidResponse;
+    _ = std.fmt.hexToBytes(out, json[start..end]) catch return error.InvalidResponse;
+}
 
 fn envelopeToJson(env: Envelope, w: anytype) !void {
     try w.writeAll("{\"version\":");
@@ -119,9 +176,14 @@ pub const Server = struct {
     kek: [32]u8,
     // REMOVED: prng field - use std.crypto.random instead
     auth_token: ?[]const u8 = null,
-    attestation_hash: [32]u8 = [_]u8{0} ** 32,
-    // Ephemeral Ed25519 key pair created on auth token set (test scope, could be rotated with token)
+    /// The attested hash: `kekIdentifier(kek)` (SONNY-6442).
+    attestation_hash: [32]u8,
+    /// Ed25519 key that signs attestations. An operator provisions it with
+    /// `setAttestationKeySeed` and gives clients its public key to pin
+    /// (SONNY-6435). Without one, `setAuthToken` creates an ephemeral key,
+    /// which no client can pin.
     attest_keypair: ?cb.Sig.KeyPair = null,
+    attest_key_provisioned: bool = false,
 
     /// Initialize KMS server with cryptographically secure KEK
     /// GAP-0142: Now uses std.crypto.random instead of deterministic PRNG
@@ -130,19 +192,12 @@ pub const Server = struct {
         var kek: [32]u8 = undefined;
         // Use cryptographic random for KEK generation
         try cb.Csprng.bytes(&kek);
-        return .{ .allocator = allocator, .kek = kek };
+        return .{ .allocator = allocator, .kek = kek, .attestation_hash = try kekIdentifier(kek) };
     }
 
     pub fn setAuthToken(self: *Server, tok: []const u8) !void {
         self.auth_token = tok;
-        // derive attestation hash (sha256 over token + kek prefix)
-        {
-            var stream = try cb.Hash.Stream.init(.sha256);
-            defer stream.deinit();
-            try stream.update(tok);
-            try stream.update(self.kek[0..16]);
-            _ = try stream.final(&self.attestation_hash);
-        }
+        if (self.attest_key_provisioned) return;
         // Free the prior ephemeral keypair before generating a new one (prevents EVP_PKEY leak)
         if (self.attest_keypair) |*kp| kp.deinit();
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
@@ -152,7 +207,24 @@ pub const Server = struct {
         self.attest_keypair = attest_kp;
     }
 
-    /// Release resources owned by Server (ephemeral attestation keypair).
+    /// Install the provisioned Ed25519 attestation key (32-byte seed). Its
+    /// public key (`attestationPublicKey`) is what clients pin.
+    pub fn setAttestationKeySeed(self: *Server, seed: [32]u8) !void {
+        const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+        if (self.attest_keypair) |*old| old.deinit();
+        self.attest_keypair = kp;
+        self.attest_key_provisioned = true;
+    }
+
+    /// Public half of the attestation key, for clients to pin.
+    pub fn attestationPublicKey(self: *Server) ![32]u8 {
+        var kp = self.attest_keypair orelse return error.NotConfigured;
+        var out: [32]u8 = undefined;
+        _ = try kp.publicBytes(&out);
+        return out;
+    }
+
+    /// Release resources owned by Server (attestation keypair).
     pub fn deinit(self: *Server) void {
         if (self.attest_keypair) |*kp| kp.deinit();
         self.attest_keypair = null;
@@ -363,7 +435,7 @@ pub const RemoteKmsServer = struct {
             var j: usize = 0;
             while (j < sc.pending.items.len) {
                 const pr = &sc.pending.items[j];
-                const outcome = self.advance(pr);
+                const outcome = self.advance(sc.conn, pr);
                 if (outcome == .waiting) {
                     j += 1;
                     continue;
@@ -403,7 +475,7 @@ pub const RemoteKmsServer = struct {
 
     /// Read whatever has arrived on `pr`'s stream without blocking; answer
     /// the request once its line is complete.
-    fn advance(self: *RemoteKmsServer, pr: *PendingRequest) Advance {
+    fn advance(self: *RemoteKmsServer, conn: *quic.QuicConnection, pr: *PendingRequest) Advance {
         var chunk: [512]u8 = undefined;
         while (std.mem.indexOfScalar(u8, pr.line.items, '\n') == null) {
             const n = pr.stream.read(&chunk) catch |err| switch (err) {
@@ -429,18 +501,18 @@ pub const RemoteKmsServer = struct {
             pr.line.appendSlice(self.allocator, chunk[0..n]) catch return .dropped;
         }
         const end = std.mem.indexOfScalar(u8, pr.line.items, '\n').?;
-        self.answer(pr.stream, pr.line.items[0 .. end + 1]);
+        self.answer(conn, pr.stream, pr.line.items[0 .. end + 1]);
         return .answered;
     }
 
-    /// Answer one complete request line on `stream`.
-    fn answer(self: *RemoteKmsServer, stream: *quic.QuicStream, request: []const u8) void {
+    /// Answer one complete request line on `stream` of `conn`.
+    fn answer(self: *RemoteKmsServer, conn: *quic.QuicConnection, stream: *quic.QuicStream, request: []const u8) void {
         self.stats.requests_served += 1;
         std.debug.print("KMS_SERVER: Received request: {s}\n", .{request});
 
         // Process request and generate response
         var response_buf: [4096]u8 = undefined;
-        const response = self.processRequest(request, &response_buf) catch |err| {
+        const response = self.processRequest(conn, request, &response_buf) catch |err| {
             std.debug.print("KMS_SERVER: Failed to process request: {}\n", .{err});
             const err_response = "{\"status\":\"ERR\",\"code\":\"InternalError\"}\n";
             // error-policy: A — best-effort error reply on an already-logged
@@ -490,7 +562,7 @@ pub const RemoteKmsServer = struct {
         }
     }
 
-    fn processRequest(self: *RemoteKmsServer, request: []const u8, response_buf: []u8) ![]const u8 {
+    fn processRequest(self: *RemoteKmsServer, conn: *quic.QuicConnection, request: []const u8, response_buf: []u8) ![]const u8 {
         // Parse operation type
         const op = jsonFind(request, "\"op\":\"") orelse return error.InvalidRequest;
         const op_start = op + 6;
@@ -519,7 +591,7 @@ pub const RemoteKmsServer = struct {
         } else if (std.mem.eql(u8, operation, "PrivUnwrap")) {
             return self.handlePrivUnwrap(request, response_buf);
         } else if (std.mem.eql(u8, operation, "Attest")) {
-            return self.handleAttest(response_buf);
+            return self.handleAttest(conn, request, response_buf);
         } else {
             return try std.fmt.bufPrint(response_buf, "{{\"status\":\"ERR\",\"code\":\"InvalidOperation\"}}\n", .{});
         }
@@ -569,15 +641,21 @@ pub const RemoteKmsServer = struct {
         return self.handleUnwrap(request, response_buf);
     }
 
-    fn handleAttest(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
-        // Generate attestation response
+    fn handleAttest(self: *RemoteKmsServer, conn: *quic.QuicConnection, request: []const u8, response_buf: []u8) ![]const u8 {
+        // SONNY-6435: sign only over the client's fresh nonce; without one
+        // the signature would be replayable.
+        var nonce: [32]u8 = undefined;
+        hexFieldAfter(request, "\"nonce\":\"", &nonce) catch {
+            return try std.fmt.bufPrint(response_buf, "{{\"status\":\"ERR\",\"code\":\"AttestNonceRequired\"}}\n", .{});
+        };
         var kp = self.server.attest_keypair orelse return error.NotConfigured;
+        // SONNY-6442: and over the TLS channel the request arrived on.
+        var binding: [32]u8 = undefined;
+        conn.exportKeyingMaterial(attest_exporter_label, &binding) catch {
+            return try std.fmt.bufPrint(response_buf, "{{\"status\":\"ERR\",\"code\":\"ChannelBindingUnavailable\"}}\n", .{});
+        };
 
-        // Sign the attestation hash
-        const domain = "GEODE-KMS-ATTEST";
-        var msg: [domain.len + 32]u8 = undefined;
-        @memcpy(msg[0..domain.len], domain);
-        @memcpy(msg[domain.len..], &self.server.attestation_hash);
+        const msg = attestationMessage(nonce, self.server.attestation_hash, binding);
 
         var sig_buf: [64]u8 = undefined;
         _ = try cb.Sig.sign(.ed25519, &kp, &msg, &sig_buf);
@@ -595,6 +673,8 @@ pub const RemoteKmsServer = struct {
         for (pub_buf) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\",\"sig\":\"");
         for (sig_buf) |b| try writer.print("{x:0>2}", .{b});
+        try writer.writeAll("\",\"nonce\":\"");
+        for (nonce) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\"}\n");
 
         return fbs_writer.buffered();
@@ -643,6 +723,13 @@ pub const RemoteKmsClient = struct {
     /// Wall-clock bound on establishing the QUIC/TLS connection. The server
     /// handles concurrent handshakes serially, before it can serve requests.
     handshake_timeout_secs: u32 = default_handshake_timeout_secs,
+    /// The server attestation public key this client trusts (SONNY-6435).
+    /// The trust anchor: `attest` refuses without one, and accepts only a
+    /// signature by this key over its own fresh nonce.
+    pinned_attestation_key: ?[32]u8 = null,
+    /// PEM CA bundle that verifies the KMS server's certificate (SONNY-6442).
+    /// The TLS trust anchor: `connect` refuses without one. Not owned.
+    ca_cert_path: ?[]const u8 = null,
 
     /// Generous on purpose: a live server answers as soon as its serving loop
     /// reaches the request, and that loop can legitimately be busy for
@@ -661,6 +748,10 @@ pub const RemoteKmsClient = struct {
         response_timeout_ms: u32 = default_response_timeout_ms,
         /// See `handshake_timeout_secs`.
         handshake_timeout_secs: u32 = default_handshake_timeout_secs,
+        /// See `pinned_attestation_key`.
+        attestation_public_key: ?[32]u8 = null,
+        /// See `ca_cert_path`.
+        ca_cert_path: ?[]const u8 = null,
     };
 
     /// `init` with explicit options (SONNY-2394 review: the configuration
@@ -670,7 +761,14 @@ pub const RemoteKmsClient = struct {
         var client = init(allocator);
         client.response_timeout_ms = options.response_timeout_ms;
         client.handshake_timeout_secs = options.handshake_timeout_secs;
+        client.pinned_attestation_key = options.attestation_public_key;
+        client.ca_cert_path = options.ca_cert_path;
         return client;
+    }
+
+    /// Trust attestations signed by `public_key` (and only those).
+    pub fn pinAttestationKey(self: *RemoteKmsClient, public_key: [32]u8) void {
+        self.pinned_attestation_key = public_key;
     }
 
     pub fn deinit(self: *RemoteKmsClient) void {
@@ -681,12 +779,29 @@ pub const RemoteKmsClient = struct {
         self.connected = false;
     }
 
+    /// Connect to the KMS server at `host:port` over QUIC/TLS, verifying its
+    /// certificate chain against `ca_cert_path` and its name against `host`
+    /// (SONNY-6442). Fails closed: no CA bundle (error.KmsTrustAnchorMissing),
+    /// a bundle that cannot be loaded, or a server it does not verify is an
+    /// error, and the client stays unconnected. There is no unverified mode.
     pub fn connect(self: *RemoteKmsClient, host: []const u8, port: u16) !void {
-        // Initialize QUIC client and connect to KMS server
+        const ca = self.ca_cert_path orelse return error.KmsTrustAnchorMissing;
+        self.deinit();
+        // In place: the QUIC config points into the QuicClient.
         self.quic_client = quic.QuicClient.init(self.allocator);
-        try self.quic_client.?.connectInsecure(host, port, true);
+        errdefer self.deinit();
+        try self.quic_client.?.connectWithCa(host, port, ca);
         try self.quic_client.?.waitForHandshake(self.handshake_timeout_secs);
         self.connected = true;
+    }
+
+    /// The TLS exporter value of this client's channel that the server
+    /// signs into an attestation (`attest_exporter_label`).
+    pub fn channelBinding(self: *RemoteKmsClient) ![32]u8 {
+        if (!self.connected or self.quic_client == null) return error.NotConnected;
+        var out: [32]u8 = undefined;
+        try self.quic_client.?.exportKeyingMaterial(attest_exporter_label, &out);
+        return out;
     }
 
     pub fn setAuthToken(self: *RemoteKmsClient, tok: []const u8) void {
@@ -734,7 +849,11 @@ pub const RemoteKmsClient = struct {
         }
     }
 
+    /// Ask the server for a new data key, wrapped under its KEK. Fails with
+    /// error.NotConnected when not connected: there is no local stand-in
+    /// (SONNY-6442; it was a KEK derived from a fixed public seed).
     pub fn generate(self: *RemoteKmsClient) !Envelope {
+        if (!self.connected) return error.NotConnected;
         // Build JSON request
         var request_buf: [256]u8 = undefined;
         var fbs_writer: std.Io.Writer = .fixed(&request_buf);
@@ -748,23 +867,6 @@ pub const RemoteKmsClient = struct {
 
         const request = fbs_writer.buffered();
 
-        // If not connected, fall back to local generation
-        if (!self.connected) {
-            const ext = @import("external_kms_client.zig");
-            // GAP-0216: Handle potential error from LocalSimulated KMS init
-            var client = try ext.Client.init(self.allocator, 0x12345678);
-            var key: [32]u8 = undefined;
-            try cb.Csprng.bytes(&key);
-            const ext_envelope = try client.wrap(key);
-            return Envelope{
-                .version = ext_envelope.version,
-                .alg = ext_envelope.alg,
-                .nonce = ext_envelope.nonce,
-                .tag = ext_envelope.tag,
-                .ct = ext_envelope.ct,
-            };
-        }
-
         // Send request and parse response
         const response = try self.sendRequest(request);
         defer self.allocator.free(response);
@@ -772,7 +874,10 @@ pub const RemoteKmsClient = struct {
         return try parseEnvelopeResponse(response);
     }
 
+    /// Unwrap `env` on the server. error.NotConnected when not connected
+    /// (no local stand-in, SONNY-6442).
     pub fn unwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
+        if (!self.connected) return error.NotConnected;
         // Build JSON request with envelope
         var request_buf: [1024]u8 = undefined;
         var fbs_writer: std.Io.Writer = .fixed(&request_buf);
@@ -788,21 +893,6 @@ pub const RemoteKmsClient = struct {
 
         const request = fbs_writer.buffered();
 
-        // If not connected, fall back to local unwrapping
-        if (!self.connected) {
-            const ext = @import("external_kms_client.zig");
-            // GAP-0216: Handle potential error from LocalSimulated KMS init
-            var client = try ext.Client.init(self.allocator, 0x12345678);
-            const ext_envelope = ext.Envelope{
-                .version = env.version,
-                .alg = env.alg,
-                .nonce = env.nonce,
-                .tag = env.tag,
-                .ct = env.ct,
-            };
-            return try client.unwrap(ext_envelope);
-        }
-
         // Send request and parse response
         const response = try self.sendRequest(request);
         defer self.allocator.free(response);
@@ -810,7 +900,10 @@ pub const RemoteKmsClient = struct {
         return try parsePlaintextResponse(response);
     }
 
+    /// Privileged unwrap of `env` on the server. error.NotConnected when not
+    /// connected (SONNY-6442).
     pub fn privUnwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
+        if (!self.connected) return error.NotConnected;
         // Build JSON request with PrivUnwrap operation
         var request_buf: [1024]u8 = undefined;
         var fbs_writer: std.Io.Writer = .fixed(&request_buf);
@@ -826,11 +919,6 @@ pub const RemoteKmsClient = struct {
 
         const request = fbs_writer.buffered();
 
-        // If not connected, fall back to local unwrapping
-        if (!self.connected) {
-            return self.unwrap(env);
-        }
-
         // Send request and parse response
         const response = try self.sendRequest(request);
         defer self.allocator.free(response);
@@ -838,32 +926,59 @@ pub const RemoteKmsClient = struct {
         return try parsePlaintextResponse(response);
     }
 
+    /// Ask the server to attest, and return the attested hash (the server's
+    /// KEK identifier, `kekIdentifier`) only if the reply is signed by the
+    /// pinned key over this call's fresh nonce (SONNY-6435) and this
+    /// client's TLS channel binding (SONNY-6442). Fails closed: no pinned
+    /// key, no connection (there is no local stand-in), another key, a bad
+    /// signature, another nonce or another channel is an error.
     pub fn attest(self: *RemoteKmsClient) ![32]u8 {
-        // Build JSON request
-        var request_buf: [256]u8 = undefined;
+        const pinned = self.pinned_attestation_key orelse return error.AttestationTrustAnchorMissing;
+        if (!self.connected) return error.NotConnected;
+        const binding = try self.channelBinding();
+
+        var nonce: [32]u8 = undefined;
+        try cb.Csprng.bytes(&nonce);
+        const nonce_hex = std.fmt.bytesToHex(nonce, .lower);
+
+        var request_buf: [512]u8 = undefined;
         var fbs_writer: std.Io.Writer = .fixed(&request_buf);
         const writer = &fbs_writer;
-
+        try writer.writeAll("{\"op\":\"Attest\"");
         if (self.auth_token) |tok| {
-            try writer.print("{{\"op\":\"Attest\",\"auth\":\"{s}\"}}\n", .{tok});
-        } else {
-            try writer.writeAll("{\"op\":\"Attest\"}\n");
+            try writer.print(",\"auth\":\"{s}\"", .{tok});
         }
+        try writer.print(",\"nonce\":\"{s}\"}}\n", .{&nonce_hex});
 
-        const request = fbs_writer.buffered();
-
-        // If not connected, fall back to local attestation hash
-        if (!self.connected) {
-            var hash: [32]u8 = undefined;
-            _ = try cb.Hash.digest(.sha256, "GEODE-KMS-ATTEST", &hash);
-            return hash;
-        }
-
-        // Send request and parse response
-        const response = try self.sendRequest(request);
+        const response = try self.sendRequest(fbs_writer.buffered());
         defer self.allocator.free(response);
 
-        return try parseAttestResponse(response);
+        return verifyAttestResponse(response, pinned, nonce, binding);
+    }
+
+    /// Check an Attest reply against the pinned key, the nonce the client
+    /// sent and the client's own channel binding, and return the attested
+    /// hash. The signature is verified under the PINNED key over the
+    /// client's OWN nonce and channel binding, whatever the reply claims.
+    pub fn verifyAttestResponse(response: []const u8, pinned: [32]u8, nonce: [32]u8, channel_binding: [32]u8) ![32]u8 {
+        if (std.mem.indexOf(u8, response, "\"hash\":\"") == null) {
+            if (std.mem.indexOf(u8, response, "\"ERR\"") != null) {
+                return remoteError(response);
+            }
+            return error.InvalidResponse;
+        }
+        var hash: [32]u8 = undefined;
+        var presented: [32]u8 = undefined;
+        var sig: [64]u8 = undefined;
+        var echoed: [32]u8 = undefined;
+        try hexFieldAfter(response, "\"hash\":\"", &hash);
+        try hexFieldAfter(response, "\"pub\":\"", &presented);
+        try hexFieldAfter(response, "\"sig\":\"", &sig);
+        try hexFieldAfter(response, "\"nonce\":\"", &echoed);
+        if (!timingSafeEql(&presented, &pinned)) return error.AttestationKeyMismatch;
+        if (!timingSafeEql(&echoed, &nonce)) return error.AttestationNonceMismatch;
+        if (!verifyAttestation(pinned, nonce, hash, channel_binding, sig)) return error.AttestationSignatureInvalid;
+        return hash;
     }
 
     /// Map an `{"status":"ERR","code":...}` reply to a typed error. SONNY-2394:
@@ -917,29 +1032,6 @@ pub const RemoteKmsClient = struct {
         return result;
     }
 
-    /// Parse attestation hash from JSON response
-    fn parseAttestResponse(response: []const u8) ![32]u8 {
-        // Look for hash field
-        const hash_start = std.mem.indexOf(u8, response, "\"hash\":\"");
-        if (hash_start == null) {
-            if (std.mem.indexOf(u8, response, "\"ERR\"") != null) {
-                return remoteError(response);
-            }
-            return error.InvalidResponse;
-        }
-
-        // Extract hex string
-        const hex_start = hash_start.? + 8;
-        const hex_end = std.mem.indexOfPos(u8, response, hex_start, "\"");
-        if (hex_end == null or hex_end.? - hex_start != 64) {
-            return error.InvalidResponse;
-        }
-
-        var result: [32]u8 = undefined;
-        _ = std.fmt.hexToBytes(&result, response[hex_start..hex_end.?]) catch return error.InvalidResponse;
-        return result;
-    }
-
     /// Parse envelope JSON object
     fn parseEnvelopeFromJson(json: []const u8) !Envelope {
         var env = Envelope{
@@ -981,17 +1073,15 @@ pub const RemoteKmsClient = struct {
         return env;
     }
 
-    /// P2-3: Now accepts allocator parameter for temporary message allocation
-    pub fn verifyAttestation(allocator: std.mem.Allocator, pub_key: [32]u8, hash: [32]u8, sig: [64]u8, is_unwrap: bool) bool {
-        const domain_attest = if (is_unwrap) "GEODE-KMS-ATTEST-UNWRAP" else "GEODE-KMS-ATTEST";
-        const msg_len = domain_attest.len + hash.len;
-        var msg = allocator.alloc(u8, msg_len) catch return false;
-        defer allocator.free(msg);
-        std.mem.copyForwards(u8, msg[0..domain_attest.len], domain_attest);
-        std.mem.copyForwards(u8, msg[domain_attest.len..msg_len], &hash);
+    /// True iff `sig` is `pub_key`'s Ed25519 signature over
+    /// `attestationMessage(nonce, hash, channel_binding)`. Callers pass the
+    /// PINNED key, their OWN nonce and their OWN channel binding, never
+    /// values taken from the reply (SONNY-6435, SONNY-6442).
+    pub fn verifyAttestation(pub_key: [32]u8, nonce: [32]u8, hash: [32]u8, channel_binding: [32]u8, sig: [64]u8) bool {
+        const msg = attestationMessage(nonce, hash, channel_binding);
         var kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &pub_key) catch return false;
         defer kp.deinit();
-        cb.Sig.verify(.ed25519, &kp, msg, &sig) catch return false;
+        cb.Sig.verify(.ed25519, &kp, &msg, &sig) catch return false;
         return true;
     }
 };

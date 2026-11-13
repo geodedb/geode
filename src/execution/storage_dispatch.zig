@@ -157,7 +157,6 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.encrypt_page_test", handleTdeEncryptPageTest },
     .{ "tde.encrypt_backup_test", handleTdeEncryptBackupTest },
     .{ "tde.roundtrip_test", handleTdeRoundtripTest },
-    .{ "tde.measure_overhead", handleTdeMeasureOverhead },
     .{ "tde.simulate_oltp_workload", handleTdeSimulateOltpWorkload },
     .{ "tde.test_kms_wrap_unwrap", handleTdeTestKmsWrapUnwrap },
     .{ "tde.test_kms_attestation", handleTdeTestKmsAttestation },
@@ -225,6 +224,13 @@ const tde_refused_set = std.StaticStringMap(void).initComptime(.{
     .{ "tde.test_kms_failure", {} },
     .{ "tde.test_corrupted_key_handling", {} },
     .{ "tde.cleanup_key_hierarchy", {} },
+    // SONNY-6442: measure_overhead timed 1000 alloc+memcpy+free of 1 KiB as
+    // the "baseline" against 1000 AEAD encryptions as "encrypted" and
+    // answered passes_threshold = overhead < 5 %. Neither loop touches
+    // storage, so it measured nothing about TDE overhead. The measurement is
+    // `zig build test-sonny6435-tde-overhead` (the storage engine with page
+    // and WAL encryption off vs on).
+    .{ "tde.measure_overhead", {} },
 });
 
 /// Execute a TDE procedure. Returns null if not recognized.
@@ -234,7 +240,11 @@ pub fn executeTde(
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
     if (tde_refused_set.has(proc_name)) {
-        log.warn("TDE procedure not supported: it reported work it did not do", &.{Attr.string("procedure", proc_name)});
+        if (std.mem.eql(u8, proc_name, "tde.measure_overhead")) {
+            log.warn("tde.measure_overhead is not supported: TDE overhead is measured by `zig build test-sonny6435-tde-overhead`", &.{});
+        } else {
+            log.warn("TDE procedure not supported: it reported work it did not do", &.{Attr.string("procedure", proc_name)});
+        }
         return error.Unsupported;
     }
     if (tde_table.get(proc_name)) |handler| {
@@ -605,34 +615,6 @@ fn handleTdeRoundtripTest(allocator: std.mem.Allocator, call_stmt: ast.CallProce
     row[0] = Value{ .Str = result.original_data };
     row[1] = Value{ .Str = result.decrypted_data };
     row[2] = Value{ .Bool = result.roundtrip_success };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-045; FEATURE="TDETestProcedures"; ASPECT=MeasureOverhead; STATUS=TESTED; TEST=tests/test_sonny6321_tde_procedures.zig; OWNER=tde; UPDATED=2026-11-12
-    // tde.measure_overhead() -> baseline_ops_per_sec, encrypted_ops_per_sec, overhead_percentage, passes_threshold
-
-    // Call real TDE function
-    const result = try tde_mod.measureOverhead(allocator);
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "baseline_ops_per_sec");
-    columns[1] = try allocator.dupe(u8, "encrypted_ops_per_sec");
-    columns[2] = try allocator.dupe(u8, "overhead_percentage");
-    columns[3] = try allocator.dupe(u8, "passes_threshold");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = result.baseline_ops_per_sec };
-    row[1] = Value{ .Int = result.encrypted_ops_per_sec };
-    row[2] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.overhead_percentage, 100.0), .scale = 2 } };
-    row[3] = Value{ .Bool = result.passes_threshold };
     rows[0] = row;
 
     return ExecutionResult{

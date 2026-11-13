@@ -131,6 +131,49 @@ pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6435-MASTER-KEY-CHECK; FEATURE="Key configuration"; ASPECT=KeyCheckValue; STATUS=TESTED; TEST=tests/test_sonny6435_master_key_check.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6435: the file, in the data directory beside the FLE catalog, that
+/// records which master key the directory's encrypted fields use.
+pub const master_key_check_file_name = "fle_master_key.kcv";
+const master_key_check_header = "geode-fle-master-key-check v1 ";
+pub const master_key_check_file_len = master_key_check_header.len + 64 + 1;
+
+/// The key check value of a 32-byte master key: HMAC-SHA256 of a fixed label
+/// under a key HKDF-derived from the master key. Identifies the key without
+/// revealing it, and is not usable as any key FLE derives.
+pub fn masterKeyCheckValue(master_key: [32]u8) ![32]u8 {
+    var subkey: [32]u8 = undefined;
+    defer cb.secureZero(&subkey);
+    try cb.Kdf.hkdf(.sha256, &master_key, "", "geode-fle-master-key-check-v1", &subkey);
+    var kcv: [32]u8 = undefined;
+    _ = try cb.Mac.hmac(.sha256, &subkey, "GEODE FLE master key check value", &kcv);
+    return kcv;
+}
+
+/// The check file's contents for `master_key`: one text line.
+pub fn encodeMasterKeyCheck(master_key: [32]u8) ![master_key_check_file_len]u8 {
+    var out: [master_key_check_file_len]u8 = undefined;
+    @memcpy(out[0..master_key_check_header.len], master_key_check_header);
+    const hex = std.fmt.bytesToHex(try masterKeyCheckValue(master_key), .lower);
+    @memcpy(out[master_key_check_header.len..][0..64], &hex);
+    out[out.len - 1] = '\n';
+    return out;
+}
+
+/// Whether the check file contents `recorded` were written for
+/// `master_key`. `error.MasterKeyCheckCorrupt` for contents that are not a
+/// check file.
+pub fn masterKeyCheckMatches(recorded: []const u8, master_key: [32]u8) !bool {
+    const body = std.mem.trimEnd(u8, recorded, "\r\n");
+    if (body.len != master_key_check_header.len + 64 or !std.mem.startsWith(u8, body, master_key_check_header)) {
+        return error.MasterKeyCheckCorrupt;
+    }
+    var stored: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&stored, body[master_key_check_header.len..]) catch return error.MasterKeyCheckCorrupt;
+    const expected = try masterKeyCheckValue(master_key);
+    return cb.timingSafeEql(&stored, &expected);
+}
+
 pub fn initFromEnv(allocator: std.mem.Allocator) !*KeyManager {
     return KeyManager.init(allocator, try loadMasterKeyFromEnv(allocator));
 }

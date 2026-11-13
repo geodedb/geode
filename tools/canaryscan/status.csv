@@ -2895,10 +2895,10 @@ REQ-GQL-TAIL-001,ListFunctions,TailElements,TESTED,src/eval/call_handlers.zig,,,
 REQ-GQL-TDE-001,TDE Key Management,KeyManagement,TESTED,src/security/tde_key_manager.zig,tde_tests,,security,2025-11-12
 REQ-GQL-TDE-001,TDE Nonce Generation,NonceGeneration,TESTED,src/security/tde_nonce_gen.zig,tde_tests,,security,2025-11-12
 REQ-GQL-TDE-001,TDE baseline,SECURITY,TESTED,src/security/tde.zig,tests/e2e_security_tde_mfa.zig,,security,2026-11-12
-REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,BENCHED,benchmarks/benchmark_tde_overhead.zig,,BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead,security,2025-09-26
 REQ-GQL-TDE-002,Snapshot encryption,TEST,TESTED,tests/unit_graphstore_encryption_round_trip.zig,,,security,2026-02-04
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ClientVerifiesPinnedFreshAttestation,TESTED,tests/test_sonny6435_kms_attestation.zig,tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation,,security,2025-09-26
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect,,security,2026-11-12
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig|tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSIntegration,SECURITY,TESTED,src/security/external_kms_client.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_001,,security,2026-01-15
@@ -2909,9 +2909,11 @@ REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TEST
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2026-11-12
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26
+REQ-GQL-TDE-EXT-KMS-REMOTE-002,RemoteKMSVerifiedChannel,SECURITY,TESTED,src/security/kms_remote.zig,tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
+REQ-GQL-TDE-EXT-KMS-REMOTE-002,RemoteKMSVerifiedChannel,VerifiedChannelBoundAttestation,TESTED,tests/test_sonny6442_kms_channel.zig,tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-KEYID-001,SecureKeyIdDerivation,Security,EXEMPT,src/security/tde_key_manager.zig,,,security,2026-01-10
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,benchmarks/benchmark_tde_oltp_overhead.zig,,BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001,perf,2025-09-26
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-09-23
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-11-12
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,RealStoreMeasurement,BENCHED,tests/test_sonny6435_tde_overhead.zig,,tests/test_sonny6435_tde_overhead.zig,perf,2026-11-12
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,TESTED,tests/benchmark_tde_overhead_smoke.zig,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2026-01-16
 REQ-GQL-TDE-SSS-001,ShamirSecretSharing,KeyEscrow,EXEMPT,src/security/tde.zig,,,security,2026-01-10
 REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,TESTED,src/eval.zig,geodetestlab/specs/gql_type_system_comprehensive.yml,,eval,2025-12-24
@@ -5445,6 +5447,14 @@ REQ-SONNY-6430-MIGRATE-CREATE-SIGNED,Migrations,NoKeyNoFile,TESTED,src/cli/backu
 REQ-SONNY-6430-REGISTRY-FAIL-CLOSED,Storage Adapter,UnloadableRegistryRefuses,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6430_storage_open_fail_closed.zig,,storage,2026-11-12
 REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED,Security Graph Audit,NoUnauditedOpen,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6430_storage_open_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6430-STORAGE-VERIFY-DATA-DIR,Storage CLI,VerifiesTheServersDataDir,TESTED,src/cli/storage_cli.zig,tests/test_sonny6430_cli_fail_closed.zig,,storage,2026-11-12
+REQ-SONNY-6435-MASTER-KEY-CHECK,Key configuration,KeyCheckValue,TESTED,src/keys/manager.zig,tests/test_sonny6435_master_key_check.zig,,security,2026-11-12
+REQ-SONNY-6435-MASTER-KEY-CHECK,Key configuration,MasterKeyCheckValue,TESTED,tests/test_sonny6435_master_key_check.zig,tests/test_sonny6435_master_key_check.zig,,security,2026-11-12
+REQ-SONNY-6435-MASTER-KEY-CHECK,Key configuration,StartupVerifyOrRecord,TESTED,src/server/server_init.zig,tests/test_sonny6435_master_key_check.zig,,security,2026-11-12
+REQ-SONNY-6435-TDE-CLAIMS-TRUTH,Docs,NoUnmeasuredTdeOverheadClaim,TESTED,tests/test_sonny6435_tde_claims_truth.zig,tests/test_sonny6435_tde_claims_truth.zig,,perf,2026-11-12
+REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS,Key configuration,EveryFleKeyPathChecksKcv,TESTED,tests/test_sonny6442_master_key_check_paths.zig,tests/test_sonny6442_master_key_check_paths.zig,,security,2026-11-12
+REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS,Key configuration,SharedVerifyOrRecord,TESTED,src/keys/master_key_check.zig,tests/test_sonny6442_master_key_check_paths.zig,,security,2026-11-12
+REQ-SONNY-6442-SERVE-UNKNOWN-OPTION,ServerCli,UnknownOptionRefused,TESTED,tests/test_sonny6442_serve_unknown_options.zig,tests/test_sonny6442_serve_unknown_options.zig,,cli,2026-11-12
+REQ-SONNY-6442-TDE-MEASURE-OVERHEAD-REFUSED,TDEProcedures,NoFakeOverheadMeasurement,TESTED,tests/test_sonny6442_tde_measure_overhead.zig,tests/test_sonny6442_tde_measure_overhead.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08
@@ -5582,7 +5592,7 @@ REQ-TDE-ENFORCE-010,TDEEnforcement,BypassDetection,TESTED,src/security/test_tde_
 REQ-TDE-ENFORCE-011,TDEEnforcement,NonceUniqueness,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
-REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
+REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,BENCHED,src/security/test_tde_enforcement.zig,,tests/test_sonny6435_tde_overhead.zig,security,2026-11-12
 REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,build.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,src/schema/fle_catalog.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,src/index/hnsw_persist.zig,,,security,2026-04-01
@@ -5598,7 +5608,6 @@ REQ-TDE-PROC-015,PerTenantTDEKeys,LibExportStorageDispatch,TESTED,src/lib.zig,te
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
-REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_fle_cases.zig,,tde,2026-11-12
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19

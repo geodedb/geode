@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:04:56.368771745Z",
+  "generated_at": "2026-11-13T02:24:19.027455457Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44129,20 +44129,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "TDE performance benchmark",
-          "aspect": "PERFORMANCE",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_tde_overhead.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead"
-          ],
-          "owner": "security",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -44168,6 +44154,20 @@
       "features": [
         {
           "feature": "RemoteKmsAttestation",
+          "aspect": "ClientVerifiesPinnedFreshAttestation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_kms_attestation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_kms_attestation.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RemoteKmsAttestation",
           "aspect": "ExpiredAttestation",
           "status": "TESTED",
           "files": [
@@ -44188,7 +44188,7 @@
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect"
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig|tests/test_sonny6442_kms_channel.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -44334,6 +44334,39 @@
       ]
     },
     {
+      "id": "REQ-GQL-TDE-EXT-KMS-REMOTE-002",
+      "features": [
+        {
+          "feature": "RemoteKMSVerifiedChannel",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/kms_remote.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RemoteKMSVerifiedChannel",
+          "aspect": "VerifiedChannelBoundAttestation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-TDE-KEYID-001",
       "features": [
         {
@@ -44355,20 +44388,6 @@
       "features": [
         {
           "feature": "TDEOlptOverheadValidation",
-          "aspect": "PERFORMANCE",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_tde_oltp_overhead.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001"
-          ],
-          "owner": "perf",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "TDEOlptOverheadValidation",
           "aspect": "PublishedSync",
           "status": "TESTED",
           "files": [
@@ -44379,7 +44398,21 @@
           ],
           "benches": [],
           "owner": "perf",
-          "updated": "2026-09-23"
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "RealStoreMeasurement",
+          "status": "BENCHED",
+          "files": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
+          "owner": "perf",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -85301,6 +85334,143 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6435-MASTER-KEY-CHECK",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "KeyCheckValue",
+          "status": "TESTED",
+          "files": [
+            "src/keys/manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "MasterKeyCheckValue",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "StartupVerifyOrRecord",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6435-TDE-CLAIMS-TRUTH",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "NoUnmeasuredTdeOverheadClaim",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_tde_claims_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_tde_claims_truth.zig"
+          ],
+          "benches": [],
+          "owner": "perf",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "EveryFleKeyPathChecksKcv",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "SharedVerifyOrRecord",
+          "status": "TESTED",
+          "files": [
+            "src/keys/master_key_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_master_key_check_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6442-SERVE-UNKNOWN-OPTION",
+      "features": [
+        {
+          "feature": "ServerCli",
+          "aspect": "UnknownOptionRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_serve_unknown_options.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_serve_unknown_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6442-TDE-MEASURE-OVERHEAD-REFUSED",
+      "features": [
+        {
+          "feature": "TDEProcedures",
+          "aspect": "NoFakeOverheadMeasurement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_tde_measure_overhead.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_tde_measure_overhead.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -87623,14 +87793,16 @@
         {
           "feature": "TDEEnforcement",
           "aspect": "PerformanceThreshold",
-          "status": "TESTED",
+          "status": "BENCHED",
           "files": [
             "src/security/test_tde_enforcement.zig"
           ],
           "tests": [],
-          "benches": [],
+          "benches": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
           "owner": "security",
-          "updated": "2026-01-28"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -87867,25 +88039,6 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "RoundtripTest",
-          "status": "TESTED",
-          "files": [
-            "src/execution/storage_dispatch.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6321_tde_procedures.zig"
-          ],
-          "benches": [],
-          "owner": "tde",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TDE-PROC-045",
-      "features": [
-        {
-          "feature": "TDETestProcedures",
-          "aspect": "MeasureOverhead",
           "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
@@ -92986,7 +93139,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4839
+      "TESTED": 4848
     },
     "by_aspect": {
       "2PC": 3,
@@ -93508,6 +93661,7 @@
       "ClientSession": 1,
       "ClientTestZig": 3,
       "ClientTimeoutBranch": 1,
+      "ClientVerifiesPinnedFreshAttestation": 1,
       "ClientWriteCongestionDeadline": 1,
       "ClosedConnectionFailFast": 1,
       "Closeness": 1,
@@ -94170,6 +94324,7 @@
       "EventSimulation": 1,
       "EveryDetailKey": 1,
       "EveryExpressionVariant": 1,
+      "EveryFleKeyPathChecksKcv": 1,
       "EveryGraphDeny": 1,
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
@@ -94836,6 +94991,7 @@
       "Katz": 1,
       "KeepISIG": 1,
       "KernelSources": 1,
+      "KeyCheckValue": 1,
       "KeyDerivation": 2,
       "KeyEpochs": 1,
       "KeyErrorFailsStatement": 1,
@@ -95046,6 +95202,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MasterKeyCheckValue": 1,
       "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,
       "Match": 1,
@@ -95092,7 +95249,6 @@
       "McpCancellation": 1,
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
-      "MeasureOverhead": 1,
       "MemberOfValue": 1,
       "MemberResolution": 1,
       "MemoryEfficiency": 2,
@@ -95258,6 +95414,7 @@
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
+      "NoFakeOverheadMeasurement": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,
       "NoFixedSharedPaths": 1,
@@ -95292,6 +95449,7 @@
       "NoTmpCertFallback": 1,
       "NoUnauditedOpen": 1,
       "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
+      "NoUnmeasuredTdeOverheadClaim": 1,
       "NoUnreadDeployConfig": 1,
       "NodeCache": 1,
       "NodeCapture": 1,
@@ -95446,7 +95604,7 @@
       "Ownership": 1,
       "PARAM_REUSE": 1,
       "PARSER": 1,
-      "PERFORMANCE": 4,
+      "PERFORMANCE": 2,
       "PROCEDURE_REGISTRY": 1,
       "PTXKernel": 2,
       "PageFreesReturnedNode": 1,
@@ -96054,6 +96212,7 @@
       "RealPlanGeneration": 1,
       "RealServer": 1,
       "RealStatistics": 1,
+      "RealStoreMeasurement": 1,
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
       "Rebalance": 1,
@@ -96261,7 +96420,7 @@
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
-      "SECURITY": 37,
+      "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,
@@ -96456,6 +96615,7 @@
       "SharedTypeAccessibility": 1,
       "SharedTypes": 1,
       "SharedUtility": 1,
+      "SharedVerifyOrRecord": 1,
       "SharedVisibilityPredicate": 2,
       "SharedWithStage": 1,
       "ShellCompletions": 1,
@@ -96580,6 +96740,7 @@
       "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
       "State": 2,
       "StateChangeClassifier": 1,
@@ -96917,6 +97078,7 @@
       "UnknownFunctionEscapes": 1,
       "UnknownLabel": 1,
       "UnknownMeansEncrypted": 1,
+      "UnknownOptionRefused": 1,
       "UnknownPropertyDiagnostic": 1,
       "UnloadableRegistryRefuses": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
@@ -97012,6 +97174,7 @@
       "VectorReadersLocked": 1,
       "VendorParallelPoolGating": 1,
       "Verification": 3,
+      "VerifiedChannelBoundAttestation": 1,
       "VerifiedPrincipalGate": 1,
       "VerifiesTheServersDataDir": 1,
       "Verify": 1,

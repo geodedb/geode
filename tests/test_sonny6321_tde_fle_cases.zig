@@ -7,8 +7,10 @@
 //         dispatch (it had only argument-bound tests), and FeatureDisabled
 //         with TDE off;
 //     (2) authorization: a CALL runs the GPS gate first; a ReadOnly
-//         principal may run the read-only tde.measure_overhead but not the
-//         self tests classified as writes, which an Admin may run;
+//         principal may not run the self tests classified as writes, which
+//         an Admin may run (SONNY-6442: tde.measure_overhead, the one
+//         read-only TDE procedure, is refused as unsupported and so
+//         classified as a write too);
 //     (3) argument validation: out-of-range simulate_oltp_workload arguments
 //         are refused;
 //     (4) cluster gate: the TDE self tests change nothing durable and run
@@ -205,7 +207,7 @@ const Harness = struct {
     }
 };
 
-test "SONNY-6321 (2) the GPS gate lets a ReadOnly principal run only the read-only TDE procedure; an Admin runs the self tests" {
+test "SONNY-6321 (2) the GPS gate refuses the TDE self tests to a ReadOnly principal; an Admin runs them" {
     enableTde();
     defer disableTde();
     var h = try Harness.init(testing.allocator);
@@ -216,10 +218,7 @@ test "SONNY-6321 (2) the GPS gate lets a ReadOnly principal run only the read-on
     h.ctx.principal = &ro;
     try testing.expectError(error.Unauthorized, h.run("CALL tde.encrypt_page_test()"));
     try testing.expectError(error.Unauthorized, h.run("CALL tde.simulate_oltp_workload(1, 1)"));
-    {
-        const res = try h.run("CALL tde.measure_overhead()");
-        try testing.expectEqual(@as(usize, 1), res.rows.len);
-    }
+    try testing.expectError(error.Unauthorized, h.run("CALL tde.measure_overhead()"));
 
     const admin_roles = [_][]const u8{"Admin"};
     var admin = principal(&admin_roles, "sonny6321-admin");
@@ -230,6 +229,8 @@ test "SONNY-6321 (2) the GPS gate lets a ReadOnly principal run only the read-on
         const i = column(res, "integrity_check") orelse return error.MissingColumn;
         try testing.expect(res.rows[0][i].Bool);
     }
+    // SONNY-6442: refused to every principal.
+    try testing.expectError(error.Unsupported, h.run("CALL tde.measure_overhead()"));
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +252,7 @@ test "SONNY-6321 (4) in cluster mode the TDE self tests run while a gated write 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    for ([_][]const u8{ "tde.encrypt_page_test", "tde.encrypt_backup_test", "tde.test_encryption", "tde.measure_overhead" }) |name| {
+    for ([_][]const u8{ "tde.encrypt_page_test", "tde.encrypt_backup_test", "tde.test_encryption" }) |name| {
         const res = (try storage_dispatch.executeTde(arena, name, try call(arena, name, &.{}))) orelse return error.ProcedureNotRecognized;
         try testing.expectEqual(@as(usize, 1), res.rows.len);
     }

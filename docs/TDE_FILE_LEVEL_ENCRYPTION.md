@@ -145,6 +145,37 @@ Encrypted files use the following format:
 
 For typical index files (kilobytes to megabytes), this overhead is negligible (<1%).
 
+### Measured overhead
+
+Measured by `zig build test-sonny6435-tde-overhead` (SONNY-6435): the
+storage engine geode opens every graph with, the same workload with page and
+WAL encryption off and on (one operation inserts a node with a 512-byte
+property and reads an earlier node's property), the two arms interleaved
+batch by batch, medians, built ReleaseFast with the production-default
+buffer pool. 2026-11-12, a shared and loaded 16-core Threadripper PRO 3955WX
+dev host:
+
+| WAL sync | Plain | TDE | Overhead |
+| --- | --- | --- | --- |
+| `each_commit` (the default) | 53.3 ms/op | 53.7 ms/op | +0.7% (four runs: -1.3% to +0.7%) |
+| `deferred`, no checkpoint in the timed window | 151.9 us/op | 181.5 us/op | +19.5% (three runs: +19.5% to +21.0%) |
+
+With an fsync per commit the encryption disappears in the disk latency on
+this host (an operation is three commits, about 18 ms per fsync). Without
+it, encrypting the WAL records costs about a fifth of the commit path's CPU
+time. Storage with a faster fsync lands between the two figures, so neither
+"<1%" nor "<5%" holds in general. The step asserts that the encrypted arm
+writes no plaintext, and checks the durable overhead below 5% and the
+commit path's below 35% through `tests/perf_gate.zig` (reported by default,
+enforced in the scheduled perf-gates CI job).
+
+Not measured: reads that miss the buffer pool. With a pool smaller than the
+store, the encrypting engine loses committed node records (graph_storage
+0.4.10; `test-sonny6435-tde-small-pool-node-loss`, intentionally red), so a
+cold-read figure would time that defect. The layers above the engine
+(executor, query, network) do the same work in both arms and dilute the
+figure.
+
 ## Security Properties
 
 ### Confidentiality
@@ -265,7 +296,10 @@ Key rotation requires:
 2. Re-encrypt with new key
 3. Atomic swap of key in all cluster nodes
 
-See [KMS Provider System](KMS_PROVIDER_SYSTEM.md) for automated key rotation support.
+There is no automated key rotation: no command or KMS provider rotates
+`GEODE_TDE_KEY` or re-encrypts the files under a new key (corrected
+2026-11-12, SONNY-6435; [KMS Provider System](KMS_PROVIDER_SYSTEM.md),
+"TDE-KMS Integration — Not Implemented").
 
 ## Related Documentation
 

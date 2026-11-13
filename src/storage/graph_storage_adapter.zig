@@ -10465,8 +10465,9 @@ pub const StorageAdapter = struct {
     /// any allocation failure returned null, and the security graph opened
     /// with no audit logger: every auth change went unaudited. No error is
     /// one to carry on past: the open fails and the caller (the server's
-    /// startup, or the CLI) reports it.
-    fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*audit.AuditLogger {
+    /// startup, or the CLI) reports it. SONNY-6435: hence no optional in the
+    /// type; the caller owns the returned logger.
+    pub fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !*audit.AuditLogger {
         if (try audit.AuditLogger.loadEnvSigningKey(allocator)) |kp| {
             var k = kp;
             k.deinit();

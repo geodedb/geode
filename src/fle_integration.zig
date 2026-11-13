@@ -4,6 +4,7 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 const fle_annotations = @import("schema/annotations.zig");
 const fle_aead = @import("fle_aead");
 const key_manager_mod = @import("fle_key_manager");
+const master_key_check = @import("keys/master_key_check.zig");
 const key_types = @import("fle_key_types");
 const blind_index_mod = @import("fle_blind_index");
 
@@ -396,6 +397,13 @@ fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManage
         return km;
     }
 
+    // SONNY-6442: refuse a GEODE_MASTER_KEY other than the one this data
+    // directory's encrypted fields were written with (as `geode serve` does
+    // at startup), and record it where none is.
+    if (try master_key_check.fleDataDir(allocator)) |dir| {
+        defer allocator.free(dir);
+        try master_key_check.verifyOrRecord(allocator, dir, .in_process);
+    }
     const km = try key_manager_mod.initFromEnv(allocator);
     global_key_manager_instance = km;
     return km;

@@ -535,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
+    .{ .name = "test-sonny6435-tde-small-pool-node-loss", .reason = "intentionally red reproduction (SONNY-6435, KNOWN_TEST_ISSUES): graph_storage 0.4.10 loses committed nodes with page encryption and a small buffer pool; compiled by test-compile; register it through shardDep in the commit that bumps the fixed graph_storage" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -1228,6 +1229,7 @@ pub fn build(b: *std.Build) void {
     });
     crypto_backend_mod.addImport("build_options", build_options_mod);
     crypto_backend_mod.addImport("std_shim", std_shim_mod);
+    transport_quic_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-6442: TLS exporter
     // Task 8: FIPS fail-close for ChaCha20 header protection in the QUIC parallel module.
     quic_parallel_serial_mod.addImport("build_options", build_options_mod);
 
@@ -1713,9 +1715,9 @@ pub fn build(b: *std.Build) void {
     // Legacy wire binary removed; run-wire step removed
 
     // --- Benchmarks ---
-    // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
-    const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
-    const run_tde_bench = b.addRunArtifact(tde_bench_exe);
+    // SONNY-6435: the TDE overhead "benchmark" here (benchmark_tde_overhead
+    // .zig) hashed a buffer and called it encryption; it is gone. The real
+    // measurement, test-sonny6435-tde-overhead, joins `bench` below.
     // CI-safe bench aggregate. The two M0.3b quarantined members are
     // now restored:
     //   - benchmark_merge_throughput : fixed by dropping redundant
@@ -1724,7 +1726,6 @@ pub fn build(b: *std.Build) void {
     //     and adding a worker slot for the reserved blocking lane (this
     //     commit).
     const bench_step = b.step("bench", "Run the full CI-safe benchmark suite");
-    bench_step.dependOn(&run_tde_bench.step);
 
     // GAP-0900 Layer-3 (Fix 3) A/B harness: in-memory node-mirror RSS / bytes-per-node.
     // Run via `zig build bench-gap0900-node-mirror -- <node_count>`.
@@ -2370,11 +2371,11 @@ pub fn build(b: *std.Build) void {
         .root_module = transport_quic_mod,
         // SONNY-1219c: "server-initiated close" adds the M-2a close-code tests.
         // Filters only — the step ROOT is untouched (that is ticket T-2).
-        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close" },
+        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "tls13Exporter" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);
-    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend + tracked-stream-wrapper unit tests");
+    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend + tracked-stream-wrapper + TLS exporter unit tests");
     transport_quic_step.dependOn(&run_transport_quic_tests.step);
 
     // Out-of-band /health liveness breadcrumb regression for
@@ -4948,6 +4949,35 @@ pub fn build(b: *std.Build) void {
     // (SONNY-2439; see tests/perf_gate.zig).
     const perf_gate_mod = b.createModule(.{ .root_source_file = b.path("tests/perf_gate.zig"), .target = target, .optimize = optimize, .link_libc = true });
 
+    // SONNY-6435 (2): the TDE overhead measurement. The storage engine (and
+    // the measurement) is built ReleaseFast whatever -Doptimize says, so it
+    // times production crypto, not Debug crypto.
+    {
+        const gs_fast = b.dependency("graph_storage", .{ .target = target, .optimize = .ReleaseFast }).module("graph_storage");
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_overhead.zig"), .target = target, .optimize = .ReleaseFast, .link_libc = true });
+        mod.addImport("graph_storage", gs_fast);
+        mod.addImport("perf_gate", perf_gate_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        bench_step.dependOn(&run_tests.step);
+        b.step("test-sonny6435-tde-overhead", "Run SONNY-6435 item 2 measurement (TDE overhead of the storage engine: the same insert+read workload with page and WAL encryption off vs on, interleaved perf_gate batches, median overhead, deferred and sync_each_commit WAL sync; asserts the encrypted arm writes no plaintext)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6435 (found by item 2): intentionally red (docs/KNOWN_TEST_ISSUES.md).
+    // graph_storage 0.4.10 loses committed node records with page encryption
+    // and a buffer pool smaller than the store. Not in shardDep until the
+    // graph_storage fix lands; compiled by test-compile.
+    {
+        const gs_fast = b.dependency("graph_storage", .{ .target = target, .optimize = .ReleaseFast }).module("graph_storage");
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_small_pool_node_loss.zig"), .target = target, .optimize = .ReleaseFast, .link_libc = true });
+        mod.addImport("graph_storage", gs_fast);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6435-tde-small-pool-node-loss", "Run SONNY-6435 reproduction, intentionally red until graph_storage keeps every committed node with page encryption and a buffer pool smaller than the store (8 pages per shard, no auto-size; the same sequence without a key keeps every node)").dependOn(&run_tests.step);
+    }
+
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });
     // Provide tde_hierarchy for encryption import (even if disabled)
@@ -5700,6 +5730,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("json", json_mod);
     kms_remote_mod.addImport("crypto_backend", crypto_backend_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    remote_kms_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     remote_kms_tests.root_module.link_libc = true;
     // GAP-0514 Phase 6 P3: these tests were COMPILE-ONLY (shardDep got the
     // Compile step, never a run artifact). Named step actually RUNS the
@@ -5716,11 +5747,61 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    remote_kms_hardening_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     remote_kms_hardening_tests.root_module.link_libc = true;
     const run_remote_kms_hardening_tests = b.addRunArtifact(remote_kms_hardening_tests);
     shardDep(test_step, &run_remote_kms_hardening_tests.step, 1, test_shard_loads, test_shard_index);
     const remote_kms_hardening_tests_step = b.step("test-remote-kms-hardening", "Run remote KMS hardening tests (negative auth, expired attestation, concurrent unwrap)");
     remote_kms_hardening_tests_step.dependOn(&run_remote_kms_hardening_tests.step);
+
+    // SONNY-6435 (1): the remote KMS client verifies a fresh, nonce-bound
+    // attestation under a pinned key, and fails closed without one.
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_kms_attestation.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6442 (1-3): the remote KMS client verifies the server's
+    // certificate, binds the attestation to the TLS channel and has no local
+    // fallback; the attested hash is the KEK identifier; the seeded simulated
+    // KMS client is test-only.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_kms_channel.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod);
+        tests.root_module.addImport("sonny6442_kms_options", opts.createModule());
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-kms-channel", "Run SONNY-6442 items 1-3 regression (the remote KMS client refuses to connect without a CA bundle, with one it cannot load or to a server that bundle does not verify; rejects an attestation from another TLS channel; refuses generate/unwrap unconnected; the attested hash is the HKDF KEK identifier; the seeded simulated KMS client compiles into tests only; over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
+    // still parses every documented one (unit + the built binary).
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_serve_unknown_options.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("cli_args", cli_args_mod);
+        mod.addImport("sonny6442_serve_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-serve-unknown-options", "Run SONNY-6442 item 4 regression (geode serve refuses an unknown option, a positional argument or a value option without its value with exit 2, and parses every option its --help documents)").dependOn(&run_tests.step);
+    }
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
@@ -9844,6 +9925,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6422-backup-docs-truth", "Run SONNY-6422 item 9 regression (TODO, GQL_COMPLIANCE, SERVER_FEATURES, DOCKER_OVERVIEW and NIX_DEPLOYMENT present no S3 / DigitalOcean Spaces backup target, option or variable, and the FLE PQC research spec does not present tde_kms_integration.zig as current code)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6435 item 2: no unmeasured TDE overhead claim, no simulated
+    // TDE benchmark; the published docs cite the real measurement.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_claims_truth.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6435_tc_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-tde-claims-truth", "Run SONNY-6435 item 2 regression (the simulated TDE benchmarks are gone, no doc claims an unmeasured <1% / <5% TDE overhead, and README, BENCHMARK_REPORT, KMS_PROVIDER_SYSTEM and TDE_FILE_LEVEL_ENCRYPTION cite zig build test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6430 item 9: deployment config and docs describe only settings
     // the server has.
     {
@@ -9938,6 +10032,28 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6342_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6342_step = b.step("test-sonny6342-tde-stub-procedures", "Run SONNY-6342 regression (tde.* key-management stubs are refused as unsupported with TDE on or off; the real TDE self tests still answer; the dead blind-index predicate rewrite is removed)");
     sonny6342_step.dependOn(&run_sonny6342_tests.step);
+    // SONNY-6442 (6): tde.measure_overhead timed a memcpy against an AEAD
+    // call; it is refused (0A000) and the fake measurement is gone.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_tde_measure_overhead.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-tde-measure-overhead", "Run SONNY-6442 item 6 regression (CALL tde.measure_overhead() is refused as unsupported with TDE on or off, and the memcpy-vs-AEAD measurement is gone; the real measurement is test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
+    }
+    // SONNY-6442 (8): geode fle and in-process FLE check the master key
+    // check value too, through the helper geode serve uses.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_master_key_check_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-master-key-check-paths", "Run SONNY-6442 item 8 regression (geode fle migrate-encrypt and the in-process FLE key manager refuse a GEODE_MASTER_KEY other than the recorded one, accept the recorded one and record one where none is, through the helper geode serve uses)").dependOn(&run_tests.step);
+    }
     const sonny6386_tde_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_tde_key_fail_closed.zig"), .target = target, .optimize = optimize });
     sonny6386_tde_test_mod.link_libc = true;
     sonny6386_tde_test_mod.addImport("geode", root_mod);
@@ -10035,6 +10151,28 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6430_so_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6430_so_step = b.step("test-sonny6430-storage-open-fail-closed", "Run SONNY-6430 items 5 and 7 regression (__geode_security does not open without its audit logger when the audit log cannot be opened or created; StorageAdapter.init refuses a graph registry that exists but cannot be loaded)");
     sonny6430_so_step.dependOn(&run_sonny6430_so_tests.step);
+    // SONNY-6435 (3): a GEODE_MASTER_KEY other than the recorded one
+    // refuses startup (spawns the built server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_master_key_check.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-master-key-check", "Run SONNY-6435 item 3 regression (geode serve records a GEODE_MASTER_KEY check value on first start with a key, refuses a restart with another key or format, records one for a store without it, and checks nothing without a key)").dependOn(&run_tests.step);
+    }
+    // SONNY-6435 (4): initAuditForGraph's type has no optional.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_audit_init_type.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-audit-init-type", "Run SONNY-6435 item 4 regression (StorageAdapter.initAuditForGraph returns !*AuditLogger, not an optional, and opens a fresh graph's audit log)").dependOn(&run_tests.step);
+    }
     const sonny6430_cli_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_cli_fail_closed.zig"), .target = target, .optimize = optimize });
     sonny6430_cli_test_mod.link_libc = true;
     sonny6430_cli_test_mod.addImport("geode", root_mod);
@@ -15893,6 +16031,7 @@ pub fn build(b: *std.Build) void {
     sonny2394_kms_deadline_tests.root_module.addImport("transport/quic", transport_quic_mod);
     sonny2394_kms_deadline_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     sonny2394_kms_deadline_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    sonny2394_kms_deadline_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     sonny2394_kms_deadline_tests.root_module.link_libc = true;
     const run_sonny2394_kms_deadline_tests = b.addRunArtifact(sonny2394_kms_deadline_tests);
     shardDep(test_step, &run_sonny2394_kms_deadline_tests.step, 1, test_shard_loads, test_shard_index);

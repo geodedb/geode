@@ -120,8 +120,8 @@ pub const read_only_procedure_names = [_][]const u8{
     // tde.audit_plaintext_keys were listed here after the server stopped
     // serving them (SONNY-6340 / SONNY-6342 refuse them); they classify
     // .mutating by omission, like any name the server does not know.
+    // SONNY-6442: so is tde.measure_overhead, refused since.
     "audit.get_merkle_digests",
-    "tde.measure_overhead",
     // CANARY: REQ=REQ-GPS-PROC-003; FEATURE="GPS Phase 5 Procedure"; ASPECT=MetadataReadOnly; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase5_procedure_fle.yml; OWNER=security; UPDATED=2026-05-21
     // db.* / dbms.* introspection procedures are inherently read-only — they
     // enumerate labels, edge types, property keys, indexes, constraints, and

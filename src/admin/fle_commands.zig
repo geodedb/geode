@@ -38,6 +38,7 @@ fn compat_microTimestamp() i64 {
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_aead = @import("fle_aead");
 const fle_key_manager = @import("fle_key_manager");
+const master_key_check = @import("../keys/master_key_check.zig");
 const fle_key_types = @import("fle_key_types"); // GAP-0147: Import key types for KeyIds struct
 const fle_blind_index = @import("fle_blind_index");
 const fle_hmac = @import("fle_hmac"); // GAP-0207 FIX: Import hmac for blind index computation
@@ -443,6 +444,14 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     std.debug.print("  Schema: {s}\n", .{args.schema_name});
     std.debug.print("  Field: {s}\n", .{args.field_name});
     std.debug.print("  Batch size: {d}\n", .{args.batch_size});
+
+    // SONNY-6442: before anything else, refuse a GEODE_MASTER_KEY other than
+    // the one this data directory's encrypted fields were written with (as
+    // `geode serve` does at startup), and record it where none is.
+    if (try master_key_check.fleDataDir(allocator)) |dir| {
+        defer allocator.free(dir);
+        try master_key_check.verifyOrRecord(allocator, dir, .fle_cli);
+    }
 
     // 1. Get FLE catalog and validate schema/field
     const catalog = try fle_catalog.globalCatalog(allocator);

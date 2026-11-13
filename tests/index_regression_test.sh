@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Start the server
 echo -e "${YELLOW}Starting Geode server...${NC}"
-./zig-out/bin/geode serve --data_dir ./test_data --insecure &
+./zig-out/bin/geode serve --data_dir ./test_data &
 SERVER_PID=$!
 sleep 2
 

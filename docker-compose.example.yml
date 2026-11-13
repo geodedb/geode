@@ -15,10 +15,10 @@ services:
       - ./migrations:/migrations:ro
       - ./certs:/certs
     environment:
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_LOG_JSON=true
       - GEODE_DATA_DIR=/data
-      - GEODE_CERT_PATH=/certs
+      # geode reads no LOG_LEVEL, GEODE_LOG_JSON or GEODE_CERT_PATH: the log
+      # level is `--log-level`, the certificate `--cert` / `--key` (or the
+      # config file's log_level, cert_path and key_path). SONNY-6435.
       # Extended type system is enabled by default
       # All indexes (Patricia, R-tree, HNSW) are automatically available
     ulimits:
@@ -27,7 +27,10 @@ services:
         hard: 4096
     pids_limit: 4096
     healthcheck:
-      test: ["CMD", "/usr/local/bin/geode query", "--host", "127.0.0.1", "--port", "3141", "RETURN 1"]
+      # SONNY-6442: the image's shared probe (GET /health on
+      # GEODE_METRICS_PORT). The exec-form program used to be the one string
+      # "/usr/local/bin/geode query", which does not exist.
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 10s
       timeout: 5s
       retries: 5
