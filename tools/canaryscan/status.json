@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:57:51.820287367Z",
+  "generated_at": "2026-11-13T09:58:42.740065415Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70269,6 +70269,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2672-READ-SEMANTICS-BATCH",
       "features": [
         {
@@ -93351,7 +93370,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4863
+      "TESTED": 4864
     },
     "by_aspect": {
       "2PC": 3,
@@ -96470,7 +96489,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 298,
+      "Regression": 299,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

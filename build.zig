@@ -12232,6 +12232,19 @@ pub fn build(b: *std.Build) void {
     const sonny2656_step = b.step("test-sonny2656-extended-value-leaks", "Run SONNY-2656 regression (the node-scan fast path frees a projected typed extended value with its row, and the clone a WHERE reads at every predicate site, for every extended kind)");
     sonny2656_step.dependOn(&run_sonny2656_tests.step);
 
+    // SONNY-2670: the FLE key-manager and blind-index singletons live on the
+    // process allocator, and the node-scan WHERE runs on its scratch arena on
+    // FLE deployments too.
+    const sonny2670_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2670_fle_singletons_process_allocator.zig"), .target = target, .optimize = optimize });
+    sonny2670_test_mod.link_libc = true; // setenv/unsetenv
+    sonny2670_test_mod.addImport("geode", root_mod);
+    sonny2670_test_mod.addImport("logging", logging_mod);
+    const sonny2670_tests = b.addTest(.{ .root_module = sonny2670_test_mod });
+    const run_sonny2670_tests = b.addRunArtifact(sonny2670_tests);
+    shardDep(test_step, &run_sonny2670_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2670_step = b.step("test-sonny2670-fle-singletons-process-allocator", "Run SONNY-2670 regression (the FLE key manager and blind index made by a first encrypt under a transient arena outlive it; on an FLE deployment the node-scan WHERE frees what it reads)");
+    sonny2670_step.dependOn(&run_sonny2670_tests.step);
+
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
