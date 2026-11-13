@@ -9709,7 +9709,7 @@ pub fn build(b: *std.Build) void {
     // SONNY-2441: the KMSProvider unit suite, built and run. (TDEKeyManager was
     // removed as never-used code in SONNY-6298; wiring is story SONNY-6380.)
     for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
-        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider local_dev / external_kms unit suite (SONNY-2441: registered)" },
+        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider external_kms unit suite (SONNY-2441: registered; SONNY-6448: no local_dev)" },
     }) |t| {
         const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
         mod.link_libc = true;

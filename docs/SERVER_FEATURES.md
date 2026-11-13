@@ -828,9 +828,8 @@ Implemented").
 
 **Providers** (`KMSProvider`, corrected SONNY-6435):
 
-1. **Local development** (`local_dev`): wraps and unwraps data keys; development only
-2. **External** (`external_kms`): an in-process deterministic stand-in, compiled into test builds only (SONNY-6442)
-3. HashiCorp Vault, AWS KMS and Azure Key Vault configurations are refused (`error.UnsupportedProvider`); there is no GCP provider
+1. **External** (`external_kms`): an in-process deterministic stand-in, compiled into test builds only (SONNY-6442)
+2. HashiCorp Vault, AWS KMS and Azure Key Vault configurations are refused (`error.UnsupportedProvider`); there is no GCP provider, and no `local_dev` provider (removed in SONNY-6448: its wrapping key was derived from the key id)
 
 **Remote KMS prototype** (`kms_remote.zig`): `Generate`, `Unwrap` and
 `PrivUnwrap` of AES-256-GCM envelopes, and an Ed25519 attestation the client

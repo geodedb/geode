@@ -50,6 +50,18 @@
   compose file (when docker is on PATH) and covers `docs/USAGE.md`,
   `docs/deployment/DEPLOYMENT.md`, `docs/docker/*.md` and `.env.example`.
   Regression: `zig build test-sonny6430-deploy-docs-truth`.
+- **BREAKING (library): the `local_dev` KMS provider is removed (SONNY-6448
+  item 7).** `KMSProvider` (`src/security/kms.zig`) offered a `local_dev`
+  provider whose wrapping key was HKDF(key id); a wrapped key carries its
+  key id, so anyone holding one could unwrap it, and its "legacy" unwrap
+  used a nonce derived from CRC32(key id). It was constructible in a Debug
+  build and nothing in the product used it (KMS wiring is SONNY-6380). It is
+  gone with `localDevProvider`, the `defaultProvider` that returned it and
+  their tests; `external_kms` (test builds only) is the one provider that
+  wraps. The unused `connectClient` in
+  `benchmarks/benchmark_remote_kms_unwrap_concurrency.zig`, which dialled the
+  remote KMS with no CA bundle, is gone too. Regression:
+  `zig build test-sonny6448-kms-dead-paths`.
 - **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
   refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
   8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was

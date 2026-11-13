@@ -1,5 +1,4 @@
 const std = @import("std");
-const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -33,8 +32,10 @@ pub const WrappedKey = struct {
     }
 };
 
+// SONNY-6448: there is no `local_dev` provider. Its wrapping key was
+// HKDF(key id), and a wrapped key carries its key id, so anyone holding one
+// could unwrap it; nothing in the product used it (KMS wiring is SONNY-6380).
 pub const KMSProviderType = enum {
-    local_dev, // Local development only - uses AES-GCM but with deterministic key derivation
     external_kms, // External deterministic KMS client
     vault_transit, // HashiCorp Vault Transit (implemented)
     aws_kms, // AWS KMS (future)
@@ -44,7 +45,6 @@ pub const KMSProviderType = enum {
     /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="Production KMS Safety Check"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
     pub fn isProductionSafe(self: KMSProviderType) bool {
         return switch (self) {
-            .local_dev => false, // Development only - deterministic key derivation
             .external_kms => false, // Simulated - no real external service
             .vault_transit => true, // Real Vault integration
             .aws_kms => true, // Real AWS integration
@@ -110,7 +110,6 @@ pub const KMSProvider = struct {
         }
 
         return switch (self.config.provider_type) {
-            .local_dev => "local-dev-master-key-v1",
             .external_kms => {
                 const seed_str = self.config.seed orelse return error.MissingSeed;
                 var buf: [64]u8 = undefined;
@@ -135,7 +134,6 @@ pub const KMSProvider = struct {
         defer if (needs_free) self.allocator.free(key_id);
 
         const result = switch (self.config.provider_type) {
-            .local_dev => try self.wrapLocalDev(key_id, plaintext),
             .external_kms => try self.wrapExternalKMS(key_id, plaintext),
             else => error.UnsupportedProvider,
         };
@@ -145,83 +143,9 @@ pub const KMSProvider = struct {
     /// Unwrap (decrypt) a wrapped data key
     pub fn unwrapDataKey(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
         return switch (self.config.provider_type) {
-            .local_dev => self.unwrapLocalDev(wrapped),
             .external_kms => self.unwrapExternalKMS(wrapped),
             else => error.UnsupportedProvider,
         };
-    }
-
-    /// Local development provider using AES-256-GCM (secure but with static key derived from key_id)
-    /// WARNING: For development/testing only - uses deterministic key derivation from key_id
-    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-001; FEATURE="AES-GCM Local KMS"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
-    fn wrapLocalDev(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
-        // Derive AES-256 key from key_id using HKDF (extract-then-expand)
-        var wrap_key: [32]u8 = undefined;
-        try cb.Kdf.hkdf(.sha256, key_id, "LOCAL_DEV_WRAP", "", &wrap_key);
-
-        // Use cryptographically random nonce (required for AES-GCM security)
-        var nonce: [12]u8 = undefined;
-        try cb.Csprng.bytes(&nonce);
-
-        // AES-256-GCM encrypt with authentication tag
-        // Output format: nonce (12) || ciphertext || tag (16)
-        var output = try self.allocator.alloc(u8, 12 + plaintext.len + 16);
-        var tag: [16]u8 = undefined;
-
-        // Prepend nonce so unwrap can recover it
-        @memcpy(output[0..12], &nonce);
-        try cb.Aead.seal(.aes_256_gcm, &wrap_key, &nonce, "", plaintext, output[12 .. 12 + plaintext.len], &tag);
-
-        // Append tag
-        @memcpy(output[12 + plaintext.len ..], &tag);
-
-        const key_id_copy = try self.allocator.dupe(u8, key_id);
-        return WrappedKey{ .key_id = key_id_copy, .ciphertext = output };
-    }
-
-    /// Local development unwrap using AES-256-GCM
-    /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-002; FEATURE="AES-GCM Local KMS Unwrap"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
-    fn unwrapLocalDev(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
-        // Minimum size: 16 bytes for tag (old format) or 28 bytes for nonce+tag (new format)
-        if (wrapped.ciphertext.len < 16) return error.InvalidCiphertext;
-
-        // Derive same key from key_id using HKDF (extract-then-expand)
-        var wrap_key: [32]u8 = undefined;
-        try cb.Kdf.hkdf(.sha256, wrapped.key_id, "LOCAL_DEV_WRAP", "", &wrap_key);
-
-        // Try new format first: nonce (12) || ciphertext || tag (16)
-        if (wrapped.ciphertext.len >= 28) {
-            const nonce: [12]u8 = wrapped.ciphertext[0..12].*;
-            const new_plaintext_len = wrapped.ciphertext.len - 12 - 16;
-            const new_ct = wrapped.ciphertext[12 .. 12 + new_plaintext_len];
-            const new_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[12 + new_plaintext_len ..][0..16]);
-
-            const plaintext = try self.allocator.alloc(u8, new_plaintext_len);
-            if (cb.Aead.open(.aes_256_gcm, &wrap_key, &nonce, "", new_ct, new_tag, plaintext)) |_| {
-                return plaintext;
-            } else |_| {
-                self.allocator.free(plaintext);
-                // Fall through to legacy format
-            }
-        }
-
-        // Legacy format: ciphertext || tag (16), deterministic nonce from CRC32(key_id)
-        const legacy_plaintext_len = wrapped.ciphertext.len - 16;
-        const legacy_ct = wrapped.ciphertext[0..legacy_plaintext_len];
-        const legacy_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[legacy_plaintext_len..][0..16]);
-
-        var legacy_nonce: [12]u8 = undefined;
-        cb.secureZero(&legacy_nonce);
-        const key_hash = std.hash.crc.Crc32.hash(wrapped.key_id);
-        std.mem.writeInt(u32, legacy_nonce[0..4], key_hash, .little);
-
-        const plaintext = try self.allocator.alloc(u8, legacy_plaintext_len);
-        cb.Aead.open(.aes_256_gcm, &wrap_key, &legacy_nonce, "", legacy_ct, legacy_tag, plaintext) catch {
-            self.allocator.free(plaintext);
-            return error.DecryptionFailed;
-        };
-
-        return plaintext;
     }
 
     // External KMS provider (AES-256-GCM with deterministic behavior)
@@ -288,43 +212,12 @@ pub const KMSProvider = struct {
 };
 
 // Factory functions for different provider types
-pub fn localDevProvider(allocator: std.mem.Allocator) !KMSProvider {
-    return KMSProvider.init(allocator, KMSConfig{ .provider_type = .local_dev });
-}
-
 pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .external_kms, .seed = seed });
 }
 
 pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .vault_transit, .vault_addr = vault_addr, .auth_token = vault_token, .vault_key_path = key_path });
-}
-
-// Legacy function for backward compatibility
-// P2-3: Use static GPA instead of page_allocator for global provider
-var default_provider_gpa: std.heap.DebugAllocator(.{}) = .{};
-var default_provider_init = false;
-
-pub fn defaultProvider() !KMSProvider {
-    if (!default_provider_init) {
-        default_provider_init = true;
-    }
-    return localDevProvider(default_provider_gpa.allocator());
-}
-
-test "local dev provider wrap/unwrap roundtrip" {
-    const allocator = std.testing.allocator;
-    var provider = try localDevProvider(allocator);
-    defer provider.deinit();
-
-    const plaintext = "0123456789abcdef0123456789abcdef"; // 32 bytes
-    var wrapped = try provider.wrapDataKey(plaintext);
-    defer wrapped.deinit(allocator);
-
-    const unwrapped = try provider.unwrapDataKey(wrapped);
-    defer allocator.free(unwrapped);
-
-    try std.testing.expectEqualSlices(u8, plaintext, unwrapped);
 }
 
 test "external KMS provider wrap/unwrap roundtrip" {
@@ -351,7 +244,6 @@ test "KMS provider types" {
 
     // Test different provider configurations
     const configs = [_]KMSConfig{
-        .{ .provider_type = .local_dev },
         .{ .provider_type = .external_kms, .seed = 0x12345 },
         .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
     };
@@ -369,12 +261,6 @@ test "KMS provider types" {
 test "master key ID generation" {
     const allocator = std.testing.allocator;
 
-    // Test local dev provider
-    var local_provider = try localDevProvider(allocator);
-    defer local_provider.deinit();
-    const local_key = try local_provider.fetchActiveMasterKey();
-    try std.testing.expectEqualStrings("local-dev-master-key-v1", local_key);
-
     // Test external KMS provider
     var external_provider = try externalKMSProvider(allocator, 0xCAFEBABE);
     defer external_provider.deinit();
@@ -384,7 +270,8 @@ test "master key ID generation" {
 
     // Test custom master key ID
     var custom_provider = try KMSProvider.init(allocator, KMSConfig{
-        .provider_type = .local_dev,
+        .provider_type = .external_kms,
+        .seed = 0x5EED,
         .master_key_id = "custom-master-key-123",
     });
     defer custom_provider.deinit();
@@ -397,10 +284,6 @@ test "master key ID generation" {
 // Verify isProductionSafe() correctly identifies insecure providers
 // =============================================================================
 
-test "GAP-0066: isProductionSafe identifies local_dev as unsafe" {
-    try std.testing.expect(!KMSProviderType.local_dev.isProductionSafe());
-}
-
 test "GAP-0066: isProductionSafe identifies external_kms as unsafe" {
     try std.testing.expect(!KMSProviderType.external_kms.isProductionSafe());
 }
@@ -409,67 +292,7 @@ test "GAP-0066: isProductionSafe identifies vault_transit as safe" {
     try std.testing.expect(KMSProviderType.vault_transit.isProductionSafe());
 }
 
-test "GAP-0066: default config is external_kms not local_dev" {
+test "GAP-0066: default config is external_kms" {
     const default_config = KMSConfig{};
     try std.testing.expectEqual(KMSProviderType.external_kms, default_config.provider_type);
-}
-
-// =============================================================================
-// GAP-0100 Regression Tests: AES-256-GCM for local_dev
-// Verify wrapLocalDev uses real encryption, not XOR
-// =============================================================================
-
-test "GAP-0100: local dev wrap produces non-XOR ciphertext" {
-    const allocator = std.testing.allocator;
-    var provider = try localDevProvider(allocator);
-    defer provider.deinit();
-
-    // All zeros plaintext - XOR would produce all same bytes
-    const plaintext = [_]u8{0x00} ** 32;
-    var wrapped = try provider.wrapDataKey(&plaintext);
-    defer wrapped.deinit(allocator);
-
-    // Check that ciphertext has variation (not constant XOR result)
-    var has_variation = false;
-    for (wrapped.ciphertext, 0..) |b, i| {
-        if (i > 0 and b != wrapped.ciphertext[0]) {
-            has_variation = true;
-            break;
-        }
-    }
-    try std.testing.expect(has_variation);
-}
-
-test "GAP-0100: local dev wrap/unwrap preserves data correctly" {
-    const allocator = std.testing.allocator;
-    var provider = try localDevProvider(allocator);
-    defer provider.deinit();
-
-    const plaintext = [_]u8{
-        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-        0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
-    };
-
-    var wrapped = try provider.wrapDataKey(&plaintext);
-    defer wrapped.deinit(allocator);
-
-    const unwrapped = try provider.unwrapDataKey(wrapped);
-    defer allocator.free(unwrapped);
-
-    try std.testing.expectEqualSlices(u8, &plaintext, unwrapped);
-}
-
-test "GAP-0100: local dev ciphertext differs from plaintext" {
-    const allocator = std.testing.allocator;
-    var provider = try localDevProvider(allocator);
-    defer provider.deinit();
-
-    const plaintext = [_]u8{0xAB} ** 32;
-    var wrapped = try provider.wrapDataKey(&plaintext);
-    defer wrapped.deinit(allocator);
-
-    // Ciphertext should not equal plaintext (encrypted, not copied)
-    try std.testing.expect(!std.mem.eql(u8, &plaintext, wrapped.ciphertext[0..32]));
 }

@@ -40,13 +40,6 @@ fn nowNs() u64 {
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance; OWNER=security; UPDATED=2025-09-26
 // Standalone executable to emit concurrency unwrap variance JSON.
 
-fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
-    var client = kms.RemoteKmsClient.init(std.heap.page_allocator);
-    try client.connect("127.0.0.1", port);
-    client.setAuthToken(auth);
-    return client;
-}
-
 pub fn main() !void {
     // Use page_allocator (thread-safe) instead of GPA to allow server loop in separate thread.
     var server = try kms.RemoteKmsServer.init(std.heap.page_allocator, 0xfeedfacecafebeef);

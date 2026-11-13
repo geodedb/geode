@@ -9,7 +9,9 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 **Core Implementation**: `src/security/kms.zig`
 
 > **Status (SONNY-2441, 2026-11-12):** `KMSProvider` wraps and unwraps data
-> keys with the `local_dev` and `external_kms` providers only. A
+> keys with the `external_kms` provider only. The `local_dev` provider was
+> removed (SONNY-6448): its wrapping key was derived from the key id, which
+> every wrapped key carries, so it protected nothing. A
 > `vault_transit`, `aws_kms` or `azure_kv` configuration is accepted by
 > `KMSProvider.init` but `wrapDataKey` / `unwrapDataKey` refuse it with
 > `error.UnsupportedProvider` (Vault is a separate module,
@@ -28,28 +30,21 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 > `KeyRegistry` (`src/security/key_rotation.zig`) has no remote-KMS rotation:
 > `rotateWithRemoteKms` never compiled and was removed (SONNY-6378).
 
-- **Provider Types**: Local dev, External KMS (wrap/unwrap); Vault, AWS and Azure configurations refuse
+- **Provider Types**: External KMS (wrap/unwrap, test builds only); Vault, AWS and Azure configurations refuse
 - **Envelope Encryption**: AES-256-GCM with JSON metadata serialization
 - **Factory Functions**: Easy provider instantiation with configuration management
 - **Statistics Integration**: Performance tracking and cost estimation
 
 ## Supported KMS Providers
 
-### 1. Local Development Provider (Development Only)
-
-```zig
-var provider = try kms.localDevProvider(allocator);
-// AES-256-GCM under a key derived from the key id - development only
-```
-
-### 2. External KMS Provider (Deterministic)
+### 1. External KMS Provider (Deterministic)
 
 ```zig  
 var provider = try kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
 // AES-256-GCM under a seed-derived key, a fresh random nonce per wrap
 ```
 
-### 3. HashiCorp Vault configuration
+### 2. HashiCorp Vault configuration
 
 ```zig
 var provider = try kms.vaultKMSProvider(allocator, "https://vault.example.com", "vault_token", "secret/path");
@@ -158,8 +153,9 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
   remote KMS server and client over real QUIC (`src/security/kms_remote.zig`).
 - `zig build test-gap0890`: key rotation policy and lazy re-wrap.
 - `zig build test-kms-provider` and `test-sonny2441-kms-provider-paths`:
-  `KMSProvider` wrap/unwrap for the `local_dev` and `external_kms` providers,
-  and refusal for the others.
+  `KMSProvider` wrap/unwrap for the `external_kms` provider, and refusal for
+  the others. `test-sonny6448-kms-dead-paths`: there is no `local_dev`
+  provider.
 - `tests/test_vault_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
   do not exist.
 
@@ -246,7 +242,6 @@ pub const KMSProvider = struct {
 
 ```zig
 // KMS Provider factories
-pub fn localDevProvider(allocator: std.mem.Allocator) !KMSProvider;
 pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) !KMSProvider;
 pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !KMSProvider;
 

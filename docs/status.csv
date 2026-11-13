@@ -2768,11 +2768,9 @@ REQ-GQL-KEYS-003,KeysFunction,NodeEdgeMapKeys,TESTED,,,eval,2025-12-28,src/eval.
 REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,,,parser,2025-01-03,tests/gql_keyword_regression_test.zig,6
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-11-12,src/security/external_kms_client.zig,70
 REQ-GQL-KMS-CONFIG-001,KMS Configuration,SECURITY,TESTED,,,security,2026-11-12,src/security/external_kms_client.zig,87
-REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,156
-REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,183
 REQ-GQL-KMS-LOCALSIM-001,LocalSimulated KMS Client,SECURITY,TESTED,,,security,2026-11-12,src/security/external_kms_client.zig,854
 REQ-GQL-KMS-PRODSAFE-001,LocalSimulated KMS Production Block,SECURITY,TESTED,,,security,2026-11-12,src/security/external_kms_client.zig,855
-REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,44
+REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,45
 REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,77
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,2665
 REQ-GQL-LARGE-DATASET,LargeDataset,Scalability,TESTED,,,team,2025-10-02,tests/integration/test_large_social_network.zig,525
@@ -2986,7 +2984,7 @@ REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,SECURITY,TESTED,,,security,2026-11-12
 REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,TEST,IMPL,,,security,2026-11-12,src/security/key_rotation.zig,485
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,SchedulerTick,TESTED,,,security,2026-06-10,tests/test_gap0890_rotation_policy.zig,19
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,Security,TESTED,,,security,2026-06-10,src/security/key_rotation.zig,288
-REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,src/security/kms.zig,18
+REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,src/security/kms.zig,17
 REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,tests/test_kms_provider.zig,5
 REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,PERFORMANCE,BENCHED,,,security,2025-09-26,benchmarks/benchmark_tde_encrypt_pages.zig,9
 REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,43
