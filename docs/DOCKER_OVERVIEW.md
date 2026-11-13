@@ -385,9 +385,16 @@ Preferred resolution, in order:
 `--ca-cert` bundle whenever one is given, and refuse to connect if it
 cannot be loaded (SONNY-6448; before, they ignored `--ca-cert` unless
 `--client-cert`/`--client-key` were also given). With no `--ca-cert`, no
-client certificate and no insecure flag they connect without verification
-and print `WARNING: TLS server certificate NOT verified (no --ca-cert
-given)` once on stderr.
+client certificate and no insecure flag they follow the `geode auth`
+rule (SONNY-6453): a release build, or any build with
+`GEODE_ENV=production`, refuses to connect (`SECURITY: refusing to connect
+without TLS certificate verification`) unless `GEODE_ALLOW_INSECURE_TLS=1`
+is set; a Debug build outside `GEODE_ENV=production` connects without
+verification and prints `WARNING: TLS server certificate NOT verified (no
+--ca-cert given)` once on stderr. `geode backup` / `restore` and the
+`geode auth` login path refuse the same way up front instead of failing
+the handshake. Pass `--ca-cert` inside the container (the release image
+is a release build).
 
 A Debug build (the default of `zig build`) is not gated unless
 `GEODE_ENV=production` is set. This is why `.gitlab-ci.yml` deliberately

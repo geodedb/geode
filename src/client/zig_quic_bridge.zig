@@ -80,6 +80,52 @@ pub fn verificationPolicy(tls_config: TlsConfig) Verification {
     return if (has_trust_material) .verify else .skip_no_trust_material;
 }
 
+/// SONNY-6453: may a connection skip server verification that the caller
+/// did not ask to skip by flag (no --ca-cert, no client certificate, no
+/// --insecure-tls-skip-verify), or a DSN `insecure=true`?
+pub const InsecurePosture = enum {
+    /// Debug build outside GEODE_ENV=production, or GEODE_ALLOW_INSECURE_TLS=1:
+    /// allowed, with a stderr warning.
+    warn,
+    /// Release build or GEODE_ENV=production: refused.
+    refuse,
+};
+
+/// The same rule as `src/cli/insecure_tls_gate.zig` (SEC-CLI-01) and
+/// `geode auth`: production posture refuses unless the operator sets
+/// GEODE_ALLOW_INSECURE_TLS=1. Pure, so it is testable from a Debug binary.
+pub fn insecurePosture(is_release: bool, env_production: bool, allow_override: bool) InsecurePosture {
+    if (allow_override) return .warn;
+    return if (is_release or env_production) .refuse else .warn;
+}
+
+fn getenvSlice(name: [*:0]const u8) ?[]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
+
+/// `insecurePosture` for this process: build mode, GEODE_ENV and
+/// GEODE_ALLOW_INSECURE_TLS ("1", "true", "yes", "on").
+pub fn liveInsecurePosture() InsecurePosture {
+    const env_production = if (getenvSlice("GEODE_ENV")) |v| std.ascii.eqlIgnoreCase(v, "production") else false;
+    const allow_override = if (getenvSlice("GEODE_ALLOW_INSECURE_TLS")) |v|
+        std.mem.eql(u8, v, "1") or std.ascii.eqlIgnoreCase(v, "true") or
+            std.ascii.eqlIgnoreCase(v, "yes") or std.ascii.eqlIgnoreCase(v, "on")
+    else
+        false;
+    return insecurePosture(@import("builtin").mode != .Debug, env_production, allow_override);
+}
+
+fn printImplicitInsecureRefusal() void {
+    if (@import("builtin").is_test) return;
+    std.debug.print(
+        "SECURITY: refusing to connect without TLS certificate verification: no --ca-cert " ++
+            "was given (release build or GEODE_ENV=production). Pass --ca-cert <path> to verify " ++
+            "the server, or --insecure-tls-skip-verify with GEODE_ALLOW_INSECURE_TLS=1 to " ++
+            "explicitly accept the risk.\n",
+        .{},
+    );
+}
+
 var implicit_insecure_warned = std.atomic.Value(bool).init(false);
 
 fn warnImplicitInsecureOnce() void {
@@ -101,7 +147,14 @@ pub fn initClient(
     password: ?[]const u8,
 ) !zig_client.GeodeClient {
     const policy = verificationPolicy(tls_config);
-    if (policy == .skip_no_trust_material) warnImplicitInsecureOnce();
+    if (policy == .skip_no_trust_material) {
+        // SONNY-6453: the geode auth rule for every CLI command.
+        if (liveInsecurePosture() == .refuse) {
+            printImplicitInsecureRefusal();
+            return error.ImplicitInsecureTlsRefused;
+        }
+        warnImplicitInsecureOnce();
+    }
     return try initClientWithInsecureSetting(
         allocator,
         host,
@@ -121,6 +174,12 @@ pub fn initClientStrictTls(
     username: ?[]const u8,
     password: ?[]const u8,
 ) !zig_client.GeodeClient {
+    // SONNY-6453: with nothing to verify against, a verified connection can
+    // only fail its handshake; under production posture say why up front.
+    if (verificationPolicy(tls_config) == .skip_no_trust_material and liveInsecurePosture() == .refuse) {
+        printImplicitInsecureRefusal();
+        return error.ImplicitInsecureTlsRefused;
+    }
     return try initClientWithInsecureSetting(
         allocator,
         host,

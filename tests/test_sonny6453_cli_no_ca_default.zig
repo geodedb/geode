@@ -173,3 +173,26 @@ test "SONNY-6453: the CLI client refuses an implicit unverified connection under
         try client.connect();
     }
 }
+
+test "SONNY-6453: insecurePosture is the geode auth / SEC-CLI-01 rule" {
+    const P = bridge.insecurePosture;
+    // (is_release, env_production, allow_override)
+    try std.testing.expectEqual(bridge.InsecurePosture.warn, P(false, false, false));
+    try std.testing.expectEqual(bridge.InsecurePosture.refuse, P(true, false, false));
+    try std.testing.expectEqual(bridge.InsecurePosture.refuse, P(false, true, false));
+    try std.testing.expectEqual(bridge.InsecurePosture.refuse, P(true, true, false));
+    try std.testing.expectEqual(bridge.InsecurePosture.warn, P(true, true, true));
+    try std.testing.expectEqual(bridge.InsecurePosture.warn, P(true, false, true));
+}
+
+test "SONNY-6453: initClientStrictTls refuses no trust material under production posture" {
+    const a = std.testing.allocator;
+    defer resetPostureEnv();
+    resetPostureEnv();
+    _ = setenv("GEODE_ENV", "production", 1);
+    if (bridge.initClientStrictTls(a, SERVER_IP, 1, .{}, null, null)) |client| {
+        var c = client;
+        c.deinit();
+        return error.ImplicitUnverifiedConnectionAllowed;
+    } else |err| try std.testing.expectEqual(error.ImplicitInsecureTlsRefused, err);
+}

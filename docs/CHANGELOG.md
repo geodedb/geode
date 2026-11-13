@@ -22,6 +22,23 @@
   self-signed CA certificate from the bundle); Zig `tls`-based clients,
   including `geode query --client-cert`, send only the leaf and are
   rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **BREAKING (operator): `geode query`, `geode shell` and the REPL refuse
+  an implicit unverified connection under production posture, like
+  `geode auth` (SONNY-6453 item 4).** With no `--ca-cert`, no client
+  certificate and no `--insecure-tls-skip-verify`, they connected without
+  verifying the server (a stderr warning since SONNY-6448). One rule now
+  applies to every CLI command (`zig_quic_bridge.liveInsecurePosture`, the
+  SEC-CLI-01 gate): a release build, or `GEODE_ENV=production`, refuses
+  with `ImplicitInsecureTlsRefused` and says to pass `--ca-cert` (or the
+  insecure flag with `GEODE_ALLOW_INSECURE_TLS=1`); `geode backup` /
+  `restore` and the `geode auth` login path, which verified with no trust
+  anchor and failed the handshake, now refuse up front with the same
+  message. A Debug build outside `GEODE_ENV=production` keeps the
+  warning-only developer default. Scripts that ran a release `geode query`
+  with no CA must pass `--ca-cert`: `scripts/docker/test.sh`,
+  `scripts/docker/test-ci.sh` (`GEODE_CA_CERT`, default `/certs/ca.crt`)
+  and the `docker-compose.example.yml` dataset loader (`./certs/ca.crt`)
+  are updated. Regression: `zig build test-sonny6453-cli-no-ca-default`.
 - **Operator-visible: every cluster peer dial uses one verified
   configuration (SONNY-6453 items 2 and 5).** The 2PC transport never read
   `GEODE_CLUSTER_CA_CERT`: it dialled with verification on and no trust

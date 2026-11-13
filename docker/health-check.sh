@@ -39,7 +39,10 @@
 #   GEODE_HEALTH_PORT    - QUIC port for the authenticated fallback (default: 3141)
 #   GEODE_USERNAME       - auth username for the authenticated fallback
 #   GEODE_PASSWORD       - auth password for the authenticated fallback
-#   GEODE_HEALTH_CA_CERT - CA bundle used to verify the server's certificate
+#   GEODE_HEALTH_CA_CERT - CA bundle used to verify the server's certificate;
+#                          required for the authenticated fallback: the
+#                          release CLI refuses a connection it cannot verify
+#                          (SONNY-6453)
 
 set -e
 
