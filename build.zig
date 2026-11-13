@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6457-external-kms-compile", .reason = "intentionally red TDD reproduction (SONNY-6457 item 4, KNOWN_TEST_ISSUES): it does not compile, so it is not in test-compile either; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
@@ -10009,14 +10008,13 @@ pub fn build(b: *std.Build) void {
 
         // SONNY-6457 item 4: every network entry point of the Vault and AWS
         // KMS clients is analysed, so they cannot stop compiling unnoticed.
-        // Intentionally red (it does not compile; docs/KNOWN_TEST_ISSUES.md)
-        // until the fix commit registers it in shardDep.
         {
             const ekc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_external_kms_compile.zig"), .target = target, .optimize = optimize });
             ekc_mod.addImport("external_kms_client", ext_kms_mod);
             const ekc_tests = b.addTest(.{ .root_module = ekc_mod });
             const run_ekc_tests = b.addRunArtifact(ekc_tests);
-            b.step("test-sonny6457-external-kms-compile", "Run SONNY-6457 item 4 regression (the Vault Transit and AWS KMS clients compile: every network entry point is analysed; an incomplete configuration is refused before any request; no network call)").dependOn(&run_ekc_tests.step);
+            shardDep(test_step, &run_ekc_tests.step, 1, test_shard_loads, test_shard_index);
+            b.step("test-sonny6457-external-kms-compile", "Run SONNY-6457 item 4 regression (the Vault Transit and AWS KMS clients compile: every network entry point is analysed; an incomplete configuration is refused before any request; Vault Transit URLs, request body and headers, and Vault / AWS KMS responses in their documented JSON shapes; no network call)").dependOn(&run_ekc_tests.step);
         }
 
         // SONNY-6386 item 5: no uncompiled KeyRegistry persistence or

@@ -199,27 +199,18 @@ pub const VaultTransitClient = struct {
             return error.InvalidConfiguration;
         }
 
-        // Base64 encode the plaintext
-        var b64_buf: [64]u8 = undefined;
-        const b64_plaintext = std.base64.standard.Encoder.encode(&b64_buf, &plaintext);
+        var body_buf: [128]u8 = undefined;
+        const body = try vaultEncryptRequestBody(&body_buf, plaintext);
+        defer std.crypto.secureZero(u8, &body_buf);
 
-        // Build request body: {"plaintext": "base64data"}
-        var body_buf: [256]u8 = undefined;
-        const body = std.fmt.bufPrint(&body_buf, "{{\"plaintext\":\"{s}\"}}", .{b64_plaintext}) catch return error.BufferOverflow;
-
-        // Build URL: {vault_addr}/v1/transit/encrypt/{key_name}
         var url_buf: [512]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}/v1/transit/encrypt/{s}", .{
-            self.config.vault_addr.?,
-            self.config.vault_key_name.?,
-        }) catch return error.BufferOverflow;
+        const url = try vaultTransitUrl(&url_buf, self.config.vault_addr.?, "encrypt", self.config.vault_key_name.?);
 
-        // Make HTTP request
-        const response = try self.httpPost(url, body, self.config.vault_token.?);
+        const response = try self.httpPost(url, body);
         defer self.allocator.free(response);
 
-        // Parse response: {"data": {"ciphertext": "vault:v1:..."}}
-        const ciphertext = try self.extractVaultCiphertext(response);
+        // Response: {"data": {"ciphertext": "vault:v1:...", "key_version": N}, ...}
+        const ciphertext = try jsonStringField(self.allocator, response, "data", "ciphertext");
         defer self.allocator.free(ciphertext);
 
         // Store ciphertext in envelope (vault ciphertexts are opaque blobs)
@@ -271,23 +262,26 @@ pub const VaultTransitClient = struct {
         const body = try json_lib.encode(self.allocator, request, .{});
         defer self.allocator.free(body);
 
-        // Build URL
         var url_buf: [512]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}/v1/transit/decrypt/{s}", .{
-            self.config.vault_addr.?,
-            self.config.vault_key_name.?,
-        }) catch return error.BufferOverflow;
+        const url = try vaultTransitUrl(&url_buf, self.config.vault_addr.?, "decrypt", self.config.vault_key_name.?);
 
-        // Make HTTP request
-        const response = try self.httpPost(url, body, self.config.vault_token.?);
-        defer self.allocator.free(response);
+        const response = try self.httpPost(url, body);
+        defer {
+            std.crypto.secureZero(u8, response);
+            self.allocator.free(response);
+        }
 
-        // Parse response: {"data": {"plaintext": "base64data"}}
-        const b64_plaintext = try self.extractVaultPlaintext(response);
-        defer self.allocator.free(b64_plaintext);
+        // Response: {"data": {"plaintext": "<base64>"}, ...}
+        const b64_plaintext = try jsonStringField(self.allocator, response, "data", "plaintext");
+        defer {
+            std.crypto.secureZero(u8, b64_plaintext);
+            self.allocator.free(b64_plaintext);
+        }
 
-        // Base64 decode
+        // Base64 decode (exactly one 32-byte data key)
         var out: [32]u8 = undefined;
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64_plaintext) catch return error.InvalidBase64;
+        if (decoded_len != out.len) return error.InvalidBase64;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
             log.err("Vault Transit base64 decode failed", &.{
                 Attr.string("error", @errorName(e)),
@@ -319,7 +313,7 @@ pub const VaultTransitClient = struct {
             self.config.vault_key_name.?,
         }) catch return error.BufferOverflow;
 
-        const response = try self.httpPost(url, "{}", self.config.vault_token.?);
+        const response = try self.httpPost(url, "{}");
         defer self.allocator.free(response);
 
         self.key_version += 1;
@@ -329,90 +323,12 @@ pub const VaultTransitClient = struct {
         return self.key_version;
     }
 
-    fn httpPost(self: *VaultTransitClient, url: []const u8, body: []const u8, token: []const u8) ![]u8 {
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
-        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-
-        // Set up headers
-        var headers = std.http.Client.Request.Headers{};
-        headers.content_type = .{ .override = "application/json" };
-
-        // Open request
-        var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            log.err("Vault HTTP open failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.ConnectionFailed;
-        };
-        defer request.deinit();
-
-        // Add X-Vault-Token header via extra headers
-        try request.headers.append("X-Vault-Token", token);
-
-        // Send body
-        request.transfer_encoding = .{ .content_length = body.len };
-        request.write(body) catch |err| {
-            log.err("Vault HTTP write failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.WriteFailed;
-        };
-
-        request.finish() catch |err| {
-            log.err("Vault HTTP finish failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.RequestFailed;
-        };
-
-        request.wait() catch |err| {
-            log.err("Vault HTTP wait failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.Timeout;
-        };
-
-        // Check status
-        if (request.response.status != .ok) {
-            log.err("Vault HTTP status error", &.{
-                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
-            });
-            return error.HttpError;
-        }
-
-        // Read response body
-        var response_body = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
-        defer response_body.deinit();
-
-        var buffer: [4096]u8 = undefined;
-        var reader = request.reader();
-        while (true) {
-            const n = reader.read(&buffer) catch break;
-            if (n == 0) break;
-            response_body.appendSlice(buffer[0..n]) catch break;
-        }
-
-        return try response_body.toOwnedSlice(self.allocator);
-    }
-
-    fn extractVaultCiphertext(self: *VaultTransitClient, response: []const u8) ![]u8 {
-        // Find "ciphertext":"vault:v..."
-        const key = "\"ciphertext\":\"";
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
-    }
-
-    fn extractVaultPlaintext(self: *VaultTransitClient, response: []const u8) ![]u8 {
-        // Find "plaintext":"base64..."
-        const key = "\"plaintext\":\"";
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
+    /// POST to Vault with X-Vault-Token (and X-Vault-Namespace when set) as
+    /// privileged headers: they are dropped if a redirect leaves the host.
+    fn httpPost(self: *VaultTransitClient, url: []const u8, body: []const u8) ![]u8 {
+        var headers_buf: [2]std.http.Header = undefined;
+        const headers = vaultHeaders(&headers_buf, self.config);
+        return httpPostJson(self.allocator, url, "application/json", body, &.{}, headers, "Vault");
     }
 
     pub fn toProvider(self: *VaultTransitClient) KmsProvider {
@@ -500,7 +416,7 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(response);
 
         // Parse response: {"CiphertextBlob": "base64..."}
-        const ciphertext_blob = try self.extractJsonField(response, "CiphertextBlob");
+        const ciphertext_blob = try jsonStringField(self.allocator, response, null, "CiphertextBlob");
         defer self.allocator.free(ciphertext_blob);
 
         // Decode the ciphertext blob from base64
@@ -568,7 +484,7 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(response);
 
         // Parse response: {"Plaintext": "base64..."}
-        const b64_plaintext = try self.extractJsonField(response, "Plaintext");
+        const b64_plaintext = try jsonStringField(self.allocator, response, null, "Plaintext");
         defer self.allocator.free(b64_plaintext);
 
         // Base64 decode
@@ -600,11 +516,11 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(response);
 
         // Parse response: {"Plaintext": "base64...", "CiphertextBlob": "base64..."}
-        const b64_plaintext = try self.extractJsonField(response, "Plaintext");
+        const b64_plaintext = try jsonStringField(self.allocator, response, null, "Plaintext");
         defer self.allocator.free(b64_plaintext);
 
         // Also get and cache the ciphertext blob
-        const ciphertext_blob_b64 = try self.extractJsonField(response, "CiphertextBlob");
+        const ciphertext_blob_b64 = try jsonStringField(self.allocator, response, null, "CiphertextBlob");
         defer self.allocator.free(ciphertext_blob_b64);
 
         const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(ciphertext_blob_b64) catch return error.InvalidBase64;
@@ -641,10 +557,10 @@ pub const AwsKmsClient = struct {
         return self.key_version;
     }
 
+    /// POST an AWS KMS JSON 1.1 request. NOTE: requests are not SigV4-signed,
+    /// so only an unauthenticated KMS-compatible endpoint (e.g. local-kms
+    /// via aws_endpoint) accepts them; KMS wiring is SONNY-6380.
     fn httpPost(self: *AwsKmsClient, target: []const u8, body: []const u8) ![]u8 {
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
         // Use custom endpoint or default AWS endpoint
         const endpoint = self.config.aws_endpoint orelse blk: {
             const region = self.config.aws_region orelse "us-east-1";
@@ -653,79 +569,8 @@ pub const AwsKmsClient = struct {
         const endpoint_owned = self.config.aws_endpoint == null;
         defer if (endpoint_owned) self.allocator.free(endpoint);
 
-        const uri = std.Uri.parse(endpoint) catch return error.InvalidUrl;
-
-        // Set up headers
-        var headers = std.http.Client.Request.Headers{};
-        headers.content_type = .{ .override = "application/x-amz-json-1.1" };
-
-        // Open request
-        var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            log.err("AWS KMS HTTP open failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.ConnectionFailed;
-        };
-        defer request.deinit();
-
-        // Add X-Amz-Target header
-        try request.headers.append("X-Amz-Target", target);
-
-        // Send body
-        request.transfer_encoding = .{ .content_length = body.len };
-        request.write(body) catch |err| {
-            log.err("AWS KMS HTTP write failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.WriteFailed;
-        };
-
-        request.finish() catch |err| {
-            log.err("AWS KMS HTTP finish failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.RequestFailed;
-        };
-
-        request.wait() catch |err| {
-            log.err("AWS KMS HTTP wait failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.Timeout;
-        };
-
-        // Check status
-        if (request.response.status != .ok) {
-            log.err("AWS KMS HTTP status error", &.{
-                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
-            });
-            return error.HttpError;
-        }
-
-        // Read response body
-        var response_body = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
-        defer response_body.deinit();
-
-        var buffer: [4096]u8 = undefined;
-        var reader = request.reader();
-        while (true) {
-            const n = reader.read(&buffer) catch break;
-            if (n == 0) break;
-            response_body.appendSlice(buffer[0..n]) catch break;
-        }
-
-        return try response_body.toOwnedSlice(self.allocator);
-    }
-
-    fn extractJsonField(self: *AwsKmsClient, response: []const u8, field: []const u8) ![]u8 {
-        // Build search key: "FieldName":"
-        var key_buf: [64]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "\"{s}\":\"", .{field}) catch return error.BufferOverflow;
-
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
+        const extra = [_]std.http.Header{.{ .name = "X-Amz-Target", .value = target }};
+        return httpPostJson(self.allocator, endpoint, "application/x-amz-json-1.1", body, &extra, &.{}, "AWS KMS");
     }
 
     pub fn toProvider(self: *AwsKmsClient) KmsProvider {
@@ -766,6 +611,97 @@ pub const AwsKmsClient = struct {
         return self.getKeyVersion();
     }
 };
+
+/// One POST over std.http.Client (Zig 0.16). Returns the response body
+/// (caller owns) on 200 OK; any other status or a transport failure is an
+/// error.
+fn httpPostJson(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    content_type: []const u8,
+    body: []const u8,
+    extra_headers: []const std.http.Header,
+    privileged_headers: []const std.http.Header,
+    what: []const u8,
+) ![]u8 {
+    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+    var client = std.http.Client{ .allocator = allocator, .io = std.Io.Threaded.global_single_threaded.io() };
+    defer client.deinit();
+
+    var response: std.Io.Writer.Allocating = .init(allocator);
+    defer response.deinit();
+    const result = client.fetch(.{
+        .location = .{ .uri = uri },
+        .method = .POST,
+        .payload = body,
+        .headers = .{ .content_type = .{ .override = content_type } },
+        .extra_headers = extra_headers,
+        .privileged_headers = privileged_headers,
+        .response_writer = &response.writer,
+        .keep_alive = false,
+    }) catch |err| {
+        log.err("KMS HTTP request failed", &.{
+            Attr.string("service", what),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.ConnectionFailed;
+    };
+    if (result.status != .ok) {
+        log.err("KMS HTTP status error", &.{
+            Attr.string("service", what),
+            Attr.int("status_code", @intCast(@intFromEnum(result.status))),
+        });
+        return error.HttpError;
+    }
+    return response.toOwnedSlice();
+}
+
+/// `{vault_addr}/v1/transit/{op}/{key_name}` (Vault Transit HTTP API).
+pub fn vaultTransitUrl(buf: []u8, vault_addr: []const u8, op: []const u8, key_name: []const u8) ![]const u8 {
+    const addr = std.mem.trimEnd(u8, vault_addr, "/");
+    return std.fmt.bufPrint(buf, "{s}/v1/transit/{s}/{s}", .{ addr, op, key_name }) catch error.BufferOverflow;
+}
+
+/// `{"plaintext":"<base64 of the 32-byte data key>"}` (Vault Transit encrypt).
+pub fn vaultEncryptRequestBody(buf: []u8, plaintext: [32]u8) ![]const u8 {
+    var b64_buf: [std.base64.standard.Encoder.calcSize(32)]u8 = undefined;
+    defer std.crypto.secureZero(u8, &b64_buf);
+    const b64 = std.base64.standard.Encoder.encode(&b64_buf, &plaintext);
+    return std.fmt.bufPrint(buf, "{{\"plaintext\":\"{s}\"}}", .{b64}) catch error.BufferOverflow;
+}
+
+/// The Vault request headers: X-Vault-Token, plus X-Vault-Namespace when a
+/// namespace is configured (Vault Enterprise). Both are privileged.
+pub fn vaultHeaders(buf: *[2]std.http.Header, config: KmsConfig) []const std.http.Header {
+    buf[0] = .{ .name = "X-Vault-Token", .value = config.vault_token orelse "" };
+    if (config.vault_namespace) |ns| {
+        buf[1] = .{ .name = "X-Vault-Namespace", .value = ns };
+        return buf[0..2];
+    }
+    return buf[0..1];
+}
+
+/// The string at `response[outer][field]` (or `response[field]` when
+/// `outer` is null), duplicated. error.InvalidResponse when the body is not
+/// a JSON object or the value is missing or not a string.
+pub fn jsonStringField(allocator: std.mem.Allocator, response: []const u8, outer: ?[]const u8, field: []const u8) ![]u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch return error.InvalidResponse;
+    defer parsed.deinit();
+    var obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return error.InvalidResponse,
+    };
+    if (outer) |name| {
+        obj = switch (obj.get(name) orelse return error.InvalidResponse) {
+            .object => |o| o,
+            else => return error.InvalidResponse,
+        };
+    }
+    return switch (obj.get(field) orelse return error.InvalidResponse) {
+        .string => |v| try allocator.dupe(u8, v),
+        else => error.InvalidResponse,
+    };
+}
 
 /// Factory function to create KMS provider based on configuration
 pub fn createKmsProvider(allocator: std.mem.Allocator, config: KmsConfig) !KmsProvider {

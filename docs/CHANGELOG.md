@@ -57,6 +57,21 @@
   mTLS-required server still times out (`zig build
   test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
   build test-sonny6457-connectex-client-cert`.
+- **The Vault Transit and AWS KMS clients compile again (SONNY-6457 item
+  4).** `src/security/external_kms_client.zig` built `std.http.Client`
+  without the `io` field Zig 0.16 requires and used the removed
+  `open`/`write`/`finish`/`wait` request API; nothing constructs these
+  clients yet (KMS wiring is SONNY-6380), so no build noticed. Both now
+  POST through `std.http.Client.fetch`; the Vault token (and the
+  configured `vault_namespace`, previously ignored, as
+  `X-Vault-Namespace`) are privileged headers, dropped on a cross-host
+  redirect; responses are parsed as JSON instead of by substring search,
+  so a pretty-printed Vault response is read and a field name inside a
+  string value is not; a decrypted data key must be exactly 32 bytes.
+  Still not production-ready: AWS requests are not SigV4-signed,
+  `tls_ca_cert` is not used (the system CA bundle is), and the Vault
+  ciphertext lives only in memory. Regression: `zig build
+  test-sonny6457-external-kms-compile` (no network calls).
 - **BREAKING (CLI): `geode mtls` subcommands are refused as unsupported
   (SONNY-6457 item 5).** `geode mtls map create|list|delete`, `config` and
   `status` kept certificate-to-user mappings in `geode_mtls_state.db` in
