@@ -2274,6 +2274,20 @@
   a restart a replayed write of a name dropped before the restart is created
   lazily again. Regression: `zig build
   test-sonny6492-replicated-write-dropped-graph`.
+- **DROP GRAPH clears the graph's counts of evicted nodes, and graph names
+  with ':' no longer share counts (SONNY-6492 item 4).** The per-graph label
+  and relationship-type counts and postings were keyed "graph:label":
+  graph "g1" with label "x:y" and graph "g1:x" with label "y" shared one
+  counter and one posting list. They are now keyed "graph\x00label", as the
+  merge-index and tenant keys are. DROP GRAPH removed only the graph's
+  resident nodes and edges from memory; with the node cache bounded, the
+  evicted ones' counts and postings stayed, so a graph created again under
+  the name started with the dropped graph's counts. DROP GRAPH now removes
+  every entry keyed by the graph (label and relationship-type postings and
+  counts, its node set, its tenant-introspection entries) and nothing of
+  another graph. Regression: `zig build test-sonny6492-drop-graph-label-counts`
+  (before: g1 counted 340 nodes with label `x:y`, its 300 and g1:x's 40;
+  with the keys fixed but no purge, g1 created again counted 300).
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

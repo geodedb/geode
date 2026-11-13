@@ -2537,7 +2537,7 @@ pub const GraphStore = struct {
     // `count(r:TYPE)` fast path answer O(1) instead of materializing one row per
     // edge. Durability is replay-on-load: rebuilt by the open edge-scan in
     // `loadOneGraphFromAdapter` (exactly like the label refcount + untyped
-    // edge count). Key format "graph:type" (see formatGraphLabelKey).
+    // edge count). Key format "graph\x00type" (see formatGraphLabelKey).
     edge_type_counts_by_graph: std.StringHashMap(LabelCountValue),
     // CANARY: REQ=REQ-PERF-GRAPH-SCOPED-NODES-001; FEATURE="GraphScopedNodeIndex"; ASPECT=NodesByGraph; STATUS=TESTED; TEST=tests/test_perf_b_graph_scoped_iteration.zig; OWNER=perf; UPDATED=2026-05-15
     // PERF-B (issue #811): Per-graph node-id index so MATCH (n) and equivalent
@@ -2666,7 +2666,7 @@ pub const GraphStore = struct {
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
     edge_type_index: std.StringHashMap(std.ArrayList(u64)),
     /// SONNY-3233 (round 15, F5): guards `edge_type_index`, which every
-    /// graph's edges share (keys are "graph:type"). It is maintained only
+    /// graph's edges share (keys are "graph\x00type"). It is maintained only
     /// while the edge cache is unbounded; there, writers of two graphs
     /// inserted into it (and grew it) with no lock between them, and readers
     /// of a third probed it during a resize. Writers take it exclusively,
@@ -3172,6 +3172,90 @@ pub const GraphStore = struct {
         for (nodes_to_remove.ids.items) |node_id| {
             self.removeNodeInMemory(node_id, &.{});
         }
+        self.purgeGraphKeyedIndexes(graph_name);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6492-DROP-GRAPH-COUNTS; FEATURE="MultiGraphIsolation"; ASPECT=PurgeEvictedCounts; STATUS=TESTED; TEST=tests/test_sonny6492_drop_graph_label_counts.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6492 (4): every graph-keyed entry of `graph_name` goes: its
+    /// label postings and counts, relationship-type postings and counts, its
+    /// node set, and its tenant-introspection entries. `clearNodesForGraph`
+    /// removes the graph's RESIDENT nodes and edges one by one; with the node
+    /// and edge caches bounded, the evicted ones' counts and postings stayed,
+    /// so a graph created again under the name counted the dropped graph's
+    /// nodes. The keys are "graph\x00name" (`graphLabelKeyMatchesGraph`), so
+    /// another graph whose name starts with this one ("g1:x" for "g1") is
+    /// never touched. Allocation-free (a re-scan after each removal), like
+    /// `removeHydrationCounterContributionsForGraph`; removing an entry moves
+    /// no other entry, so other graphs' posting pointers stay valid.
+    fn purgeGraphKeyedIndexes(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        {
+            self.label_index_mutex.lockUncancelable(io);
+            defer self.label_index_mutex.unlock(io);
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = self.label_index.iterator();
+                while (it.next()) |e| {
+                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (self.label_index.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var posting = kv.value;
+                    posting.deinit(self.allocator);
+                }
+            }
+        }
+        {
+            self.label_count_rwlock.lockUncancelable(io);
+            defer self.label_count_rwlock.unlock(io);
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = self.label_counts_by_graph.iterator();
+                while (it.next()) |e| {
+                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (self.label_counts_by_graph.fetchRemove(key)) |kv| self.allocator.free(kv.key);
+            }
+        }
+        {
+            self.edge_type_index_lock.lockUncancelable(io);
+            defer self.edge_type_index_lock.unlock(io);
+            while (true) {
+                var victim: ?[]const u8 = null;
+                var it = self.edge_type_index.iterator();
+                while (it.next()) |e| {
+                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
+                        victim = e.key_ptr.*;
+                        break;
+                    }
+                }
+                const key = victim orelse break;
+                if (self.edge_type_index.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list = kv.value;
+                    list.deinit(self.allocator);
+                }
+            }
+        }
+        {
+            self.nodes_by_graph_mutex.lockUncancelable(io);
+            defer self.nodes_by_graph_mutex.unlock(io);
+            if (self.nodes_by_graph.fetchRemove(graph_name)) |kv| {
+                self.allocator.free(kv.key);
+                var set = kv.value;
+                set.deinit();
+            }
+        }
+        // Relationship-type counts and the tenant-introspection entries.
+        self.removeHydrationCounterContributionsForGraph(graph_name);
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphHelpers; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
@@ -5722,8 +5806,8 @@ pub const GraphStore = struct {
     /// the posting while its leaf mutex is locked.
     fn ensureLabelPostingListLocked(self: *GraphStore, graph_name: []const u8, label: []const u8) !*LabelPosting {
         var buf: [512]u8 = undefined;
-        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
-            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        const probe_key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ graph_name, label }) catch {
+            const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label });
             // SONNY-6268: a failed insert frees the key (it leaked).
             const result = self.label_index.getOrPut(key) catch |err| {
                 self.allocator.free(key);
@@ -5739,7 +5823,7 @@ pub const GraphStore = struct {
 
         if (self.label_index.getPtr(probe_key)) |posting| return posting;
 
-        const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label });
         const result = self.label_index.getOrPut(key) catch |err| {
             self.allocator.free(key);
             return err;
@@ -5758,13 +5842,13 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         label: []const u8,
     ) !struct { key: []const u8, owned: ?[]u8 } {
-        const key = std.fmt.bufPrint(scratch, "{s}:{s}", .{ graph_name, label }) catch |err| switch (err) {
+        const key = std.fmt.bufPrint(scratch, "{s}\x00{s}", .{ graph_name, label }) catch |err| switch (err) {
             error.NoSpaceLeft => {
                 // One exact allocation (SONNY-6302: the removers' reserved
                 // room is sized for it; allocPrint grows a buffer).
                 const owned = try allocator.alloc(u8, graph_name.len + 1 + label.len);
                 @memcpy(owned[0..graph_name.len], graph_name);
-                owned[graph_name.len] = ':';
+                owned[graph_name.len] = 0;
                 @memcpy(owned[graph_name.len + 1 ..], label);
                 return .{ .key = owned, .owned = owned };
             },
@@ -5853,7 +5937,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        } else try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label });
         errdefer self.allocator.free(owned_key);
         try self.label_counts_by_graph.put(owned_key, LabelCountValue.init(0));
     }
@@ -5882,7 +5966,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
         self.label_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
             self.allocator.free(owned_key);
             return;
@@ -5918,7 +6002,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
         self.label_counts_by_graph.put(owned_key, LabelCountValue.init(n)) catch {
             self.allocator.free(owned_key);
             return;
@@ -5961,7 +6045,7 @@ pub const GraphStore = struct {
     }
 
     // ── Per-(graph, edge_type) exact-count refcount ────────────────────────
-    // Mirrors ensure/bump/dec/countGraphLabel for the edge side. Key "graph:type"
+    // Mirrors ensure/bump/dec/countGraphLabel for the edge side. Key "graph\x00type"
     // via formatGraphLabelKey. Guarded by edge_type_count_rwlock (SHARED for the
     // atomic mutate of an existing entry, EXCLUSIVE for the lazy insert).
     fn ensureGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) !void {
@@ -5978,7 +6062,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+        } else try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type });
         errdefer self.allocator.free(owned_key);
         try self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(0));
     }
@@ -6007,7 +6091,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type }) catch return;
+        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type }) catch return;
         self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
             self.allocator.free(owned_key);
             return;
@@ -7816,7 +7900,7 @@ pub const GraphStore = struct {
 
         // Create composite key "graph_name:label"
         var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
+        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, label }) catch return null;
 
         // PHASE 1b concurrency fix: the `label_index` writer (`addToLabelIndex`,
         // reached by hydration) already rehashes the outer map under
@@ -7854,7 +7938,7 @@ pub const GraphStore = struct {
     ) !?[]u64 {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
+        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, label }) catch return null;
 
         // PHASE 1b concurrency fix: guard the outer getPtr with `label_index_mutex`
         // (same ordering as the writer: outer mutex -> posting leaf mutex) so a
@@ -10918,9 +11002,9 @@ pub const GraphStore = struct {
         defer self.edge_type_index_lock.unlock(eti_io);
 
         var buf: [512]u8 = undefined;
-        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, edge_type }) catch {
+        const probe_key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ graph_name, edge_type }) catch {
             // Key too long for stack buffer — fall back to heap alloc
-            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+            const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type });
             const result = self.edge_type_index.getOrPut(key) catch |err| {
                 self.allocator.free(key);
                 return err;
@@ -10937,7 +11021,7 @@ pub const GraphStore = struct {
         if (self.edge_type_index.getPtr(probe_key)) |list| {
             try sortedInsert(list, self.allocator, edge_id);
         } else {
-            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+            const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type });
             const result = self.edge_type_index.getOrPut(key) catch |err| {
                 self.allocator.free(key);
                 return err;
@@ -10995,7 +11079,7 @@ pub const GraphStore = struct {
     pub fn getEdgeIdsByType(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) ?[]const u64 {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, edge_type }) catch return null;
+        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, edge_type }) catch return null;
 
         // SONNY-3233 (round 15, F5): the lookup under the index's lock. The
         // list it returns belongs to `graph_name`, whose writers the caller's
@@ -11505,7 +11589,7 @@ pub const GraphStore = struct {
         const eti_io = std.Io.Threaded.global_single_threaded.io();
         if (graph_name) |gn| {
             var key_buf: [512]u8 = undefined;
-            const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ gn, edge_type }) catch return &.{};
+            const probe = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ gn, edge_type }) catch return &.{};
             self.edge_type_index_lock.lockSharedUncancelable(eti_io);
             defer self.edge_type_index_lock.unlockShared(eti_io);
             if (self.edge_type_index.get(probe)) |posting| {
@@ -11516,7 +11600,7 @@ pub const GraphStore = struct {
             defer freeGraphNames(allocator, names);
             for (names) |graph_key| {
                 var key_buf: [512]u8 = undefined;
-                const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key, edge_type }) catch continue;
+                const probe = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_key, edge_type }) catch continue;
                 self.edge_type_index_lock.lockSharedUncancelable(eti_io);
                 defer self.edge_type_index_lock.unlockShared(eti_io);
                 if (self.edge_type_index.get(probe)) |posting| {
@@ -12648,14 +12732,16 @@ pub const GraphStore = struct {
             std.mem.eql(u8, key[0..graph_name.len], graph_name);
     }
 
-    /// True when `key` ("graph:label" / "graph:type", see formatGraphLabelKey)
-    /// belongs to `graph_name`. Prefix match on "graph:"; a graph name that
-    /// itself contains ':' carries the same (pre-existing, system-wide)
-    /// ambiguity the composite key format has — the snapshot neither adds nor
-    /// removes it (save and restore use the identical convention).
+    /// True when `key` ("graph\x00label" / "graph\x00type", see
+    /// formatGraphLabelKey) belongs to `graph_name`. SONNY-6492 (4): the
+    /// separator is NUL, as in the merge-index and tenant keys, so the match
+    /// is exact (graph names cannot contain NUL). With ':' it was not: graph
+    /// "g1" with label "x:y" and graph "g1:x" with label "y" shared one key
+    /// (one counter, one posting list), and a prefix match for "g1" also
+    /// took "g1:x"'s keys.
     fn graphLabelKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
         return key.len > graph_name.len and
-            key[graph_name.len] == ':' and
+            key[graph_name.len] == 0 and
             std.mem.eql(u8, key[0..graph_name.len], graph_name);
     }
 
@@ -13839,7 +13925,7 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
+        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
         self.label_counts_by_graph.put(owned_key, LabelCountValue.init(count)) catch {
             self.allocator.free(owned_key);
         };
@@ -13912,7 +13998,7 @@ pub const GraphStore = struct {
             while (i < n) : (i += 1) {
                 const type_name = try cur.readBytes();
                 const count = try cur.readInt(u64);
-                const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, type_name });
+                const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, type_name });
                 const gop = try self.edge_type_counts_by_graph.getOrPut(key);
                 if (gop.found_existing) {
                     self.allocator.free(key);
@@ -13933,7 +14019,7 @@ pub const GraphStore = struct {
     }
 
     /// GAP-ENT-0023 P3 (review I2): delete EVERY contribution `graph_name`
-    /// made to the counters product — its "graph:type" keys in
+    /// made to the counters product — its "graph\x00type" keys in
     /// `edge_type_counts_by_graph` and its "graph\x00tenant" outer entries in
     /// the three tenant-introspection multisets. Called when
     /// `applyHydrationCountersSnapshot` fails mid-apply (only OOM can get past

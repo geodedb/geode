@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T17:31:35.148619563Z",
+  "generated_at": "2026-11-13T18:32:31.822855978Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86991,6 +86991,20 @@
       "features": [
         {
           "feature": "MultiGraphIsolation",
+          "aspect": "PurgeEvictedCounts",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6492_drop_graph_label_counts.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94746,7 +94760,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4943
+      "TESTED": 4944
     },
     "by_aspect": {
       "2PC": 3,
@@ -97689,6 +97703,7 @@
       "PunycodeHandling": 1,
       "PureFunction": 1,
       "PureValidation": 1,
+      "PurgeEvictedCounts": 1,
       "QUERY": 1,
       "QUICAccept": 1,
       "QUICAlgorithms": 1,
