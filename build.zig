@@ -15244,6 +15244,33 @@ pub fn build(b: *std.Build) void {
     const sonny6436_secrets_step = b.step("test-sonny6436-fixture-secrets", "Run the SONNY-6436 item 1 regression (every admin password and auth-chain HMAC key the in-repo scripts and fixtures seed is one the server accepts: 64 hex characters, a passphrase meeting the password policy)");
     sonny6436_secrets_step.dependOn(&run_sonny6436_secrets_tests.step);
 
+    // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
+    // is True, in the raw-string interpreter and the compiled VM.
+    const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });
+    sonny6436_rls_test_mod.addImport("rls", rls_mod);
+    sonny6436_rls_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6436_rls_tests = b.addTest(.{ .root_module = sonny6436_rls_test_mod });
+    const run_sonny6436_rls_tests = b.addRunArtifact(sonny6436_rls_tests);
+    shardDep(test_step, &run_sonny6436_rls_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_rls_step = b.step("test-sonny6436-rls-raw-truthiness", "Run the SONNY-6436 item 5 regression (an RLS policy admits a row only when its predicate is True: a non-boolean value, a comparison with a null side or values that do not compare, and an empty sub-expression deny, in the raw-string interpreter and the compiled VM)");
+    sonny6436_rls_step.dependOn(&run_sonny6436_rls_tests.step);
+
+    // SONNY-6436 item 7: geode query --file over QUIC stops the run, with the
+    // summary, when a statement of a rejected chunk, retried on its own, was
+    // sent and got no answer.
+    const sonny6436_retry_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_quic_retry_stops.zig"), .target = target, .optimize = optimize });
+    sonny6436_retry_test_mod.link_libc = true;
+    sonny6436_retry_test_mod.addImport("geode", root_mod);
+    sonny6436_retry_test_mod.addImport("schema", schema_mod);
+    sonny6436_retry_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6436_retry_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6436_retry_tests = b.addTest(.{ .root_module = sonny6436_retry_test_mod });
+    const run_sonny6436_retry_tests = b.addRunArtifact(sonny6436_retry_tests);
+    spawnsBuiltGeode(sonny6436_retry_tests);
+    shardDep(test_step, &run_sonny6436_retry_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_retry_step = b.step("test-sonny6436-quic-retry-stops", "Run the SONNY-6436 item 7 regression (geode query --file over QUIC: a statement of a rejected chunk, retried on its own, that was sent and timed out stops the run with the chunked summary; no later chunk is sent; spawns the CLI and a server)");
+    sonny6436_retry_step.dependOn(&run_sonny6436_retry_tests.step);
+
     // SONNY-6358: the offline `geode user create` / `geode user update
     // --password` store an Argon2id hash and seal the chain, so the server
     // starts and logs the user in. Spawns the CLI and a server.

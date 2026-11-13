@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:04:35.700610391Z",
+  "generated_at": "2026-11-13T01:07:03.579802765Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84679,6 +84679,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6436-QUIC-RETRY-STOPS",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6436-RLS-RAW-TRUTHINESS",
+      "features": [
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92364,7 +92402,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4804
+      "TESTED": 4806
     },
     "by_aspect": {
       "2PC": 3,
@@ -95451,7 +95489,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 280,
+      "Regression": 282,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
