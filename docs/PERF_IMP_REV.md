@@ -130,7 +130,7 @@ recommendations focus on incremental improvements rather than architectural chan
 
 ## 6. I/O Performance
 
-**Evidence:** Already has memory-mapped I/O (13.18x improvement noted)
+**Evidence:** The id map and hydration snapshot are memory-mapped. The "13.18x improvement" came from `src/performance/memory_mapped_io.zig`, which no server path uses (SONNY-6511); it is not evidence.
 
 ### Recommendations (measurable)
 

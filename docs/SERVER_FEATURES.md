@@ -47,14 +47,13 @@ Geode uses a slotted page architecture optimized for graph storage:
 
 **Key Features**:
 
-- **Memory-Mapped I/O**: Zero-copy data access with 13.18x performance improvement
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`). The "13.18x improvement" is unmeasured: the figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
 - **Checksumming**: Adler32 over entire page for corruption detection
 - **Slot-Based Storage**: Each slot tracks offset and size for variable-length records
 - **LSN Tracking**: Every page tracks last modification for WAL recovery
 
 **Performance**:
 
-- I/O operations improved from 5,754μs to 436μs (13.18x)
 - <1% overhead for checksumming
 - Efficient space reclamation with slot compaction
 

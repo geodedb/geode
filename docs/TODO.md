@@ -365,7 +365,7 @@ Skipped: 46 (setup requirements not met)
 - ✅ **Core functionality**: 100% (all basic queries, graph operations, transactions)
 - ✅ **Advanced features**: 100% (vector search, full-text search, analytics)
 - ✅ **Security**: 100% (authentication, encryption, audit logging, memory-safe user management)
-- ✅ **Performance**: Optimized (13.18x I/O improvement, memory-mapped operations)
+- ✅ **Performance**: Optimized (memory-mapped id map and hydration snapshot; the "13.18x I/O improvement" is unmeasured on the server path, SONNY-6511)
 
 ---
 
@@ -466,7 +466,7 @@ Skipped: 46 (setup requirements not met)
 
 - ❌ **Cloud (S3 / DigitalOcean Spaces) Backup**: NOT implemented. Backups are local files (`geode backup create` / `geode restore`); no command reaches object storage (SONNY-6290, corrected SONNY-6422). Real support is story SONNY-6356
 - ✅ **Vector Operations**: HNSW indexing with 6 distance metrics
-- ✅ **Performance Optimization**: 13.18x I/O improvement, memory-mapped operations
+- ✅ **Performance Optimization**: memory-mapped id map and hydration snapshot; the "13.18x I/O improvement" came from `src/performance/memory_mapped_io.zig`, which the server does not use (SONNY-6511)
 - ✅ **ML Graph Embeddings**: Node2Vec, GraphSAGE, DeepWalk
 - ✅ **Real-time Analytics**: Streaming analytics with pattern detection
 - ✅ **Enhanced RLS**: Advanced row-level security with policy optimization

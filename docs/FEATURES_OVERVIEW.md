@@ -158,7 +158,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Storage Engine**
 
 - **MVCC**: Multi-version concurrency control
-- **Memory-Mapped I/O**: 13.18x I/O performance improvement
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`); the "13.18x" figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
 - **Backup files**: `geode backup create` / `geode restore` write and read local files (`none` or `gzip` payloads); there is no S3-compatible object-storage path: copy backup files with your own tool (SONNY-6290)
 - **WAL Optimization**: Write-ahead logging
 
