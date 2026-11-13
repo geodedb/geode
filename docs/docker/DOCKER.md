@@ -298,14 +298,22 @@ docker-compose -f docker-compose.distributed.yml down
 
 ### Cluster Environment Variables
 
+As shipped, `docker-compose.distributed.yml` runs three standalone nodes
+(see the comment at the top of that file). Geode forms a Raft cluster from
+these variables (`src/server/cluster_bootstrap.zig`), which the compose file
+does not set:
+
 ```bash
-NODE_ID=node-1
-NODE_ROLE=leader|follower
-CLUSTER_NAME=geode-cluster
-GEODE_DISTRIBUTED=true
-GEODE_SHARD_COUNT=3
-GEODE_REPLICATION_FACTOR=2
+GEODE_CLUSTER_TOKEN=<shared secret>          # enables cluster mode
+GEODE_PEERS=geode-leader:8300,geode-follower-1:8300,geode-follower-2:8300
+GEODE_NODE_ID=1                              # 1-based position in GEODE_PEERS
+GEODE_CLUSTER_NAME=geode-cluster
+GEODE_CLUSTER_PORT=8300
+GEODE_CLUSTER_CA_CERT=/certs/ca.crt          # CA that signed every node's certificate
 ```
+
+`GEODE_CLUSTER_CA_CERT` must name a readable CA bundle: a missing or
+unreadable file fails each peer connection (SONNY-6448).
 
 ---
 

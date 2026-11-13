@@ -28,6 +28,28 @@
   `all_transparent` and `errors_encountered`. The overhead measurement is
   `zig build test-sonny6435-tde-overhead`. Regression:
   `zig build test-sonny6448-tde-transparent-encryption`.
+- **Operator-visible: `docker compose config` accepts
+  `docker-compose.distributed.yml` and
+  `docker-integration/docker-compose.integration.yml` (SONNY-6448 item 5).**
+  Their geode services set `pids_limit` next to `deploy.resources.limits`,
+  which Compose rejects ("can't set distinct values on 'pids_limit' and
+  'deploy.resources.limits.pids'"), so neither stack started. The limit
+  (4096) is now `deploy.resources.limits.pids`. Docs and `.env.example` no
+  longer give variables nothing reads (SONNY-6448 item 6): the cluster
+  variables in `docs/docker/DOCKER.md` are the ones geode reads
+  (`GEODE_CLUSTER_TOKEN`, `GEODE_PEERS`, `GEODE_NODE_ID`,
+  `GEODE_CLUSTER_NAME`, `GEODE_CLUSTER_PORT`, `GEODE_CLUSTER_CA_CERT`), not
+  `NODE_ID`, `NODE_ROLE`, `CLUSTER_NAME`, `GEODE_DISTRIBUTED`,
+  `GEODE_SHARD_COUNT` or `GEODE_REPLICATION_FACTOR`; `docs/USAGE.md` drops
+  `GEODE_LOG_LEVEL`, `GEODE_LOG_FORMAT`, `GEODE_TRACE_OPTIMIZER` and the
+  `CDC_*` names and gives the TDE key as `GEODE_TDE_KEY` (not
+  `GEODE_DISK_KEY_HEX`); `docs/deployment/DEPLOYMENT.md` and `.env.example`
+  drop `GEODE_LISTEN_ADDR` (and `GEODE_MEMORY_LIMIT` / `GEODE_CPU_LIMIT`)
+  and say `GEODE_LOG_LEVEL` is a compose variable passed as `--log-level`.
+  The deploy-docs-truth test now runs `docker compose config` on every
+  compose file (when docker is on PATH) and covers `docs/USAGE.md`,
+  `docs/deployment/DEPLOYMENT.md`, `docs/docker/*.md` and `.env.example`.
+  Regression: `zig build test-sonny6430-deploy-docs-truth`.
 - **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
   refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
   8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was

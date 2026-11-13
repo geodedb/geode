@@ -49,10 +49,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
@@ -91,10 +92,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
@@ -133,10 +135,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
