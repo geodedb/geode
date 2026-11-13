@@ -362,15 +362,20 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, first_node, q.where_clause))
+            // SONNY-6496 item 4: the start the run takes (`startsFromTail`):
+            // the scan of the tail and the hop walked backwards, as PROFILE
+            // reports them. The bindings keep the pattern's order.
+            const from_tail = if (graph_store.getGlobalAdapter()) |adapter| startsFromTail(adapter, graph_name, chain, context.query_param_names, context.query_param_values, allocator) else false;
+            const start_node = if (from_tail) chain.hops[0].right else first_node;
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, start_node, q.where_clause))
                 .IndexSeek
-            else if (first_node.labels.len > 0)
+            else if (start_node.labels.len > 0)
                 .LabelScan
             else
                 .AllNodesScan;
             try ops.append(allocator, .{
                 .kind = scan_kind,
-                .est_rows = try estimateScanRows(allocator, graph_name, first_node),
+                .est_rows = try estimateScanRows(allocator, graph_name, start_node),
             });
 
             for (chain.hops, 0..) |hop, hop_idx| {
@@ -379,7 +384,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
                     .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
                 });
                 try ops.append(allocator, .{
-                    .kind = switch (hop.rel.dir) {
+                    .kind = switch (if (from_tail) flipRelDir(hop.rel.dir) else hop.rel.dir) {
                         .right => .ExpandOut,
                         .left => .ExpandIn,
                         .undirected => .ExpandEither,
@@ -875,6 +880,29 @@ fn estimatePatternSelectivity(
     return best_len;
 }
 
+// CANARY: REQ=REQ-SONNY-6496-EXPLAIN-TAIL-START; FEATURE="EXPLAIN"; ASPECT=PlanMatchesRunStart; STATUS=TESTED; TEST=tests/test_sonny6496_explain_start.zig; OWNER=engine; UPDATED=2026-11-13
+/// Bug B / SONNY-6496 item 4: whether `executePatternQuery` starts `chain`
+/// from its tail: a single directed hop whose tail pattern is more selective
+/// than its head. EXPLAIN (`buildPlanIfSupported`) asks the same question,
+/// so its plan starts where the run does; it described the head while
+/// PROFILE reported the tail.
+fn startsFromTail(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    chain: ast.Chain,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    allocator: std.mem.Allocator,
+) bool {
+    if (chain.hops.len != 1) return false;
+    const hop = chain.hops[0];
+    if (hop.rel.dir == .undirected) return false;
+    if (!adapter.graphExists(graph_name)) return false;
+    const head_sel = estimatePatternSelectivity(adapter, graph_name, hop.left, param_names, param_values, allocator);
+    const tail_sel = estimatePatternSelectivity(adapter, graph_name, hop.right, param_names, param_values, allocator);
+    return tail_sel < head_sel;
+}
+
 fn executePatternQuery(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -928,17 +956,7 @@ fn executePatternQuery(
     //   - hop.rel.dir != .undirected (undirected: unchanged path)
     //   - tail strictly more selective than head
     // All other cases take the existing seeded_from_tail==false path unchanged.
-    const seeded_from_tail: bool = sel: {
-        if (chain.hops.len == 1) {
-            const hop = chain.hops[0];
-            if (hop.rel.dir != .undirected) {
-                const head_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.left, param_names, param_values, allocator);
-                const tail_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.right, param_names, param_values, allocator);
-                if (tail_sel < head_sel) break :sel true;
-            }
-        }
-        break :sel false;
-    };
+    const seeded_from_tail = startsFromTail(adapter, plan.graph_name, chain, param_names, param_values, allocator);
     const start_pattern = if (seeded_from_tail)
         chain.hops[0].right
     else if (chain.head) |head|

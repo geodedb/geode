@@ -2235,6 +2235,18 @@
 
 ### Fixed
 
+- **EXPLAIN plans the start the planned read takes (SONNY-6496 item 4,
+  partial).** A single directed hop whose tail pattern is more selective
+  than its head starts from the tail and walks the hop backwards (Bug B);
+  PROFILE's scan collected the tail's nodes while EXPLAIN planned the
+  head's scan and the forward expand (`MATCH (a:H)-[:R]->(b:T {k: 2})`:
+  `LabelScan(est 5) ExpandOut` for 5 heads, the run started from 1 tail).
+  `planned_read_runtime.startsFromTail` now decides for both, so EXPLAIN
+  plans `LabelScan(est 3) ExpandIn` and PROFILE traces the same operators.
+  A multi-property inline map's seed key is chosen by the same function
+  (`chooseStartSeed`) for EXPLAIN and the run. Still open: PROFILE version 1
+  (the legacy executor's payload) does not report the exact-index seek the
+  legacy executor takes. Regression: `zig build test-sonny6496-explain-start`.
 - **FOR at the start of a subquery runs; DELETE ... RETURN ... ORDER BY /
   LIMIT runs; CALL there and MERGE ... CREATE are refused with 0A000
   (SONNY-6496 item 3).** Each was a syntax error (42000). A FOR may start

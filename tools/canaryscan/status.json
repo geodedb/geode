@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T23:04:32.182989981Z",
+  "generated_at": "2026-11-13T23:11:37.909363418Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87480,6 +87480,20 @@
       "features": [
         {
           "feature": "EXPLAIN",
+          "aspect": "PlanMatchesRunStart",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_explain_start.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EXPLAIN",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -95359,7 +95373,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4980
+      "TESTED": 4981
     },
     "by_aspect": {
       "2PC": 3,
@@ -98114,6 +98128,7 @@
       "PlanJoinReorderDiversity": 1,
       "PlanJoinReorderVarianceEnvelope": 1,
       "PlanMatchesExecutorSeek": 1,
+      "PlanMatchesRunStart": 1,
       "PlanMissSingleFlight": 1,
       "PlanSelectionIntegration": 1,
       "PlanSelectionPipelineAdoption": 1,
