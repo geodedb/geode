@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:09:19.46194983Z",
+  "generated_at": "2026-11-13T01:12:18.435437293Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84683,6 +84683,20 @@
       "features": [
         {
           "feature": "ChunkedExecution",
+          "aspect": "QuicRetryStopsWithSummary",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_quic_retry_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ChunkedExecution",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -92416,7 +92430,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4807
+      "TESTED": 4808
     },
     "by_aspect": {
       "2PC": 3,
@@ -95397,6 +95411,7 @@
       "QuicReadGate": 1,
       "QuicReadLineInterrupt": 1,
       "QuicReadLineTimeout": 1,
+      "QuicRetryStopsWithSummary": 1,
       "QuicRollbackTo": 1,
       "QuicSavepoint": 1,
       "QuicTransportAdapter": 1,

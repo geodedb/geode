@@ -1644,6 +1644,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             // timeout_error, as a single query's does.
             error.ChunkTimedOut => std.process.exit(@intFromEnum(ExitCode.timeout_error)),
             error.ChunkOutcomeUnknown => std.process.exit(@intFromEnum(ExitCode.general_error)),
+            // SONNY-6436: the QUIC retry's connection failed before a
+            // statement was sent; the run stopped there.
+            error.ChunkRetryConnectionLost => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => return err,
         };
         if (chunk_errors > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -2789,6 +2792,19 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 for (u.stmt_idx + 1..statements.len) |idx| {
                     if (!txn_strip.items[idx]) not_run += 1;
                 }
+                if (!u.sent) {
+                    // SONNY-6436: the QUIC retry's connection failed before
+                    // the statement went out; nothing is outstanding, but the
+                    // retry cannot go on, and the run stops as for a lost
+                    // answer.
+                    std.debug.print(
+                        "Error: the retry's connection failed before statement {d} was sent ({t}); it was not executed.\n" ++
+                            "Stopping: the {d} statement(s) after it were not executed.\n",
+                        .{ u.stmt_idx + 1, u.err, not_run },
+                    );
+                    printChunkedSummary(executed, error_count);
+                    return error.ChunkRetryConnectionLost;
+                }
                 std.debug.print(
                     "Error: statement {d} got no answer after it was sent ({t}); it may still be executing on the server or may have been applied, so it was not sent again.\n" ++
                         "Stopping: the {d} statement(s) after it were not executed.\n",
@@ -2819,7 +2835,9 @@ const ChunkRetryOutcome = struct {
     /// SONNY-6425 item 6: a retried statement that got no answer after it
     /// was sent (a client timeout, a dropped connection): its error, and its
     /// index. The retry stopped there; the caller stops the run.
-    unknown: ?struct { err: anyerror, stmt_idx: usize } = null,
+    /// SONNY-6436: over QUIC also a transport failure before the statement
+    /// was sent (`sent` false): the retry's one connection is gone.
+    unknown: ?struct { err: anyerror, stmt_idx: usize, sent: bool = true } = null,
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=StatementFallback; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
@@ -2964,6 +2982,7 @@ fn retryChunkStatementByStatement(
         if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
 
         const empty_params = std.ArrayList(schema.Param).empty;
+        var stmt_sent = false;
         const stmt_failed = runQueryOnHelloedStream(
             allocator,
             &raw_client,
@@ -2976,7 +2995,7 @@ fn retryChunkStatementByStatement(
             opts.timeout_secs,
             null,
             false,
-            null,
+            &stmt_sent,
         ) catch |err| {
             // A transport failure kills the shared stream; continuing would
             // only produce a cascade of misleading timeouts.
@@ -2984,7 +3003,14 @@ fn retryChunkStatementByStatement(
                 "Error: chunk retry aborted at statement {d}: {t}\n",
                 .{ idx + 1, err },
             );
-            return err;
+            // CANARY: REQ=REQ-SONNY-6436-QUIC-RETRY-STOPS; FEATURE="ChunkedExecution"; ASPECT=QuicRetryStopsWithSummary; STATUS=TESTED; TEST=tests/test_sonny6436_quic_retry_stops.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6436: and the run stops there, with the summary, as the
+            // gRPC branch's does (SONNY-6425): a statement that was sent may
+            // still be running or have been applied. The error used to be
+            // returned, and the caller went on with the next chunk.
+            outcome.failed += 1;
+            outcome.unknown = .{ .err = err, .stmt_idx = idx, .sent = stmt_sent };
+            return outcome;
         };
         if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
     }

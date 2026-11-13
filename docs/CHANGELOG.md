@@ -1827,6 +1827,18 @@
   sent again, the run stops, and the summary and the count of statements not
   executed are printed, as for a chunk (SONNY-6384). Exit code 1 (as before).
   Regression: `zig build test-sonny6425-grpc-retry-summary`.
+- **`geode query --file` over QUIC stops with its summary when a statement
+  it retries on its own gets no answer (SONNY-6436 item 7).** The QUIC
+  retry runs a rejected chunk's statements over one connection; when one of
+  them timed out or its connection failed, it returned the error, and the
+  run went on with the NEXT chunk on a new connection: statements were
+  written after one that may still be running or have been applied, and the
+  rest of the chunk was silently dropped (counted as one error). The run
+  now stops there, as the gRPC retry does: the statement is not sent again,
+  the summary and the count of statements not executed are printed, and it
+  exits 4 for a client timeout, 1 otherwise. A failure before the statement
+  was sent says so (it was not executed) and also stops the run (exit 1).
+  Regression: `zig build test-sonny6436-quic-retry-stops`.
 - **Documented: cluster data written before SONNY-2726 stays tagged
   `default` (SONNY-6425 item 9).** The writer's tenant was never recorded
   (the raft entries carried none), so geode cannot re-tag it; the operator
