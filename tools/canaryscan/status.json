@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:03:11.998448594Z",
+  "generated_at": "2026-11-13T19:07:19.707338137Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87570,6 +87570,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-RELATIVE-DATA-DIR",
+      "features": [
+        {
+          "feature": "Server Startup",
+          "aspect": "RelativeDataDirAndRefusalCleanup",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_relative_data_dir.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_relative_data_dir.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95291,7 +95310,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4977
+      "TESTED": 4978
     },
     "by_aspect": {
       "2PC": 3,
@@ -98482,6 +98501,7 @@
       "RelationshipMatchEdgeRls": 1,
       "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
+      "RelativeDataDirAndRefusalCleanup": 1,
       "ReleaseAtStatement": 1,
       "ReleaseSafe": 1,
       "RemainingCategories": 1,

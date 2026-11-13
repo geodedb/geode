@@ -10796,6 +10796,21 @@ pub fn build(b: *std.Build) void {
     const sonny6339_step = b.step("test-sonny6339-resolved-data-dir", "Run SONNY-6339 regression (spawns servers with --data-dir, GEODE_DATA_DIR only, and the per-user default under a private HOME/TMPDIR: users, roles, per-graph grants and policies survive a restart, the HMAC key, TLS pair, audit log, tenant registry and timeseries land in the resolved directory, never the working directory, and geode auth verify passes; a malformed .geode_hmac_key or GEODE_AUTH_HMAC_KEY refuses startup; startup reads the raw flag once)");
     sonny6339_step.dependOn(&run_sonny6339_tests.step);
 
+    // SONNY-6499 (3): a relative --data-dir (with a `..` segment) on a fresh
+    // directory starts as the absolute path does; a startup refusal frees
+    // what startup allocated.
+    const sonny6499_reldir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_relative_data_dir.zig"), .target = target, .optimize = optimize });
+    sonny6499_reldir_mod.link_libc = true;
+    sonny6499_reldir_mod.addImport("geode", root_mod);
+    sonny6499_reldir_mod.addImport("protobuf", protobuf_mod);
+    sonny6499_reldir_mod.addImport("schema", schema_mod);
+    sonny6499_reldir_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6499_reldir_tests = b.addTest(.{ .root_module = sonny6499_reldir_mod });
+    const run_sonny6499_reldir_tests = b.addRunArtifact(sonny6499_reldir_tests);
+    spawnsBuiltGeode(sonny6499_reldir_tests);
+    shardDep(test_step, &run_sonny6499_reldir_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-relative-data-dir", "Run SONNY-6499 item 3 regression (spawns servers: --data-dir ../REL on a fresh directory starts and keeps its HMAC key there, as an absolute path does, and restarts; an HMAC-key refusal with a relative or absolute --data-dir exits non-zero with no leaked allocation)").dependOn(&run_sonny6499_reldir_tests.step);
+
     // SONNY-3147: an audit record's event_hash covers the whole record (hash
     // format 2); the verifier recomputes every record's hash, reports format-1
     // records as weaker and refuses a downgrade; one verdict, no record
