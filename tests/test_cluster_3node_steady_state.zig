@@ -455,7 +455,9 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
 
     const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
     const token = "steady-state-cluster-token";
-    const hmac = "steady-hmac-0123456789abcdef0123456789abcdef";
+    // SONNY-6433: GEODE_AUTH_HMAC_KEY is 64 hex characters (32 bytes); a
+    // malformed key refuses startup since SONNY-6339.
+    const hmac = "5eadc0de" ** 8;
 
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
