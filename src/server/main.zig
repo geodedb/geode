@@ -133,7 +133,6 @@ const eval = geode.eval;
 const eval_extended = geode.eval_ext;
 const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
-const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic");
 const grpc_transport = @import("../transport/grpc_server.zig");
 const thread_pool = @import("transport/thread_pool");

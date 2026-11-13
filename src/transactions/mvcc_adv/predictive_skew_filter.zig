@@ -79,34 +79,21 @@ pub const PredictiveSkewFilter = struct {
     }
 };
 
-pub fn simulateHotWorkload(filter: *PredictiveSkewFilter) !usize {
-    // Generate a skewed workload: 90% of ops on key "hot", 10% on rotating cold keys
-    var prng = std.rand.DefaultPrng.init(12345);
-    var rnd = prng.random();
-    var conflicts_prevented: usize = 0;
-    var i: usize = 0;
-    while (i < 10_000) : (i += 1) {
-        const r = rnd.float(f64);
-        if (r < 0.9) {
-            filter.noteAccess("hot", true);
-            if (filter.isHot("hot")) conflicts_prevented += 1; // stand-in metric
-        } else {
-            var buf: [16]u8 = undefined;
-            const cold_key = try std.fmt.bufPrint(&buf, "cold-{d}", .{i % 17});
-            filter.noteAccess(cold_key, false);
-        }
-    }
-    return conflicts_prevented;
-}
-
+// SONNY-6463: this test ran in no step and expected 1,000 writes (weight 2,
+// all inside one 1,024-operation decay window: frequency 2,000) to stay under
+// the threshold of 25. It now checks the documented tunables: a key crosses
+// the threshold on its 13th write (26 >= 25), not its 12th (24), and decays
+// back under it once enough epochs pass without access.
 test "predictive skew filter basic hotspot detection" {
     var filter = PredictiveSkewFilter.init(std.testing.allocator);
     defer filter.deinit();
-    // Build up accesses below threshold
     var i: usize = 0;
-    while (i < 1000) : (i += 1) filter.noteAccess("hot", true);
+    while (i < 12) : (i += 1) filter.noteAccess("hot", true);
     try std.testing.expect(!filter.isHot("hot"));
-    // More to cross threshold
-    while (i < 5000) : (i += 1) filter.noteAccess("hot", true);
+    filter.noteAccess("hot", true);
     try std.testing.expect(filter.isHot("hot"));
+    // Six decay windows of other traffic halve it six times (26 / 64 < 25).
+    i = 0;
+    while (i < 6 * filter.decay_window) : (i += 1) filter.noteAccess("cold", false);
+    try std.testing.expect(!filter.isHot("hot"));
 }

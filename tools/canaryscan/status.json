@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:21:13.563018747Z",
+  "generated_at": "2026-11-13T11:25:39.240049147Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -31054,20 +31054,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-27"
-        },
-        {
-          "feature": "Security Audit",
-          "aspect": "AuditSinks",
-          "status": "TESTED",
-          "files": [
-            "src/security/audit_sink.zig"
-          ],
-          "tests": [
-            "audit_tests"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-11-12"
         }
       ]
     },
@@ -93351,7 +93337,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4863
+      "TESTED": 4862
     },
     "by_aspect": {
       "2PC": 3,
@@ -93538,7 +93524,6 @@
       "AuditLog": 2,
       "AuditLogging": 6,
       "AuditSeedEpochsAndHmacStartup": 1,
-      "AuditSinks": 1,
       "AuditTrail": 2,
       "AuditTransports": 1,
       "AuditedGrantRevokeConfigure": 1,

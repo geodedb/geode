@@ -2045,7 +2045,6 @@ REQ-GQL-028,SnapshotCompaction,QuarantinedGraphFailClosed,TESTED,tests/canary_re
 REQ-GQL-028,SnapshotCompaction,ZeroedPageRebuildFailClosed,TESTED,src/storage/hydration_scan.zig,TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild,,storage,2026-10-19
 REQ-GQL-028,SnapshotCompaction,ZeroedPageRebuildFailClosed,TESTED,tests/canary_recovery_corrupt_latency.zig,tests/canary_recovery_corrupt_latency.zig,,storage,2026-10-19
 REQ-GQL-031,Security Audit,AuditFormatting,TESTED,src/security/audit_formatter.zig,tests/test_sonny3045_audit_text_escaping.zig,,security,2026-09-27
-REQ-GQL-031,Security Audit,AuditSinks,TESTED,src/security/audit_sink.zig,audit_tests,,security,2025-11-12
 REQ-GQL-032,Constraint Cascading,CascadePerf,BENCHED,tests/benchmark_constraints_cascade_perf.zig,,BenchmarkCANARY_REQ_GQL_032_CascadePerf,schema,2025-09-20
 REQ-GQL-032,Constraints,CascadePerf,BENCHED,tests/benchmark_constraint_cascade_perf.zig,,BenchmarkCANARY_REQ_GQL_032_CascadePerf,engine,2025-09-21
 REQ-GQL-032,Schema Constraints,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_032_ConstraintEnforce,,schema,2025-09-20

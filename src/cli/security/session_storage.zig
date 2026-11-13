@@ -121,14 +121,22 @@ pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
     const hostname_buf_size = if (builtin.os.tag == .windows) 256 else std.posix.HOST_NAME_MAX;
     var hostname_buf: [hostname_buf_size]u8 = undefined;
 
-    const hostname = if (builtin.os.tag == .windows) blk: {
-        // On Windows, use std.process for environment variables
-        break :blk getEnvVarOwned(allocator, "COMPUTERNAME") catch "unknown";
-    } else std.posix.gethostname(&hostname_buf) catch "unknown";
+    // SONNY-6463: the environment copies are freed (they leaked on every call).
+    const hostname_owned: ?[]u8 = if (builtin.os.tag == .windows)
+        getEnvVarOwned(allocator, "COMPUTERNAME") catch null
+    else
+        null;
+    defer if (hostname_owned) |h| allocator.free(h);
+    const hostname: []const u8 = if (builtin.os.tag == .windows)
+        hostname_owned orelse "unknown"
+    else
+        std.posix.gethostname(&hostname_buf) catch "unknown";
 
     // Get system username - use std.process for cross-platform compatibility
-    const username = getEnvVarOwned(allocator, "USER") catch
-        getEnvVarOwned(allocator, "USERNAME") catch "unknown";
+    const username_owned: ?[]u8 = getEnvVarOwned(allocator, "USER") catch
+        getEnvVarOwned(allocator, "USERNAME") catch null;
+    defer if (username_owned) |u| allocator.free(u);
+    const username: []const u8 = username_owned orelse "unknown";
 
     // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
     const uid: u32 = if (builtin.os.tag == .windows) 0 else std.os.linux.getuid();
@@ -174,23 +182,15 @@ pub const CredentialStore = struct {
     pub fn saveCredentials(self: *CredentialStore, creds: Credentials) !void {
         // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        const file = try std.fs.createFileAbsolute(self.file_path, .{ .truncate = true, .mode = 0o600 });
-        defer file.close();
+        // SONNY-6463: Zig 0.16 file API (std.fs.createFileAbsolute and
+        // ArrayList.writer are gone; this did not compile, and no step built it).
+        const body = try std.fmt.allocPrint(self.allocator, "{{\n  \"token\": \"{s}\",\n  \"username\": \"{s}\",\n  \"server\": \"{s}\",\n  \"created_at\": {d},\n  \"system_fingerprint\": \"{s}\"\n}}\n", .{ creds.token, creds.username, creds.server, creds.created_at, creds.system_fingerprint });
+        defer self.allocator.free(body);
 
-        // Write JSON
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
-        defer buf.deinit(self.allocator);
-
-        const writer = buf.writer(self.allocator);
-        try writer.print("{{\n", .{});
-        try writer.print("  \"token\": \"{s}\",\n", .{creds.token});
-        try writer.print("  \"username\": \"{s}\",\n", .{creds.username});
-        try writer.print("  \"server\": \"{s}\",\n", .{creds.server});
-        try writer.print("  \"created_at\": {d},\n", .{creds.created_at});
-        try writer.print("  \"system_fingerprint\": \"{s}\"\n", .{creds.system_fingerprint});
-        try writer.print("}}\n", .{});
-
-        try file.writeAll(buf.items);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.createFileAbsolute(io, self.file_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
+        defer file.close(io);
+        try file.writeStreamingAll(io, body);
     }
 
     pub fn loadCredentials(self: *CredentialStore) !?Credentials {
@@ -258,7 +258,7 @@ pub const CredentialStore = struct {
 
     pub fn deleteCredentials(self: *CredentialStore) !void {
         // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
-        std.fs.deleteFileAbsolute(self.file_path) catch |err| {
+        std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), self.file_path) catch |err| {
             if (err != error.FileNotFound) return err;
         };
     }
@@ -477,25 +477,49 @@ test "SessionToken.isValid checks fingerprint and expiry" {
     try std.testing.expect(!token.isValid(current_fp));
 }
 
-test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
-    // Note: This test is integration-level and requires filesystem access
-    // It will use the real HOME directory temporarily
-    const allocator = std.testing.allocator;
+/// SONNY-6463: the CredentialStore tests run against a private HOME (a test
+/// temporary directory). They used to write the real ~/.geode/credentials.json
+/// and "restore" it best-effort, and did not compile under Zig 0.16
+/// (std.fs.copyFileAbsolute is gone), so no step ran them.
+const TestHome = struct {
+    tmp: std.testing.TmpDir,
+    old_home: ?[:0]u8,
 
-    // Save the current credentials file if it exists
+    fn enter() !TestHome {
+        if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const n = try tmp.dir.realPath(std.Io.Threaded.global_single_threaded.io(), &buf);
+        const old = if (std.c.getenv("HOME")) |h| try std.testing.allocator.dupeZ(u8, std.mem.span(h)) else null;
+        errdefer if (old) |o| std.testing.allocator.free(o);
+        const path_z = try std.testing.allocator.dupeZ(u8, buf[0..n]);
+        defer std.testing.allocator.free(path_z);
+        if (setenv("HOME", path_z, 1) != 0) return error.SetEnvFailed;
+        return .{ .tmp = tmp, .old_home = old };
+    }
+
+    fn leave(self: *TestHome) void {
+        if (self.old_home) |o| {
+            _ = setenv("HOME", o, 1);
+            std.testing.allocator.free(o);
+        } else {
+            _ = unsetenv("HOME");
+        }
+        self.tmp.cleanup();
+    }
+
+    extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+    extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+};
+
+test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
+    const allocator = std.testing.allocator;
+    var home = try TestHome.enter();
+    defer home.leave();
+
     var store = try CredentialStore.init(allocator);
     defer store.deinit();
-
-    const backup_path = try std.fmt.allocPrint(allocator, "{s}.test_backup", .{store.file_path});
-    defer allocator.free(backup_path);
-
-    // Backup existing file
-    std.fs.copyFileAbsolute(store.file_path, backup_path, .{}) catch {};
-    defer {
-        // Restore backup
-        std.fs.copyFileAbsolute(backup_path, store.file_path, .{}) catch {};
-        std.fs.deleteFileAbsolute(backup_path) catch {};
-    }
 
     // Create test credentials
     const creds = Credentials{
@@ -533,19 +557,11 @@ test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
 test "CredentialStore.deleteCredentials removes file" {
     const allocator = std.testing.allocator;
 
+    var home = try TestHome.enter();
+    defer home.leave();
+
     var store = try CredentialStore.init(allocator);
     defer store.deinit();
-
-    const backup_path = try std.fmt.allocPrint(allocator, "{s}.test_backup2", .{store.file_path});
-    defer allocator.free(backup_path);
-
-    // Backup existing file
-    std.fs.copyFileAbsolute(store.file_path, backup_path, .{}) catch {};
-    defer {
-        // Restore backup
-        std.fs.copyFileAbsolute(backup_path, store.file_path, .{}) catch {};
-        std.fs.deleteFileAbsolute(backup_path) catch {};
-    }
 
     const creds = Credentials{
         .token = "testtoken_delete",

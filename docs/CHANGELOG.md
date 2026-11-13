@@ -2035,6 +2035,25 @@
 
 ### Fixed
 
+- **Inline tests of 12 live files outside src/distributed run; dead files
+  removed (SONNY-6463 item 5, partial).** `zig build test-sonny6463-inline`
+  runs the inline tests of the MVCC heuristics (`conflict_repair_heuristics`,
+  `early_detect`, `partial_rollback`, `predictive_skew_filter`),
+  `stream_scheduler`, `index/selectivity`, `mcp/prompts`, `tools/bulk_loader`,
+  `cli/tenant_cli`, `transactions/range_tracker`,
+  `cli/security/session_storage` and `cli/geode_audit_verify` (78 tests), none
+  of which any step ran. Found on the way: `CredentialStore.saveCredentials`
+  / `deleteCredentials` did not compile under Zig 0.16 (ported);
+  `getSystemFingerprint` leaked its environment copies on every call (the CLI
+  calls it on each auto-loaded session); the CredentialStore tests wrote the
+  real `~/.geode/credentials.json` (they now use a private HOME); the skew
+  filter test contradicted its own documented threshold (corrected) and its
+  uncompilable, uncalled `simulateHotWorkload` is removed. Removed as verified
+  dead: `src/util/text_formatter.zig` (did not compile; its only importer was
+  an unused alias in `src/server/main.zig`) and `src/security/audit_sink.zig`
+  (no importer). The rest of the ticket's candidate list remains (see the
+  SONNY-6463 report).
+
 - **External KMS clients: AWS requests signed, TLS options honoured,
   unwrap from the envelope (SONNY-6465).** `src/security/external_kms_client.zig`
   (not yet constructed by the product; wiring is SONNY-6380): AWS KMS
