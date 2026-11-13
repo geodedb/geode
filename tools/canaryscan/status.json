@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:27:03.911252819Z",
+  "generated_at": "2026-11-13T13:40:35.17230227Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86791,6 +86791,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-738-EQUALITY-CONSISTENCY",
+      "features": [
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "EverySite",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -94425,7 +94444,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4925
+      "TESTED": 4926
     },
     "by_aspect": {
       "2PC": 3,
@@ -95633,6 +95652,7 @@
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
       "EveryPathExpands": 1,
+      "EverySite": 1,
       "EvictedNode": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,

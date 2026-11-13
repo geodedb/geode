@@ -12491,6 +12491,17 @@ pub fn build(b: *std.Build) void {
     const sonny6282_q_step = b.step("test-sonny6282-int-string-equality", "Run SONNY-6282 regression (WHERE n.id = 1 and n.id = '1' each match only their own type, as the inline property map does; ISO/IEC 39075 19.3: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6282_q_step.dependOn(&run_sonny6282_q_tests.step);
 
+    // SONNY-738 (sweep item 0): a value pair is equal at every equality site or at none. See tests/test_sonny738_equality_consistency.zig.
+    const sonny738_eq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_equality_consistency.zig"), .target = target, .optimize = optimize });
+    sonny738_eq_test_mod.addImport("geode", root_mod);
+    sonny738_eq_test_mod.addImport("logging", logging_mod);
+    sonny738_eq_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny738_eq_tests = b.addTest(.{ .root_module = sonny738_eq_test_mod });
+    const run_sonny738_eq_tests = b.addRunArtifact(sonny738_eq_tests);
+    shardDep(test_step, &run_sonny738_eq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny738_eq_step = b.step("test-sonny738-equality-consistency", "Run SONNY-738 regression (each value pair is equal, unequal or unknown alike at =, <>, IN, simple CASE, list/record equality, DISTINCT, WHERE over a stored property, the inline property map / index seek and MERGE; ISO/IEC 39075 19.3, 22.12: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny738_eq_step.dependOn(&run_sonny738_eq_tests.step);
+
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });
     sonny6266_q_test_mod.addImport("geode", root_mod);
