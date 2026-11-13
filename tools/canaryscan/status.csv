@@ -5142,6 +5142,7 @@ REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,NotNullViolationCode,
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,Regression,TESTED,tests/test_sonny6281_existence_constraints.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,StatementEndCheck,TESTED,src/execution/unique_constraints.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,UniqueIndexRefused,TESTED,src/execution.zig,tests/test_sonny6281_existence_constraints.zig,,engine,2026-11-12
+REQ-SONNY-6282-INT-STRING-EQUALITY,ComparisonPredicate,Regression,TESTED,tests/test_sonny6282_int_string_equality.zig,tests/test_sonny6282_int_string_equality.zig,,eval,2026-11-13
 REQ-SONNY-6290-BACKUP-DOC-COMMANDS,CLI Backup,DocumentedCommandsExist,TESTED,tests/test_sonny6290_backup_doc_commands.zig,tests/test_sonny6290_backup_doc_commands.zig,,cli,2026-11-12
 REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,ApiKeysNotSupported,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6291_apikey_user_show.zig,,security,2026-11-12
 REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,Regression,TESTED,tests/test_sonny6291_apikey_user_show.zig,tests/test_sonny6291_apikey_user_show.zig,,security,2026-11-12

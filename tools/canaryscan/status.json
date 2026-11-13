@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:02:53.44576859Z",
+  "generated_at": "2026-11-13T12:03:46.15304302Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80245,6 +80245,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6282-INT-STRING-EQUALITY",
+      "features": [
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6290-BACKUP-DOC-COMMANDS",
       "features": [
         {
@@ -93605,7 +93624,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4880
+      "TESTED": 4881
     },
     "by_aspect": {
       "2PC": 3,
@@ -96734,7 +96753,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 305,
+      "Regression": 306,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

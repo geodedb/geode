@@ -12081,6 +12081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-6282: an integer and a string are never equal. See tests/test_sonny6282_int_string_equality.zig.
+    const sonny6282_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6282_int_string_equality.zig"), .target = target, .optimize = optimize });
+    sonny6282_q_test_mod.addImport("geode", root_mod);
+    sonny6282_q_test_mod.addImport("logging", logging_mod);
+    sonny6282_q_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6282_q_tests = b.addTest(.{ .root_module = sonny6282_q_test_mod });
+    const run_sonny6282_q_tests = b.addRunArtifact(sonny6282_q_tests);
+    shardDep(test_step, &run_sonny6282_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6282_q_step = b.step("test-sonny6282-int-string-equality", "Run SONNY-6282 regression (WHERE n.id = 1 and n.id = '1' each match only their own type, as the inline property map does; ISO/IEC 39075 19.3: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6282_q_step.dependOn(&run_sonny6282_q_tests.step);
+
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });
     sonny6266_q_test_mod.addImport("geode", root_mod);
