@@ -3628,6 +3628,20 @@
 
 ### Removed
 
+- **Dead code: `match_operations.executeMatchWithOptionalPatterns` and the
+  legacy aggregate RETURN-after-WITH stage of `executeMatchQueryImpl`
+  (SONNY-6437 item 4).** Neither was reached by a parsed query: an OPTIONAL
+  MATCH clause is served by the left outer join (`optional_match`) or, with
+  a SET or REMOVE, by the write step; an aggregating RETURN after a WITH by
+  the shared projection, after an initial WITH once the WITH is bound. A
+  reference search finds no other caller, and a run with a panic at both
+  sites (`test-sonny6437-query-residuals`, `-2672-read-semantics-batch`,
+  `-3184`, `-3039`, `-3041`, `-2694`, `-2674`, `-2675`, `-3148`,
+  `gap0055`, `r4b-memory`, `gql-conformance` and 17 probe shapes) never
+  hit either. About 1,770 lines go, with the helpers only the executor used
+  (`whereReferencesLaterChains`, `whereNamesUnboundBy`); a query built
+  another way that reaches either site is refused
+  (`UnsupportedOptionalMatchShape`, `UnsupportedGroupedReturn`).
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant
