@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:17:52.02702959Z",
+  "generated_at": "2026-11-13T14:32:59.335827632Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -73874,6 +73874,7 @@
           "aspect": "DatetimeDurationOperators",
           "status": "TESTED",
           "files": [
+            "src/eval/temporal_ops.zig",
             "tests/test_sonny2797_duration_arithmetic.zig"
           ],
           "tests": [

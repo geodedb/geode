@@ -2161,6 +2161,23 @@
 
 ### Fixed
 
+- **Datetime and duration arithmetic (SONNY-2797).** Only `DATE +/-
+  duration` was implemented; every other ISO/IEC 39075:2024 20.26 and 20.28
+  operation was a type mismatch. Now: datetime, local datetime, date, time
+  and zoned time `+`/`-` a duration (and duration `+` instant), months first
+  as calendar months with the day clamped to the target month
+  (`datetime('2024-01-31T10:00:00Z') + duration('P1M')` is
+  2024-02-29T10:00:00Z), then the day-to-second part; a time of day wraps at
+  24 hours; a date takes the whole days (so `date + PT48H` is two days later;
+  it was the same date). Duration `+`/`-` duration (part by part, the
+  day-to-second part normalized: `PT20H + PT20H` = `P1DT16H`), duration `*`
+  number, number `*` duration and duration `/` number (a month count that is
+  not whole, `P1M / 2`, is refused with 22023; a fraction of a microsecond is
+  truncated; `/ 0` is 22012). `instant - instant` of one type is the
+  day-to-second duration between them (a Geode extension for
+  DURATION_BETWEEN; two types are 22G04). Overflow is 22003, as for `DATE +/-
+  duration` (the standard names 22008/22015). Regression: `zig build
+  test-sonny2797-duration-arithmetic` (incl. a fixed-seed property test).
 - **Temporal fields before 1970 (SONNY-2796).** `.hour`, `.minute` and
   `.second` of a zoned datetime took the time of day with a truncating
   remainder, negative before 1970: `datetime('1969-12-31T23:30:15Z').hour`

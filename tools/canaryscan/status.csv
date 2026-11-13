@@ -4737,7 +4737,8 @@ REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,Regression,TESTED,tests/test_son
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,VectorReadersLocked,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2796-TEMPORAL-FIELDS,DateTimeFunctions,FieldsBefore1970,TESTED,src/eval.zig,tests/test_sonny2796_temporal_fields.zig,,datetime,2026-11-13
 REQ-SONNY-2796-TEMPORAL-FIELDS,DateTimeFunctions,FieldsBefore1970,TESTED,tests/test_sonny2796_temporal_fields.zig,,,datetime,2026-11-13
-REQ-SONNY-2797-DURATION-ARITHMETIC,DateIntervalArithmetic,DatetimeDurationOperators,TESTED,tests/test_sonny2797_duration_arithmetic.zig,tests/test_sonny2797_duration_arithmetic.zig,,eval,2026-11-13
+REQ-SONNY-2797-DURATION-ARITHMETIC,DateIntervalArithmetic,DatetimeDurationOperators,TESTED,src/eval/temporal_ops.zig,tests/test_sonny2797_duration_arithmetic.zig,,eval,2026-11-13
+REQ-SONNY-2797-DURATION-ARITHMETIC,DateIntervalArithmetic,DatetimeDurationOperators,TESTED,tests/test_sonny2797_duration_arithmetic.zig,,,eval,2026-11-13
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,Regression,TESTED,tests/test_sonny2798_offline_verify.zig,tests/test_sonny2798_offline_verify.zig,,security,2026-09-26
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,VerifyBeforeChange,TESTED,src/cli/cli_auth_helpers.zig,tests/test_sonny2798_offline_verify.zig,,security,2026-09-26
 REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,DeferToHandler,TESTED,src/execution.zig,tests/test_sonny2805_txn_sessions.zig,,engine,2026-09-26

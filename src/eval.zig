@@ -579,6 +579,7 @@ const truthy = value_types.truthy;
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 const value_order = @import("execution/value_order.zig");
+const temporal_ops = @import("eval/temporal_ops.zig");
 const canonical_string = @import("unicode/canonical_string.zig");
 const decimal_text = @import("types/decimal_text.zig");
 
@@ -744,19 +745,13 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date + Interval: Add months and days from interval to date
-            // Date + Interval (either order): the months, the day clamped to
-            // the target month, then the days. SONNY-2769: the month and day
-            // arithmetic was i32 and aborted the server past it
-            // (`DATE '2026-01-01' + duration('P2147483647D')`); a date past the
-            // day range is 22003.
-            if ((l == .Date and r == .Interval) or (l == .Interval and r == .Date)) {
-                const date = if (l == .Date) l.Date else r.Date;
-                const interval = if (l == .Interval) l.Interval else r.Interval;
-                const days = @import("types/datetime.zig").Date.addMonthsDays(date.days_since_epoch, interval.months, interval.days) catch
-                    return EvalError.IntegerOverflow;
-                break :blk .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant (date, time, zoned time, local or zoned datetime)
+            // plus a duration, in either order, and a duration plus a
+            // duration (SONNY-2797; only Date + Interval was implemented):
+            // the months, the day clamped to the target month, then the
+            // day-to-second part. SONNY-2769: a result past the range is
+            // 22003.
+            if (try temporal_ops.evalTemporal(.Add, l, r)) |v| break :blk v;
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
@@ -780,13 +775,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date - Interval: Subtract months and days from interval
-            if (l == .Date and r == .Interval) {
-                // SONNY-2769: see Date + Interval.
-                const days = @import("types/datetime.zig").Date.addMonthsDays(l.Date.days_since_epoch, -@as(i64, r.Interval.months), -@as(i64, r.Interval.days)) catch
-                    return EvalError.IntegerOverflow;
-                break :blk2 .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant minus a duration, a duration minus a duration, and
+            // the duration between two instants of one type (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Sub, l, r)) |v| break :blk2 v;
             return EvalError.TypeMismatch;
         },
         .Mul => blk3: {
@@ -809,6 +800,8 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
+            // A duration times a number, either order (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Mul, l, r)) |v| break :blk3 v;
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {
@@ -845,6 +838,8 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 
                 break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
             }
+            // A duration divided by a number (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Div, l, r)) |v| break :blk4 v;
             return EvalError.TypeMismatch;
         },
         .Mod => blk_mod: {
@@ -5740,4 +5735,5 @@ test {
     // file (see build.zig "EVAL CALL-HANDLER UNIT TESTS").
     _ = ts_call_handlers;
     _ = quantifier_call_handlers;
+    _ = temporal_ops; // SONNY-2797
 }

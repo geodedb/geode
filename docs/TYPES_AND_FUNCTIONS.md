@@ -503,6 +503,24 @@
 
 ### Date/Time Arithmetic
 
+Operators (ISO/IEC 39075:2024 20.26 and 20.28; SONNY-2797):
+
+- `instant + duration`, `duration + instant`, `instant - duration` for a
+  date, time, zoned time, local or zoned datetime: the months as calendar
+  months, the day clamped to the target month (`2024-01-31 + P1M` is
+  `2024-02-29`), then the day-to-second part; a date takes its whole days,
+  a time of day wraps at 24 hours.
+- `duration + duration`, `duration - duration`: part by part, the
+  day-to-second part normalized (`PT20H + PT20H` is `P1DT16H`).
+- `duration * number`, `number * duration`, `duration / number`: a result
+  with a fraction of a month is refused (22023: a month has no fixed length);
+  a fraction of a microsecond is truncated; `/ 0` is 22012.
+- `instant - instant` (one type): the day-to-second duration between them
+  (Geode extension for `DURATION_BETWEEN`); two types are 22G04.
+- A result out of range is 22003.
+
+Functions:
+
 - `date_add(date, interval)` - Add interval to date
 - `date_sub(date, interval)` - Subtract interval
 - `ts_add(timestamp, interval)` - Add to timestamp
