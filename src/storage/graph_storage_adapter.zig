@@ -10853,6 +10853,79 @@ pub const StorageAdapter = struct {
                 log.warn("graph '{s}' has invalid persisted free.store; truncating it so GraphEngine.open can rebuild from disk", .{name});
             }
         }
+        try truncateStaleShardFreeStores(self.allocator, name, graph_dir);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6492-STALE-FREE-STORE; FEATURE="CrashRecovery"; ASPECT=StaleFreeStoreRebuild; STATUS=TESTED; TEST=tests/test_sonny6492_checkpoint_free_store_crash.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6492 (1): a shard's `free.store` older than one of its manifest
+    /// slots is truncated before the open, so graph-storage rebuilds the
+    /// shard's page bitmaps from the store files (`rebuildFreeSpaceFromDisk`)
+    /// instead of loading them.
+    ///
+    /// graph-storage 0.4.13's checkpoint (`engine_persist.checkpointEx`)
+    /// writes the manifest and truncates the WAL (`doCheckpoint`) BEFORE it
+    /// saves `free.store`. A crash between the two (a SIGKILL during the
+    /// periodic light checkpoint), or a failed save (ENOSPC, EIO), leaves the
+    /// previous checkpoint's bitmaps beside a manifest and a WAL that already
+    /// count the pages allocated since. The reopen replays no tail, so it
+    /// loads them: every node page allocated since that checkpoint reads as
+    /// free, the node scans skip it (the nodes on it are gone from every
+    /// read; the live-count check reports DataCorruption, REQ-GQL-028), and
+    /// the allocator hands out pages that hold live data.
+    ///
+    /// The rule: graph-storage writes `free.store` (tmp + rename) after the
+    /// manifest of the same checkpoint, and after the manifest a recovery
+    /// writes, so a `free.store` written at or after the newer manifest slot
+    /// belongs to it, and one written before it is stale. Rebuilding from the
+    /// files marks every page below each file's end allocated, which is what
+    /// graph-storage does after any WAL replay: pages freed since the stale
+    /// checkpoint stay unused until the next checkpoint persists the rebuilt
+    /// bitmaps (space, never correctness). Limits: the rule reads file
+    /// modification times, so it needs them to move forward between two
+    /// checkpoints (a clock stepped back across a crash can hide a stale
+    /// file), and a copy of the data directory that does not keep them can
+    /// flag a current file (a needless rebuild) or hide a stale one.
+    fn truncateStaleShardFreeStores(allocator: Allocator, name: []const u8, graph_dir: []const u8) !void {
+        const shards_path = try std.fmt.allocPrint(allocator, "{s}/graphs", .{graph_dir});
+        defer allocator.free(shards_path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var shards_dir = std.Io.Dir.cwd().openDir(io, shards_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer shards_dir.close(io);
+        var it = shards_dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .directory) continue;
+            const shard_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shards_path, entry.name });
+            defer allocator.free(shard_dir);
+            if (!try freeStoreOlderThanManifest(allocator, shard_dir)) continue;
+            if (try truncateFreeStoreIfPresent(allocator, shard_dir)) {
+                log.warn("graph '{s}' shard {s}: free.store predates the shard's last manifest (a checkpoint stopped between its manifest and its free.store); truncating it so GraphEngine.open rebuilds the page bitmaps from disk", .{ name, entry.name });
+            }
+        }
+    }
+
+    fn freeStoreOlderThanManifest(allocator: Allocator, shard_dir: []const u8) !bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const free_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shard_dir, free_store_path_name });
+        defer allocator.free(free_path);
+        const free_stat = std.Io.Dir.cwd().statFile(io, free_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return err,
+        };
+        // Empty: graph-storage rebuilds from disk anyway.
+        if (free_stat.size == 0) return false;
+        for ([_][]const u8{ "manifest.a", "manifest.b" }) |slot| {
+            const manifest_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shard_dir, slot });
+            defer allocator.free(manifest_path);
+            const manifest_stat = std.Io.Dir.cwd().statFile(io, manifest_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => return err,
+            };
+            if (manifest_stat.mtime.nanoseconds > free_stat.mtime.nanoseconds) return true;
+        }
+        return false;
     }
 
     // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12

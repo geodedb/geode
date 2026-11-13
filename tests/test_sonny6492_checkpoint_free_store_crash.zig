@@ -4,8 +4,8 @@
 // graph-storage's checkpoint (0.4.13 `engine_persist.checkpointEx`) flushes
 // the pages, writes the shard manifest and truncates the shard WAL, and only
 // then saves the shard's page bitmaps (`free.store`). The server runs a light
-// checkpoint on every persistence tick (100 ms), whatever
-// GEODE_CHECKPOINT_INTERVAL_MS says. A SIGKILL between the two left the
+// checkpoint on every persistence tick (--persist-interval, 30 s by default),
+// whatever GEODE_CHECKPOINT_INTERVAL_MS says. A SIGKILL between the two left the
 // previous checkpoint's bitmaps beside a manifest and an empty WAL: the
 // restart replayed nothing and loaded them, so every node page allocated
 // since that checkpoint read as free. The hydration scan skips free pages:

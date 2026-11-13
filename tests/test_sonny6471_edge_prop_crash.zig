@@ -270,9 +270,12 @@ fn matrix(allocator: std.mem.Allocator, tde: bool) !usize {
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6471-{d}", .{try util.getRandomPort()});
     std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
-    // No checkpoint before the kill: everything the restart sees comes from
-    // the WAL, which is what this regression is about (a checkpoint flushes
-    // the in-memory pages and hides a missing page image).
+    // No deferred-mode auto-checkpoint before the kill: what the restart sees
+    // comes from the WAL, which is what this regression is about (a
+    // checkpoint flushes the in-memory pages and hides a missing page image).
+    // SONNY-6492: the persistence tick's light checkpoint still runs (every
+    // --persist-interval, 30 s by default); a kill during one is what
+    // test-sonny6492-checkpoint-free-store-crash pins.
     const no_checkpoint = .{ "GEODE_CHECKPOINT_INTERVAL_MS=86400000", "GEODE_CHECKPOINT_OPS=1000000000" };
     const env: []const []const u8 = if (tde) &(no_checkpoint ++ .{"GEODE_TDE_KEY=" ++ tde_key_hex}) else &no_checkpoint;
 

@@ -2218,6 +2218,31 @@
 
 ### Fixed
 
+- **Data loss: nodes survive a crash during a checkpoint (SONNY-6492 item
+  1).** graph-storage 0.4.13's checkpoint writes a shard's manifest and
+  truncates its WAL, and only then saves the shard's page bitmaps
+  (`free.store`). The server runs a light checkpoint on every persistence
+  tick (`--persist-interval`, 30 s by default; `GEODE_CHECKPOINT_INTERVAL_MS`
+  and `GEODE_CHECKPOINT_OPS` do not stop it), so a SIGKILL could land
+  between the two, and a failed bitmap save (ENOSPC, EIO) leaves the same
+  state without a crash. The restart replayed no WAL and loaded the previous
+  checkpoint's bitmaps: the node pages allocated since read as free, so
+  every read missed the nodes on them, the first query after the restart
+  failed with `DataCorruption` (the hydration scan's live-count check:
+  "found 42 live node record(s) but the shard manifest counts 84"), and the
+  allocator could hand out pages holding live data. This was the
+  unexplained `DataCorruption` of `test-sonny6471-edge-prop-crash`. Before
+  it opens a graph, the storage adapter now truncates a shard's
+  `free.store` written before the shard's newer manifest slot, so
+  graph-storage rebuilds the bitmaps from the store files, as it does after
+  any WAL replay. Pages freed since that checkpoint stay unused until the
+  next checkpoint saves the rebuilt bitmaps. The rule reads file
+  modification times; a copy of a data directory that does not keep them
+  can make a needless rebuild. The graph-storage ordering itself is
+  reported upstream (save, or truncate, `free.store` before the WAL is
+  truncated). Regression: `zig build
+  test-sonny6492-checkpoint-free-store-crash` (464 of 464 nodes after the
+  kill, with and without TDE; 0 before).
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness
