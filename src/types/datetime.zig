@@ -456,38 +456,55 @@ pub const Interval = struct {
     }
 
     pub fn toString(self: Interval, allocator: std.mem.Allocator) ![]u8 {
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        defer aw.deinit();
+        self.writeIso(&aw.writer) catch return error.OutOfMemory;
+        return aw.toOwnedSlice();
+    }
+
+    // CANARY: REQ=REQ-SONNY-6489-TEMPORAL-RENDERING; FEATURE="TemporalTypes"; ASPECT=DurationIsoWriter; STATUS=TESTED; TEST=tests/test_sonny6489_temporal_rendering.zig; OWNER=datetime; UPDATED=2026-11-13
+    /// SONNY-6489: the ISO 8601 form of the duration (ISO/IEC 39075 21.2
+    /// <duration literal>), the one writer for stringify, CAST and the wire;
+    /// `fromStr` reads it back as the same duration. Each component carries
+    /// the sign of its part (truncating division: P-1M, PT-1H-1M), and the
+    /// seconds keep their fraction, trailing zeros trimmed (PT1.5S, PT-0.25S).
+    /// The wire writer used a floor division (P-1M came out P-1Y-1M) and both
+    /// writers dropped the fraction (PT0.5S came out "PT").
+    pub fn writeIso(self: Interval, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.months == 0 and self.days == 0 and self.micros == 0) {
-            return allocator.dupe(u8, "PT0S");
+            return w.writeAll("PT0S");
         }
-
-        var result: std.ArrayList(u8) = .empty;
-        defer result.deinit(allocator);
-
-        try result.append(allocator, 'P');
-
+        try w.writeByte('P');
         if (self.months != 0) {
-            const years = @divFloor(self.months, 12);
+            const years = @divTrunc(self.months, 12);
             const months = @rem(self.months, 12);
-            if (years != 0) try result.print(allocator, "{d}Y", .{years});
-            if (months != 0) try result.print(allocator, "{d}M", .{months});
+            if (years != 0) try w.print("{d}Y", .{years});
+            if (months != 0) try w.print("{d}M", .{months});
         }
-
-        if (self.days != 0) {
-            try result.print(allocator, "{d}D", .{self.days});
-        }
-
+        if (self.days != 0) try w.print("{d}D", .{self.days});
         if (self.micros != 0) {
-            try result.append(allocator, 'T');
-            const hours = @divFloor(self.micros, 3600 * 1_000_000);
-            const minutes = @divFloor(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
-            const seconds = @divFloor(@rem(self.micros, 60 * 1_000_000), 1_000_000);
-
-            if (hours != 0) try result.print(allocator, "{d}H", .{hours});
-            if (minutes != 0) try result.print(allocator, "{d}M", .{minutes});
-            if (seconds != 0) try result.print(allocator, "{d}S", .{seconds});
+            try w.writeByte('T');
+            const hours = @divTrunc(self.micros, 3600 * 1_000_000);
+            const minutes = @divTrunc(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
+            const sec_micros = @rem(self.micros, 60 * 1_000_000);
+            if (hours != 0) try w.print("{d}H", .{hours});
+            if (minutes != 0) try w.print("{d}M", .{minutes});
+            if (sec_micros != 0) {
+                const whole = @divTrunc(sec_micros, 1_000_000);
+                const frac: u64 = @abs(@rem(sec_micros, 1_000_000));
+                if (sec_micros < 0 and whole == 0) try w.writeByte('-');
+                try w.print("{d}", .{whole});
+                if (frac != 0) {
+                    var digits: [6]u8 = undefined;
+                    _ = std.fmt.bufPrint(&digits, "{d:0>6}", .{frac}) catch unreachable;
+                    var len: usize = 6;
+                    while (digits[len - 1] == '0') len -= 1;
+                    try w.writeByte('.');
+                    try w.writeAll(digits[0..len]);
+                }
+                try w.writeByte('S');
+            }
         }
-
-        return result.toOwnedSlice(allocator);
     }
 };
 

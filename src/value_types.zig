@@ -698,28 +698,10 @@ fn writeTimestampIso(w: *std.Io.Writer, micros_since_epoch: i64) !void {
     try writeTimeIso(w, time_of_day);
 }
 
+/// SONNY-6489: the one ISO 8601 duration writer (`Interval.writeIso`), which
+/// keeps the fraction of a second (PT1.5S was written PT1S).
 fn writeIntervalIso(w: *std.Io.Writer, iv: datetime.Interval) !void {
-    if (iv.months == 0 and iv.days == 0 and iv.micros == 0) {
-        try w.writeAll("PT0S");
-        return;
-    }
-    try w.writeByte('P');
-    if (iv.months != 0) {
-        const years = @divTrunc(iv.months, 12);
-        const months = @rem(iv.months, 12);
-        if (years != 0) try w.print("{d}Y", .{years});
-        if (months != 0) try w.print("{d}M", .{months});
-    }
-    if (iv.days != 0) try w.print("{d}D", .{iv.days});
-    if (iv.micros != 0) {
-        try w.writeByte('T');
-        const hours = @divTrunc(iv.micros, 3600 * 1_000_000);
-        const minutes = @divTrunc(@rem(iv.micros, 3600 * 1_000_000), 60 * 1_000_000);
-        const seconds = @divTrunc(@rem(iv.micros, 60 * 1_000_000), 1_000_000);
-        if (hours != 0) try w.print("{d}H", .{hours});
-        if (minutes != 0) try w.print("{d}M", .{minutes});
-        if (seconds != 0) try w.print("{d}S", .{seconds});
-    }
+    return iv.writeIso(w);
 }
 
 fn writeUrl(w: *std.Io.Writer, u: url.Url) !void {

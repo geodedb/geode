@@ -2235,6 +2235,24 @@
 
 ### Fixed
 
+- **`localdatetime()` is a local datetime; durations keep their fraction of a
+  second (SONNY-6489 item 4).** `localdatetime()` and `localdatetime(s)`
+  built a zoned (UTC) datetime that rendered with `Z` and compared as an
+  instant; they are now local datetimes (ISO/IEC 39075 20.27 GR 10).
+  Both duration writers dropped the fraction of a second (PT1.5S came out
+  PT1S, PT0.5S as "PT"), and the wire writer (`Interval.toString`, QUIC and
+  gRPC) split negative parts with a floor division (P-1M came out
+  P-1Y-1M, PT-1.5S as PT-1H-1M-2S). Both now use one ISO 8601 writer
+  (`Interval.writeIso`), whose output reads back as the same duration.
+  `CAST(<date, time, datetime or duration> AS STRING)` is the value's
+  literal form (it was NULL). **Behaviour change:** `localdatetime(...)`
+  renders without `Z` and is a local datetime in comparisons and
+  arithmetic; negative durations on the wire are correct. **Not changed
+  (story):** a zoned datetime (TIMESTAMPTZ) still stores only its UTC
+  instant, so `datetime('...+02:00')` reads back as the UTC time with `Z`;
+  keeping the offset needs a new value encoding (in memory, on disk and on
+  the wire) with a version for values stored before it. Regression: `zig
+  build test-sonny6489-temporal-rendering`.
 - **A QUIC listener that cannot bind frees its TLS configuration once
   (SONNY-6489 item 5).** `geode serve --listen ::1:0` (an unbracketed IPv6
   address, refused with InvalidAddress; the grammar is SONNY-6487) logged

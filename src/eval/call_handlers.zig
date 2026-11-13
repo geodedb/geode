@@ -1050,6 +1050,14 @@ pub fn evalTypeCastFunction(
                 },
                 .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
                 .Str => |s| return Value{ .Str = s },
+                // SONNY-6489: a datetime or duration casts to the character
+                // form of its literal (20.8; ISO 8601), the form it renders
+                // in, which reads back as the same value. It was NULL.
+                .Date, .Time, .TimeTZ, .Timestamp, .TimestampTZ, .Interval => {
+                    var buf: [64]u8 = undefined;
+                    const text = try value_types.stringify(value_arg, &buf);
+                    return Value{ .Str = try allocator.dupe(u8, text) };
+                },
                 else => return Value{ .Null = {} },
             }
         }

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:43:55.615266759Z",
+  "generated_at": "2026-11-13T16:44:29.263424065Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86946,6 +86946,20 @@
       "features": [
         {
           "feature": "TemporalTypes",
+          "aspect": "DurationIsoWriter",
+          "status": "TESTED",
+          "files": [
+            "src/types/datetime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TemporalTypes",
           "aspect": "LocalDatetimeAndDurationFraction",
           "status": "TESTED",
           "files": [
@@ -94636,7 +94650,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4936
+      "TESTED": 4937
     },
     "by_aspect": {
       "2PC": 3,
@@ -95693,6 +95707,7 @@
       "DurablePersistTestSuite": 1,
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
+      "DurationIsoWriter": 1,
       "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
       "E2E": 8,

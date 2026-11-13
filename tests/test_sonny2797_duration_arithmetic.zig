@@ -55,7 +55,7 @@ fn checkInstantPlusDuration(s: *Session, f: *Failures) !void {
     try v(s, f, "RETURN datetime('1969-12-31T23:00:00Z') + duration('PT2H') AS x", "1970-01-01T01:00:00Z");
     // A local datetime.
     try v(s, f, "RETURN timestamp('2024-01-31T10:00:00') + duration('P1M1DT1H') AS x", "2024-03-01T11:00:00");
-    try v(s, f, "RETURN localdatetime('2024-12-31T23:00:00') + duration('PT1H') AS x", "2025-01-01T00:00:00Z");
+    try v(s, f, "RETURN localdatetime('2024-12-31T23:00:00') + duration('PT1H') AS x", "2025-01-01T00:00:00"); // SONNY-6489: stays a local datetime
     // A date: whole days of the day-to-second part.
     try v(s, f, "RETURN date('2024-01-01') + duration('PT48H') AS x", "2024-01-03");
     try v(s, f, "RETURN date('2024-01-31') + duration('P1M') AS x", "2024-02-29");

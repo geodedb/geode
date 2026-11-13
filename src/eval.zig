@@ -4460,13 +4460,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle localdatetime() function - returns current local datetime
     if (std.ascii.eqlIgnoreCase(function_name, "localdatetime")) {
         if (args.len == 0) {
-            // localdatetime() with no args returns current local datetime (same as datetime for now)
-            const result = evaluator_functions.current_timestamp();
-            return heapValueToEvalValue(result);
+            // SONNY-6489: the current local datetime (20.27 GR 10a), in the
+            // server's time zone displacement (UTC); it was a zoned datetime.
+            const now = evaluator_functions.current_timestamp();
+            return Value{ .Timestamp = .{ .micros_since_epoch = now.TimestampTZ.micros_since_epoch_utc } };
         } else if (args.len == 1) {
             // localdatetime(string) parses ISO datetime string
             const datetime_module = @import("types/datetime.zig");
-            const eval_ext = @import("eval_extended.zig");
 
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
@@ -4477,9 +4477,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             // SONNY-2808: a malformed string (or one with a zone: a local
             // datetime has none) is a TimeParse data exception; `return null`
             // fell through to "unknown function" (42883).
+            // SONNY-6489: a local datetime (20.27 GR 10b), not a zoned one:
+            // it was a UTC TIMESTAMPTZ that rendered with Z.
             const ts = datetime_module.Timestamp.fromStr(str) catch return EvalError.TimeParse;
-            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
-            return Value{ .ExtValue = tz_ts };
+            return Value{ .Timestamp = ts };
         } else {
             return null;
         }
