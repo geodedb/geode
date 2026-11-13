@@ -91,8 +91,9 @@ const BoundedHarness = struct {
         _ = unsetenv("GEODE_NODE_CACHE_ENTRIES");
     }
 
-    // Parse with `geode.parse` (not parseGql) so ORDER BY over `n.<key>`
-    // property access is accepted (parseGql enforces ident_order_only).
+    // Parse with `geode.parse`, which accepts ORDER BY over `n.<key>`
+    // property access whatever the environment (`parseGql` accepts it too
+    // since SONNY-6351, unless GEODE_ORDER_KEYS_EXPR=0).
     pub fn runQuery(self: *BoundedHarness, query: []const u8) !execution.ExecutionResult {
         const aa = self.arena.allocator();
         var parsed = try geode.parse(aa, query, .{});

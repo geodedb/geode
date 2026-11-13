@@ -155,9 +155,10 @@ const Harness = struct {
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
     }
 
-    // Relaxed-parse variant: `parseGql` enforces `ident_order_only=true`, which
-    // rejects `ORDER BY p.<key>` (property-access ordering) at parse time.
-    // `geode.parse` accepts it, which is required to drive the top-K fast path.
+    // Relaxed-parse variant: `geode.parse` accepts `ORDER BY p.<key>`
+    // (property-access ordering) whatever the environment, which the top-K
+    // fast path needs. (`parseGql` accepts it too since SONNY-6351; with
+    // GEODE_ORDER_KEYS_EXPR=0 it allows identifier keys only.)
     pub fn runQueryRelaxed(self: *Harness, query: []const u8) !execution.ExecutionResult {
         const aa = self.arena.allocator();
         var parsed = try geode.parse(aa, query, .{});

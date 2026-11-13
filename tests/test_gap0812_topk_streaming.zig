@@ -76,10 +76,10 @@ const Harness = struct {
 
     pub fn runQuery(self: *Harness, query: []const u8) !execution.ExecutionResult {
         const aa = self.arena.allocator();
-        // Use `geode.parse` (rather than `geode.parseGql`) so ORDER BY over
-        // `p.<key>` property access is accepted — parseGql enforces
-        // `ident_order_only=true` which would reject the bench-scenario
-        // `ORDER BY p.lt_id` shape at parse time.
+        // `geode.parse` takes the parser's options as given, so ORDER BY over
+        // `p.<key>` property access is accepted whatever the environment.
+        // (`geode.parseGql` accepts it too since SONNY-6351; with
+        // GEODE_ORDER_KEYS_EXPR=0 it allows identifier keys only.)
         var parsed = try geode.parse(aa, query, .{});
         defer parsed.deinit();
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
