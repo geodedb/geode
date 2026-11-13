@@ -8225,6 +8225,23 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6494-repl-long-input", "Run SONNY-6494 item 3 regression (geode shell: \\echo, \\set, an unknown command, \\use and \\graph answer long text; \\source runs a path over 500 bytes and names one it cannot open; a statement over 4 KiB typed across lines runs once, whole; \\history prints it; ESC before a UTF-8 character is not Alt; real shell, plain mode and a PTY)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6511 (5): the shell keeps the character after ESC when it is a
+    // digit or punctuation; GEODE_AUDIT_*_ENABLED takes 1/0, true/false,
+    // yes/no in any case and refuses anything else.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_repl_audit.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6511-repl-audit", "Run SONNY-6511 item 5 regression (geode shell through a PTY reads ESC followed by a digit or punctuation in one read as ESC and the character; geode serve refuses a GEODE_AUDIT_*_ENABLED value that is not 1/0/true/false/yes/no and honours TRUE / Yes / no; real shell, built binary)").dependOn(&run_tests.step);
+    }
+
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
     // sends .cdc_ctrl and .cdc_diag, and asserts both are rejected.
