@@ -339,7 +339,34 @@ RETURN label ORDER BY label
 CALL db.schema.nodeTypeProperties()
 YIELD nodeType, propertyName, propertyTypes
 RETURN nodeType, collect(propertyName) AS properties
+
+-- Filtering a procedure's rows: the FILTER statement (14.6)
+CALL db.labels() YIELD label
+FILTER label <> 'Internal'
+RETURN label ORDER BY label
 ```
+
+### FILTER Statement (14.6)
+
+`FILTER { <where clause> | <search condition> }` is a primitive query
+statement (14.3): `FILTER WHERE c` and `FILTER c` are the same statement
+(14.6 SR 2). Geode accepts it after `MATCH` (also after the MATCH's WHERE),
+after `CALL ... [YIELD ...]`, and after `MATCH ... CALL ... YIELD ...`, any
+number of times in a row. It keeps a row only when the condition is True;
+False and Unknown (NULL) drop it (16.13 GR 2, 19.1 GR 2). After a `CALL`
+the condition sees the yielded columns by the names the `YIELD` gives them
+(aliases included); after `MATCH ... CALL` it also sees the MATCH variables.
+
+```gql
+MATCH (n:Person) FILTER n.age >= 18 FILTER WHERE n.active RETURN n.name
+MATCH (p:Person) CALL db.labels() YIELD label FILTER label <> 'Person' RETURN p.name, label
+```
+
+A `WHERE` directly after `YIELD` (the Cypher form) is not ISO GQL (16.14
+<yield clause> is `YIELD <yield item list>` only) and is refused with
+42000, naming the FILTER form. Not yet accepted: a FILTER after an inline
+`LET` or between two MATCH clauses. Regression: `zig build
+test-sonny6460-filter-statement`.
 
 ## 🔧 Advanced Features
 

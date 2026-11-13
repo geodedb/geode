@@ -1066,21 +1066,8 @@ pub fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult,
         if (item.alias != null) break true;
     } else false;
     if (proc.return_clause == null and !aliased) return;
-    // The yielded columns as the YIELD names them.
-    const names = try allocator.alloc([]const u8, result.columns.len);
+    const names = try callYieldNames(allocator, result.*, proc);
     defer allocator.free(names);
-    @memcpy(names, result.columns);
-    for (yield_items) |item| {
-        const alias = item.alias orelse continue;
-        const source = switch (item.expr) {
-            .Ident => |id| id.orig,
-            .Member => |m| m.field,
-            else => continue,
-        };
-        for (result.columns, names) |column, *name| {
-            if (std.mem.eql(u8, column, source)) name.* = alias;
-        }
-    }
     var view = result.*;
     view.columns = names;
     var identity: ?[]ast.ReturnItem = null;
@@ -1102,6 +1089,78 @@ pub fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult,
     for (result.flags.items) |flag| try appendFlagIfMissing(allocator, &projected, flag);
     result.deinit(allocator);
     result.* = projected;
+}
+
+/// The yielded columns as the YIELD names them: each column a YIELD item
+/// aliases is named by its alias. The names borrow from `result` and `proc`.
+fn callYieldNames(allocator: std.mem.Allocator, result: ExecutionResult, proc: ast.CallProcedure) ![][]const u8 {
+    const names = try allocator.alloc([]const u8, result.columns.len);
+    @memcpy(names, result.columns);
+    for (proc.yield_items orelse &.{}) |item| {
+        const alias = item.alias orelse continue;
+        const source = switch (item.expr) {
+            .Ident => |id| id.orig,
+            .Member => |m| m.field,
+            else => continue,
+        };
+        for (result.columns, names) |column, *name| {
+            if (std.mem.eql(u8, column, source)) name.* = alias;
+        }
+    }
+    return names;
+}
+
+// CANARY: REQ=REQ-SONNY-6460-FILTER-STATEMENT; FEATURE="FilterStatement"; ASPECT=CallFilter; STATUS=TESTED; TEST=tests/test_sonny6460_filter_statement.zig; OWNER=engine; UPDATED=2026-11-13
+/// SONNY-6460 item 2: the FILTER statements after a procedure call (ISO/IEC
+/// 39075:2024 14.6): a row is kept only when the condition is True (16.13
+/// GR 2, 19.1 GR 2); False and Unknown (NULL) drop it. The condition sees
+/// the yielded columns by the names the YIELD gives them, and the
+/// statement's parameters. An evaluation error is the statement's error.
+pub fn applyCallFilter(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, context: ExecutionContext) !void {
+    const filter = (proc.filter orelse return).*;
+    const names = try callYieldNames(allocator, result.*, proc);
+    defer allocator.free(names);
+    const keep = try allocator.alloc(bool, result.rows.len);
+    defer allocator.free(keep);
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    var kept: usize = 0;
+    for (result.rows, keep) |row, *k| {
+        _ = scratch.reset(.retain_capacity);
+        const width = @min(names.len, row.len);
+        const env: eval.Env = .{
+            .names = names[0..width],
+            .values = row[0..width],
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
+            .allocator = scratch.allocator(),
+        };
+        const verdict = try eval.evalExpr(scratch.allocator(), filter, env);
+        k.* = verdict == .Bool and verdict.Bool;
+        if (k.*) kept += 1;
+    }
+    if (kept == result.rows.len) return;
+    const rows = try allocator.alloc([]Value, kept);
+    var next: usize = 0;
+    for (result.rows, keep) |row, k| {
+        if (k) {
+            rows[next] = row;
+            next += 1;
+        } else {
+            freeRowValues(allocator, result, row);
+        }
+    }
+    allocator.free(result.rows);
+    result.rows = rows;
+}
+
+/// SONNY-6460 item 2: a procedure call in a transaction body, with its
+/// FILTER statements applied (`applyCallFilter`).
+fn executeCallProcedureFiltered(allocator: std.mem.Allocator, proc: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+    var result = try executeCallProcedure(allocator, proc, context);
+    errdefer result.deinit(allocator);
+    try applyCallFilter(allocator, &result, proc, context);
+    return result;
 }
 
 pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
@@ -1962,7 +2021,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     last_result = (switch (body_stmt.*) {
                         .Query => |q| executeQueryWithContext(allocator, q, mut_context),
                         .Call => |c| switch (c) {
-                            .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
+                            .Procedure => |proc| executeCallProcedureFiltered(allocator, proc, mut_context),
                             .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
                         },
                         .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
@@ -2825,6 +2884,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     };
                     result = try executeCallStatement(allocator, call_stmt, context);
                     errdefer result.deinit(allocator);
+                    try applyCallFilter(allocator, &result, proc, context);
                     try projectCallReturn(allocator, &result, proc, context);
                     if (proc.order_by) |order| try sortRows(allocator, &result, order);
                     try applyQueryWindow(allocator, &result, window);

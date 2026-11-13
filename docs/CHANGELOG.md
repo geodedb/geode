@@ -1995,6 +1995,16 @@
 
 ### Added
 
+- **The ISO FILTER statement after `CALL ... YIELD` (SONNY-6460 item 2).**
+  `FILTER [WHERE] <condition>` (ISO/IEC 39075:2024 14.6) now follows
+  `CALL ... [YIELD ...]` and `MATCH ... CALL ... YIELD ...`, and any number
+  of FILTER statements may follow one another (after a MATCH only one was
+  accepted). A row is kept only when the condition is True; False and NULL
+  drop it. After a CALL the condition reads the yielded columns by their
+  YIELD names; after `MATCH ... CALL` also the MATCH variables. The 42000
+  refusal of a WHERE after YIELD now points at `FILTER [WHERE]` instead of
+  saying Geode does not accept it. See `docs/GQL_COMPLIANCE.md` (FILTER
+  Statement). Regression: `zig build test-sonny6460-filter-statement`.
 - **CANARY Governance Tokens:** 24 CANARY markers added across timeseries source files (GAP-0281)
 - **Legacy GAP ID Mapping:** Documented mapping from Grey Cardinal GAP-004/005/006 to GAP-0279+ numbering (GAP-0288)
 - **Time-Series Audit Report:** `docs/TIMESERIES_AUDIT_REPORT.md` tracking all timeseries gap status

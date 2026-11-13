@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:30:01.148702201Z",
+  "generated_at": "2026-11-13T09:48:02.688071755Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85588,6 +85588,34 @@
       "features": [
         {
           "feature": "FilterStatement",
+          "aspect": "CallFilter",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "FilterStatement",
+          "aspect": "Parser",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "FilterStatement",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93308,7 +93336,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4861
+      "TESTED": 4863
     },
     "by_aspect": {
       "2PC": 3,
@@ -93702,6 +93730,7 @@
       "CalibrationEntries": 1,
       "CallDispatch": 1,
       "CallExecution": 1,
+      "CallFilter": 1,
       "CallHandlers": 1,
       "CallHandlersImport": 1,
       "CallParsing": 1,
@@ -95809,7 +95838,7 @@
       "ParseHotPath": 1,
       "ParseHotPathWiring": 1,
       "ParseTimeEnforcement": 1,
-      "Parser": 26,
+      "Parser": 27,
       "ParserBasic": 1,
       "ParserCreateQuery": 1,
       "ParserCreateStatement": 2,
