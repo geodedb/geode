@@ -421,11 +421,16 @@ assert_raft_state_persisted() {
 #    liveness/heartbeat-driven re-resolve can recover the peer. That is the
 #    contract under test.
 reschedule_node() {
-  local id=$1 oldpfx="${IPLAST[$id]:-1}" newpfx oldip o
+  local id=$1 newpfx oldip o
+  local oldpfx="${IPLAST[$id]:-1}"   # a separate `local`: in one, $id is still the caller's
   newpfx=2; [ "$oldpfx" = "2" ] && newpfx=1
   oldip="$SUBNET.$oldpfx$id"
-  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
-  PID[$id]=""; sleep 3
+  # SONNY-6451: reap the old process before its data dir is wiped and a new
+  # one starts on the SAME path (in k8s the new pod gets a different volume).
+  # A plain SIGTERM + `sleep 3` let a still-flushing old process recreate part
+  # of the wiped tree, and the new node then refused to start
+  # ("initializing the auth graph manager failed ... FileNotFound").
+  kill_and_reap "$id"
   for o in $NS_NODES; do
     [ "$o" = "$id" ] && continue
     $SUDO ip netns exec gt$o ip neigh replace "$oldip" lladdr 02:00:00:00:00:ee nud permanent dev vtp$o 2>/dev/null

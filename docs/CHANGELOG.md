@@ -1902,6 +1902,62 @@
 
 ### Fixed
 
+- **Operator-visible: on SIGTERM a cluster node stops its raft transport
+  before the final flush and exits promptly (SONNY-6451 item 3).**
+  `geode serve` stopped the `ClusterCoordinator` only in a defer that ran
+  after "[shutdown] data flush complete", so the node kept leading or
+  following (applying committed entries to the store) during and after the
+  flush, its transport threads kept re-resolving peers, and the teardown
+  then waited on inbound cluster handlers parked on a live peer's stream:
+  "thread-pool deinit timed out after 2000ms with 2 active tasks", and the
+  teardown watchdog force-exited the process 30 s later (orchestrators
+  SIGKILLed it first). The coordinator is now stopped right before the full
+  checkpoint, under the first-stage flush watchdog, and the log shows
+  "[shutdown] cluster transport stopped (<n>ms)" before "[shutdown] data
+  flush complete". Regression: `zig build test-sonny6451-cluster-sigterm`.
+- **A cluster node keeps receiving raft traffic after its peers restart
+  or move (SONNY-6451 item 1).** Raft frames ride one long-lived stream per
+  peer, and the inbound handler on the receiver parked on that stream in a
+  loop that only re-read it while it was quiet. A peer that went away
+  without FIN or CONNECTION_CLOSE (a killed or force-exited process, a
+  rescheduled pod whose old IP is gone) left the stream open, the QUIC
+  library answers `WouldBlock` for it forever, and the RC1 idle reap, the
+  RC-A occupancy sweeper and the shutdown flag were checked only between
+  streams. Each such peer therefore held one of the receiver's 4 cluster
+  connection workers for the life of the process; after four, the node
+  serviced no inbound raft connection at all, so it never received the
+  leader's appends while the leader logged "peer stalled ... evicting
+  stale connection" over and over (the netns membership-churn M6-M8
+  failures). The handler now gives a quiet stream up on shutdown, a closed
+  connection, a sweeper request, or no frame for the inbound idle deadline
+  (`GEODE_CLUSTER_INBOUND_IDLE_MS`, default 30 s; a live peer sends a
+  heartbeat or response every ~50 ms), releases its worker and closes the
+  connection; each frame refreshes the sweeper's activity clock. A raft
+  sender whose connection the peer closed now rebuilds it on the next send
+  instead of writing into it. Regression:
+  `zig build test-sonny6451-raft-restarted-peer`.
+- **The cluster health loop fails over only configured peers and keeps a
+  failed peer's address (SONNY-6451 item 2).** `healthLoop` iterated
+  `cluster_state.nodes` while `handleNodeFailure` `swapRemove`d the failed
+  peer from it, so the same pass skipped the peer moved into its slot and
+  read the vacated (`undefined`) slot as a node: the log's "Node detected
+  as failed node_id=12297829382473034410" (0xAAAAAAAAAAAAAAAA), recorded in
+  the health monitor and failed over. Removing the peer also dropped its
+  endpoint from the address book for good (shard forwarding and
+  `sendToNode` to it failed with `NodeNotFound` after it came back) and
+  leaked the entry. A failed peer now stays in the list marked `failed`, is
+  failed over once when it turns unhealthy, and is `active` again when it
+  is heard from. Regression: `zig build test-sonny6451-health-failed-peer`.
+- **The Python test runners fail a test that uses an undeclared secret
+  (SONNY-6451 item 5).** `scripts/test/extended_test_runner.py` and
+  `scripts/test/test_runner_core.py` substituted any `${secret:NAME}` other
+  than `admin_password`, `user_password` and `api_token` that the spec's
+  `secrets` section does not declare with `default-NAME`, a value nobody
+  chose and one the password policy refuses for a password-named secret
+  (so the test failed later with a misleading policy error). The test now
+  fails at once with `UnknownSecretError` naming the secret. The
+  fixture-secrets scan refuses a computed-name secret lookup with a
+  fallback. Regression: `zig build test-sonny6436-fixture-secrets`.
 - **`test-startup-lazy-hydrate` finishes in under a minute instead of
   running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
   writes (one fsync per commit), checkpoints, crashes or closes, and reopens
@@ -3663,6 +3719,13 @@
   described only these files. `src/server/main.zig` no longer imports the
   unused `geode.exec`, and `tests/benchmark_hashagg_spill_variance.zig` no
   longer names the removed `HashAggregator`.
+- **Dead benchmark: `tests/benchmark_hashagg_spill_variance.zig`
+  (SONNY-6451 item 4).** It measured spilling in the `HashAggregator`
+  removed under SONNY-6436 item 6 (geode has no aggregation spill path),
+  no build step compiled it, and it could not compile (`../src` imports
+  outside the module root, `ArrayList.init`, `std.mem.copy`, and the old
+  `runGroupedQuery` arity). Its BENCHED marker (REQ-GQL-012
+  HashAggSpillVarianceEnvelope) described only that code.
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant

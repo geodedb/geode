@@ -404,6 +404,11 @@ const quic = if (builtin.is_test) struct {
         // Task A6b: test-mode stub for the same poll() call the production
         // path uses to flush in-flight FIN before tearing the client down.
         pub fn poll(_: *QuicClient, _: u32) !void {}
+        // SONNY-6451: test-mode stub for the closed-connection check in
+        // `Transport.send` (a stub connection never closes).
+        pub fn isClosed(_: *const QuicClient) bool {
+            return false;
+        }
     };
     pub const QuicClientStream = struct {
         pub fn writeAll(_: *QuicClientStream, _: []const u8) !void {}
@@ -1770,6 +1775,18 @@ pub const Transport = struct {
         const io_send = std.Io.Threaded.global_single_threaded.io();
         conn.client_mutex.lockUncancelable(io_send);
         defer conn.client_mutex.unlock(io_send);
+
+        // SONNY-6451: the peer closed this connection (CONNECTION_CLOSE: it
+        // shut down, or its inbound handler gave up a stream that stayed
+        // quiet past the idle deadline). The vendor still accepts writes on a
+        // closed connection and sends nothing, so rebuild it instead.
+        if (conn.client.isClosed()) {
+            log.info("raft transport peer closed the connection; evicting it", &.{
+                Attr.uint("peer", peer.id),
+            });
+            self.evictPeerConnection(peer.id);
+            return error.ConnectionClosed;
+        }
 
         // 2026-06-08 raft multiplexed streams: reuse ONE long-lived stream per
         // peer instead of opening a fresh bidi stream per RPC. Lazily (re)open

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:58:40.357130829Z",
+  "generated_at": "2026-11-13T04:58:56.51273595Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28290,20 +28290,6 @@
             "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope"
           ],
           "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggSpillVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_spill_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope"
-          ],
           "owner": "engine",
           "updated": "2025-09-21"
         },
@@ -85649,6 +85635,82 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6451-CLUSTER-SIGTERM",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ShutdownStopsRaftBeforeFlush",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_cluster_sigterm.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_cluster_sigterm.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6451-HEALTH-FAILED-PEER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HealthPassKeepsFailedPeer",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_health_failed_peer.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_health_failed_peer.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6451-RAFT-RESTARTED-PEER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InboundStreamReleasesWorker",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_raft_restarted_peer.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_raft_restarted_peer.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6451-UNKNOWN-SECRET",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "UndeclaredSecretIsAnError",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93275,11 +93337,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 210,
+      "BENCHED": 209,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4860
+      "TESTED": 4864
     },
     "by_aspect": {
       "2PC": 3,
@@ -94928,13 +94990,13 @@
       "HasGraphGrant": 2,
       "HasGraphGrantLocked": 1,
       "HashAggDistinctHighCardVarianceEnvelope": 1,
-      "HashAggSpillVarianceEnvelope": 1,
       "HashBeforeStore": 1,
       "Hashing": 1,
       "HavingCountDistinctFilter": 1,
       "HavingFilter": 1,
       "HeadElement": 1,
       "HealthCheck": 1,
+      "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,
       "HelloAuthCheck": 1,
@@ -95012,6 +95074,7 @@
       "InboundIdleDeadline": 1,
       "InboundOccupancySweeper": 1,
       "InboundReapCountForCapacity": 1,
+      "InboundStreamReleasesWorker": 1,
       "IncomingEdgeFilter": 1,
       "IncrementalPathReachableOnWirePath": 1,
       "IncrementalRefresh": 1,
@@ -96795,6 +96858,7 @@
       "ShowTypeGrantsFor": 1,
       "Shutdown": 3,
       "ShutdownSnapshotWrite": 1,
+      "ShutdownStopsRaftBeforeFlush": 1,
       "SignalBasedInterrupt": 1,
       "SignalHandler": 1,
       "SignalInstall": 1,
@@ -97168,6 +97232,7 @@
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundedWithoutLimit": 1,
+      "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
       "UndoApplication": 1,

@@ -1845,7 +1845,6 @@ REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowHandling,TESTED,tests/test_group
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowSum,TESTED,tests/test_decimal_overflow_aggregates.zig,TestCANARY_REQ_GQL_012_DecimalOverflowSum,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,Engine,TESTED,src/exec.zig,tests/e2e_protocol_groupby_basic.zig,,engine,2025-09-20
 REQ-GQL-012,GROUP BY/Aggregation,HashAggDistinctHighCardVarianceEnvelope,BENCHED,tests/benchmark_hashagg_distinct_variance.zig,BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope,,engine,2025-09-21
-REQ-GQL-012,GROUP BY/Aggregation,HashAggSpillVarianceEnvelope,BENCHED,tests/benchmark_hashagg_spill_variance.zig,,BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,tests/test_groupby_having_count_distinct.zig,TestCANARY_REQ_GQL_012_HavingCountDistinctFilter,,engine,2025-09-21
 REQ-GQL-012,Planner ISO Enforcement,OrderByEnforcement,TESTED,tests/e2e_planner_order_enforcement.zig,e2e_planner_order_enforcement,,planner,2025-09-25
 REQ-GQL-013,AdvancedUnionOperations,IntersectOperation,TESTED,tests/advanced_union_test.zig,TestCANARY_REQ_GQL_013_IntersectOperation,,engine,2025-10-03
@@ -5466,6 +5465,10 @@ REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6447_rls_raw_tokenize.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-6448-KMS-NO-LOCAL-DEV,KMSProviderSystem,NoKeyFromKeyId,TESTED,tests/test_sonny6448_kms_dead_paths.zig,tests/test_sonny6448_kms_dead_paths.zig,,security,2026-11-12
 REQ-SONNY-6448-TDE-TRANSPARENT-NO-FAKE-IMPACT,TDEProcedures,NoFakePerformanceImpact,TESTED,tests/test_sonny6448_tde_transparent_encryption.zig,tests/test_sonny6448_tde_transparent_encryption.zig,,security,2026-11-12
+REQ-SONNY-6451-CLUSTER-SIGTERM,DistributedCluster,ShutdownStopsRaftBeforeFlush,TESTED,tests/test_sonny6451_cluster_sigterm.zig,tests/test_sonny6451_cluster_sigterm.zig,,distributed,2026-11-12
+REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,TESTED,tests/test_sonny6451_health_failed_peer.zig,tests/test_sonny6451_health_failed_peer.zig,,distributed,2026-11-12
+REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,tests/test_sonny6451_raft_restarted_peer.zig,tests/test_sonny6451_raft_restarted_peer.zig,,distributed,2026-11-12
+REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08
