@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:37:12.197510028Z",
+  "generated_at": "2026-11-13T04:44:07.797027728Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85781,6 +85781,20 @@
       "features": [
         {
           "feature": "EngineDirectNodeOwnership",
+          "aspect": "LaterEntryReplacesEarlier",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "EngineDirectNodeOwnership",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93426,7 +93440,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4868
+      "TESTED": 4869
     },
     "by_aspect": {
       "2PC": 3,
@@ -95339,6 +95353,7 @@
       "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
       "LatencyVarianceEnvelope": 2,
+      "LaterEntryReplacesEarlier": 1,
       "LayeredArchitecture": 1,
       "LazyEvaluation": 1,
       "LazyFetchCache": 1,

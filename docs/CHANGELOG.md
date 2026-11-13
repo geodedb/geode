@@ -1844,6 +1844,17 @@
 
 ### Fixed
 
+- **A stored property chain that holds the same key twice no longer leaks
+  when it is read (SONNY-6450 item 6).** `getAllNodeProperties` /
+  `getAllEdgeProperties` decode each entry of a chain into a map
+  (`putDecodedProperty`), which copied the key and called `put`: for a key
+  already in the map, `put` kept the map's key and overwrote the value, so
+  the new key copy and the earlier value (a string's or an extended value's
+  bytes) were never freed. The later entry's value is still the one kept,
+  and the earlier one is now freed; a later null (the REMOVE tombstone)
+  still removes the key. Regression: `zig build
+  test-sonny6450-ownership-residuals` (3/3, 0 leaks; was 2 pass, 1 fail,
+  9 leaks).
 - **A member read (`n.p`) has one ownership, and every projection path owns
   the values it builds from it (SONNY-6449, SONNY-6450 items 3-5,
   SONNY-6437 items 1, 2, 6).** A read of an FLE-encrypted field returned a

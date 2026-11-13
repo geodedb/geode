@@ -5473,6 +5473,7 @@ REQ-SONNY-6449-MEMBER-READ-OWNERSHIP,ExpressionEvaluator,Regression,TESTED,tests
 REQ-SONNY-6449-PROJECTION-OWNERSHIP,ExecutionResultOwnership,LentProjectionValues,TESTED,src/execution/value_utilities.zig,tests/test_sonny6449_projection_value_ownership.zig,,execution,2026-11-12
 REQ-SONNY-6449-STATEMENT-SCRATCH,ExecutionResultOwnership,EntryPointScratch,TESTED,src/execution.zig,tests/test_sonny6449_projection_value_ownership.zig,,execution,2026-11-12
 REQ-SONNY-6449-STATEMENT-SCRATCH,PerQueryArenaPool,StatementScratch,TESTED,src/server/query_arena.zig,tests/test_sonny6449_projection_value_ownership.zig,,engine,2026-11-12
+REQ-SONNY-6450-DUPLICATE-STORED-KEY,EngineDirectNodeOwnership,LaterEntryReplacesEarlier,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6450_ownership_residuals.zig,,storage,2026-11-12
 REQ-SONNY-6450-DUPLICATE-STORED-KEY,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny6450_ownership_residuals.zig,tests/test_sonny6450_ownership_residuals.zig,,storage,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

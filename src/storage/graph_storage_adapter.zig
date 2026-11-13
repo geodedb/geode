@@ -1575,11 +1575,15 @@ fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.Property
 }
 
 // CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReadMapPartialFailure; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+// CANARY: REQ=REQ-SONNY-6450-DUPLICATE-STORED-KEY; FEATURE="EngineDirectNodeOwnership"; ASPECT=LaterEntryReplacesEarlier; STATUS=TESTED; TEST=tests/test_sonny6450_ownership_residuals.zig; OWNER=storage; UPDATED=2026-11-12
 /// Decode `encoded` and put it into `map` under a copy of `key`. The map owns
 /// both copies once the put succeeds. If a copy or the put itself fails, the
 /// copies made so far are freed here, and the map is unchanged (SONNY-2463:
-/// they used to leak).
-/// `pub` for the SONNY-6450 item 6 regression.
+/// they used to leak). SONNY-6450 item 6: a key the map already holds (the
+/// same key twice in a stored property chain) has its value replaced by the
+/// later entry's, and the earlier value freed; `put` kept the map's key and
+/// dropped both the new key copy and the earlier value. `pub` for that
+/// regression.
 pub fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
     const decoded = try gs.property.decode(allocator, encoded);
     // CANARY: REQ=REQ-SONNY-6433-KEYS-AFTER-REMOVE; FEATURE="PropertyStorage"; ASPECT=TombstoneNotAProperty; STATUS=TESTED; TEST=tests/test_sonny6433_keys_after_remove.zig; OWNER=storage; UPDATED=2026-11-12
@@ -1595,9 +1599,14 @@ pub fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.Prope
         return;
     }
     errdefer freeOwnedStorageProperty(allocator, decoded.value);
+    if (map.getPtr(key)) |held| {
+        freeOwnedStorageProperty(allocator, held.*);
+        held.* = decoded.value;
+        return;
+    }
     const owned_key = try allocator.dupe(u8, key);
     errdefer allocator.free(owned_key);
-    try map.put(owned_key, decoded.value);
+    try map.putNoClobber(owned_key, decoded.value);
 }
 
 // CANARY: REQ=REQ-SONNY-2806-EXACT-INDEX-NUMBER-HASH; FEATURE="InlinePropertyMatch"; ASPECT=ExactNumberHash; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-26
