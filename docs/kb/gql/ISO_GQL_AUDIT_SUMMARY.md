@@ -1,5 +1,11 @@
 # ISO-GQL Audit Summary Report
 
+> **Status note (2026-11-13, SONNY-6343):** this is a historical snapshot.
+> MATCH pattern execution, property access, labels, traversal and OPTIONAL
+> MATCH (with outer-join semantics) have long been implemented and are
+> executed, not only parsed. See [GQL_COMPLIANCE.md](../../GQL_COMPLIANCE.md)
+> for the current status.
+
 **Date**: 2025-09-17  
 **Auditor**: ISO-GQL Auditor v1.1  
 **Repository**: geode v0.1.0  
@@ -19,7 +25,7 @@ The geode project currently implements a **SQL-like query engine** with GQL synt
 | Property graph model | 4.3 | Not Implemented | No property access |
 | Node/edge labels | 4.3, 22 | Not Implemented | No label filtering |
 | Graph traversal | 22.4 | Not Implemented | No path operations |
-| OPTIONAL MATCH | 14.4 | Parser only | No outer semantics |
+| OPTIONAL MATCH | 14.4 | Parser only (2025-09; executed since, see the status note) | No outer semantics |
 
 ### 2. Working Features
 

@@ -457,6 +457,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.ParseMemoryLimit => .{ .code = "54000", .message = "Parsing the request needs more than 64 MiB" },
         // SONNY-6433: ISO/IEC 39075 Feature GH02 (the parser's own message is the same).
         error.UndirectedEdgeNotSupported => .{ .code = "0A000", .message = "undirected edges are not supported: Geode stores directed edges only, so an undirected edge pattern (~[ ]~, ~, <~[ ]~, ~[ ]~>; ISO/IEC 39075 Feature GH02) can be neither matched nor inserted. Use -[ ]-> or <-[ ]- (or -[ ]- to match either direction)" },
+        // SONNY-6343: the parser's message (which names the shape) is the
+        // detail where the parse outcome carries it.
+        error.UnsupportedQueryShape => .{ .code = "0A000", .message = "This query shape is not supported: a NEXT after a statement with no RETURN or after a UNION, INTERSECT, EXCEPT or OTHERWISE, or an inline CALL other than a statement-level CALL { } followed by WITH, WHERE or RETURN" },
         error.QueryNestingTooDeep => .{ .code = "54001", .message = "Queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },

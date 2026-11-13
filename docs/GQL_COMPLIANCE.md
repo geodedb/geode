@@ -267,6 +267,32 @@ RETURN company.name, COUNT(person) AS employees
 ORDER BY employees DESC
 ```
 
+### Linear Composition with `NEXT` (9.2, Feature GQ20)
+
+`<statement> NEXT [<yield clause>] <statement>` (ISO/IEC 39075:2024 9.2
+`<procedure body>`): the result table of the statement before `NEXT` is the
+working table of the one after it (9.2 GR 4), narrowed and renamed by an
+optional `YIELD` (16.14). Geode runs it as its WITH chain: the `RETURN`
+before `NEXT` projects the rows the next statement continues from, with its
+`DISTINCT`, aggregates, `GROUP BY`, `ORDER BY`, `OFFSET` and `LIMIT`
+(SONNY-6343).
+
+```gql
+MATCH (n:Person) RETURN n.city AS city, count(*) AS c
+NEXT MATCH (m:Person) WHERE m.city = city AND c > 1 RETURN m.name
+
+MATCH (n:Person) RETURN n.name AS name, n.age AS age ORDER BY age DESC LIMIT 3
+NEXT YIELD name AS top RETURN top
+
+RETURN 1 AS a NEXT RETURN a + 1 AS b NEXT RETURN b * 10 AS c
+```
+
+Refused with `0A000`: a `NEXT` after a statement with no `RETURN` at its
+level (it has no result table), and a `NEXT` after a `UNION`, `INTERSECT`,
+`EXCEPT` or `OTHERWISE`. A name the `RETURN` does not project reads `NULL`
+after `NEXT` (as after a `WITH`) instead of being refused (a known
+WITH-chain scoping defect). Covered by `zig build test-sonny6343-next-and-call`.
+
 ### Common Table Expressions (`WITH [RECURSIVE]`)
 
 Geode executes both simple and recursive Common Table Expressions
@@ -370,6 +396,21 @@ CALL db.labels() YIELD label
 FILTER label <> 'Internal'
 RETURN label ORDER BY label
 ```
+
+#### Inline procedure calls (`CALL { }`, 15.2)
+
+| Form | Status |
+|------|--------|
+| `CALL { <query> } RETURN ...` (with `GROUP BY`, `ORDER BY`, `SKIP`, `LIMIT`) | Supported |
+| `CALL { <query> } WITH ... [WHERE ...] RETURN ...` | Supported |
+| `CALL { ... }` inside an `IN (subquery)` (read-only) | Supported (SONNY-3248) |
+| `CALL { ... }` followed by `MATCH`, a second `CALL`, or a write | Refused, `0A000` |
+| `MATCH ... CALL { ... }` (a subquery per matched row) | Refused, `0A000` |
+| `CALL (x, y) { ... }` (a variable scope clause) | Refused, `0A000` |
+| `OPTIONAL CALL ...` | Refused, `0A000` |
+
+Each refusal names the form; none is run in part (SONNY-6343,
+`zig build test-sonny6343-next-and-call`).
 
 ### FILTER Statement (14.6)
 

@@ -1327,6 +1327,14 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         // Start with input bindings
         var current_names: []const []const u8 = binding_names;
         var current_values: []const Value = binding_values;
+        // SONNY-6343: the WITH's bindings below are this part's own arrays;
+        // they were never freed, so every row through a WITH ... WITH chain
+        // (and NEXT, which runs as one) leaked two allocations. The values
+        // are copied into the row this returns, not freed here.
+        var with_names: ?[]const []const u8 = null;
+        var with_values: ?[]const Value = null;
+        defer if (with_names) |n| allocator.free(n);
+        defer if (with_values) |v| allocator.free(v);
 
         // CANARY: REQ=REQ-GQL-WITH-CHAIN-002; FEATURE="ChainedWithClauseExecution"; ASPECT=BindingTransform; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
         // If there's a WITH clause, first transform bindings by evaluating WITH items
@@ -1342,7 +1350,9 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 
             // Evaluate WITH items to create new bindings
             var new_names = try std.ArrayList([]const u8).initCapacity(allocator, with_clause.items.len);
+            errdefer new_names.deinit(allocator);
             var new_values = try std.ArrayList(Value).initCapacity(allocator, with_clause.items.len);
+            errdefer new_values.deinit(allocator);
 
             for (with_clause.items) |item| {
                 const val = try eval.evalExpr(allocator, item.expr, env_for_with);
@@ -1359,7 +1369,9 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 
             // Convert to owned slices to persist beyond this block
             current_names = try new_names.toOwnedSlice(allocator);
+            with_names = current_names;
             current_values = try new_values.toOwnedSlice(allocator);
+            with_values = current_values;
         }
 
         const env = Env{

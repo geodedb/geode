@@ -2376,6 +2376,26 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **ISO `NEXT` runs; unsupported inline `CALL` forms are refused with
+  0A000 (SONNY-6343).** `NEXT` (ISO/IEC 39075:2024 9.2, Feature GQ20) was
+  a keyword only: every `... RETURN ... NEXT ...` was a syntax error. The
+  result table of the statement before `NEXT` now continues as the working
+  table of the one after it, with its `DISTINCT`, aggregates, `ORDER BY`,
+  `OFFSET` and `LIMIT`, and an optional `YIELD` (16.14) selecting and
+  renaming columns: `MATCH (n) RETURN n.k AS k NEXT MATCH (m) WHERE m.k =
+  k + 1 RETURN m`. It runs as Geode's WITH chain (the parser reads `RETURN
+  ... NEXT [YIELD]` as `WITH ... [WITH]`, keeping every source position),
+  so it has the WITH chain's validator, refusals and executors. A `NEXT`
+  after a statement with no `RETURN` at its level, or after `UNION`,
+  `INTERSECT`, `EXCEPT` or `OTHERWISE`, is refused with 0A000. Inline
+  procedure calls: `CALL { } RETURN ...` and `CALL { } WITH ...` run as
+  before; `CALL { }` followed by `MATCH`, a second `CALL` or a write,
+  `MATCH ... CALL { }`, `CALL (x) { }` and `OPTIONAL CALL` were syntax
+  errors (42000) and are now refused with 0A000 naming the form. Also: a
+  `WITH ... WITH` chain (and so `NEXT ... NEXT`, `NEXT YIELD`) leaked two
+  allocations per row on the bound-variables path; freed. Regression:
+  `zig build test-sonny6343-next-and-call` (new). The stale OPTIONAL MATCH
+  claims in `docs/kb/gql/` carry a status note.
 - **A read-only `CALL { }` or procedure CALL inside an IN subquery reads
   (SONNY-3248, M1).** The write-shape validator's write walk counted any
   `CALL { }`, `FOR` or procedure call inside an expression or a CTE body as

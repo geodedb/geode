@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:57:58.429682395Z",
+  "generated_at": "2026-11-13T16:27:38.220780172Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82414,6 +82414,20 @@
       "features": [
         {
           "feature": "LinearComposition",
+          "aspect": "NextAsWithChain",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "LinearComposition",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94484,7 +94498,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4932
+      "TESTED": 4933
     },
     "by_aspect": {
       "2PC": 3,
@@ -96767,6 +96781,7 @@
       "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
+      "NextAsWithChain": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
       "NextSliceStructureGuard": 1,

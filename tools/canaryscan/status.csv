@@ -5271,6 +5271,7 @@ REQ-SONNY-6341-FLE-ROLE-GRANT-PROC,FieldLevelEncryption,GrantRevokeFleRole,TESTE
 REQ-SONNY-6341-FLE-ROLE-GRANT-STORE,FieldLevelEncryption,DurableFleRoleGrants,TESTED,src/storage/user_storage.zig,tests/test_sonny6341_fle_role_binding.zig,,security,2026-11-12
 REQ-SONNY-6341-FLE-ROLE-GRANT-STORE,FieldLevelEncryption,SealedFleRoleGrants,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6341_fle_role_binding.zig,,security,2026-11-12
 REQ-SONNY-6342-TDE-NO-STUB-PROCEDURES,TDEProcedures,NoFabricatedKeyManagement,TESTED,tests/test_sonny6342_tde_stub_procedures.zig,tests/test_sonny6342_tde_stub_procedures.zig,,security,2026-11-12
+REQ-SONNY-6343-NEXT-AND-CALL,LinearComposition,NextAsWithChain,TESTED,src/gql/parser.zig,tests/test_sonny6343_next_and_call.zig,,parser,2026-11-13
 REQ-SONNY-6343-NEXT-AND-CALL,LinearComposition,Regression,TESTED,tests/test_sonny6343_next_and_call.zig,tests/test_sonny6343_next_and_call.zig,,parser,2026-11-13
 REQ-SONNY-6344-TENANT-LISTINGS,PerTenantIsolation,SchemaListings,TESTED,tests/test_sonny6344_tenant_schema_listings.zig,tests/test_sonny6344_tenant_schema_listings.zig,,security,2026-11-12
 REQ-SONNY-6344-TENANT-LISTINGS,PerTenantIsolation,VisibleTenantTags,TESTED,src/execution/tenant_visibility.zig,tests/test_sonny6344_tenant_schema_listings.zig,,security,2026-11-12

@@ -453,7 +453,7 @@ pub const Parser = struct {
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep, UndirectedEdgeNotSupported };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep, UndirectedEdgeNotSupported, UnsupportedQueryShape };
 
     // CANARY: REQ=REQ-SONNY-3190-CLAUSE-CAP; FEATURE="WriteClauseCap"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
     /// SONNY-3190: the most SET, REMOVE, CREATE and MERGE clauses one query
@@ -760,6 +760,7 @@ pub const Parser = struct {
     }
 
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
+        try self.desugarNext();
         // SONNY-3244: a parse cut short by `max_parse_arena_bytes` (`advance`)
         // is refused as such, whatever the truncated input parsed as.
         const program = self.parseProgramInner() catch |err| {
@@ -775,6 +776,111 @@ pub const Parser = struct {
             return error.ParseMemoryLimit;
         }
         return program;
+    }
+
+    /// SONNY-6343: refuse a query shape Geode does not run, with 0A000 and
+    /// a message naming it (`error.UnsupportedQueryShape`).
+    fn refuseShape(self: *Parser, what: []const u8) ParserError {
+        self.last_error = what;
+        return error.UnsupportedQueryShape;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6343-NEXT-AND-CALL; FEATURE="LinearComposition"; ASPECT=NextAsWithChain; STATUS=TESTED; TEST=tests/test_sonny6343_next_and_call.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6343: ISO/IEC 39075:2024 9.2 <procedure body>:
+    /// `<statement> NEXT [<yield clause>] <statement>` (Feature GQ20). The
+    /// result binding table of the statement before NEXT becomes the working
+    /// table of the one after it (9.2 GR 4), narrowed and renamed by the
+    /// <yield clause> (16.14), and only its columns are in scope there. That
+    /// is Geode's WITH chain: the RETURN that ends the statement before NEXT
+    /// projects, with its DISTINCT, aggregates, GROUP BY, ORDER BY, OFFSET
+    /// and LIMIT, the rows the next statement continues from, as a WITH
+    /// does; a YIELD selects and renames columns, as a WITH of them does. So
+    /// before parsing, each NEXT is rewritten in the source: the last RETURN
+    /// at its level becomes `WITH  `, the NEXT four spaces, and a YIELD right
+    /// after it `WITH `, each the same length, so every position the parser
+    /// reports is unchanged and one mechanism (the WITH chain, its parser,
+    /// validator and executors) runs both. Refused with 0A000: a NEXT after a
+    /// statement with no RETURN at its level (it has no result table), and a
+    /// NEXT after a UNION, INTERSECT, EXCEPT or OTHERWISE (a composite query
+    /// statement; the WITH chain cannot continue from it). A `next` that is a
+    /// name (after `.`, `:` or `$`, or a map key) is left alone.
+    fn desugarNext(self: *Parser) ParserError!void {
+        const src = self.lx.src;
+        if (std.ascii.indexOfIgnoreCase(src, "next") == null) return;
+        const a = self.arena.allocator();
+        const Frame = struct { last_return: ?usize = null, composite: bool = false };
+        const Edit = struct { at: usize, text: []const u8 };
+        var frames: std.ArrayList(Frame) = .empty;
+        try frames.append(a, .{});
+        var edits: std.ArrayList(Edit) = .empty;
+        var scan = Lexer{ .src = src };
+        var prev: tok.TokenKind = .eof;
+        // A NEXT keyword candidate, settled by the token after it (a map
+        // key `next:` is not the keyword).
+        var pending: ?usize = null;
+        var yield_may_follow = false;
+        while (true) {
+            const t = scan.next();
+            const at = @intFromPtr(t.lexeme.ptr) -| @intFromPtr(src.ptr);
+            if (pending) |next_at| {
+                pending = null;
+                if (t.kind != .colon) {
+                    const f = &frames.items[frames.items.len - 1];
+                    if (f.composite) return self.refuseShape("NEXT after a UNION, INTERSECT, EXCEPT or OTHERWISE (a composite query statement) is not supported: run the composite statement in a CALL { } and continue with WITH");
+                    const ret_at = f.last_return orelse return self.refuseShape("NEXT continues from the result table of the statement before it, and that statement has no RETURN at its level: end it with RETURN (ISO/IEC 39075 9.2)");
+                    try edits.append(a, .{ .at = ret_at, .text = "WITH  " });
+                    try edits.append(a, .{ .at = next_at, .text = "    " });
+                    f.* = .{};
+                    yield_may_follow = true;
+                }
+            }
+            if (yield_may_follow) {
+                yield_may_follow = false;
+                if (t.kind == .YIELD) try edits.append(a, .{ .at = at, .text = "WITH " });
+            }
+            const is_name = prev == .dot or prev == .colon or prev == .dollar;
+            switch (t.kind) {
+                .eof => break,
+                .l_paren, .l_brace, .l_bracket => try frames.append(a, .{}),
+                .r_paren, .r_brace, .r_bracket => {
+                    if (frames.items.len > 1) _ = frames.pop();
+                },
+                .semicolon => if (frames.items.len == 1) {
+                    frames.items[0] = .{};
+                },
+                .RETURN => if (!is_name and t.lexeme.len == "RETURN".len) {
+                    frames.items[frames.items.len - 1].last_return = at;
+                },
+                .UNION, .INTERSECT, .EXCEPT, .OTHERWISE => if (!is_name) {
+                    frames.items[frames.items.len - 1].composite = true;
+                },
+                .NEXT => if (!is_name and t.lexeme.len == "NEXT".len) {
+                    pending = at;
+                },
+                else => {},
+            }
+            prev = t.kind;
+        }
+        if (edits.items.len == 0) return;
+        const buf = try a.dupe(u8, src);
+        for (edits.items) |e| @memcpy(buf[e.at..][0..e.text.len], e.text);
+        self.lx.* = Lexer{ .src = buf };
+        self.cur = self.lx.next();
+    }
+
+    /// SONNY-6343: what may follow a statement-level CALL { }.
+    fn refuseClauseAfterCallSubquery(self: *Parser) ParserError!void {
+        switch (self.cur.kind) {
+            .MATCH, .OPTIONAL, .CALL, .CREATE, .INSERT, .MERGE, .SET, .REMOVE, .DELETE, .DETACH, .FOR, .LET, .FILTER, .UNWIND => return self.refuseShape("CALL { } followed by another clause than WITH, WHERE or RETURN is not supported: continue with WITH (for example CALL { ... } WITH x MATCH ...)"),
+            else => {},
+        }
+    }
+
+    /// SONNY-6343: OPTIONAL CALL (ISO/IEC 39075 15.1 <call procedure
+    /// statement>, OPTIONAL) is not run; `self.cur` is the token after
+    /// OPTIONAL.
+    fn refuseOptionalCall(self: *Parser) ParserError!void {
+        if (self.cur.kind == .CALL) return self.refuseShape("OPTIONAL CALL is not supported");
     }
 
     fn parseProgramInner(self: *Parser) ParserError!ast.Program {
@@ -1704,6 +1810,12 @@ pub const Parser = struct {
                     // Expect closing brace
                     _ = try self.expect(.r_brace);
 
+                    // SONNY-6343: a statement-level CALL { } is followed by
+                    // WITH, WHERE or RETURN (or ends the statement); another
+                    // clause after it (MATCH, a second CALL, a write) was a
+                    // syntax error and is a shape Geode does not run.
+                    try self.refuseClauseAfterCallSubquery();
+
                     // If there's a WITH clause after the CALL, this needs to be parsed as a Query
                     // not as a standalone Statement.Call
                     if (self.cur.kind == .WITH or self.cur.kind == .WHERE) {
@@ -1839,6 +1951,9 @@ pub const Parser = struct {
                         },
                     };
                 } else {
+                    // SONNY-6343: `CALL (x, y) { ... }`, an inline procedure
+                    // call with a <variable scope clause> (ISO/IEC 39075 15.2).
+                    if (self.cur.kind == .l_paren) return self.refuseShape("CALL (variables) { } (an inline procedure call with a variable scope clause) is not supported: use CALL { } with WITH or RETURN after it");
                     // Traditional procedure call (e.g., db.labels())
                     const procedure = try self.parseOrExpr();
 
@@ -2524,6 +2639,7 @@ pub const Parser = struct {
             create_pattern = .{ .chains = try create_chains.toOwnedSlice(self.arena.allocator()) };
         } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
+            try self.refuseOptionalCall();
             // Check for OPTIONAL { } block, OPTIONAL (...), or OPTIONAL MATCH
             if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
                 // OPTIONAL { ... } or OPTIONAL (...) block - treat as optional match without initial MATCH
@@ -2625,6 +2741,7 @@ pub const Parser = struct {
                 // Handle OPTIONAL MATCH
                 if (self.cur.kind == .OPTIONAL) {
                     self.advance();
+                    try self.refuseOptionalCall();
                     is_currently_optional = true;
                     // Check for OPTIONAL { ... } or OPTIONAL (...) block syntax
                     if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
@@ -2720,6 +2837,7 @@ pub const Parser = struct {
                     const clause_optional = self.cur.kind == .OPTIONAL;
                     if (clause_optional) {
                         self.advance(); // consume OPTIONAL
+                        try self.refuseOptionalCall();
                         if (self.cur.kind != .MATCH) return error.UnexpectedToken;
                         optional_match = true;
                     }
@@ -3081,6 +3199,9 @@ pub const Parser = struct {
         var call_clause: ?ast.CallClause = null;
         if (self.cur.kind == .CALL) {
             self.advance();
+            // SONNY-6343: an inline procedure call after MATCH (a subquery run
+            // per incoming row, ISO/IEC 39075 15.2) is not run.
+            if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) return self.refuseShape("CALL { } or CALL (variables) { } after MATCH (an inline procedure call per matched row) is not supported: run the subquery first (CALL { ... } WITH ...) or use a pattern in the MATCH");
             // Parse procedure call expression (e.g., algo.bfs.stream(start, {maxDepth: 3}))
             const procedure = try self.parseOrExpr();
 
