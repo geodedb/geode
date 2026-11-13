@@ -393,11 +393,6 @@ const Case = struct {
     /// in the case's comment and reported separately): the subquery is held
     /// to the walk, and MATCH is not compared.
     match_wrong: bool = false,
-    /// The engine's PathIterator, which the MATCH executors and now the
-    /// subqueries share, yields fewer paths than the walk here (it expands
-    /// only the first path to reach a node at a given depth, reported
-    /// separately): the subquery is held to MATCH, not the walk.
-    path_dedup: bool = false,
 };
 
 fn sameRows(a: []const []const u8, b: []const []const u8) bool {
@@ -411,7 +406,7 @@ fn runCase(s: *Session, stage: []const u8, c: Case, f: *Failures) !void {
     const mode = @tagName(s.mode);
     var expected: []const []const u8 = &.{};
     var source: []const u8 = c.oracle;
-    if (c.walk != null and !c.path_dedup) {
+    if (c.walk != null) {
         expected = try walkRows(aa, c.walk.?, s.visible(), c.rows);
         source = "the walk";
         if (!c.match_wrong) {
@@ -518,33 +513,31 @@ test "SONNY-2707 (2): COUNT {} and EXISTS {} over an unbound relationship agree 
 // Part (3): variable-length subqueries honour the pattern's direction, and
 // count paths.
 
-// The cases marked `path_dedup` reach a node twice at one depth (the parallel
-// 0->1 and 4->2 edges, the diamond through 1 and 4): the walk counts every
-// path, PathIterator expands only the first, so MATCH and the subquery,
-// which share it, count fewer (e.g. `(a:V {k: 0})-[*1..3]->(b)`: the walk 12,
-// MATCH 7). The subquery is held to MATCH there.
+// Several cases reach a node twice at one depth (the parallel 0->1 and 4->2
+// edges, the diamond through 1 and 4): every path counts (SONNY-6264, e.g.
+// `(a:V {k: 0})-[*1..3]->(b)` is 12, not the 7 the traversal used to give).
 const variable_length_cases = [_]Case{
-    .{ .q = "RETURN COUNT { (a:V {k: 0})-[*1..3]->(b) } AS c", .oracle = "MATCH (a:V {k: 0})-[*1..3]->(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .out, .min = 1, .max = 3, .acyclic = true }, .path_dedup = true },
-    .{ .q = "RETURN COUNT { (a:V {k: 0})<-[*1..3]-(b) } AS c", .oracle = "MATCH (a:V {k: 0})<-[*1..3]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .in, .min = 1, .max = 3, .acyclic = true }, .path_dedup = true },
-    .{ .q = "RETURN COUNT { (a:V {k: 0})-[*1..3]-(b) } AS c", .oracle = "MATCH (a:V {k: 0})-[*1..3]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .both, .min = 1, .max = 3, .acyclic = true }, .path_dedup = true },
+    .{ .q = "RETURN COUNT { (a:V {k: 0})-[*1..3]->(b) } AS c", .oracle = "MATCH (a:V {k: 0})-[*1..3]->(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .out, .min = 1, .max = 3, .acyclic = true } },
+    .{ .q = "RETURN COUNT { (a:V {k: 0})<-[*1..3]-(b) } AS c", .oracle = "MATCH (a:V {k: 0})<-[*1..3]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .in, .min = 1, .max = 3, .acyclic = true } },
+    .{ .q = "RETURN COUNT { (a:V {k: 0})-[*1..3]-(b) } AS c", .oracle = "MATCH (a:V {k: 0})-[*1..3]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .both, .min = 1, .max = 3, .acyclic = true } },
     .{ .q = "RETURN COUNT { (a:V {k: 2})<-[:R*1..2]-(b) } AS c", .oracle = "MATCH (a:V {k: 2})<-[:R*1..2]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 2, .dir = .in, .rel = "R", .min = 1, .max = 2, .acyclic = true } },
     .{ .q = "RETURN COUNT { (a:V {k: 2})-[:R*0..2]-(b) } AS c", .oracle = "MATCH (a:V {k: 2})-[:R*0..2]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 2, .dir = .both, .rel = "R", .min = 0, .max = 2, .acyclic = true } },
     // m = 0 incoming: the only way into 5 is through the hidden node 6.
     .{ .q = "RETURN COUNT { (a:V {k: 5})<-[*0..2]-(b) } AS c", .oracle = "MATCH (a:V {k: 5})<-[*0..2]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 5, .dir = .in, .min = 0, .max = 2, .acyclic = true } },
     // Every start, labels on either end.
     .{ .q = "RETURN COUNT { (a:A)<-[:R*1..2]-(b) } AS c", .oracle = "MATCH (a:A)<-[:R*1..2]-(b) RETURN count(*) AS c", .walk = .{ .start_label = "A", .dir = .in, .rel = "R", .min = 1, .max = 2, .acyclic = true } },
-    .{ .q = "RETURN COUNT { (a)-[*1..2]-(b:B) } AS c", .oracle = "MATCH (a)-[*1..2]-(b:B) RETURN count(*) AS c", .walk = .{ .end_label = "B", .dir = .both, .min = 1, .max = 2, .acyclic = true }, .path_dedup = true },
+    .{ .q = "RETURN COUNT { (a)-[*1..2]-(b:B) } AS c", .oracle = "MATCH (a)-[*1..2]-(b:B) RETURN count(*) AS c", .walk = .{ .end_label = "B", .dir = .both, .min = 1, .max = 2, .acyclic = true } },
     .{ .q = "RETURN COUNT { (a:V {k: 4})<-[*1..3]-(b:A) WHERE b.k > 0 } AS c", .oracle = "MATCH (a:V {k: 4})<-[*1..3]-(b:A) WHERE b.k > 0 RETURN count(*) AS c" },
     .{ .q = "RETURN EXISTS { (a:V {k: 3})<-[:S*1..2]-(b:V {k: 4}) } AS e", .oracle = "MATCH (a:V {k: 3})<-[:S*1..2]-(b:V {k: 4}) RETURN count(*) AS c", .kind = .exists, .walk = .{ .start_k = 3, .end_k = 4, .dir = .in, .rel = "S", .min = 1, .max = 2, .acyclic = true } },
     .{ .q = "RETURN EXISTS { (a:V {k: 4})<-[:S*1..2]-(b) } AS e", .oracle = "MATCH (a:V {k: 4})<-[:S*1..2]-(b) RETURN count(*) AS c", .kind = .exists, .walk = .{ .start_k = 4, .dir = .in, .rel = "S", .min = 1, .max = 2, .acyclic = true } },
     // Correlated.
-    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)<-[*1..2]-(b) } AS c", .oracle = "MATCH (a:V)<-[*1..2]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in, .min = 1, .max = 2, .acyclic = true }, .rows = .by_start, .path_dedup = true },
+    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)<-[*1..2]-(b) } AS c", .oracle = "MATCH (a:V)<-[*1..2]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in, .min = 1, .max = 2, .acyclic = true }, .rows = .by_start },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[:R*1..2]-(b) } AS c", .oracle = "MATCH (a:V)-[:R*1..2]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .rel = "R", .min = 1, .max = 2, .acyclic = true }, .rows = .by_start },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[*0..1]->(b) } AS c", .oracle = "MATCH (a:V)-[*0..1]->(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .out, .min = 0, .max = 1, .acyclic = true }, .rows = .by_start },
     .{ .q = "MATCH (a:V) WHERE EXISTS { (a)<-[:S*1..2]-(:A) } RETURN a.k", .oracle = "MATCH (a:V)<-[:S*1..2]-(:A) RETURN DISTINCT a.k", .walk = .{ .dir = .in, .rel = "S", .end_label = "A", .min = 1, .max = 2, .acyclic = true }, .rows = .starts },
     // Pattern comprehensions.
     .{ .q = "RETURN size([(a:V {k: 0})<-[*1..2]-(b) | b.k]) AS n", .oracle = "MATCH (a:V {k: 0})<-[*1..2]-(b) RETURN count(*) AS c", .walk = .{ .start_k = 0, .dir = .in, .min = 1, .max = 2, .acyclic = true } },
-    .{ .q = "MATCH (a:V) RETURN a.k, size([(a)-[*1..2]-(b) | b.k]) AS n", .oracle = "MATCH (a:V)-[*1..2]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .min = 1, .max = 2, .acyclic = true }, .rows = .by_start, .path_dedup = true },
+    .{ .q = "MATCH (a:V) RETURN a.k, size([(a)-[*1..2]-(b) | b.k]) AS n", .oracle = "MATCH (a:V)-[*1..2]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .min = 1, .max = 2, .acyclic = true }, .rows = .by_start },
 };
 
 test "SONNY-2707 (3): variable-length COUNT {}, EXISTS {} and comprehensions honour the pattern's direction" {

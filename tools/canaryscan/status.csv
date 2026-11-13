@@ -5108,6 +5108,7 @@ REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,DisableAllowsByPrefix,TES
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,NameCollectionAllocFailure,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,PersistenceDeleteFailure,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,Regression,TESTED,tests/test_sonny4877_grant_retire_fail_closed.zig,tests/test_sonny4877_grant_retire_fail_closed.zig,,security,2026-11-11
+REQ-SONNY-6264-VARLEN-PATH-COUNT,VariableLengthPaths,EveryPathExpands,TESTED,src/execution.zig,tests/test_sonny6264_varlen_path_count.zig,,execution,2026-11-13
 REQ-SONNY-6264-VARLEN-PATH-COUNT,VariableLengthPaths,OneRowPerPath,TESTED,tests/test_sonny6264_varlen_path_count.zig,tests/test_sonny6264_varlen_path_count.zig,,execution,2026-11-13
 REQ-SONNY-6268-EDGE-CREATE-ATOMIC,GraphStoreFailureAtomicity,EdgeCreateInMemory,TESTED,src/graph_store.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
 REQ-SONNY-6268-FAILURE-ATOMICITY,GraphStoreFailureAtomicity,Regression,TESTED,tests/test_sonny6268_graph_store_failure_atomicity.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11

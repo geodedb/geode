@@ -3526,7 +3526,6 @@ pub const PathIterator = struct {
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     queue: std.ArrayList(QueueItem),
-    visited_states: std.AutoHashMap(u64, u32),
     iteration_count: u64,
     min_len: u32,
     max_len: ?u32,
@@ -3550,8 +3549,7 @@ pub const PathIterator = struct {
     // SONNY-2679: the session's graph, tenant and RLS scope. Every edge the
     // BFS walks, and every node it steps onto, must pass it, so a path never
     // contains, ends at or runs through a node the session may not see. A step
-    // is refused BEFORE it is expanded, so a denied node also never claims a
-    // `visited_states` slot another route to the same node would need.
+    // is refused BEFORE it is expanded.
     // Required: a caller with no session to apply (a unit test, a benchmark)
     // passes `PathStepFilter.unrestricted` explicitly.
     scope: PathStepFilter,
@@ -3586,7 +3584,6 @@ pub const PathIterator = struct {
             .allocator = allocator,
             .store = store,
             .queue = queue,
-            .visited_states = std.AutoHashMap(u64, u32).init(allocator),
             .iteration_count = 0,
             .min_len = min_len,
             .max_len = max_len,
@@ -3616,7 +3613,6 @@ pub const PathIterator = struct {
             item.path.deinit(self.allocator);
         }
         self.queue.deinit(self.allocator);
-        self.visited_states.deinit();
     }
 
     // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1QueueDequeue; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
@@ -3788,13 +3784,13 @@ pub const PathIterator = struct {
             // Get the last node in the current path
             const last_node_id = current_path.nodes.items[current_path.nodes.items.len - 1];
 
-            // Check if we've visited this node at this depth before
-            const state_key = last_node_id + (@as(u64, depth) << 32);
-            if (self.visited_states.get(state_key)) |_| {
-                current_path.deinit(self.allocator);
-                continue;
-            }
-            try self.visited_states.put(state_key, depth);
+            // CANARY: REQ=REQ-SONNY-6264-VARLEN-PATH-COUNT; FEATURE="VariableLengthPaths"; ASPECT=EveryPathExpands; STATUS=TESTED; TEST=tests/test_sonny6264_varlen_path_count.zig; OWNER=execution; UPDATED=2026-11-13
+            // SONNY-6264: every path expands. Only the first path to reach a
+            // (node, depth) state used to, so a later path through the same
+            // node (a parallel edge, a diamond) lost every extension: two
+            // paths that differ in an edge are two bindings (ISO/IEC
+            // 39075:2024 22.2). The path mode restricts each path
+            // (`shouldSkipByPathMode`); the caps above bound the work.
 
             // Get edges based on direction (zero-copy: no allocation needed)
             const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getOutgoingEdgeIds(last_node_id) else null;

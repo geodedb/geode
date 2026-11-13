@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:24:47.112518781Z",
+  "generated_at": "2026-11-13T10:47:58.031941917Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79688,6 +79688,20 @@
       "features": [
         {
           "feature": "VariableLengthPaths",
+          "aspect": "EveryPathExpands",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6264_varlen_path_count.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "VariableLengthPaths",
           "aspect": "OneRowPerPath",
           "status": "TESTED",
           "files": [
@@ -93520,7 +93534,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4875
+      "TESTED": 4876
     },
     "by_aspect": {
       "2PC": 3,
@@ -94723,6 +94737,7 @@
       "EveryGraphDeny": 1,
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
+      "EveryPathExpands": 1,
       "EvictedNode": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,

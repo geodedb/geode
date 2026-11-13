@@ -2036,6 +2036,20 @@
 
 ### Fixed
 
+- **A variable-length MATCH returns one row per path, also through
+  parallel edges and diamonds (SONNY-6264). User-visible: counts
+  grow.** The traversal (`execution.PathIterator`, shared by the MATCH
+  executors, `COUNT { }`, `EXISTS { }` and pattern comprehensions, and the
+  planned read's engine-direct port of it) expanded only the first path to
+  reach a node at a given depth, so every later path through that node lost
+  its extensions: `MATCH (a:V {k: 0})-[*1..3]->(b) RETURN count(*)` gave 7
+  where 12 paths exist. Two paths that differ in an edge are two bindings
+  (ISO/IEC 39075:2024 22.2); the path mode (geode's default ACYCLIC, or an
+  explicit TRAIL / WALK / SIMPLE) still restricts each path, and the
+  10,000-iteration / 5,000-queue caps still bound the work. Regression:
+  `zig build test-sonny6264-varlen-path-count` (new), and the six
+  `path_dedup` cases of `test-sonny2707-count-direction` now held to the
+  test's own walk.
 - **`FOR x IN [ ... ]` no longer leaks the list it iterates
   (SONNY-6449 follow-up).** `executeFor` and the FOR header expansion
   evaluated the collection on the caller's allocator and never freed it,

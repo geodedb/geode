@@ -1456,9 +1456,8 @@ fn emitOptionalLeftOuterRow(
 // engine-direct port of the clone-path oracle's BFS
 // (execution.PathIterator, driven by
 // match_operations.executeVariableLengthPathTraversal): a breadth-first expand
-// with ACYCLIC per-path semantics (no repeated node per path), a (node,depth)
-// expansion dedup (only the FIRST path to reach a (node,depth) state expands
-// further — emission of already-discovered paths is unaffected), and the same
+// with ACYCLIC per-path semantics (no repeated node per path), every path
+// expanding (SONNY-6264: no (node,depth) dedup), and the same
 // 10_000-iteration / 5_000-queue safety caps. Emission is ONE ROW PER
 // QUALIFYING PATH (duplicates allowed; downstream DISTINCT dedups); min_len==0
 // emits the seed as a 0-length path; the endpoint label/prop filter restricts
@@ -1552,9 +1551,6 @@ const VarLenExec = struct {
             for (queue.items[front..]) |*it| it.node_set.deinit(self.allocator);
             queue.deinit(self.allocator);
         }
-        var visited: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer visited.deinit(self.allocator);
-
         var seed_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
         {
             errdefer seed_set.deinit(self.allocator);
@@ -1589,15 +1585,9 @@ const VarLenExec = struct {
                 continue;
             }
 
-            // (node, depth) expansion dedup: only the FIRST path to reach this
-            // state expands. Already-emitted paths are unaffected.
-            const state_key: u64 = current.last + (@as(u64, depth) << 32);
-            if (visited.contains(state_key)) {
-                current.node_set.deinit(self.allocator);
-                continue;
-            }
-            try visited.put(self.allocator, state_key, {});
-
+            // SONNY-6264: every path expands, as in `execution.PathIterator`
+            // (a later path through the same node at the same depth lost
+            // every extension).
             const edges = try collectHopEdges(self.allocator, self.adapter, self.graph_name, current.last, self.dir);
             defer self.allocator.free(edges);
             for (edges) |edge| {
