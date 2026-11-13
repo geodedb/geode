@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:14:39.210332887Z",
+  "generated_at": "2026-11-13T10:32:07.088227371Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85981,6 +85981,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6468-CATALOG-AND-BATCH-FLE",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93648,7 +93667,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4882
+      "TESTED": 4883
     },
     "by_aspect": {
       "2PC": 3,
@@ -96777,7 +96796,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 304,
+      "Regression": 305,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

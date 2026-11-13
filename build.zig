@@ -15228,6 +15228,19 @@ pub fn build(b: *std.Build) void {
     const sonny6347_step = b.step("test-sonny6347-fle-envelope-identity", "Run SONNY-6347 regression (a string shaped like an FLE envelope reaching a graph-store write primitive is encrypted unless it authenticates as the record's envelope; the encryption identity is the record's stored tenant, so a parent tenant reads its child's encrypted row, and values written under the writer's request tenant still decrypt)");
     sonny6347_step.dependOn(&run_sonny6347_tests.step);
 
+    const sonny6468_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6468_catalog_and_batch_fle.zig"), .target = target, .optimize = optimize });
+    sonny6468_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6468_test_mod.addImport("geode", root_mod);
+    sonny6468_test_mod.addImport("schema", schema_mod);
+    sonny6468_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6468_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6468_test_mod.addImport("logging", logging_mod);
+    const sonny6468_tests = b.addTest(.{ .root_module = sonny6468_test_mod });
+    const run_sonny6468_tests = b.addRunArtifact(sonny6468_tests);
+    shardDep(test_step, &run_sonny6468_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6468_step = b.step("test-sonny6468-catalog-and-batch-fle", "Run SONNY-6468 regression (the process schema catalog made by a first caller on a transient arena outlives the arena; a batch node or edge property write seals each FLE value once, so the store and the engine hold one envelope)");
+    sonny6468_step.dependOn(&run_sonny6468_tests.step);
+
     const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
     sonny6294_test_mod.link_libc = true;
     sonny6294_test_mod.addImport("geode", root_mod);
