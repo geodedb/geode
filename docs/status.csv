@@ -1681,7 +1681,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,963
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,17501
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,17518
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2331
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1538
@@ -1828,7 +1828,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,17510
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,17527
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1692
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1944
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1038
@@ -1840,7 +1840,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7737
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,17522
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,17539
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -2107,7 +2107,7 @@ REQ-GQL-025,DistributedQueryPlanning,CoordinatorOperations,TESTED,,,distributed,
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-26,src/transactions/manager.zig,10
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-21,tests/canary_txn_write_skew.zig,44
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md,310
-REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-02-23,src/conformance.zig,2
+REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-11-13,src/conformance.zig,2
 REQ-GQL-026,DistributedQueryPlanning,ExecutionPhasing,TESTED,,,distributed,2025-10-05,tests/distributed_query_planner_test.zig,123
 REQ-GQL-028,Recovery After Compaction,Storage,TESTED,,,storage,2025-09-20,src/canary.zig,22
 REQ-GQL-028,Snapshot Adaptive Policy,SnapshotAdaptivePolicyLatencyVarianceEnvelope,BENCHED,,,storage,2026-02-04,tests/benchmark_snapshot_adaptive_policy_latency_variance.zig,2
@@ -4666,7 +4666,6 @@ REQ-SHELL-INTERRUPT-023,SourceInterrupt,DrainWithTimeout,TESTED,,,cli,2026-06-11
 REQ-SHELL-INTERRUPT-024,SourceInterrupt,DrainForRollback,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1842
 REQ-SHELL-INTERRUPT-025,SourceInterrupt,DrainAllForRollback,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1878
 REQ-SHELL-INTERRUPT-026,SourceInterrupt,RollbackScaledTimeout,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1566
-REQ-SHELL-INTERRUPT-030,SourceInterrupt,RollbackScalingTests,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig,5031
 REQ-SHELL-INTERRUPT-033,SourceInterrupt,DrainWithSpinner,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1938
 REQ-SHELL-INTERRUPT-034,SourceInterrupt,QuicReadLineTimeout,TESTED,,,transport,2026-06-11,src/transport/quic.zig,2806
 REQ-SHELL-INTERRUPT-035,SourceInterrupt,DisconnectForRollback,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,775
@@ -4700,7 +4699,7 @@ REQ-SHELL-RECONNECT-010,ShellAutoReconnect,HandleConnectionError,TESTED,,,cli,20
 REQ-SHELL-RECONNECT-011,ShellAutoReconnect,ExecuteWithRetry,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,2547
 REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig,417
 REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig,129
-REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4731
+REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4396
 REQ-SHELL-SOURCE-ERROR-001,SourceFileErrorDetails,BatchErrorExtraction,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,3119
 REQ-SHELL-SOURCE-ERROR-003,SourceFileErrorDetails,ErrorExtraction,TESTED,,,cli,2026-11-12,src/client/repl/repl_dispatch.zig,3177
 REQ-SHELL-SPINNER-001,ShellProcessingIndicator,Module,TESTED,,,cli,2026-11-12,src/client/repl/spinner.zig,54
@@ -5885,9 +5884,8 @@ REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,TESTED,,,cli,2026-0
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4175
 REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,2845
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,3012
-REQ-SOURCE-PERF-006,SourceBatchTests,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4222
 REQ-SOURCE-PERF-011,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,3259
-REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4569
+REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4235
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,1914
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,2006
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,1952

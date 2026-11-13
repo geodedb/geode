@@ -15410,6 +15410,23 @@ pub fn build(b: *std.Build) void {
                 sonny6463b_step.dependOn(&run_tests.step);
             }
         }
+        // SONNY-6494 (2): geode-module files whose inline tests no step ran.
+        // conformance.zig is std-only (its own root); repl_dispatch.zig
+        // reaches src/lib.zig back, so its tests run from the geode lib
+        // module, filtered (test "repl_dispatch: inline test root" in
+        // src/lib.zig keeps the file in discovery).
+        {
+            const sonny6494_step = b.step("test-sonny6494-inline", "Run SONNY-6494 item 2: the inline tests of src/conformance.zig and src/client/repl/repl_dispatch.zig, which did not compile on Zig 0.16 and ran in no step");
+            for ([_]struct { name: []const u8, mod: *std.Build.Module, filters: []const []const u8 = &.{} }{
+                .{ .name = "conformance", .mod = b.createModule(.{ .root_source_file = b.path("src/conformance.zig"), .target = target, .optimize = optimize }) },
+                .{ .name = "repl-dispatch", .mod = root_mod, .filters = &.{"repl_dispatch:"} },
+            }) |entry| {
+                const tests = b.addTest(.{ .name = b.fmt("sonny6494-{s}", .{entry.name}), .root_module = entry.mod, .filters = entry.filters });
+                const run_tests = b.addRunArtifact(tests);
+                shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+                sonny6494_step.dependOn(&run_tests.step);
+            }
+        }
     }
 
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).

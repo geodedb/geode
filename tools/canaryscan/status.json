@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:39:23.124414389Z",
+  "generated_at": "2026-11-13T16:45:34.320306815Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -30692,7 +30692,7 @@
         {
           "feature": "Conformance/Flagger",
           "aspect": "FlaggerCompleteness",
-          "status": "BENCHED",
+          "status": "TESTED",
           "files": [
             "src/conformance.zig"
           ],
@@ -30700,11 +30700,9 @@
             "TestCANARY_REQ_GQL_026_FlaggerCompleteness",
             "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing"
           ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope"
-          ],
+          "benches": [],
           "owner": "conformance",
-          "updated": "2026-02-23"
+          "updated": "2026-11-13"
         },
         {
           "feature": "DistributedQueryPlanning",
@@ -68377,23 +68375,6 @@
       ]
     },
     {
-      "id": "REQ-SHELL-INTERRUPT-030",
-      "features": [
-        {
-          "feature": "SourceInterrupt",
-          "aspect": "RollbackScalingTests",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl/repl_dispatch.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
       "id": "REQ-SHELL-INTERRUPT-034",
       "features": [
         {
@@ -87504,23 +87485,6 @@
       ]
     },
     {
-      "id": "REQ-SOURCE-PERF-006",
-      "features": [
-        {
-          "feature": "SourceBatchTests",
-          "aspect": "UnitTests",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl/repl_dispatch.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-SOURCE-PERF-012",
       "features": [
         {
@@ -94695,11 +94659,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 208,
+      "BENCHED": 207,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4940
+      "TESTED": 4939
     },
     "by_aspect": {
       "2PC": 3,
@@ -97994,7 +97958,6 @@
       "RollBack": 1,
       "Rollback": 4,
       "RollbackGraphStore": 2,
-      "RollbackScalingTests": 1,
       "RollbackToSavepoint": 1,
       "RollbackTransaction": 2,
       "RollbackUseGraphStore": 1,
@@ -98682,7 +98645,7 @@
       "UnitTestExecution": 1,
       "UnitTestFramework": 1,
       "UnitTesting": 5,
-      "UnitTests": 28,
+      "UnitTests": 27,
       "UnitValidation": 1,
       "UnitVerification": 1,
       "UniversalAndUserSpecificMixed": 1,

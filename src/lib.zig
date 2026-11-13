@@ -985,3 +985,10 @@ test "exec.zig: inline test root" {
 test "recommendations: inline test root" {
     _ = @import("gql/recommendations.zig");
 }
+
+// SONNY-6494: src/client/repl/repl_dispatch.zig's inline tests did not
+// compile on Zig 0.16 and entered no test binary. Named with the
+// "repl_dispatch:" filter of `zig build test-sonny6494-inline`.
+test "repl_dispatch: inline test root" {
+    _ = @import("client/repl/repl_dispatch.zig");
+}

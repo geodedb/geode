@@ -129,10 +129,6 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
 - GreyCardinalVarianceEnvelope
 - PageRankVarianceEnvelope
 
-### Conformance / Flagger
-
-- FlaggerGenerationVarianceEnvelope
-
 ### Optimizer Extensions / Misc
 
 - PlanEnumerationEngineVarianceEnvelope (alias of PlanEnumerationVarianceEnvelope if duplicated)
