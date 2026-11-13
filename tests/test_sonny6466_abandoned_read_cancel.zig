@@ -27,6 +27,18 @@
 //
 // RED before the fix: case 1 stays busy past 30 s (no env knob, IP grouping),
 // case 2 stays busy until the 60 s watchdog.
+//
+// SONNY-6487 item 4: "idle" is measured per thread. It was a one-second
+// window in which the whole server process spent under 30 ticks, and under
+// parallel load (several server-spawning test steps at once) an idle server's
+// own background -- a dozen polling threads at 3-4 ticks/s each, 32-38
+// ticks/s in total (measured; about 9 ticks/s on a quiet machine) -- never
+// fell under 30: the watchdog had cancelled the read at idle 12.8 s and the
+// join had stopped, yet the case reported "still busy 75 s after the client
+// vanished". The join runs on one thread at 80-110 ticks/s; idle is now a
+// window in which no server thread spent 30 ticks and the thread that ran the
+// join is not runnable (a join starved of CPU is still runnable, so it never
+// counts as stopped). The bounds are unchanged.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -42,6 +54,9 @@ const join_query = "MATCH (a:KP), (c:KP), (d:KP) WHERE a.i + c.i + d.i < 0 RETUR
 /// Case 1's watchdog threshold, and how long after the client vanished the
 /// server must be idle: the threshold, plus the watchdog's 5 s tick, plus room
 /// for a loaded machine — and still half the 60 s default it used to wait for.
+/// Measured (SONNY-6487): the watchdog cancels at a stream idle of 12.3-12.8 s
+/// (threshold + part of one tick) and the server is idle 14 s after the
+/// client vanished, quiet or under load.
 const vanish_stall_ms = 10_000;
 const vanish_idle_deadline_ms: i64 = 30_000;
 
@@ -78,16 +93,84 @@ fn procCpuTicks(pid: std.posix.pid_t) u64 {
     return total;
 }
 
-/// Milliseconds from `from_ms` until a one-second window in which the server
-/// spent under 30 ticks (a running join spends about 100), or null if that did
-/// not happen within `limit_ms`.
-fn idleAfter(pid: std.posix.pid_t, from_ms: i64, limit_ms: i64) ?i64 {
-    var prev = procCpuTicks(pid);
+const ThreadSample = struct { tid: u32, ticks: u64, runnable: bool };
+const max_threads = 1024;
+
+/// One thread's CPU ticks so far and whether it is runnable (state R).
+fn threadStat(pid: std.posix.pid_t, tid: u32) ?ThreadSample {
+    var path_buf: [96]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/task/{d}/stat", .{ pid, tid }) catch return null;
+    var buf: [1024]u8 = undefined;
+    const fd = std.c.open(path, .{});
+    if (fd < 0) return null;
+    defer _ = std.c.close(fd);
+    const got = std.c.read(fd, &buf, buf.len);
+    if (got <= 0) return null;
+    const text = buf[0..@intCast(got)];
+    const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse return null;
+    var fields = std.mem.tokenizeScalar(u8, text[close + 1 ..], ' ');
+    const state = fields.next() orelse return null;
+    var i: usize = 4;
+    var total: u64 = 0;
+    while (fields.next()) |f| : (i += 1) {
+        if (i == 14 or i == 15) total += std.fmt.parseInt(u64, f, 10) catch 0;
+        if (i == 15) break;
+    }
+    return .{ .tid = tid, .ticks = total, .runnable = state[0] == 'R' };
+}
+
+/// Every thread of `pid` (up to `max_threads`).
+fn sampleThreads(pid: std.posix.pid_t, out: *[max_threads]ThreadSample) []ThreadSample {
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/task", .{pid}) catch return out[0..0];
+    const dir = std.c.opendir(path) orelse return out[0..0];
+    defer _ = std.c.closedir(dir);
+    var n: usize = 0;
+    while (std.c.readdir(dir)) |ent| {
+        if (n == out.len) break;
+        const tid = std.fmt.parseInt(u32, std.mem.sliceTo(&ent.name, 0), 10) catch continue;
+        out[n] = threadStat(pid, tid) orelse continue;
+        n += 1;
+    }
+    return out[0..n];
+}
+
+fn ticksOf(samples: []const ThreadSample, tid: u32) ?ThreadSample {
+    for (samples) |s| if (s.tid == tid) return s;
+    return null;
+}
+
+const Busiest = struct { tid: u32, ticks: u64 };
+
+/// The thread that spent the most ticks between two samples, and how many.
+fn busiest(before: []const ThreadSample, after: []const ThreadSample) Busiest {
+    var best: Busiest = .{ .tid = 0, .ticks = 0 };
+    for (after) |a| {
+        const b = if (ticksOf(before, a.tid)) |s| s.ticks else 0;
+        const d = a.ticks -| b;
+        if (d > best.ticks) best = .{ .tid = a.tid, .ticks = d };
+    }
+    return best;
+}
+
+/// Milliseconds from `from_ms` until a one-second window in which no server
+/// thread spent 30 ticks (a running join spends 80-110 on its one thread;
+/// an idle server's threads 0-4 each) and `hot_tid` -- the thread that ran
+/// the join, if any -- is not runnable; null if that did not happen within
+/// `limit_ms`.
+fn idleAfter(pid: std.posix.pid_t, hot_tid: ?u32, from_ms: i64, limit_ms: i64) ?i64 {
+    var a: [max_threads]ThreadSample = undefined;
+    var b: [max_threads]ThreadSample = undefined;
+    var prev = sampleThreads(pid, &a);
+    var use_b = true;
     while (nowMillis() - from_ms < limit_ms) {
         sleepMillis(1_000);
-        const now_t = procCpuTicks(pid);
-        if (now_t -| prev < 30) return nowMillis() - from_ms;
-        prev = now_t;
+        const now = sampleThreads(pid, if (use_b) &b else &a);
+        const top = busiest(prev, now);
+        const hot_running = if (hot_tid) |t| (if (ticksOf(now, t)) |s| s.runnable else false) else false;
+        if (top.ticks < 30 and !hot_running) return nowMillis() - from_ms;
+        prev = now;
+        use_b = !use_b;
     }
     return null;
 }
@@ -104,7 +187,7 @@ fn seed(allocator: std.mem.Allocator, addr: []const u8, pid: std.posix.pid_t) !v
         seeded.deinit(allocator);
         if (failed) return error.SeedFailed;
     }
-    if (idleAfter(pid, nowMillis(), 60_000) == null) {
+    if (idleAfter(pid, null, nowMillis(), 60_000) == null) {
         std.debug.print("SONNY-6466: the server never went idle after the seed\n", .{});
         return error.ServerNeverSettled;
     }
@@ -112,18 +195,24 @@ fn seed(allocator: std.mem.Allocator, addr: []const u8, pid: std.posix.pid_t) !v
 
 /// Send the join with no statement timeout (a timeout makes the server cancel
 /// it itself) and confirm it is running: the server is busy a second later.
-fn startJoin(client: *util.QuicProtoClient, pid: std.posix.pid_t) !void {
+/// Returns the thread running it (the busiest thread in that second).
+fn startJoin(client: *util.QuicProtoClient, pid: std.posix.pid_t) !u32 {
     try client.writeMessage(.{ .execute = schema.ExecuteRequest{
         .session_id = client.session_id,
         .query = join_query,
         .params = .empty,
     } });
     sleepMillis(1_000);
+    var a: [max_threads]ThreadSample = undefined;
+    var b: [max_threads]ThreadSample = undefined;
+    const before = sampleThreads(pid, &a);
     const busy_from = procCpuTicks(pid);
     sleepMillis(1_000);
     const busy_ticks = procCpuTicks(pid) -| busy_from;
+    const top = busiest(before, sampleThreads(pid, &b));
     if (busy_ticks < 50) std.debug.print("SONNY-6466: the join spent only {d} ticks in its second second\n", .{busy_ticks});
     try testing.expect(busy_ticks >= 50);
+    return top.tid;
 }
 
 fn expectAnswers(allocator: std.mem.Allocator, client: *util.QuicProtoClient) !void {
@@ -156,7 +245,7 @@ test "SONNY-6466 a client that vanishes without CONNECTION_CLOSE has its read ca
     var gone = try util.QuicProtoClient.connect(allocator, addr);
     var hello = try gone.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello.deinit(allocator);
-    startJoin(&gone, pid) catch |err| {
+    const join_tid = startJoin(&gone, pid) catch |err| {
         gone.abandon();
         return err;
     };
@@ -164,7 +253,7 @@ test "SONNY-6466 a client that vanishes without CONNECTION_CLOSE has its read ca
     const left = nowMillis();
     gone.abandon();
 
-    const idle_ms = idleAfter(pid, left, 75_000);
+    const idle_ms = idleAfter(pid, join_tid, left, 75_000);
     if (idle_ms) |ms| {
         std.debug.print("SONNY-6466 (vanish): the server was idle {d} ms after the client vanished (bound {d} ms, stall threshold {d} ms)\n", .{ ms, vanish_idle_deadline_ms, vanish_stall_ms });
     } else {
@@ -185,11 +274,10 @@ const MuxConn = struct {
     client: quic.QuicClient,
 
     fn connect(allocator: std.mem.Allocator, addr: []const u8) !MuxConn {
-        const colon = std.mem.lastIndexOfScalar(u8, addr, ':') orelse return error.InvalidAddress;
-        const port = try std.fmt.parseInt(u16, addr[colon + 1 ..], 10);
+        const parsed = try util.parseAddr(addr);
         var client = quic.QuicClient.init(allocator);
         errdefer client.deinit();
-        try client.connectInsecure(addr[0..colon], port, true);
+        try client.connectInsecure(parsed.host, parsed.port, true);
         try client.waitForHandshake(10);
         return .{ .allocator = allocator, .client = client };
     }
@@ -240,7 +328,7 @@ test "SONNY-6466 a client that closes its connection stops a read running on a s
         defer hello.deinit(allocator);
         try testing.expect(hello.success);
     }
-    startJoin(&second, pid) catch |err| {
+    const join_tid = startJoin(&second, pid) catch |err| {
         conn.releaseStream(&second);
         return err;
     };
@@ -251,7 +339,7 @@ test "SONNY-6466 a client that closes its connection stops a read running on a s
     conn.client.closeGraceful(quic.app_error.no_error);
     closed = true;
 
-    const idle_ms = idleAfter(pid, left, 75_000);
+    const idle_ms = idleAfter(pid, join_tid, left, 75_000);
     if (idle_ms) |ms| {
         std.debug.print("SONNY-6466 (close, sibling stream): the server was idle {d} ms after the client closed (bound {d} ms)\n", .{ ms, close_idle_deadline_ms });
     } else {

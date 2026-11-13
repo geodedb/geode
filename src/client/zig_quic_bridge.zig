@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const zig_client = @import("geode_client_zig");
 const endpoint_host = @import("quic_endpoint_host.zig");
+const host_port = @import("host_port.zig");
 
 pub const TlsConfig = struct {
     insecure: bool = false,
@@ -23,7 +24,10 @@ fn initClientWithInsecureSetting(
     password: ?[]const u8,
     insecure: bool,
 ) !zig_client.GeodeClient {
-    const transport_host = try endpoint_host.resolveAlloc(allocator, host);
+    const transport_host = endpoint_host.resolveAlloc(allocator, host) catch |err| {
+        if (err == error.Ipv6EndpointUnsupported) printIpv6Unsupported(host);
+        return err;
+    };
     defer allocator.free(transport_host);
     var cfg = zig_client.config.Config.initWithTransport(transport_host, port, .quic);
     defer cfg.deinit(allocator);
@@ -55,34 +59,29 @@ fn initClientWithInsecureSetting(
 /// more than one colon (a bare IPv6 literal such as `::1`) is refused with
 /// `error.InvalidAddress`; splitting it on the last colon read `::1` as
 /// host `:` port 1.
-pub fn parseHostPort(addr: []const u8, default_port: u16) !HostPort {
-    if (addr.len > 0 and addr[0] == '[') {
-        const close = std.mem.indexOfScalar(u8, addr, ']') orelse return error.InvalidAddress;
-        const host = addr[1..close];
-        if (!isIpv6Literal(host)) return error.InvalidAddress;
-        const rest = addr[close + 1 ..];
-        if (rest.len == 0) return .{ .host = host, .port = default_port };
-        if (rest[0] != ':') return error.InvalidAddress;
-        return .{ .host = host, .port = try std.fmt.parseInt(u16, rest[1..], 10) };
-    }
-    const colon_idx = std.mem.indexOfScalar(u8, addr, ':') orelse {
-        return .{ .host = addr, .port = default_port };
-    };
-    if (std.mem.indexOfScalarPos(u8, addr, colon_idx + 1, ':') != null) return error.InvalidAddress;
-    const host = addr[0..colon_idx];
-    const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
+/// SONNY-6487: the grammar is `host_port.split` (shared by every address
+/// parser); a port that is not 1-5 digits is `error.InvalidPort`.
+pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPort {
+    const hp = try host_port.split(addr, default_port);
     return .{
-        .host = if (host.len == 0) "127.0.0.1" else host,
-        .port = port,
+        .host = if (hp.host.len == 0) "127.0.0.1" else hp.host,
+        .port = hp.port,
     };
 }
 
-/// An IPv6 address, optionally with a `%zone` suffix (no brackets).
-fn isIpv6Literal(text: []const u8) bool {
-    return switch (std.Io.net.Ip6Address.Unresolved.parse(text)) {
-        .success => true,
-        else => false,
-    };
+const isIpv6Literal = host_port.isIpv6Literal;
+
+/// SONNY-6487: geode-client-zig binds its QUIC endpoint to 0.0.0.0:0 and
+/// formats the dial address without brackets, so it cannot reach an IPv6
+/// server. Say so instead of failing later with a bare InvalidAddress.
+fn printIpv6Unsupported(host: []const u8) void {
+    if (@import("builtin").is_test) return;
+    std.debug.print(
+        "Error: '{s}' is an IPv6 address or has only IPv6 addresses; the CLI's QUIC client " ++
+            "(geode-client-zig) binds an IPv4-only endpoint and cannot reach an IPv6 server yet. " ++
+            "Use an IPv4 address or a name with an IPv4 address.\n",
+        .{host},
+    );
 }
 
 /// SONNY-6484: refuse a DSN whose host is an unbracketed IPv6 literal

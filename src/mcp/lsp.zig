@@ -303,30 +303,14 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a function
     if (language_metadata.findFunction(word.?)) |func| {
-        var params_buf: [1024]u8 = undefined;
-        var params_len: usize = 0;
-
-        for (func.params, 0..) |param, i| {
-            if (i > 0) {
-                params_buf[params_len] = ',';
-                params_buf[params_len + 1] = ' ';
-                params_len += 2;
-            }
-            const param_str = param.name;
-            @memcpy(params_buf[params_len .. params_len + param_str.len], param_str);
-            params_len += param_str.len;
-            params_buf[params_len] = ':';
-            params_buf[params_len + 1] = ' ';
-            params_len += 2;
-            @memcpy(params_buf[params_len .. params_len + param.type_name.len], param.type_name);
-            params_len += param.type_name.len;
-        }
+        const params = try formatHoverParams(allocator, func.params);
+        defer allocator.free(params);
 
         const example = try formatExample(allocator, func.example);
         defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**({s}) → {s}\n\n{s}\n\nCompliance: {s}{s}", .{
             func.name,
-            params_buf[0..params_len],
+            params,
             func.return_type,
             func.doc,
             @tagName(func.compliance),
@@ -354,24 +338,14 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a procedure
     if (language_metadata.findProcedure(word.?)) |proc| {
-        var cols_buf: [2048]u8 = undefined;
-        var cols_len: usize = 0;
-
-        for (proc.columns, 0..) |col, i| {
-            if (i > 0) {
-                cols_buf[cols_len] = ',';
-                cols_buf[cols_len + 1] = ' ';
-                cols_len += 2;
-            }
-            @memcpy(cols_buf[cols_len .. cols_len + col.name.len], col.name);
-            cols_len += col.name.len;
-        }
+        const cols = try formatHoverColumns(allocator, proc.columns);
+        defer allocator.free(cols);
 
         const example = try formatExample(allocator, proc.example);
         defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**\n\nYIELD: {s}\n\n{s}{s}", .{
             proc.name,
-            cols_buf[0..cols_len],
+            cols,
             proc.doc,
             example,
         });
@@ -381,6 +355,34 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
     }
 
     return formatHoverResponse(allocator, null);
+}
+
+/// SONNY-6487: a function's hover parameter list ("name: TYPE, ..."),
+/// allocated to its real length and owned by the caller. It used to be
+/// written into a fixed 1024-byte stack buffer with unchecked index writes.
+pub fn formatHoverParams(allocator: std.mem.Allocator, params: []const language_metadata.FunctionParam) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (params, 0..) |param, i| {
+        if (i > 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, param.name);
+        try out.appendSlice(allocator, ": ");
+        try out.appendSlice(allocator, param.type_name);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// SONNY-6487: a procedure's hover YIELD column list ("a, b, ..."),
+/// allocated to its real length and owned by the caller. It used to be
+/// written into a fixed 2048-byte stack buffer with unchecked index writes.
+pub fn formatHoverColumns(allocator: std.mem.Allocator, columns: []const language_metadata.ProcedureColumn) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (columns, 0..) |col, i| {
+        if (i > 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, col.name);
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 /// SONNY-6484: the hover "Example:" suffix, owned by the caller (it used to

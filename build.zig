@@ -2167,6 +2167,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cli_args_mod.addImport("config", config_mod);
+    // SONNY-6487: the shared host:port parser (geode.host_port).
+    cli_args_mod.addImport("geode", root_mod);
     cli_args_mod.addImport("build_options", build_options_mod);
     const cli_args_cluster_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cli_args_cluster.zig"),
@@ -6842,7 +6844,8 @@ pub fn build(b: *std.Build) void {
     // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
+        // SONNY-6487: rooted in src/ so kafka_sink.zig reaches src/client/host_port.zig.
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/cdc_enhanced_test_root.zig"), .target = target, .optimize = optimize }),
     });
     streaming_test.root_module.link_libc = true;
     streaming_test.root_module.addImport("logging", logging_mod);
@@ -8391,6 +8394,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0830_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0830_step = b.step("test-gap0830", "GAP-0830: MCP/LSP bridge contract governance test");
     gap0830_step.dependOn(&run_gap0830_tests.step);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_mcp_hover_bounds.zig"), .target = target, .optimize = optimize });
+        test_mod.addImport("mcp_bridge", gap0830_bridge_mod);
+        test_mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-mcp-hover-bounds", "Run SONNY-6487 item 1 regression (MCP hover formats function parameter and procedure YIELD column lists to their real length instead of into fixed 1024/2048-byte stack buffers, and every shipped function/procedure hovers with its full signature)").dependOn(&run_tests.step);
+    }
 
     // GAP-0820..0824: LSP "honest non-support" contract — unadvertised feature
     // REQUESTS answer -32601 (MethodNotFound) and unadvertised NOTIFICATIONS are
@@ -10062,6 +10074,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
     const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
     endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_endpoint_host_family.zig"), .target = target, .optimize = optimize });
+        test_mod.link_libc = true;
+        test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-endpoint-host-family", "Run SONNY-6487 item 2 regression (the CLI QUIC client looks a server name up in both address families, prefers IPv4, and refuses an IPv6-only destination with Ipv6EndpointUnsupported because geode-client-zig binds an IPv4-only endpoint)").dependOn(&run_tests.step);
+    }
 
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
@@ -10140,6 +10161,64 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6487 item 5: src/distributed/federation_flag.zig (std-only; the
+    // build imports it only as a named module of benchmarks and tests).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
+        const tests = b.addTest(.{ .name = "sonny6487-federation-flag", .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-federation-flag-inline", "Run SONNY-6487 item 5: src/distributed/federation_flag.zig's inline test").dependOn(&run_tests.step);
+    }
+    // SONNY-6487 (3): src/client/repl/line_text.zig's grapheme/width helpers.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("src/client/repl/line_text.zig"), .target = target, .optimize = optimize });
+        mod.addImport("strings", strings_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-repl-line-text", "Run SONNY-6487 item 3 unit tests of the shell editor's UTF-8 helpers (grapheme boundaries, display width, whole-cluster removal)").dependOn(&run_tests.step);
+    }
+    // SONNY-6487 (3): the interactive shell edits multi-byte text (PTY).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_repl_utf8.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-repl-utf8", "Run SONNY-6487 item 3 regression (geode shell through a pseudo-terminal: multi-byte characters and a combining mark typed key by key are kept, the cursor and Backspace/Delete step over whole grapheme clusters, the statement reaches the server intact, and Ctrl-R finds a non-ASCII search term)").dependOn(&run_tests.step);
+    }
+    // SONNY-6487 (2): one host:port grammar; IPv6 listen and dial end to end.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_ipv6_serve.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port; geode query refuses an IPv6 server with the client-library reason)").dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_host_port.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("cli_args", cli_args_mod);
+        mod.addImport("cluster_bootstrap", cluster_bootstrap_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-host-port", "Run SONNY-6487 item 2 regression (one host:port grammar: bracketed IPv6 with optional zone, bare IPv6 refused, a port is 1-5 digits; --listen, --listen-grpc and cluster peer specs parse with it and refuse bad ports)").dependOn(&run_tests.step);
     }
 
     // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
@@ -16305,6 +16384,15 @@ pub fn build(b: *std.Build) void {
     const bug731_pwreset_tests = b.addTest(.{ .root_module = bug731_pwreset_test_mod });
     const run_bug731_pwreset_tests = b.addRunArtifact(bug731_pwreset_tests);
     shardDep(test_step, &run_bug731_pwreset_tests.step, 0, test_shard_loads, test_shard_index);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_server_state_mvcc_fields.zig"), .target = target, .optimize = optimize });
+        test_mod.addImport("geode", root_mod);
+        test_mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 0, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-server-state-mvcc-fields", "Run SONNY-6487 item 6 regression (ServerState no longer carries the never-set, never-read mvcc_manager / current_mvcc_txn fields)").dependOn(&run_tests.step);
+    }
     const bug731_pwreset_step = b.step("test-bug731-pwreset", "Run bug-731 ALTER USER password_reset_required lockout regressions");
     bug731_pwreset_step.dependOn(&run_bug731_pwreset_tests.step);
 

@@ -27,6 +27,8 @@ fn inlineLongOptionValue(arg: []const u8, option: []const u8) ?[]const u8 {
 // External configuration library - XDG compliant, multi-format support (YAML, TOML, JSON)
 // Provides config file support with precedence: flags > env > project > user > system > defaults
 const config_lib = @import("config");
+// SONNY-6487: the shared host:port grammar (src/client/host_port.zig).
+const host_port = @import("geode").host_port;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-007; FEATURE="ServerRefactoring"; ASPECT=CLI_ARGS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - CLI Argument Parsing Module (Third Increment)
@@ -397,29 +399,72 @@ fn ipv4ListenHost(host: []const u8) ?[]const u8 {
     return host;
 }
 
+/// The QUIC listener's default port (src/transport/quic.zig DEFAULT_PORT).
+const default_quic_port: u16 = 3141;
+
+pub const QuicListen = struct {
+    /// What the QUIC transport binds: an IPv6 address keeps its brackets
+    /// (`[::1]`), because the transport formats `"{address}:{port}"`.
+    address: []const u8,
+    port: u16,
+};
+
+pub const QuicListenError = error{
+    /// The port is not 1-5 digits or is above 65535.
+    InvalidQuicListenPort,
+    /// Unterminated or misplaced brackets, brackets around something that is
+    /// not an IPv6 address, or a bare (unbracketed) IPv6 address.
+    InvalidQuicListenAddress,
+};
+
+fn isPortOnly(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| if (!std.ascii.isDigit(c)) return false;
+    return true;
+}
+
+/// SONNY-6487: resolve `--listen` (docs/DSN.md grammar): `<port>` and
+/// `:<port>` bind 0.0.0.0, a host without a port binds port 3141,
+/// `[ipv6]:<port>` binds IPv6. A port that is not a port is refused; it used
+/// to fall back to 3141, and a host without a port fell back to
+/// 0.0.0.0:3141 (every interface).
+pub fn resolveQuicListen(listen: []const u8) QuicListenError!QuicListen {
+    if (isPortOnly(listen)) {
+        return .{ .address = "0.0.0.0", .port = host_port.parsePort(listen) catch return error.InvalidQuicListenPort };
+    }
+    const hp = host_port.split(listen, default_quic_port) catch |err| return switch (err) {
+        error.InvalidPort => error.InvalidQuicListenPort,
+        error.InvalidAddress => error.InvalidQuicListenAddress,
+    };
+    return .{ .address = if (hp.host.len == 0) "0.0.0.0" else hp.host_literal, .port = hp.port };
+}
+
+/// The IPv4 address the QUIC listener binds, for a port-only --listen-grpc.
+fn quicListenIpv4(listen_quic: ?[]const u8) ?[]const u8 {
+    const quic = resolveQuicListen(listen_quic orelse return null) catch return null;
+    return ipv4ListenHost(quic.address);
+}
+
 /// SONNY-1336: resolve `--listen-grpc` (`<ipv4>:<port>`, `localhost:<port>`
 /// or `<port>`) to the address the gRPC listener binds. A port alone binds
 /// the QUIC listener's address (`listen_quic`), or 0.0.0.0 -- the QUIC
 /// port-only default -- when that names no IPv4 address. An IPv6 address or a
 /// host name is refused rather than replaced: grpc-zig binds IPv4 only.
+/// SONNY-6487: parsed with the shared grammar, so `[::1]:50051` and
+/// `::1:50051` are refused as IPv6 (not as a host named `[::1]`), and a port
+/// is 1-5 digits (`+80` and `1_000` are refused).
 pub fn resolveGrpcBind(listen_grpc: []const u8, listen_quic: ?[]const u8) GrpcListenError!GrpcBind {
-    var host: []const u8 = "";
-    var port_text: []const u8 = listen_grpc;
-    if (std.mem.lastIndexOfScalar(u8, listen_grpc, ':')) |ci| {
-        host = listen_grpc[0..ci];
-        port_text = listen_grpc[ci + 1 ..];
+    if (isPortOnly(listen_grpc)) {
+        const port = host_port.parsePort(listen_grpc) catch return error.InvalidGrpcListenPort;
+        return .{ .address = quicListenIpv4(listen_quic) orelse "0.0.0.0", .port = port };
     }
-    const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidGrpcListenPort;
-    if (host.len > 0) {
-        const address = ipv4ListenHost(host) orelse return error.GrpcListenAddressNotIpv4;
-        return .{ .address = address, .port = port };
-    }
-    if (listen_quic) |quic| {
-        if (std.mem.lastIndexOfScalar(u8, quic, ':')) |ci| {
-            if (ipv4ListenHost(quic[0..ci])) |address| return .{ .address = address, .port = port };
-        }
-    }
-    return .{ .address = "0.0.0.0", .port = port };
+    const hp = host_port.split(listen_grpc, null) catch |err| return switch (err) {
+        error.InvalidPort => error.InvalidGrpcListenPort,
+        error.InvalidAddress => error.GrpcListenAddressNotIpv4,
+    };
+    if (hp.host.len == 0) return .{ .address = quicListenIpv4(listen_quic) orelse "0.0.0.0", .port = hp.port };
+    const address = ipv4ListenHost(hp.host) orelse return error.GrpcListenAddressNotIpv4;
+    return .{ .address = address, .port = hp.port };
 }
 
 /// Parse command line arguments from a caller-supplied slice.
@@ -671,6 +716,19 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
 
     if (config.listen_quic == null and config.listen_grpc == null) {
         config.listen_quic = "0.0.0.0:3141";
+    }
+
+    // SONNY-6487: refuse a QUIC listen address that cannot be bound as given
+    // (it used to fall back to port 3141, or to 0.0.0.0:3141 for a host with
+    // no port).
+    if (config.listen_quic) |quic_addr| {
+        _ = resolveQuicListen(quic_addr) catch |err| {
+            switch (err) {
+                error.InvalidQuicListenPort => std.debug.print("Error: geode serve: --listen '{s}' has no valid port (expected <host>:<port>, [<ipv6>]:<port> or <port>, port 0-65535)\n", .{quic_addr}),
+                error.InvalidQuicListenAddress => std.debug.print("Error: geode serve: --listen '{s}' is not a valid address (an IPv6 address must be bracketed: [::1]:3141)\n", .{quic_addr}),
+            }
+            return err;
+        };
     }
 
     // SONNY-1336: refuse a gRPC listen address that cannot be bound as given,

@@ -2218,6 +2218,85 @@
 
 ### Fixed
 
+- **MCP hover: function and procedure signatures are no longer built in
+  fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
+  wrote a function's parameter list into a 1024-byte stack array and a
+  procedure's YIELD column list into a 2048-byte one with unchecked index
+  writes. A longer signature aborted the MCP server with `index out of
+  bounds` in Debug and ReleaseSafe (the release mode) and wrote past the
+  stack buffer in ReleaseFast. The hover text comes only from the built-in
+  `language_metadata` table (longest today: 66 and 22 bytes), so no request
+  could trigger it; the lists are now allocated to their real length
+  (`formatHoverParams`, `formatHoverColumns`). Regression:
+  `zig build test-sonny6487-mcp-hover-bounds`.
+- **Addresses: one host:port grammar; IPv6 listen and dial; a bad port is
+  an error (SONNY-6487 item 2).** `geode serve --listen` / `--listen-grpc`,
+  the cluster peer list (`GEODE_PEERS`, `--peers`) and dialler, the 2PC
+  participant dialler, `geode lsp --listen`, the `geode query` / `shell`
+  `--server` paths, `--audit-syslog`, Kafka brokers, KMS endpoint probes and
+  the shared test client split addresses on their last (or first) colon and
+  ignored brackets, so `[::1]:4242` kept its brackets as the host and a bare
+  `::1:4242` was read as host `::1`. They now all use
+  `src/client/host_port.zig` (`geode.host_port`, the docs/DSN.md grammar
+  `zig_quic_bridge.parseHostPort` already used). Operator-visible:
+  `--listen <host>:<not a port>` refuses to start (it listened on port
+  3141), `--listen localhost` binds 127.0.0.1:3141 (it bound 0.0.0.0:3141),
+  a bare IPv6 address is refused everywhere (`geode lsp --listen ::1:9257`
+  used to work by accident: write `[::1]:9257`), `GEODE_CLUSTER_PORT` that is
+  not a port refuses cluster bootstrap (it fell back to 4242), and
+  `--audit-syslog <host>:<not a port>` and `--audit-syslog <host name>` are
+  refused (they sent to port 514, or dropped every message). The syslog
+  sender addressed 127.0.0.1 as 1.0.0.127 (byte order) and dropped IPv6
+  targets; both are delivered now. `--listen [::1]:<port>` serves over IPv6,
+  and geode's own QUIC client (cluster peers, tests) binds an IPv6 endpoint
+  and brackets the dial address for an IPv6 server. The CLI client
+  (geode-client-zig) is still IPv4-only: it looks names up in both families,
+  prefers IPv4, and refuses an IPv6-only destination with
+  `Ipv6EndpointUnsupported` instead of failing with a bare `InvalidAddress`.
+  Regressions: `zig build test-sonny6487-host-port`,
+  `test-sonny6487-endpoint-host-family`, `test-sonny6487-ipv6-serve`.
+- **Test infrastructure: `src/distributed/federation_flag.zig`'s inline
+  test runs (SONNY-6487 item 5).** The build imported the file only as a
+  named module of benchmarks and tests, so its test ran in no step:
+  `zig build test-sonny6487-federation-flag-inline` (1/1).
+- **Shell: the interactive editor keeps and edits non-ASCII text
+  (SONNY-6487 item 3).** `geode shell`'s line editor
+  (`src/client/repl/`) inserted only bytes 0x20-0x7e from typed keys, so
+  `é`, `€` or a combining accent typed at the prompt were dropped (pasted
+  text kept them); the cursor keys, Backspace and Delete moved or removed
+  one byte, so they could split a character and send invalid UTF-8; the
+  cursor column counted bytes; and Ctrl-R history search dropped non-ASCII
+  search terms (and ended the editor on a match longer than about 1000
+  bytes, `NoSpaceLeft` from a fixed 1024-byte line buffer). Typed UTF-8 is
+  inserted; cursor moves, Backspace, Delete and vi `a`/`e`/Esc step over a
+  whole grapheme cluster (`strings` UAX #29 segmentation, so `e` + U+0301
+  is one step); a combining mark takes no column; Ctrl-R searches UTF-8 and
+  writes its line without a fixed buffer. The Delete key (`ESC [ 3 ~`) did
+  nothing in either keymap (its arm compared key `0x1f`, the parser produces
+  `0x7f`); it deletes the character at the cursor now. Known gap: East Asian wide
+  characters are drawn as one column (no East Asian Width table in the
+  repository or its dependencies), so the cursor is placed one column left
+  per wide character before it; the text is unaffected. Regressions:
+  `zig build test-sonny6487-repl-utf8` (real `geode shell` through a
+  pseudo-terminal against a real server) and
+  `test-sonny6487-repl-line-text`.
+- **Test infrastructure: the abandoned-read test measures idle per thread
+  (SONNY-6487 item 4).** `tests/test_sonny6466_abandoned_read_cancel.zig`'s
+  "vanish" case failed under parallel load although the server behaved: the
+  stall watchdog cancelled the vanished client's read at a stream idle of
+  12.8 s and the join stopped, but the test's "idle" was a one-second window
+  in which the whole server process spent under 30 ticks, and an idle
+  server's polling threads spend 32-38 ticks/s together when several
+  server-spawning steps run at once (about 9 on a quiet machine). Idle is
+  now a window in which no server thread spends 30 ticks and the thread
+  that ran the join is not runnable (the join runs on one thread at 80-110
+  ticks/s); the 10 s threshold and the 30 s / 20 s bounds are unchanged.
+  `zig build test-sonny6466-abandoned-read-cancel`.
+- **Server: removed the unused MVCC manager fields from the connection
+  state (SONNY-6487 item 6).** `ServerState.mvcc_manager` and
+  `current_mvcc_txn` (`src/server/server_state.zig`) were never set or read;
+  the server never ran the `src/server/txn/mvcc.zig` conflict detector they
+  named. Regression: `zig build test-sonny6487-server-state-mvcc-fields`.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

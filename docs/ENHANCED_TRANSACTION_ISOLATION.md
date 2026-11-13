@@ -46,9 +46,10 @@ together with the two uncompiled tests that exercised them
   doomed now), and a transaction's wait-for list leaked at commit and
   rollback.
 - `src/server/txn/mvcc.zig` and `src/server/txn/phantom_read_prevention.zig`
-  are named only by an export in `src/lib.zig` and by two fields in
-  `src/server/server_state.zig` (`mvcc_manager`, `current_mvcc_txn`) that
-  nothing sets or reads. Compile-error probes placed inside their functions do
+  are named only by an export in `src/lib.zig`. Until SONNY-6487
+  `src/server/server_state.zig` also carried two fields of their types
+  (`mvcc_manager`, `current_mvcc_txn`) that nothing set or read; they were
+  removed. Compile-error probes placed inside their functions do
   not fire in `zig build`: none of their functions is compiled into the
   server.
 - The `geode.transaction.isolation_level` metric label

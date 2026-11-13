@@ -759,16 +759,18 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
             addr_raw["tcp://".len..]
         else
             addr_raw;
-        const colon = std.mem.lastIndexOfScalar(u8, stripped, ':') orelse {
-            std.debug.print("Error: --listen address must be host:port (got '{s}')\n", .{addr_raw});
+        // SONNY-6487: the shared grammar -- an IPv6 host is bracketed
+        // (`[::1]:9257`); a bare `::1:9257` is refused, not split on its
+        // last colon.
+        const listen_hp = geode.host_port.split(stripped, null) catch |err| {
+            switch (err) {
+                error.InvalidPort => std.debug.print("Error: --listen '{s}' has no valid port (expected host:port, port 0-65535)\n", .{addr_raw}),
+                error.InvalidAddress => std.debug.print("Error: --listen address must be host:port or [ipv6]:port (got '{s}')\n", .{addr_raw}),
+            }
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        const host = stripped[0..colon];
-        const port_str = stripped[colon + 1 ..];
-        const port = std.fmt.parseInt(u16, port_str, 10) catch {
-            std.debug.print("Error: invalid port '{s}'\n", .{port_str});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        };
+        const host = listen_hp.host;
+        const port = listen_hp.port;
 
         // Zig 0.16: the net stack is `std.Io.net.*` — `IpAddress.parseIp4`
         // / `parseIp6` build the address and `IpAddress.listen` returns a
@@ -2023,13 +2025,14 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     };
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3142";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3142) catch {
+        printInvalidServerAddress(stderr, server_addr);
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     var attempts: u32 = 0;
     // Match QUIC's behavior for rapid sequential CLI usage: allow at least
@@ -2366,13 +2369,14 @@ fn executeBatchQueries(
     }
 
     // Parse server address
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch {
+        printInvalidServerAddress(stderr, server_addr);
         return error.InvalidAddress;
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     // Single QUIC connection for all queries via the shared Zig client library.
     // GAP-0260/0263: retry the initial connect a few times. Under CPU contention
@@ -2953,10 +2957,10 @@ fn retryChunkStatementByStatement(
     }
 
     // QUIC: one connection, one HELLO, one stream for the whole retry.
-    var addr_port = std.mem.splitSequence(u8, opts.server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidAddress;
+    // SONNY-6487: the shared grammar (`[ipv6]:port`).
+    const server_hp = zig_quic_bridge.parseHostPort(opts.server_addr, 3141) catch return error.InvalidAddress;
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     var raw_client = zig_quic_bridge.initClient(
         allocator,
@@ -3111,13 +3115,14 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     };
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch {
+        printInvalidServerAddress(stderr, server_addr);
         return error.InvalidAddress;
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
@@ -4291,6 +4296,14 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
 // test binary (this file is only compiled inside the `geode` executable).
 const hello_decode = geode.hello_decode;
 const AuthResult = hello_decode.AuthResult;
+
+/// SONNY-6487: the one message for a `--server` address the shared grammar
+/// refuses.
+fn printInvalidServerAddress(stderr: std.Io.File, server_addr: []const u8) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Error: invalid server address '{s}' (expected host:port, [ipv6]:port or :port; port 0-65535)\n", .{server_addr}) catch "Error: invalid server address (expected host:port, [ipv6]:port or :port)\n";
+    stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+}
 
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15

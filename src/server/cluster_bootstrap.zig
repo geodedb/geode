@@ -28,6 +28,8 @@ const geode = @import("geode");
 const cluster = geode.distributed.cluster;
 // GAP-0838 (Bug B hardening): boot-time cluster identity-contract diagnostic.
 const cluster_identity = @import("cluster_identity.zig");
+// SONNY-6487: the shared host:port grammar (src/client/host_port.zig).
+const host_port = geode.host_port;
 
 /// Whether an appendPeer call added the peer or skipped it as a self-reference.
 const PeerOutcome = enum { added, skipped_self };
@@ -40,6 +42,9 @@ pub const Error = error{
     MissingNodeId,
     InvalidNodeId,
     InvalidPeerSpec,
+    /// GEODE_CLUSTER_PORT is not a port (SONNY-6487: it used to fall back to
+    /// the default 4242).
+    InvalidClusterPort,
     /// The durable raft storage directory (`<data_dir>/raft`) is already locked
     /// by a live process (FileStorage exclusive `.lock` flock). Surfaced
     /// distinctly so the operator sees a real "already running / stale lock"
@@ -107,12 +112,21 @@ pub fn computeSelfIdentity(specs: []const []const u8, hostname: []const u8) Self
     var self_pos: ?usize = null;
     var any_dns = false;
     for (specs, 0..) |spec, i| {
-        const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse continue;
-        const host = spec[0..colon];
+        const host = (parsePeerSpec(spec) catch continue).host;
         if (!cluster_identity.isLoopbackAlias(host)) any_dns = true;
         if (self_pos == null and cluster_identity.hostMatchesSelf(host, hostname)) self_pos = i + 1;
     }
     return .{ .self_position = self_pos, .any_dns_peer = any_dns };
+}
+
+/// SONNY-6487: a peer spec is `host:port` or `[ipv6]:port` (docs/DSN.md
+/// grammar; the port is required). The host comes back without brackets.
+/// Splitting on the last colon kept `[::1]` as the host and read a bare
+/// `::1:4242` as host `::1`.
+pub fn parsePeerSpec(spec: []const u8) Error!host_port.HostPort {
+    const hp = host_port.split(spec, null) catch return Error.InvalidPeerSpec;
+    if (hp.host.len == 0) return Error.InvalidPeerSpec;
+    return hp;
 }
 
 /// Initialized cluster coordinator handle.  Caller MUST call `deinit` on
@@ -220,7 +234,7 @@ pub fn maybeStart(
     const cluster_port: u16 = blk: {
         if (cli_cluster_port) |p| break :blk p;
         if (env.get("GEODE_CLUSTER_PORT")) |p_str| {
-            break :blk std.fmt.parseInt(u16, p_str, 10) catch DEFAULT_CLUSTER_PORT;
+            break :blk host_port.parsePort(p_str) catch return Error.InvalidClusterPort;
         }
         break :blk DEFAULT_CLUSTER_PORT;
     };
@@ -428,11 +442,14 @@ fn appendPeer(
     self_aliases: []const []const u8,
     self_listen_address: []const u8,
 ) Error!PeerOutcome {
-    const colon = std.mem.lastIndexOfScalar(u8, spec, ':') orelse return Error.InvalidPeerSpec;
-    const host = spec[0..colon];
-    const port_str = spec[colon + 1 ..];
-    if (host.len == 0 or port_str.len == 0) return Error.InvalidPeerSpec;
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return Error.InvalidPeerSpec;
+    const peer = try parsePeerSpec(spec);
+    const host = peer.host;
+    const port = peer.port;
+    // GEODE_CLUSTER_LISTEN_ADDRESS may be written bracketed (`[::1]`).
+    const self_host = if (self_listen_address.len >= 2 and self_listen_address[0] == '[' and self_listen_address[self_listen_address.len - 1] == ']')
+        self_listen_address[1 .. self_listen_address.len - 1]
+    else
+        self_listen_address;
 
     // Skip self-references so a 3-node cluster can ship the same peer list to
     // every node.  The AUTHORITATIVE self-test is the position-based
@@ -451,7 +468,7 @@ fn appendPeer(
     //     documented loopback aliases as self (the original k8s/single-host
     //     posture, where each node has its own netns or a 127.0.0.1 self-entry).
     if (port == self_port) {
-        if (self_listen_address.len > 0 and std.mem.eql(u8, host, self_listen_address)) {
+        if (self_host.len > 0 and std.mem.eql(u8, host, self_host)) {
             return .skipped_self;
         }
         if (isWildcardBindAddress(self_listen_address)) {

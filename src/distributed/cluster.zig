@@ -66,6 +66,8 @@ const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
 const graph_store = @import("../graph_store.zig");
+// SONNY-6487: the shared host:port grammar.
+const host_port = @import("../client/host_port.zig");
 const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
@@ -1002,7 +1004,9 @@ pub const ClusterCoordinator = struct {
             cluster_state.replication_map.deinit();
         }
         for (config.peers) |pc| {
-            const ep = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ pc.address, pc.port });
+            // SONNY-6487: an IPv6 peer is `[addr]:port`, so the dial path
+            // can split it back.
+            const ep = try host_port.formatAlloc(allocator, pc.address, pc.port);
             errdefer allocator.free(ep);
             try cluster_state.nodes.append(allocator, .{
                 .id = pc.id,
@@ -2600,9 +2604,9 @@ pub const ClusterCoordinator = struct {
     // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: Message) !void {
         const endpoint = try self.findNodeEndpoint(node_id);
-        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
-        const host = endpoint[0..colon_idx];
-        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
+        const peer = host_port.split(endpoint, null) catch return error.InvalidAddress;
+        const host = peer.host;
+        const port = peer.port;
 
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
@@ -2748,9 +2752,9 @@ pub const ClusterCoordinator = struct {
     /// call `Response.deinit(allocator)` to free it.
     fn sendClusterRpcToNode(self: *ClusterCoordinator, target_node: u64, msg: Message) !Response {
         const endpoint = try self.findNodeEndpoint(target_node);
-        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
-        const host = endpoint[0..colon_idx];
-        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
+        const peer = host_port.split(endpoint, null) catch return error.InvalidAddress;
+        const host = peer.host;
+        const port = peer.port;
 
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();

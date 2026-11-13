@@ -56,7 +56,10 @@ quic://[fe80::1%eth0]:3141
 ```
 
 The host grammar the geode binary accepts (the MCP endpoint DSN, the CLI
-`--dsn` and `--server`; SONNY-6484):
+`--dsn` and `--server`, SONNY-6484; and, since SONNY-6487, every other
+address it parses: `geode serve --listen` and `--listen-grpc`,
+`GEODE_PEERS` / `--peers`, `geode lsp --listen`, `--audit-syslog`, Kafka
+brokers and KMS endpoints, all through `src/client/host_port.zig`):
 
 | Form | Host | Port |
 |------|------|------|
@@ -75,12 +78,26 @@ Refused with `InvalidAddress`, never reinterpreted:
 - an unterminated bracket (`[::1`), anything but `:port` after the
   bracket (`[::1]3141`), or brackets around anything but an IPv6 address
   (`[127.0.0.1]`, `[]`);
-- a port that is empty, not a number, or above 65535 (`--server` and
-  `--dsn`; the MCP endpoint DSN goes through geode-client-zig's lenient
-  `parseDSN`, which still falls back to the default port for such a port).
+- a port that is not 1-5 digits or is above 65535 (empty, `http`, `+80`,
+  `3_141`, `70000`). No parser replaces a bad port with a default any more
+  (`--listen` used to fall back to 3141, `--audit-syslog` to 514,
+  `GEODE_CLUSTER_PORT` to 4242); the MCP endpoint DSN still goes through
+  geode-client-zig's lenient `parseDSN`, which falls back to the default
+  port for such a port.
 
-Accepting an IPv6 address does not make it reachable: the CLI's QUIC client
-resolves host names to IPv4 only (`src/client/quic_endpoint_host.zig`).
+`geode serve --listen` also takes `<port>` or `:<port>` (0.0.0.0) and a host
+without a port (port 3141; `--listen localhost` used to bind
+0.0.0.0:3141). `--listen [::1]:3141` binds the IPv6 loopback, and geode's
+own QUIC client (the cluster peer dialler and the test client) dials
+`[ipv6]:port`. `--listen-grpc` parses the same grammar but still refuses
+IPv6: grpc-zig binds IPv4 only.
+
+The CLI's QUIC client (`geode query`, `geode shell`, `geode backup`, ...)
+cannot reach an IPv6 server yet: geode-client-zig binds its endpoint to
+`0.0.0.0:0` and formats the dial address without brackets. It looks a host
+name up in both address families, uses the first IPv4 address, and refuses
+an IPv6 literal or an IPv6-only name with `Ipv6EndpointUnsupported` and a
+message saying why (`src/client/quic_endpoint_host.zig`).
 
 ### Hostnames
 

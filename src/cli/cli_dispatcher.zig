@@ -223,15 +223,20 @@ pub fn dispatch(
                 audit_cfg.syslog_enabled = true;
                 audit_cfg.enabled = true;
 
-                // Parse host:port
+                // SONNY-6487: host[:port] or [ipv6][:port] (the shared
+                // grammar); a port that is not a port is refused -- it used
+                // to send to 514.
                 const hostport = argv[i + 1];
-                if (std.mem.lastIndexOf(u8, hostport, ":")) |colon_idx| {
-                    audit_cfg.syslog_host = try allocator.dupe(u8, hostport[0..colon_idx]);
-                    audit_cfg.syslog_port = std.fmt.parseInt(u16, hostport[colon_idx + 1 ..], 10) catch 514;
-                } else {
-                    audit_cfg.syslog_host = try allocator.dupe(u8, hostport);
-                    audit_cfg.syslog_port = 514;
+                const target = geode.host_port.split(hostport, 514) catch {
+                    std.debug.print("Error: --audit-syslog '{s}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{hostport});
+                    return error.InvalidAuditSyslogAddress;
+                };
+                if (syslogTarget(target.host, target.port) == null) {
+                    std.debug.print("Error: --audit-syslog '{s}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{hostport});
+                    return error.InvalidAuditSyslogAddress;
                 }
+                audit_cfg.syslog_host = try allocator.dupe(u8, target.host);
+                audit_cfg.syslog_port = target.port;
 
                 i += 1;
                 subcommand_start = i + 1;
@@ -1334,43 +1339,46 @@ fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: 
         ts,
     }) catch return;
 
+    // SONNY-6487: an IPv4 or IPv6 literal (or localhost). The address used to
+    // be assembled with the wrong byte order (127.0.0.1 went to 1.0.0.127 on
+    // a little-endian host) and IPv6 targets were dropped.
+    const target = syslogTarget(host, port) orelse return;
     // Send via UDP using linux syscalls (std.posix.socket removed in Zig 0.16)
     const linux = std.os.linux;
-    const sock_rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    const family: u32 = switch (target) {
+        .ip4 => linux.AF.INET,
+        .ip6 => linux.AF.INET6,
+    };
+    const sock_rc = linux.socket(family, linux.SOCK.DGRAM, 0);
     if (@as(isize, @bitCast(sock_rc)) < 0) return;
     const sock_fd: i32 = @intCast(sock_rc);
     defer _ = linux.close(sock_fd);
 
-    // Parse IP address
-    var addr_bytes: [4]u8 = undefined;
-    var segments: [4][]const u8 = undefined;
-    var segment_count: usize = 0;
-    var start: usize = 0;
-    for (host, 0..) |c, i| {
-        if (c == '.') {
-            if (segment_count < 4) {
-                segments[segment_count] = host[start..i];
-                segment_count += 1;
-            }
-            start = i + 1;
-        }
+    switch (target) {
+        .ip4 => |ip| {
+            var sa: linux.sockaddr.in = .{
+                .port = std.mem.nativeToBig(u16, ip.port),
+                .addr = std.mem.readInt(u32, &ip.bytes, .little),
+            };
+            _ = linux.sendto(sock_fd, message.ptr, message.len, 0, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+        },
+        .ip6 => |ip| {
+            var sa: linux.sockaddr.in6 = .{
+                .port = std.mem.nativeToBig(u16, ip.port),
+                .flowinfo = ip.flow,
+                .addr = ip.bytes,
+                .scope_id = ip.interface.index,
+            };
+            _ = linux.sendto(sock_fd, message.ptr, message.len, 0, @ptrCast(&sa), @sizeOf(linux.sockaddr.in6));
+        },
     }
-    if (segment_count < 4 and start < host.len) {
-        segments[segment_count] = host[start..];
-        segment_count += 1;
-    }
+}
 
-    if (segment_count != 4) return; // Invalid IP
-
-    for (segments[0..4], 0..) |seg, i| {
-        addr_bytes[i] = std.fmt.parseInt(u8, seg, 10) catch return;
-    }
-
-    var sa: linux.sockaddr.in = .{
-        .port = std.mem.nativeToBig(u16, port),
-        .addr = std.mem.readInt(u32, &addr_bytes, .big),
-    };
-    _ = linux.sendto(sock_fd, message.ptr, message.len, 0, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+/// SONNY-6487: the syslog destination: an IPv4 or IPv6 literal, or
+/// `localhost` (127.0.0.1). The sender does not resolve other names.
+fn syslogTarget(host: []const u8, port: u16) ?std.Io.net.IpAddress {
+    const literal = if (std.ascii.eqlIgnoreCase(host, "localhost")) "127.0.0.1" else host;
+    return std.Io.net.IpAddress.parse(literal, port) catch null;
 }
 
 // CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30

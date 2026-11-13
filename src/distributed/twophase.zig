@@ -64,6 +64,8 @@ const protobuf = @import("protobuf");
 const dist_schema = @import("distributed_schema");
 const proto_schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
+// SONNY-6487: the shared host:port grammar.
+const host_port = @import("../client/host_port.zig");
 const value_convert = @import("value_convert.zig");
 const pooled = @import("transport/thread_pool");
 
@@ -238,10 +240,13 @@ pub const TwoPhaseTransport = struct {
         // Parse endpoint into host and port
         // GAP-0144: Secure TLS connections for 2PC coordination
         // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=distributed; UPDATED=2026-11-13
-        const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
-        const host = endpoint[0..colon_pos];
-        const port_str = endpoint[colon_pos + 1 ..];
-        const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
+        const peer = host_port.split(endpoint, null) catch |err| return switch (err) {
+            error.InvalidPort => error.InvalidPort,
+            error.InvalidAddress => error.InvalidEndpoint,
+        };
+        if (peer.host.len == 0) return error.InvalidEndpoint;
+        const host = peer.host;
+        const port = peer.port;
 
         // SONNY-6453: the cluster transport configuration raft uses
         // (GEODE_CLUSTER_CA_CERT, or GEODE_CLUSTER_INSECURE in Debug builds);
@@ -421,10 +426,13 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     // One-shot connection for when transport not initialized
     // Parse endpoint into host and port
-    const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
-    const host = endpoint[0..colon_pos];
-    const port_str = endpoint[colon_pos + 1 ..];
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
+    const peer = host_port.split(endpoint, null) catch |err| return switch (err) {
+        error.InvalidPort => error.InvalidPort,
+        error.InvalidAddress => error.InvalidEndpoint,
+    };
+    if (peer.host.len == 0) return error.InvalidEndpoint;
+    const host = peer.host;
+    const port = peer.port;
 
     // Create allocator for this operation
     var gpa = std.heap.DebugAllocator(.{}){};

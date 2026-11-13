@@ -538,7 +538,7 @@ REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegression,TESTED,te
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegressionBuild,TESTED,build.zig,test-deadline-watchdog,,cli,2026-06-11
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookFollowup,IMPL,tests/test_deadline_watchdog_quic_progress_followup.sh,,,cli,2026-04-16
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookIntegration,IMPL,tests/test_quic_long_query_no_false_timeout.sh,,,cli,2026-04-16
-REQ-CLI-DNS-5077,CLI QUIC hostname resolution,HostnameResolution,TESTED,src/client/quic_endpoint_host.zig,tests/test_5077_quic_endpoint_host.zig,,cli,2026-11-07
+REQ-CLI-DNS-5077,CLI QUIC hostname resolution,HostnameResolution,TESTED,src/client/quic_endpoint_host.zig,tests/test_5077_quic_endpoint_host.zig,,cli,2026-11-13
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,tests/exit_code_mapping_regression_test.sh,TestCANARY_REQ_CLI_EXIT_001_ExitCodes,,cli,2025-10-04
 REQ-CLI-FILE-CHUNKED-001,QueryFileChunkedExecution,SubprocessE2E,TESTED,tests/test_cli_file_chunked.zig,tests/test_cli_file_chunked.zig,,cli,2026-11-12
 REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,TESTED,src/cli/main.zig,geodetestlab/specs/query_file_flag_comprehensive.yml,,cli,2026-06-10
@@ -3553,6 +3553,7 @@ REQ-NESTING-REFACTOR-017,NestingReduction,PropertyConversion,TESTED,src/executio
 REQ-NESTING-REFACTOR-023,NestingReduction,FLEVisibility,TESTED,src/execution/storage_dispatch.zig,,,refactor,2026-01-30
 REQ-NESTING-REFACTOR-024,NestingReduction,FLEConfigParsing,TESTED,src/execution/storage_dispatch.zig,,,refactor,2026-01-30
 REQ-NESTING-REFACTOR-025,NestingReduction,OrderByParsing,TESTED,src/gql/parser.zig,,,refactor,2026-01-30
+REQ-NET-HOSTPORT-6487,Shared host:port parser,AddressGrammar,TESTED,src/client/host_port.zig,tests/test_sonny6487_host_port.zig,,transport,2026-11-13
 REQ-NETWORK-SECURITY-001,NetworkSecurity,TLSConnection,IMPL,tests/test_gap_0193_batch2_security.zig,,,transport,2026-11-12
 REQ-NETWORK-SECURITY-002,NetworkSecurity,CertValidation,IMPL,tests/test_gap_0193_batch2_security.zig,,,transport,2026-11-12
 REQ-NEW8-ENVELOPE-TRUST,EnvelopeTrustGate,HandlerWiring,TESTED,src/server/quic_connection_handler.zig,src/server/test_federation_server_auth.zig,,security,2026-06-26
@@ -4180,6 +4181,7 @@ REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,EXEMPT,tests/test_repl_e2e.
 REQ-REPL-SESSION-001,REPL Session Persistence,Implementation,TESTED,src/client/repl/session_state.zig,test_session_state,,repl,2025-11-17
 REQ-REPL-SYNTAX-001,REPL Syntax Highlighting,Implementation,TESTED,src/client/repl/syntax_highlighter.zig,test_syntax_highlighting,,repl,2025-11-17
 REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,tests/repl_timing_regression_test.sh,repl_timing_regression_test,,repl,2026-02-16
+REQ-REPL-UTF8-EDIT-6487,REPL UTF-8 line editing,GraphemeCursor,TESTED,src/client/repl/line_text.zig,tests/test_sonny6487_repl_utf8.zig,,cli,2026-11-13
 REQ-RLS-001,RLSExpressionCompilation,PolicyParsing,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15
 REQ-RLS-002,RLSExpressionCompilation,ExpressionOptimization,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15
 REQ-RLS-003,RLSExpressionCompilation,CacheIntegration,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15
