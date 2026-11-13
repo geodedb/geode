@@ -342,12 +342,13 @@ test "SONNY-2769: arithmetic past i64 or the decimal is 22003" {
 // ---------------------------------------------------------------------------
 
 fn checkTemporal(s: *Session, f: *Failures) !void {
-    // Date +/- interval past the day range.
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647D') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647M') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P100000000Y') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '1000-01-01' - duration('P2147483647D') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' - duration('P2147483647M') AS x", &.{}, error.IntegerOverflow);
+    // Date +/- interval past the day range: 22008 datetime field overflow
+    // since SONNY-6489 (it was 22003).
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647D') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647M') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P100000000Y') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '1000-01-01' - duration('P2147483647D') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' - duration('P2147483647M') AS x", &.{}, error.DatetimeFieldOverflow);
     // In range, and unchanged: the day clamps to the target month.
     try expectValue(s, f, "RETURN DATE '2026-01-31' + duration('P1M') AS x", "2026-02-28");
     try expectValue(s, f, "RETURN duration('P1M') + DATE '2026-01-31' AS x", "2026-02-28");

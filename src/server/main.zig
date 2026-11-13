@@ -1330,7 +1330,7 @@ fn loadMtlsClientCa(gpa: std.mem.Allocator, grpc_listener: bool) !quic_transport
         return error.MtlsClientCaRequired;
     };
     defer gpa.free(path);
-    const trust = quic_transport.installClientCaTrust(gpa, path) catch |err| {
+    const trust = quic_transport.loadClientCaTrust(gpa, path) catch |err| {
         log.err("mTLS: cannot use GEODE_MTLS_CLIENT_CA; refusing to start", &.{
             Attr.string("path", path),
             Attr.string("error", @errorName(err)),
@@ -1339,7 +1339,7 @@ fn loadMtlsClientCa(gpa: std.mem.Allocator, grpc_listener: bool) !quic_transport
     };
     log.info("mTLS: client certificates verified against GEODE_MTLS_CLIENT_CA", &.{
         Attr.string("path", path),
-        Attr.int("ca_certificates", @intCast(trust.spkis.len)),
+        Attr.int("ca_certificates", @intCast(trust.ders.len)),
     });
     return trust;
 }
@@ -2599,13 +2599,21 @@ pub fn main() !void {
 
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
         // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
-        // SONNY-6453: resolved (and the client CA installed) at startup.
-        // SONNY-6457: the bundle also goes to the TLS layer, which completes
-        // a client chain sent without its issuer from these CAs only.
+        // SONNY-6453: resolved (the client CA bundle loaded) at startup.
+        // SONNY-6457: the bundle goes to the TLS layer, which verifies client
+        // chains against these CAs only and completes a chain sent without
+        // its issuer from them. SONNY-6490: the listener is its only user.
         if (mtls_client_ca) |*trust| {
             transport.config.require_client_cert = true;
             transport.config.inline_client_ca_der = trust.ders;
         }
+        // SONNY-6490: with passive teardown the transport is never torn down,
+        // so its TLS configuration keeps pointing at the client CA bundle.
+        // The bundle is left allocated with it (main's `deinit` of
+        // `mtls_client_ca` sees null), never freed under a live endpoint.
+        defer if (passive_teardown) {
+            mtls_client_ca = null;
+        };
 
         var mtls_prov = geode.mtls_provider.MtlsProvider.init(gpa);
         defer mtls_prov.deinit();

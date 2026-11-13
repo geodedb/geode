@@ -22,6 +22,7 @@ const uuid = @import("uuid");
 const arrays = @import("types/arrays.zig");
 const bitstring = @import("types/bitstring.zig");
 const range = @import("types/range.zig");
+const canonical_string = @import("unicode/canonical_string.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ValueTypes; STATUS=EXEMPT; OWNER=value_types; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -59,6 +60,17 @@ pub const EvalError = error{
     RangeTooLarge, // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; range() function safety limit
     FloatNaN,
     TimeParse,
+    // SONNY-6489: a duration string that is not an ISO 8601 duration
+    // (ISO/IEC 39075 20.29 GR 1c: invalid duration format, 22G0H). Kept apart
+    // from TimeParse (a date, time or datetime string, 22007).
+    DurationParse,
+    // SONNY-6489: duration and datetime arithmetic (ISO/IEC 39075 20.28,
+    // 23.1 Table 8): a duration result out of range (22015), a datetime
+    // result out of range (22008), and duration +/- duration of a
+    // year-to-month and a day-to-second operand (22G14). They were 22003.
+    IntervalFieldOverflow,
+    DatetimeFieldOverflow,
+    IncompatibleTemporalUnitGroups,
     DecimalOverflow,
     DecimalDivZero,
     // GAP-0921: CAST semantic validation — an unconvertible value (invalid
@@ -356,7 +368,9 @@ pub fn eqVals(a: Value, b: Value) bool {
         .Null => b == .Null,
         .Int => |ai| b == .Int and ai == b.Int,
         .Bool => |ab| b == .Bool and ab == b.Bool,
-        .Str => |as| b == .Str and std.mem.eql(u8, as, b.Str),
+        // SONNY-6489: strings by their NFC form, as `=` compares them
+        // (SONNY-3055); this is the element rule of `[...] = [...]`.
+        .Str => |as| b == .Str and canonical_string.eqlNoAlloc(as, b.Str),
         .Decimal => |ad| b == .Decimal and ad.coeff == b.Decimal.coeff and ad.scale == b.Decimal.scale,
         // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="NodeComparison"; ASPECT=IdentityById; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:406; OWNER=value_types; UPDATED=2026-07-31
         // Graph elements compare by IDENTITY (id), never by pointer. Node/Edge
@@ -410,9 +424,9 @@ pub fn eqVals(a: Value, b: Value) bool {
         .BigInt => |ai| b == .BigInt and ai == b.BigInt,
         .Real => |af| b == .Real and af == b.Real,
         .Double => |ad| b == .Double and ad == b.Double,
-        .Char => |ac| b == .Char and std.mem.eql(u8, ac.data, b.Char.data) and ac.n == b.Char.n,
-        .Varchar => |av| b == .Varchar and std.mem.eql(u8, av.data, b.Varchar.data) and av.n == b.Varchar.n,
-        .Text => |at| b == .Text and std.mem.eql(u8, at, b.Text),
+        .Char => |ac| b == .Char and canonical_string.eqlNoAlloc(ac.data, b.Char.data) and ac.n == b.Char.n,
+        .Varchar => |av| b == .Varchar and canonical_string.eqlNoAlloc(av.data, b.Varchar.data) and av.n == b.Varchar.n,
+        .Text => |at| b == .Text and canonical_string.eqlNoAlloc(at, b.Text),
         .Date => |ad| b == .Date and ad.days_since_epoch == b.Date.days_since_epoch,
         .Time => |at| b == .Time and at.micros_since_midnight == b.Time.micros_since_midnight,
         // Round 4 (I1'): a zoned time by its UTC time and a duration by its
@@ -471,15 +485,19 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
         .Null => true,
         .Int => |v| v == b.Int,
         .Bool => |v| v == b.Bool,
-        .Str => |v| std.mem.eql(u8, v, b.Str),
+        // CANARY: REQ=REQ-SONNY-6489-LIST-STRING-NFC; FEATURE="UnicodeEval"; ASPECT=StoredListElementsNfc; STATUS=TESTED; TEST=tests/test_sonny6489_list_string_nfc.zig; OWNER=unicode; UPDATED=2026-11-13
+        // SONNY-6489: strings by their NFC form, as `=` compares them
+        // (SONNY-3055); a stored list of 'caf\u{e9}' and one of 'cafe\u{301}'
+        // compared unequal by raw bytes.
+        .Str => |v| canonical_string.eqlNoAlloc(v, b.Str),
         .SmallInt => |v| v == b.SmallInt,
         .BigInt => |v| v == b.BigInt,
         .Real => |v| v == b.Real,
         .Double => |v| v == b.Double,
         .Decimal => |v| v.coeff == b.Decimal.coeff and v.scale == b.Decimal.scale,
-        .Char => |v| v.n == b.Char.n and std.mem.eql(u8, v.data, b.Char.data),
-        .Varchar => |v| v.n == b.Varchar.n and std.mem.eql(u8, v.data, b.Varchar.data),
-        .Text => |v| std.mem.eql(u8, v, b.Text),
+        .Char => |v| v.n == b.Char.n and canonical_string.eqlNoAlloc(v.data, b.Char.data),
+        .Varchar => |v| v.n == b.Varchar.n and canonical_string.eqlNoAlloc(v.data, b.Varchar.data),
+        .Text => |v| canonical_string.eqlNoAlloc(v, b.Text),
         .IpAddr => |v| switch (v) {
             .v4 => |addr| switch (b.IpAddr) {
                 .v4 => |baddr| std.mem.eql(u8, &addr, &baddr),
@@ -694,28 +712,10 @@ fn writeTimestampIso(w: *std.Io.Writer, micros_since_epoch: i64) !void {
     try writeTimeIso(w, time_of_day);
 }
 
+/// SONNY-6489: the one ISO 8601 duration writer (`Interval.writeIso`), which
+/// keeps the fraction of a second (PT1.5S was written PT1S).
 fn writeIntervalIso(w: *std.Io.Writer, iv: datetime.Interval) !void {
-    if (iv.months == 0 and iv.days == 0 and iv.micros == 0) {
-        try w.writeAll("PT0S");
-        return;
-    }
-    try w.writeByte('P');
-    if (iv.months != 0) {
-        const years = @divTrunc(iv.months, 12);
-        const months = @rem(iv.months, 12);
-        if (years != 0) try w.print("{d}Y", .{years});
-        if (months != 0) try w.print("{d}M", .{months});
-    }
-    if (iv.days != 0) try w.print("{d}D", .{iv.days});
-    if (iv.micros != 0) {
-        try w.writeByte('T');
-        const hours = @divTrunc(iv.micros, 3600 * 1_000_000);
-        const minutes = @divTrunc(@rem(iv.micros, 3600 * 1_000_000), 60 * 1_000_000);
-        const seconds = @divTrunc(@rem(iv.micros, 60 * 1_000_000), 1_000_000);
-        if (hours != 0) try w.print("{d}H", .{hours});
-        if (minutes != 0) try w.print("{d}M", .{minutes});
-        if (seconds != 0) try w.print("{d}S", .{seconds});
-    }
+    return iv.writeIso(w);
 }
 
 fn writeUrl(w: *std.Io.Writer, u: url.Url) !void {

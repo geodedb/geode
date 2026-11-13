@@ -20,9 +20,11 @@
 //!     24 hours and is unchanged by months and whole days.
 //!   * instant - duration is instant + (-duration).
 //!   * duration +/- duration: part by part, the day-to-second part normalized
-//!     to days and microseconds of one sign (PT20H + PT20H = P1DT16H). Where
-//!     the standard requires one unit group (22G14) Geode keeps both parts, an
-//!     extension consistent with its mixed durations (P1M1D).
+//!     to days and microseconds of one sign (PT20H + PT20H = P1DT16H). A
+//!     year-to-month and a day-to-second operand are not of the same unit
+//!     group: 22G14 (20.28 GR 5c ii; SONNY-6489). An operand with both parts
+//!     (Geode's mixed duration, P1M1D) is of neither group and is added part
+//!     by part, an extension; a zero duration is of either group.
 //!   * duration * number, number * duration, duration / number: the month
 //!     count must come out a whole number of months (a month has no fixed
 //!     length in days), else 22023 (InvalidArgs); the day-to-second length is
@@ -31,8 +33,9 @@
 //!     duration between them, a Geode extension standing for
 //!     DURATION_BETWEEN(b, a). Instants of two types are not comparable
 //!     (22G04).
-//!   * A result outside the value range is 22003 (IntegerOverflow), as DATE
-//!     +/- duration already was (SONNY-2769).
+//!   * A result outside the value range (SONNY-6489, 23.1 Table 8): a
+//!     duration is 22015 interval field overflow (20.28 GR 5d), an instant is
+//!     22008 datetime field overflow. Both were 22003 (SONNY-2769).
 
 // CANARY: REQ=REQ-SONNY-2797-DURATION-ARITHMETIC; FEATURE="DateIntervalArithmetic"; ASPECT=DatetimeDurationOperators; STATUS=TESTED; TEST=tests/test_sonny2797_duration_arithmetic.zig; OWNER=eval; UPDATED=2026-11-13
 
@@ -52,12 +55,35 @@ const us_per_day: i64 = std.time.us_per_day;
 
 const Error = error{ Overflow, NotWholeMonths, DivisionByZero };
 
-fn evalError(err: Error) EvalError {
+/// The exception for a failed operation whose result is a duration.
+fn durationError(err: Error) EvalError {
     return switch (err) {
-        error.Overflow => EvalError.IntegerOverflow,
+        error.Overflow => EvalError.IntervalFieldOverflow,
         error.NotWholeMonths => EvalError.InvalidArgs,
         error.DivisionByZero => EvalError.DivisionByZero,
     };
+}
+
+/// The exception for a failed operation whose result is an instant.
+fn datetimeError(err: Error) EvalError {
+    return switch (err) {
+        error.Overflow => EvalError.DatetimeFieldOverflow,
+        error.NotWholeMonths => EvalError.InvalidArgs,
+        error.DivisionByZero => EvalError.DivisionByZero,
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-6489-DURATION-UNIT-GROUPS; FEATURE="DateIntervalArithmetic"; ASPECT=UnitGroupsAndOverflowCodes; STATUS=TESTED; TEST=tests/test_sonny6489_duration_unit_groups.zig; OWNER=eval; UPDATED=2026-11-13
+/// SONNY-6489: 20.28 GR 5c ii. A year-to-month duration (months only) and a
+/// day-to-second duration (days and microseconds only) are not of the same
+/// unit group: 22G14. A zero duration is of either group; a duration with
+/// both parts (Geode's mixed duration) of neither, so it is not refused.
+fn checkUnitGroups(a: Interval, b: Interval) EvalError!void {
+    const a_ym = a.months != 0 and a.days == 0 and a.micros == 0;
+    const a_dt = a.months == 0 and (a.days != 0 or a.micros != 0);
+    const b_ym = b.months != 0 and b.days == 0 and b.micros == 0;
+    const b_dt = b.months == 0 and (b.days != 0 or b.micros != 0);
+    if ((a_ym and b_dt) or (a_dt and b_ym)) return EvalError.IncompatibleTemporalUnitGroups;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,42 +286,44 @@ pub fn evalTemporal(op: ast.BinOp, l: Value, r: Value) EvalError!?Value {
         .Add => {
             if (l_inst != null and r_dur != null) {
                 const li = l_inst.?;
-                return toValue(addToInstant(li.instant, r_dur.?) catch |e| return evalError(e), li.ext);
+                return toValue(addToInstant(li.instant, r_dur.?) catch |e| return datetimeError(e), li.ext);
             }
             if (l_dur != null and r_inst != null) {
                 const ri = r_inst.?;
-                return toValue(addToInstant(ri.instant, l_dur.?) catch |e| return evalError(e), ri.ext);
+                return toValue(addToInstant(ri.instant, l_dur.?) catch |e| return datetimeError(e), ri.ext);
             }
             if (l_dur != null and r_dur != null) {
-                return .{ .Interval = addDurations(l_dur.?, r_dur.?) catch |e| return evalError(e) };
+                try checkUnitGroups(l_dur.?, r_dur.?);
+                return .{ .Interval = addDurations(l_dur.?, r_dur.?) catch |e| return durationError(e) };
             }
         },
         .Sub => {
             if (l_inst != null and r_dur != null) {
                 const li = l_inst.?;
-                const neg = negateDuration(r_dur.?) catch |e| return evalError(e);
-                return toValue(addToInstant(li.instant, neg) catch |e| return evalError(e), li.ext);
+                const neg = negateDuration(r_dur.?) catch |e| return durationError(e);
+                return toValue(addToInstant(li.instant, neg) catch |e| return datetimeError(e), li.ext);
             }
             if (l_dur != null and r_dur != null) {
-                const neg = negateDuration(r_dur.?) catch |e| return evalError(e);
-                return .{ .Interval = addDurations(l_dur.?, neg) catch |e| return evalError(e) };
+                try checkUnitGroups(l_dur.?, r_dur.?);
+                const neg = negateDuration(r_dur.?) catch |e| return durationError(e);
+                return .{ .Interval = addDurations(l_dur.?, neg) catch |e| return durationError(e) };
             }
             if (l_inst != null and r_inst != null) {
                 const d = between(l_inst.?.instant, r_inst.?.instant) orelse return EvalError.ValuesNotComparable;
-                return .{ .Interval = d catch |e| return evalError(e) };
+                return .{ .Interval = d catch |e| return durationError(e) };
             }
         },
         .Mul => {
             if (l_dur != null) {
-                if (value_order.numberOf(r)) |n| return .{ .Interval = scaleBy(l_dur.?, n, false) catch |e| return evalError(e) };
+                if (value_order.numberOf(r)) |n| return .{ .Interval = scaleBy(l_dur.?, n, false) catch |e| return durationError(e) };
             }
             if (r_dur != null) {
-                if (value_order.numberOf(l)) |n| return .{ .Interval = scaleBy(r_dur.?, n, false) catch |e| return evalError(e) };
+                if (value_order.numberOf(l)) |n| return .{ .Interval = scaleBy(r_dur.?, n, false) catch |e| return durationError(e) };
             }
         },
         .Div => {
             if (l_dur != null) {
-                if (value_order.numberOf(r)) |n| return .{ .Interval = scaleBy(l_dur.?, n, true) catch |e| return evalError(e) };
+                if (value_order.numberOf(r)) |n| return .{ .Interval = scaleBy(l_dur.?, n, true) catch |e| return durationError(e) };
             }
         },
         else => {},

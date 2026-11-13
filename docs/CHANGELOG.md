@@ -4,6 +4,23 @@
 
 ### Security
 
+- **The mTLS client CAs are no longer trusted for server certificates
+  (SONNY-6490 item 1).** Loading `GEODE_MTLS_CLIENT_CA` for
+  `GEODE_MTLS_REQUIRED` also installed the bundle as the process-wide x509
+  trust store, although the listener has taken it directly since SONNY-6457
+  (`inline_client_ca_der`). Every client TLS context created later in the
+  server process validates a server certificate against that store when it
+  has no CA of its own, so a QUIC dial without one (`QuicClient.connect`,
+  `connectEx` with no CA) accepted a server presenting a client identity
+  from the bundle, or a chain ending in a client CA. The bundle now reaches
+  the listener only (`loadClientCaTrust`, formerly `installClientCaTrust`).
+  No outbound dial of a running server relied on it: the cluster peer dial
+  (raft, coordinator, 2PC) and the remote KMS client pin their own CA, and
+  the HTTP clients (KMS, S3 backup, webhook sink) use std's TLS with their
+  own CA bundle. Also: with `GEODE_QUIC_PASSIVE_TEARDOWN=1` (tests) the
+  transport is never torn down, and the client CA bundle it points at is now
+  left allocated with it instead of being freed under it (item 2).
+  Regression: `zig build test-sonny6490-client-ca-scope`.
 - **The TLS exporter comes from the tls library again (SONNY-6448).** The
   remote-KMS attestation binds each reply to its channel with the RFC 8446
   §7.5 exporter (`EXPORTER-geode-kms-attest-v3`, SONNY-6442). geode computed
@@ -2297,6 +2314,86 @@
   `current_mvcc_txn` (`src/server/server_state.zig`) were never set or read;
   the server never ran the `src/server/txn/mvcc.zig` conflict detector they
   named. Regression: `zig build test-sonny6487-server-state-mvcc-fields`.
+- **Stored lists compare their string elements by NFC (SONNY-6489 item 3).**
+  `value_types.eqVals` (the element rule of `[...] = [...]`) and
+  `value_types.eqExtValues` (two stored extended values) compared STRING,
+  TEXT, CHAR and VARCHAR elements by raw bytes, so a list property holding
+  a precomposed `é` was not equal to one holding `e` + U+0301, although `=`
+  finds the strings equal (SONNY-3055). Both now use
+  `canonical_string.eqlNoAlloc`. **Not changed:** full-text search keeps its
+  normaliser (`index/fts_tokenizer.zig`, a two-character NFC) on both the
+  indexed and the query side, so it stays self-consistent; switching it to
+  full NFC changes the tokens stored in existing fts-storage indexes and
+  needs a versioned index rebuilt on open (story). `fts/advanced.zig`'s
+  analyzer is not on any live path (`LanguageAnalyzer.analyze` uses the
+  removed managed `std.ArrayList` API and is never compiled). Regression:
+  `zig build test-sonny6489-list-string-nfc`.
+- **Duration arithmetic raises the standard's exceptions (SONNY-6489 item
+  6).** ISO/IEC 39075:2024 20.28 GR 5c ii: a duration plus or minus a
+  duration of the other unit group is 22G14 (incompatible temporal instant
+  unit groups); Table 8 (23.1) names 22015 interval field overflow (20.28 GR
+  5d) and 22008 datetime field overflow. **Behaviour change:**
+  `duration('P1M') + duration('P1D')` is 22G14 (it was P1M1D); a duration
+  result out of range (`duration('P2147483647M') + duration('P1M')`,
+  `duration('PT1H') * 9223372036854775807`, an instant difference) is 22015
+  and a datetime or date result out of range (`DATE '2026-01-01' +
+  duration('P2147483647D')`) 22008, where both were 22003. Unchanged: a
+  zero duration is of either group, and a duration with both parts (Geode's
+  mixed duration, `duration('P1M1D')`, an extension: 20.29 GR 1 allows one
+  group per duration string) is added part by part. Regression: `zig build
+  test-sonny6489-duration-unit-groups`.
+- **`localdatetime()` is a local datetime; durations keep their fraction of a
+  second (SONNY-6489 item 4).** `localdatetime()` and `localdatetime(s)`
+  built a zoned (UTC) datetime that rendered with `Z` and compared as an
+  instant; they are now local datetimes (ISO/IEC 39075 20.27 GR 10).
+  Both duration writers dropped the fraction of a second (PT1.5S came out
+  PT1S, PT0.5S as "PT"), and the wire writer (`Interval.toString`, QUIC and
+  gRPC) split negative parts with a floor division (P-1M came out
+  P-1Y-1M, PT-1.5S as PT-1H-1M-2S). Both now use one ISO 8601 writer
+  (`Interval.writeIso`), whose output reads back as the same duration.
+  `CAST(<date, time, datetime or duration> AS STRING)` is the value's
+  literal form (it was NULL). **Behaviour change:** `localdatetime(...)`
+  renders without `Z` and is a local datetime in comparisons and
+  arithmetic; negative durations on the wire are correct. **Not changed
+  (story):** a zoned datetime (TIMESTAMPTZ) still stores only its UTC
+  instant, so `datetime('...+02:00')` reads back as the UTC time with `Z`;
+  keeping the offset needs a new value encoding (in memory, on disk and on
+  the wire) with a version for values stored before it. Regression: `zig
+  build test-sonny6489-temporal-rendering`.
+- **A QUIC listener that cannot bind frees its TLS configuration once
+  (SONNY-6489 item 5).** `geode serve --listen ::1:0` (an unbracketed IPv6
+  address, refused with InvalidAddress; the grammar is SONNY-6487) logged
+  three DebugAllocator double frees: `QuicTransport.listen` recorded its
+  config before creating the endpoint, its error path freed the config,
+  certificate and key, and `deinit` freed them again. The error path now
+  clears the recorded config. Regression: `zig build
+  test-sonny6489-listen-error-free`.
+- **`ORDER BY ... LIMIT k` returns the first k rows of the full ORDER BY
+  (SONNY-6489 item 2).** The top-K heap that serves `MATCH (n:L) RETURN n.k
+  ORDER BY n.k LIMIT k` compared an INT with a DOUBLE or DECIMAL through f64
+  (9007199254740993 tied DOUBLE 2^53, DECIMAL 0.1 tied DOUBLE 0.1), ordered
+  strings by raw bytes, returned a DECIMAL as a DOUBLE, and dropped every
+  stored DOUBLE row (a DOUBLE is stored as an extended value). It now keeps
+  the value the full path projects and orders with the full sort's own
+  comparator (`compareValuesWithNullsPolicy`: numbers by exact value,
+  SONNY-2807; strings by NFC, SONNY-3055); a key of any other kind makes the
+  fast path decline (the full sort serves it) instead of dropping the row.
+  The value-ordered index path returns a DECIMAL as a DECIMAL too.
+  **Behaviour change:** those queries return the DOUBLE rows they omitted, a
+  DECIMAL column comes back as DECIMAL (was DOUBLE), and ties broken by f64
+  are ordered exactly. Regression: `zig build test-sonny6489-topk-order`.
+- **Data exceptions answer their GQLSTATUS, not 58000 (SONNY-6489 item 1).**
+  `proto_util.mapError` had no arm for these, so QUIC and gRPC clients were
+  told the server broke (58000) when a value was bad. **Behaviour change**
+  (ISO/IEC 39075:2024 23.1, Table 8): a date, time or datetime string that
+  does not parse (`datetime('x')`, `date()`, `time()`, `localdatetime()`,
+  ...) is 22007 invalid date, time, or datetime format; a duration string
+  that does not parse (`duration('P1Q')`, `interval()`, including a
+  component that overflows) is 22G0H invalid duration format (20.29 GR 1c;
+  its own error, `DurationParse`, where it was `TimeParse`); DECIMAL division
+  by zero (`decimal_div`) is 22012; `char(s, n)` of a longer string is 22001
+  string data, right truncation. Regression: `zig build
+  test-sonny6489-data-exception-codes` (QUIC and gRPC).
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T17:43:09.788964594Z",
+  "generated_at": "2026-11-13T18:10:23.864812456Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -4854,6 +4854,26 @@
           ],
           "tests": [
             "tests/test_sonny6457_connectex_client_cert.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-AUTH-MTLS-QUIC-008",
+      "features": [
+        {
+          "feature": "mTLS over QUIC",
+          "aspect": "ClientCaScope",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/test_sonny6490_client_ca_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6490_client_ca_scope.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -87366,6 +87386,138 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-DATA-EXCEPTION-CODES",
+      "features": [
+        {
+          "feature": "ErrorMapping",
+          "aspect": "DataExceptionGqlstatus",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig",
+            "tests/test_sonny6489_data_exception_codes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_data_exception_codes.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6489-DURATION-UNIT-GROUPS",
+      "features": [
+        {
+          "feature": "DateIntervalArithmetic",
+          "aspect": "UnitGroupsAndOverflowCodes",
+          "status": "TESTED",
+          "files": [
+            "src/eval/temporal_ops.zig",
+            "tests/test_sonny6489_duration_unit_groups.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_duration_unit_groups.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6489-LIST-STRING-NFC",
+      "features": [
+        {
+          "feature": "UnicodeEval",
+          "aspect": "StoredListElementsNfc",
+          "status": "TESTED",
+          "files": [
+            "src/value_types.zig",
+            "tests/test_sonny6489_list_string_nfc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_list_string_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6489-LISTEN-ERROR-FREE",
+      "features": [
+        {
+          "feature": "QuicTransport",
+          "aspect": "ListenErrorOwnership",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_listen_error_free.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_listen_error_free.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6489-TEMPORAL-RENDERING",
+      "features": [
+        {
+          "feature": "TemporalTypes",
+          "aspect": "DurationIsoWriter",
+          "status": "TESTED",
+          "files": [
+            "src/types/datetime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TemporalTypes",
+          "aspect": "LocalDatetimeAndDurationFraction",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6489-TOPK-EXACT-ORDER",
+      "features": [
+        {
+          "feature": "ValueOrdering",
+          "aspect": "TopKHeapSharesFullSortOrder",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig",
+            "tests/test_sonny6489_topk_order.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_topk_order.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95087,7 +95239,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4966
+      "TESTED": 4974
     },
     "by_aspect": {
       "2PC": 3,
@@ -95610,6 +95762,7 @@
       "CliPlaintextDiagnostic": 1,
       "CliRlsPolicyCreate": 1,
       "CliUtf16HexInputFlag": 1,
+      "ClientCaScope": 1,
       "ClientCaTrust": 1,
       "ClientCertPresentation": 1,
       "ClientConnect": 1,
@@ -95910,6 +96063,7 @@
       "DataDirCreation": 1,
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
+      "DataExceptionGqlstatus": 1,
       "DataExport": 1,
       "DataGeneration": 1,
       "DataIngestion": 2,
@@ -96147,6 +96301,7 @@
       "DurablePersistTestSuite": 1,
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
+      "DurationIsoWriter": 1,
       "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
       "E2E": 8,
@@ -97108,6 +97263,7 @@
       "ListTail": 1,
       "ListType": 1,
       "ListUnwind": 1,
+      "ListenErrorOwnership": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
       "ListsRecordsUniversal": 1,
@@ -97125,6 +97281,7 @@
       "LoadOptimizedVarianceEnvelope": 1,
       "LoaderFilter": 1,
       "LocalClustering": 1,
+      "LocalDatetimeAndDurationFraction": 1,
       "LocalRestore": 1,
       "LocalRestoreWritesAndVerifies": 1,
       "LocalTime": 1,
@@ -98813,6 +98970,7 @@
       "StoreUndoCapture": 1,
       "StoreUpgradedHash": 1,
       "StoreWriteFence": 1,
+      "StoredListElementsNfc": 1,
       "StreamAliasParity": 1,
       "StreamCloseBeforeTeardown": 1,
       "StreamExecution": 1,
@@ -98966,6 +99124,7 @@
       "ToolDispatch": 1,
       "Tooling": 2,
       "ToolsThreading": 1,
+      "TopKHeapSharesFullSortOrder": 1,
       "TopLevelAgg": 1,
       "TopologicalSortKahn": 1,
       "Topology": 1,
@@ -99079,6 +99238,7 @@
       "UniquePerfVarianceEnvelope": 1,
       "UniqueViolationCode": 1,
       "UnitAssertions": 1,
+      "UnitGroupsAndOverflowCodes": 1,
       "UnitTest": 13,
       "UnitTestCoverage": 1,
       "UnitTestExecution": 1,

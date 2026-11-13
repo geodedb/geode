@@ -825,7 +825,8 @@ test "FN-DISPATCH-PARITY: datetime accepts a date-only literal and reports parse
 
     // A malformed literal on a RESOLVED function is TimeParse, never 42883.
     try testing.expectError(error.TimeParse, h.exec("RETURN datetime('garbage') AS x"));
-    try testing.expectError(error.TimeParse, h.exec("RETURN duration('garbage') AS x"));
+    // SONNY-6489: a duration string's own data exception (22G0H).
+    try testing.expectError(error.DurationParse, h.exec("RETURN duration('garbage') AS x"));
     // Non-string / wrong-arity are data exceptions on the resolved name too.
     try testing.expectError(error.TypeMismatch, h.exec("RETURN datetime(123) AS x"));
     try testing.expectError(error.InvalidArgs, h.exec("RETURN datetime('a', 'b') AS x"));

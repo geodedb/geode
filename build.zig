@@ -6183,6 +6183,34 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the 2PC transport verifies participants against GEODE_CLUSTER_CA_CERT: the signing CA completes the handshake, another CA fails it; 2PC and the raft / cluster peer dial refuse with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6490 (1): the mTLS client CA bundle is no process-wide trust
+    // store: an outbound dial never accepts a server certificate from it.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6490_client_ca_scope.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("vendor_quic", quic_ext_mod);
+        mod.addImport("quic_x509", quic_tls_dep.module("x509"));
+        mod.addImport("security/kms_remote", kms_remote_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6490-client-ca-scope", "Run SONNY-6490 item 1 regression (loading GEODE_MTLS_CLIENT_CA installs no process-wide trust store; a QUIC dial with no CA of its own rejects a server presenting a client identity from the bundle, and server-chain validation rejects a chain ending in a client CA; the cluster peer dial and the remote KMS client pin their own anchors; real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6489 (5): a QUIC listener that cannot bind frees its TLS
+    // configuration once (strict allocator).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_listen_error_free.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6489-listen-error-free", "Run SONNY-6489 item 5 regression (QuicTransport.listen on an address the endpoint refuses, \"::1\" port 0, then deinit: the config, certificate and key are freed once, under std.testing.allocator)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
@@ -9899,6 +9927,22 @@ pub fn build(b: *std.Build) void {
     const sonny2805_step = b.step("test-sonny2805-txn-sessions", "Run SONNY-2805/SONNY-2799 regression (transaction control in program order; a failed statement rolls back only its own transaction, under its graph's write lock; the undo log keys changes and savepoints by transaction and never matches all; gRPC keeps the transaction per session across threads; QUIC e2e)");
     sonny2805_step.dependOn(&run_sonny2805_tests.step);
     shardDep(test_step, &run_sonny2805_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6489 (1): data exceptions answer their class-22 GQLSTATUS on
+    // gRPC (in-process) and QUIC (the built server), not 58000.
+    const sonny6489_codes_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_data_exception_codes.zig"), .target = target, .optimize = optimize });
+    sonny6489_codes_mod.link_libc = true;
+    sonny6489_codes_mod.addImport("geode", root_mod);
+    sonny6489_codes_mod.addImport("schema", schema_mod);
+    sonny6489_codes_mod.addImport("protobuf", protobuf_mod);
+    sonny6489_codes_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6489_codes_mod.addImport("logging", logging_mod);
+    sonny6489_codes_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6489_codes_tests = b.addTest(.{ .root_module = sonny6489_codes_mod });
+    const run_sonny6489_codes_tests = b.addRunArtifact(sonny6489_codes_tests);
+    spawnsBuiltGeode(sonny6489_codes_tests);
+    b.step("test-sonny6489-data-exception-codes", "Run SONNY-6489 item 1 regression (a malformed datetime string answers 22007, a malformed duration string 22G0H, DECIMAL division by zero 22012, CHAR truncation 22001, on gRPC and QUIC; ISO/IEC 39075 23.1 Table 8)").dependOn(&run_sonny6489_codes_tests.step);
+    shardDep(test_step, &run_sonny6489_codes_tests.step, 1, test_shard_loads, test_shard_index);
     // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
     // tests) through the geode lib module, filtered, as test-quality733 does.
     const txn_undo_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "undo log", "savepoint" } });
@@ -12575,6 +12619,44 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2807_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2807_step = b.step("test-sonny2807-exact-numeric-equality", "Run SONNY-2807 regression (one numeric equality rule: = and the order operators compare a DOUBLE and an exact number by exact value, agreeing with WHERE, IN, joins, GROUP BY, DISTINCT, ORDER BY, inline maps, MERGE and the WHERE seek)");
     sonny2807_step.dependOn(&run_sonny2807_tests.step);
+
+    // SONNY-6489 (2): the top-K heap orders as the full ORDER BY does.
+    const sonny6489_topk_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_topk_order.zig"), .target = target, .optimize = optimize });
+    sonny6489_topk_mod.addImport("geode", root_mod);
+    sonny6489_topk_mod.addImport("logging", logging_mod);
+    const sonny6489_topk_tests = b.addTest(.{ .root_module = sonny6489_topk_mod });
+    const run_sonny6489_topk_tests = b.addRunArtifact(sonny6489_topk_tests);
+    shardDep(test_step, &run_sonny6489_topk_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-topk-order", "Run SONNY-6489 item 2 regression (ORDER BY ... LIMIT k, served by the top-K heap, returns the first k rows of the full ORDER BY for every k: numbers by exact value, a DECIMAL stays a DECIMAL, strings by NFC)").dependOn(&run_sonny6489_topk_tests.step);
+
+    // SONNY-6489 (4): localdatetime() is a local datetime; durations render
+    // their fraction of a second (stringify and the wire writer).
+    const sonny6489_temporal_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_temporal_rendering.zig"), .target = target, .optimize = optimize });
+    sonny6489_temporal_mod.addImport("geode", root_mod);
+    sonny6489_temporal_mod.addImport("logging", logging_mod);
+    const sonny6489_temporal_tests = b.addTest(.{ .root_module = sonny6489_temporal_mod });
+    const run_sonny6489_temporal_tests = b.addRunArtifact(sonny6489_temporal_tests);
+    shardDep(test_step, &run_sonny6489_temporal_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-temporal-rendering", "Run SONNY-6489 item 4 regression (localdatetime() is a local datetime, rendered without Z; a duration renders its fraction of a second and its sign in stringify, CAST and the wire writer, and reads back as the same duration)").dependOn(&run_sonny6489_temporal_tests.step);
+
+    // SONNY-6489 (6): duration arithmetic across unit groups is 22G14;
+    // overflow is 22015 (a duration) or 22008 (a datetime).
+    const sonny6489_units_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_duration_unit_groups.zig"), .target = target, .optimize = optimize });
+    sonny6489_units_mod.addImport("geode", root_mod);
+    sonny6489_units_mod.addImport("logging", logging_mod);
+    const sonny6489_units_tests = b.addTest(.{ .root_module = sonny6489_units_mod });
+    const run_sonny6489_units_tests = b.addRunArtifact(sonny6489_units_tests);
+    shardDep(test_step, &run_sonny6489_units_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-duration-unit-groups", "Run SONNY-6489 item 6 regression (duration +/- duration of a year-to-month and a day-to-second operand is 22G14; a duration result out of range is 22015, a datetime result 22008; a mixed duration is still added part by part)").dependOn(&run_sonny6489_units_tests.step);
+
+    // SONNY-6489 (3): stored-list string elements compare by NFC.
+    const sonny6489_nfc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_list_string_nfc.zig"), .target = target, .optimize = optimize });
+    sonny6489_nfc_mod.addImport("geode", root_mod);
+    sonny6489_nfc_mod.addImport("logging", logging_mod);
+    const sonny6489_nfc_tests = b.addTest(.{ .root_module = sonny6489_nfc_mod });
+    const run_sonny6489_nfc_tests = b.addRunArtifact(sonny6489_nfc_tests);
+    shardDep(test_step, &run_sonny6489_nfc_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-list-string-nfc", "Run SONNY-6489 item 3 regression (value_types.eqExtValues compares STRING, TEXT, CHAR and VARCHAR elements of stored values by their NFC form: a stored list holding a precomposed character equals one holding the decomposed form)").dependOn(&run_sonny6489_nfc_tests.step);
 
     // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
     // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.

@@ -11,7 +11,7 @@
 // Expected behavior after the fix: any component that overflows its
 // accumulator is a clean Date.Error.ParseError (the same error class the
 // 10-digit form produces), which the query layer maps to a typed
-// EvalError.TimeParse — never a panic.
+// EvalError.DurationParse (SONNY-6489; TimeParse before) — never a panic.
 
 const std = @import("std");
 const testing = std.testing;
@@ -61,7 +61,7 @@ test "GAP-0906: query-level Interval() overflow raises a typed error" {
     var parsed = try geode.parseGql("RETURN Interval('P999999999Y')", aa);
     defer parsed.deinit();
     try testing.expectError(
-        error.TimeParse,
+        error.DurationParse,
         execution.executeStatementWithContext(aa, parsed.program.statements[0], ctx),
     );
 }

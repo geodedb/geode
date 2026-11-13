@@ -641,6 +641,11 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
   certificates (SONNY-6453). `geode serve` refuses to start when
   `GEODE_MTLS_REQUIRED` is set and the bundle is unset, cannot be read,
   holds no certificate or holds a non-CA certificate.
+- The bundle authenticates clients of the listener and nothing else
+  (SONNY-6490). It is not a trust anchor for a server certificate: the
+  server's outbound connections (cluster peers, the remote KMS) verify the
+  server they reach against their own CA (`GEODE_CLUSTER_CA_CERT`, the KMS
+  CA bundle), never against the client CAs.
 - `GEODE_MTLS_REQUIRED` is QUIC only. The gRPC listener does not verify
   client certificates, so `geode serve` refuses to start with both
   `GEODE_MTLS_REQUIRED` and `--listen-grpc`.
