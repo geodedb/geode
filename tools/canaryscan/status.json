@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:43:42.258499127Z",
+  "generated_at": "2026-11-13T18:48:15.363575871Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87518,6 +87518,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-CAST-MATRIX",
+      "features": [
+        {
+          "feature": "TypeCasting",
+          "aspect": "StandardCastMatrix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_cast_matrix.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_cast_matrix.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
       "features": [
         {
@@ -95272,7 +95291,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4976
+      "TESTED": 4977
     },
     "by_aspect": {
       "2PC": 3,
@@ -98928,6 +98947,7 @@
       "StaleDetection": 1,
       "StallEvictDecision": 1,
       "StandaloneCallReturn": 1,
+      "StandardCastMatrix": 1,
       "Start": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,

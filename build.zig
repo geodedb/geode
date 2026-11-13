@@ -12639,6 +12639,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6499_orderby_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6499-orderby-fastpath-nulls", "Run SONNY-6499 item 1 regression (the value-ordered index and top-K heap ORDER BY ... LIMIT fast paths return the full sort's first k rows for every k, direction and null ordering: NULL rows, non-NFC strings, DOUBLEs; the hit counters prove which path served)").dependOn(&run_sonny6499_orderby_tests.step);
 
+    // SONNY-6499 (2): CAST per ISO/IEC 39075 20.8 for every source and target.
+    const sonny6499_cast_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_cast_matrix.zig"), .target = target, .optimize = optimize });
+    sonny6499_cast_mod.addImport("geode", root_mod);
+    sonny6499_cast_mod.addImport("logging", logging_mod);
+    const sonny6499_cast_tests = b.addTest(.{ .root_module = sonny6499_cast_mod });
+    const run_sonny6499_cast_tests = b.addRunArtifact(sonny6499_cast_tests);
+    shardDep(test_step, &run_sonny6499_cast_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-cast-matrix", "Run SONNY-6499 item 2 regression (CAST per ISO/IEC 39075 20.8: a DOUBLE casts to its approximate numeric literal and back, an approximate target gives a DOUBLE, a stored DOUBLE converts, text is trimmed and read as a numeric literal, no cell answers a silent NULL)").dependOn(&run_sonny6499_cast_tests.step);
+
     // SONNY-6489 (4): localdatetime() is a local datetime; durations render
     // their fraction of a second (stringify and the wire writer).
     const sonny6489_temporal_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_temporal_rendering.zig"), .target = target, .optimize = optimize });
