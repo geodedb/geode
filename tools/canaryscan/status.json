@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:34:35.11111533Z",
+  "generated_at": "2026-11-13T07:35:20.461617633Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -66427,6 +66427,25 @@
       ]
     },
     {
+      "id": "REQ-SEC-CLI-NO-CA-DEFAULT-001",
+      "features": [
+        {
+          "feature": "InsecureTlsFlagGate",
+          "aspect": "ImplicitNoCaDefault",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_cli_no_ca_default.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cli_no_ca_default.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SEC-CONN-001",
       "features": [
         {
@@ -93405,7 +93424,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4868
+      "TESTED": 4869
     },
     "by_aspect": {
       "2PC": 3,
@@ -95133,6 +95152,7 @@
       "Implementation": 12,
       "ImplementationVerification": 1,
       "ImplicitAckStampsProof": 1,
+      "ImplicitNoCaDefault": 1,
       "InFlightHandlerDrain": 1,
       "InMemoryCatalog": 1,
       "InWorkloadMutationVerifier": 1,

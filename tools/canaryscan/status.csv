@@ -4273,6 +4273,7 @@ REQ-SEC-AUTH-UNAVAILABLE-005,AuthOutcomeClassification,StoreLockReentrancy,TESTE
 REQ-SEC-AUTH-VALIDATION-001,Security,AuthValidation,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,src/cli/insecure_tls_gate.zig,tests/test_s3_sigv4.zig,,security,2026-06-10
 REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,tests/test_s3_sigv4.zig,,,security,2026-06-10
+REQ-SEC-CLI-NO-CA-DEFAULT-001,InsecureTlsFlagGate,ImplicitNoCaDefault,TESTED,tests/test_sonny6453_cli_no_ca_default.zig,tests/test_sonny6453_cli_no_ca_default.zig,,security,2026-11-13
 REQ-SEC-CONN-001,Security,ConnectionSecurity,TESTED,tests/test_gap_0193_batch3_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CRYPTO-001,Security,Cryptography,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CRYPTO-TRUTH-001,HmacSha3RealConstruction,Security,TESTED,tests/test_gap0881_crypto_truth.zig,tests/test_gap0881_crypto_truth.zig:1,,security,2026-06-10
