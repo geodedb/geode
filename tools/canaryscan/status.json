@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:30:30.24046301Z",
+  "generated_at": "2026-11-13T07:31:20.534199263Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1697,6 +1697,25 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-04-10"
+        }
+      ]
+    },
+    {
+      "id": "REQ-2PC-TLS-003",
+      "features": [
+        {
+          "feature": "2PC TLS",
+          "aspect": "ClusterCa",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93361,7 +93380,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4865
+      "TESTED": 4866
     },
     "by_aspect": {
       "2PC": 3,
@@ -93898,6 +93917,7 @@
       "Cluster": 1,
       "ClusterBindAddress": 1,
       "ClusterBootstrap": 3,
+      "ClusterCa": 1,
       "ClusterErrorSqlstateMapping": 1,
       "ClusterMergePrePass": 1,
       "ClusterPort": 1,

@@ -104,6 +104,7 @@ REQ-2PC-TLS-001,2PC,TLSSecurity,IMPL,tests/test_gap_0193_batch2_security.zig,,,d
 REQ-2PC-TLS-001,2PC TLS,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
 REQ-2PC-TLS-002,2PC,TLSOneShot,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
 REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
+REQ-2PC-TLS-003,2PC TLS,ClusterCa,TESTED,tests/test_sonny6453_cluster_peer_tls.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerInit,IMPL,src/server/server_init.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerIntegration,IMPL,src/server/server_state.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-002,ABAC Enforcement,SecurityManager,IMPL,src/server/server_state.zig,,,security,2026-11-12

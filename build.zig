@@ -5832,6 +5832,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-mtls-client-ca", "Run SONNY-6453 item 1 regression (GEODE_MTLS_REQUIRED accepts a client certificate that chains to GEODE_MTLS_CLIENT_CA and rejects one from another CA, a self-signed or expired one, none, and one sent without CertificateVerify; refuses to start with no usable client CA or with a gRPC listener; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
+    // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
+    // QUIC against an in-process server with openssl-made CAs.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_cluster_peer_tls.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the 2PC transport verifies participants against GEODE_CLUSTER_CA_CERT: the signing CA completes the handshake, another CA fails it; 2PC and the raft / cluster peer dial refuse with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
