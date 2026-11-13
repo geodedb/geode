@@ -9590,6 +9590,24 @@ pub fn build(b: *std.Build) void {
     const sonny2823_step = b.step("test-sonny2823-session-engine-txn", "Run SONNY-2823 regression (no engine transaction outlives the request that opened it or stays on a worker thread: gRPC sessions interleaved on one worker; COMMIT, ROLLBACK, a failed statement and teardown; a committed transaction, and other sessions' writes around it, survive a crash; QUIC with one worker, killed and restarted)");
     sonny2823_step.dependOn(&run_sonny2823_tests.step);
 
+    // SONNY-2978: inside a Geode transaction, a change that commits its own
+    // engine transaction on the session engine transaction's shard (REMOVE,
+    // DELETE, label SET/REMOVE, relationship DELETE, edge-property REMOVE)
+    // survives a kill of a real server: the session transaction's older page
+    // images must not reach the WAL after the change's newer ones.
+    const sonny2978_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2978_overlapping_engine_txn_crash.zig"), .target = target, .optimize = optimize });
+    sonny2978_test_mod.link_libc = true;
+    sonny2978_test_mod.addImport("geode", root_mod);
+    sonny2978_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2978_test_mod.addImport("schema", schema_mod);
+    sonny2978_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2978_tests = b.addTest(.{ .root_module = sonny2978_test_mod });
+    const run_sonny2978_tests = b.addRunArtifact(sonny2978_tests);
+    spawnsBuiltGeode(sonny2978_tests);
+    shardDep(test_step, &run_sonny2978_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2978_step = b.step("test-sonny2978-overlapping-engine-txn-crash", "Run SONNY-2978 regression (a REMOVE, DELETE, label SET or REMOVE, relationship DELETE or edge-property REMOVE inside a Geode transaction, on the session engine transaction's shard, survives a SIGKILL of a real server and a restart)");
+    sonny2978_step.dependOn(&run_sonny2978_tests.step);
+
     // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
     // session-graph gate (internal, permission, existence) and creates a
     // missing graph only for a principal with the schema permission on it.

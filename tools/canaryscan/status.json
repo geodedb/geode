@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:21:36.461454985Z",
+  "generated_at": "2026-11-13T09:45:49.249021665Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74868,6 +74868,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3025-WRITE-RETURN-ROWS",
       "features": [
         {
@@ -93298,7 +93317,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4862
+      "TESTED": 4863
     },
     "by_aspect": {
       "2PC": 3,
@@ -96418,7 +96437,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 297,
+      "Regression": 298,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
