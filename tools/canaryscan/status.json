@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:32:59.335827632Z",
+  "generated_at": "2026-11-13T14:34:27.965083598Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74524,6 +74524,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2808-TEMPORAL-PARSING",
+      "features": [
+        {
+          "feature": "DateTimeFunctions",
+          "aspect": "StrictIso8601Strings",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2808_temporal_parsing.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2808_temporal_parsing.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2809-DUPLICATE-CONSTRAINT",
       "features": [
         {
@@ -94234,7 +94253,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4914
+      "TESTED": 4915
     },
     "by_aspect": {
       "2PC": 3,
@@ -97953,6 +97972,7 @@
       "StressHarnessTeardown": 1,
       "StressTests": 1,
       "StrictCreatePolicy": 1,
+      "StrictIso8601Strings": 1,
       "String": 1,
       "StringFunctions": 4,
       "StringHelpers": 1,
