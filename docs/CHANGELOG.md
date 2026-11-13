@@ -2235,6 +2235,22 @@
 
 ### Fixed
 
+- **Temporaries a predicate, a CTE or a standalone WITH computes are freed
+  (SONNY-6496 item 2).** A list literal, a map, a string or any other value
+  a WHERE, a FILTER or a pattern's property map computed was allocated on
+  the result allocator and never freed (once per row, every executor:
+  `match_operations.zig`, `planned_read_runtime.zig`, the WHERE-equality
+  start seed). It is lent from the statement's scratch arena now
+  (`value_utilities.lentAllocator`), as projected items already were. A
+  CTE's body results, each recursive iteration's working set and the CTE's
+  value (bound for the whole statement) are the scratch's too; they leaked.
+  The standalone `WITH ... FOR` / `WITH ... RETURN` path frees the WITH's
+  rows (never freed on the FOR path), builds its one empty input row on the
+  stack (it was allocated and dropped), lends its RETURN items and frees its
+  result on an error. Regression: `zig build test-sonny6496-query-leaks`
+  (leak-checked, with and without a scratch arena, four session kinds;
+  `tests/statement_leak_harness.zig` now installs the execution callbacks a
+  subquery needs, as every server does).
 - **A statement whose allocation fails frees what it built, on every
   executor (SONNY-6498 item 1).** With its N-th allocation failing, for
   every N, 64 of the 68 runs of `test-sonny6297-allocation-failure-sweep`

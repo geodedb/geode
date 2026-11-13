@@ -1497,12 +1497,18 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
 /// term with the working set until no new rows are produced or depth limit is hit.
 /// CANARY: REQ=REQ-GQL-CTE-005; FEATURE="CTEExecution"; ASPECT=Evaluator; STATUS=TESTED; TEST=tests/e2e_recursive_queries.zig; OWNER=execution; UPDATED=2026-06-10
 fn executeCTE(
-    allocator: std.mem.Allocator,
+    allocator_in: std.mem.Allocator,
     cte: ast.CommonTableExpression,
     context: ExecutionContext,
     param_names: []const []const u8,
     param_values: []const Value,
 ) anyerror!Value {
+    // SONNY-6496 item 2: a CTE's value is bound for the whole statement, and
+    // what its body and its iterations compute is the statement's scratch
+    // arena's (`value_utilities.lentAllocator`). On the result allocator the
+    // body results, every iteration's working set and the value itself were
+    // never freed.
+    const allocator = value_utilities.lentAllocator(allocator_in);
     switch (cte.body) {
         .simple => |body_query| {
             // Simple CTE: execute body query and convert result to Value.List of Value.Map
@@ -2356,17 +2362,24 @@ pub fn executeLegacyQueryWithResolvedParams(
         // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)
         .with => {
             const with_clause = q.with_clause.?;
-            // Create initial empty result with one row
-            var initial_result = ExecutionResult{
-                .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]Value, 1),
+            // The one empty row the WITH projects from. SONNY-6496 item 2: it
+            // is this frame's (the WITH only reads it); it was allocated and
+            // never freed, on every run.
+            var no_cells = [_]Value{};
+            var initial_rows = [_][]Value{no_cells[0..]};
+            const initial_result = ExecutionResult{
+                .columns = &.{},
+                .rows = initial_rows[0..],
                 .flags = std.ArrayList([]const u8).empty,
             };
-            initial_result.rows[0] = try allocator.alloc(Value, 0);
 
             // Apply WITH clause to transform the empty row into WITH variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names.items, param_values.items);
+            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names.items, param_values.items);
+            // SONNY-6496 item 2: the WITH's rows are freed once the FOR or
+            // the RETURN has read them (the FOR path never freed them, and an
+            // error anywhere below leaked them).
+            defer releasePart(allocator, &with_result);
 
             // Check if there's a FOR statement to execute with WITH bindings
             if (q.for_statement) |for_stmt| {
@@ -2376,9 +2389,15 @@ pub fn executeLegacyQueryWithResolvedParams(
             // Now evaluate RETURN using the WITH results as environment
             // GAP-0220 FIX: Use try for proper error propagation
             var final_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
+            defer final_rows.deinit(allocator);
+            errdefer for (final_rows.items) |r| allocator.free(r);
+            // The rows borrow what the items compute: lent from the
+            // statement's scratch arena (on `allocator` it was never freed).
+            const lent = value_utilities.lentAllocator(allocator);
 
             for (with_result.rows) |with_row| {
                 var return_row = try allocator.alloc(Value, q.ret.items.len);
+                errdefer allocator.free(return_row);
 
                 // Create environment from WITH results + LET binding parameters
                 const env = Env{
@@ -2391,7 +2410,7 @@ pub fn executeLegacyQueryWithResolvedParams(
                 };
 
                 for (q.ret.items, 0..) |item, i| {
-                    return_row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    return_row[i] = try eval.evalExpr(lent, item.expr, env);
                 }
 
                 try final_rows.append(allocator, return_row);
@@ -2409,33 +2428,24 @@ pub fn executeLegacyQueryWithResolvedParams(
                 try col_name_strings.append(allocator, col_name);
             }
 
-            const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
+            // Each piece is the result's as soon as it is made, so an
+            // error frees it (`errdefer result.deinit`).
             var result = ExecutionResult{
-                .columns = col_result.columns,
+                .columns = &.{},
                 .rows = try final_rows.toOwnedSlice(allocator),
-                .flags = with_result.flags,
-                .column_buffer = col_result.buffer,
+                .flags = std.ArrayList([]const u8).empty,
             };
-
-            // Clean up with_result (we took ownership of flags, but need to free columns/rows)
-            for (with_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(with_result.columns);
-            for (with_result.rows) |row| {
-                allocator.free(row);
-            }
-            allocator.free(with_result.rows);
+            errdefer result.deinit(allocator);
+            const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
+            result.columns = col_result.columns;
+            result.column_buffer = col_result.buffer;
+            // The WITH's flags are the result's now.
+            result.flags = with_result.flags;
+            with_result.flags = .empty;
 
             // Apply ORDER BY if present
-            if (q.order_by) |order| {
-                sortRows(allocator, &result, order) catch |err| {
-                    // SONNY-2811: a key that fails to evaluate fails the sort.
-                    result.deinit(allocator);
-                    return err;
-                };
-            }
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            if (q.order_by) |order| try sortRows(allocator, &result, order);
 
             return result;
         },

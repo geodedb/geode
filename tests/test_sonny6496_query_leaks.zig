@@ -39,6 +39,8 @@ const cases = [_]h.Case{
     // Subqueries and CTE bodies.
     .{ .q = "MATCH (n:L6496) WHERE n.k IN (WITH [2, 3] AS l FOR x IN l RETURN x) RETURN n.t AS t", .want = &.{"'b'"} },
     .{ .q = "WITH c AS (MATCH (m:L6496) RETURN m.t || '!' AS s) RETURN size(c) AS n", .want = &.{"2"} },
+    .{ .q = "WITH c AS (CALL { MATCH (m:L6496) RETURN m.t || '?' AS s } RETURN s) RETURN size(c) AS n", .want = &.{"2"} },
+    .{ .q = "MATCH (n:L6496) RETURN n.k AS k ORDER BY n.t || [n.k][0] DESC", .want = &.{ "2", "1" }, .ordered = true },
     .{ .q = "WITH RECURSIVE r AS (RETURN 1 AS x UNION ALL MATCH (y:L6496) RETURN y.k AS x) RETURN 1 AS one", .want = &.{"1"} },
 };
 

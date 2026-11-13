@@ -859,7 +859,7 @@ fn estimatePatternSelectivity(
     for (props) |prop| {
         if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
         if (!graph_store.shouldIndexProperty(prop.key)) continue;
-        const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
         const pv: graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| .{ .String = s },
             .Int => |i| .{ .Int = i },
@@ -2728,7 +2728,7 @@ fn chooseStartSeed(
             // a non-indexed key is meaningless — skip it and try the next prop.
             // No-op when lean mode is off (shouldIndexProperty is then true for all).
             if (!graph_store.shouldIndexProperty(prop.key)) continue;
-            const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+            const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
             const pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| .{ .String = s },
                 .Int => |i| .{ .Int = i },
@@ -2756,7 +2756,7 @@ fn chooseStartSeed(
             .param_values = param_values,
             .allocator = allocator,
         };
-        const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch return null;
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), extracted.value.*, prop_env) catch return null;
         const seed_pv: graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| graph_store.PropertyValue{ .String = s },
             // SONNY-2807: `=` compares numbers by exact value, as the
@@ -3428,8 +3428,8 @@ fn applyResultFilters(
             .allocator = allocator,
             .exec_context = @constCast(&context),
         };
-        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
-        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
+        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
+        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
     }
     for (result.rows, keep) |row, k| {
         if (k) filtered_rows.appendAssumeCapacity(row) else allocator.free(row);

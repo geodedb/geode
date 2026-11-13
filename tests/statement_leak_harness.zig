@@ -71,6 +71,8 @@ pub const Session = struct {
             graph_store.deinitGlobalStore();
             graph_store.setDataDirOverride(allocator, null);
         }
+        // The execution callbacks a subquery needs, as a server installs them.
+        execution.initEvaluator();
         const persisted = mode != .in_memory;
         if (persisted) graph_store.setDataDirOverride(allocator, data_dir);
         _ = graph_store.getGlobalStore(allocator);

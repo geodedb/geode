@@ -4449,7 +4449,7 @@ fn seekMultiNodeCandidate(
         // Only equality on a key the exact index actually covers is seekable.
         if (!graph_store.shouldIndexProperty(prop.key)) continue;
 
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        const expected = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, env) catch continue;
         const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
         defer property_value_codec.freePropertyValue(allocator, pv);
         if (pv == .Null) continue;
@@ -4625,7 +4625,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             const node_val = propertyValueToValue(node_prop_val);
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
                                 break;
@@ -4683,7 +4683,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             const node_val = propertyValueToValue(node_prop_val);
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
                                 break;
@@ -4779,7 +4779,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             for (props) |prop| {
                                 // Only check properties that have variable references
                                 if (containsVariableReference(prop.value.*)) {
-                                    const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                    const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch Value{ .Null = {} };
                                     if (node.properties.get(prop.key)) |node_prop_val| {
                                         const node_val = propertyValueToValue(node_prop_val);
                                         if (!valuesEqual(node_val, expected_val)) {
@@ -4796,7 +4796,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate WHERE clause
                 if (self.q.where_clause) |where_expr| {
-                    const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                    const where_result = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), where_expr, env);
                     const passes = switch (where_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -4931,7 +4931,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (self.q.where_clause) |where_expr| {
-                            const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                            const where_result = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), where_expr, env);
                             const passes = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -4951,7 +4951,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (node_pattern.props) |props| {
                                     for (props) |prop| {
                                         if (containsVariableReference(prop.value.*)) {
-                                            const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                            const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch Value{ .Null = {} };
                                             if (node.properties.get(prop.key)) |node_prop_val| {
                                                 const node_val = propertyValueToValue(node_prop_val);
                                                 if (!valuesEqual(node_val, expected_val)) {
@@ -6808,7 +6808,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
         // Evaluate WHERE clause (the join applied it already, SONNY-3368)
         if (!where_in_join) if (q.where_clause) |where_expr| {
-            const where_result = eval.evalExpr(allocator, where_expr, env) catch |err| {
+            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
                 if (execution.isQueryLevelEvalError(err)) return err;
                 continue;
             };
@@ -6820,7 +6820,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         };
         // SONNY-3386: the FILTER, when the join did not apply it.
         if (!where_in_join) if (q.filter_clause) |filter_expr| {
-            if (!filterPasses(try eval.evalExpr(allocator, filter_expr, env))) continue;
+            if (!filterPasses(try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env))) continue;
         };
 
         // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=SetClauses; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:248; OWNER=execution; UPDATED=2026-07-31
@@ -7176,7 +7176,7 @@ fn executeVariableLengthPathTraversal(
                         .param_values = param_values,
                         .allocator = allocator,
                     };
-                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                    const prop_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch {
                         passes_props = false;
                         break;
                     };
@@ -7259,7 +7259,7 @@ fn executeVariableLengthPathTraversal(
 
         // Evaluate WHERE clause if present
         if (where_clause) |where_expr| {
-            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
             const passes_where = switch (where_result) {
                 .Bool => |b| b,
                 .Null => false,
@@ -7285,7 +7285,7 @@ fn executeVariableLengthPathTraversal(
 
         // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
         if (filter_clause) |filter_expr| {
-            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+            const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
             const passes_filter = switch (filter_result) {
                 .Bool => |b| b,
                 .Null => false,
@@ -7675,7 +7675,7 @@ fn executeSingleHopEdgeTraversal(
                             .param_values = param_values,
                             .allocator = allocator,
                         };
-                        const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                        const prop_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch {
                             passes_props = false;
                             break;
                         };
@@ -7742,7 +7742,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Evaluate WHERE clause if present
             if (where_clause) |where_expr| {
-                const where_result = try eval.evalExpr(allocator, where_expr, env);
+                const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                 const passes_where = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
@@ -7760,7 +7760,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
             if (filter_clause) |filter_expr| {
-                const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                 const passes_filter = switch (filter_result) {
                     .Bool => |b| b,
                     .Null => false,
@@ -8294,7 +8294,7 @@ fn readWithStageRows(
         var kept: usize = 0;
         for (rows.rows, keep) |row, *k| {
             const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
-            k.* = switch (try eval.evalExpr(allocator, where_expr, env)) {
+            k.* = switch (try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env)) {
                 .Bool => |b| b,
                 else => false,
             };
@@ -9522,7 +9522,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch Value{ .Bool = false };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9613,7 +9613,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch Value{ .Bool = false };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9719,7 +9719,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     .param_values = param_values,
                                     .allocator = allocator,
                                 };
-                                const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                                 if (!valuesEqual(node_val, prop_val)) {
                                     passes_props = false;
                                     break;
@@ -9790,7 +9790,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .param_values = param_values,
                                         .allocator = allocator,
                                     };
-                                    const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                    const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                                     if (!valuesEqual(node_val, prop_val)) {
                                         passes_right_props = false;
                                         break;
@@ -9978,7 +9978,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .param_values = param_values,
                                 .allocator = allocator,
                             };
-                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                             if (!valuesEqual(node_val, prop_val)) {
                                 passes_props = false;
                                 break;
@@ -10013,7 +10013,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Evaluate WHERE clause if present
                 if (q.where_clause) |where_expr| {
                     const passes_where = blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
@@ -10028,7 +10028,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate FILTER clause if present
                 if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -10299,7 +10299,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                if (eval.evalExpr(allocator, prop.value.*, prop_env)) |expected_val| {
+                if (eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env)) |expected_val| {
                     const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -10419,7 +10419,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             // Convert PropertyValue to Value for comparison
                             const node_val = propertyValueToValue(node_prop_val);
                             // Evaluate expected value from pattern (with access to parameters)
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 props_match = false;
                                 break;
@@ -10490,7 +10490,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (q.where_clause) |where_expr| {
                     // Skip WHERE at MATCH level when WITH clause exists - post-WITH WHERE will handle it
                     const passes_where = if (has_with) true else blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
@@ -10509,7 +10509,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
                 if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -10810,7 +10810,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .param_values = param_values,
                         .allocator = allocator,
                     };
-                    const where_val = try eval.evalExpr(allocator, where_expr, where_env);
+                    const where_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, where_env);
                     k.* = switch (where_val) {
                         .Bool => |b| b,
                         .Null => false,
