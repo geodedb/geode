@@ -50,8 +50,6 @@ const builtin = @import("builtin");
 // SONNY-6325: the self-signed certificate fallback (shared with
 // tools/cert_gen.zig); it spawns openssl through spawn_io (SONNY-2394).
 const tls_material = @import("tls_material");
-// SONNY-6442: the TLS exporter (HKDF-Expand-Label) through the FIPS seam.
-const cb = @import("crypto_backend");
 
 /// Allocation-free, Io-independent readability check for a cert/key file.
 /// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
@@ -2225,67 +2223,42 @@ test "parsePemCertChain: single + multi-cert PEM bundle -> DER chain (GAP-0838)"
 /// error.NoTlsContext or error.HandshakeIncomplete before the handshake has
 /// produced the exporter master secret.
 ///
-/// Computed here from the exporter master secret rather than through the
-/// vendor `Context.exportSecret`, which is not RFC 8446 §7.5 and hashes a
-/// different transcript on each side (client: through CertificateVerify,
-/// server: through server Finished), so the two ends disagree.
+/// Computed by the tls library (`Context.exportSecret`, RFC 8446 §7.5 since
+/// tls v0.1.25; SONNY-6448 retired geode's own copy of the construction). The
+/// value is unchanged from that copy, so peers on either side of the
+/// retirement agree.
 fn exportTlsKeyingMaterial(conn: *Connection, label: []const u8, out: []u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     conn.tls_context_mu.lockUncancelable(io);
     defer conn.tls_context_mu.unlock(io);
     const ctx = conn.tls_context orelse return error.NoTlsContext;
-    const slot = &ctx.secrets.exporter_master;
-    if (!slot.valid) return error.HandshakeIncomplete;
-    // geode negotiates TLS_AES_128_GCM_SHA256 only (vendor handshake
-    // integration); another hash would need its own digest length here.
-    if (slot.hash != .sha256) return error.UnsupportedCipherSuite;
-    return tls13Exporter(slot.slice(), label, out);
+    if (!ctx.secrets.exporter_master.valid) return error.HandshakeIncomplete;
+    return ctx.exportSecret(label, out);
 }
 
-/// TLS-Exporter(label, "", out.len) over an SHA-256 exporter master secret
-/// (RFC 8446 §7.5):
-///   HKDF-Expand-Label(Derive-Secret(secret, label, ""), "exporter",
-///                     Hash(""), out.len)
-fn tls13Exporter(exporter_master: []const u8, label: []const u8, out: []u8) !void {
-    var empty_hash: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, "", &empty_hash);
-    var derived: [32]u8 = undefined;
-    defer std.crypto.secureZero(u8, &derived);
-    try hkdfExpandLabel(exporter_master, label, &empty_hash, &derived);
-    try hkdfExpandLabel(&derived, "exporter", &empty_hash, out);
-}
+// SONNY-6448 / SONNY-6442: the channel binding of the remote-KMS attestation is
+// this exporter, computed independently by both ends. Pin it to RFC 8446 §7.5
+// (TLS-Exporter(label, "", L) = HKDF-Expand-Label(Derive-Secret(secret, label,
+// ""), "exporter", Hash(""), L)) with an independent std.crypto computation and
+// a known-answer value, so a library change that alters it fails here instead
+// of splitting a geode cluster across versions.
+test "tls Context.exportSecret is the RFC 8446 §7.5 exporter (SONNY-6448 regression)" {
+    const TlsContext = std.meta.Child(std.meta.Child(@FieldType(Connection, "tls_context")));
+    var ctx = try TlsContext.init(.{ .allocator = std.testing.allocator, .role = .Client }, .{});
+    defer ctx.deinit();
+    const secret = [_]u8{0x42} ** 32;
+    const SecretT = @FieldType(@TypeOf(ctx.secrets.exporter_master), "value");
+    ctx.secrets.exporter_master.store(.Application, .sha256, SecretT.fromSlice(.sha256, &secret));
 
-/// RFC 8446 §7.1 HKDF-Expand-Label with SHA-256.
-fn hkdfExpandLabel(secret: []const u8, label: []const u8, context: []const u8, out: []u8) !void {
-    const prefix = "tls13 ";
-    if (out.len > std.math.maxInt(u16) or prefix.len + label.len > 255 or context.len > 255) return error.InvalidLength;
-    var info_buf: [2 + 1 + 255 + 1 + 255]u8 = undefined;
-    var n: usize = 0;
-    std.mem.writeInt(u16, info_buf[0..2], @intCast(out.len), .big);
-    n += 2;
-    info_buf[n] = @intCast(prefix.len + label.len);
-    n += 1;
-    @memcpy(info_buf[n..][0..prefix.len], prefix);
-    n += prefix.len;
-    @memcpy(info_buf[n..][0..label.len], label);
-    n += label.len;
-    info_buf[n] = @intCast(context.len);
-    n += 1;
-    @memcpy(info_buf[n..][0..context.len], context);
-    n += context.len;
-    try cb.Kdf.hkdfExpand(.sha256, secret, info_buf[0..n], out);
-}
+    const label = "EXPORTER-geode-kms-attest-v3";
+    var library: [32]u8 = undefined;
+    try ctx.exportSecret(label, &library);
 
-test "tls13Exporter matches RFC 8448-style HKDF-Expand-Label construction (SONNY-6442)" {
-    // Independent computation with std.crypto of the same construction.
+    // Independent HKDF-Expand-Label construction with std.crypto.
     const Hkdf = std.crypto.kdf.hkdf.HkdfSha256;
-    const secret = [_]u8{0x11} ** 32;
-    var out: [32]u8 = undefined;
-    try tls13Exporter(&secret, "EXPORTER-test", &out);
-
     var empty: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash("", &empty, .{});
-    const label1 = "tls13 EXPORTER-test";
+    const label1 = "tls13 " ++ label;
     var info1: [2 + 1 + label1.len + 1 + 32]u8 = undefined;
     std.mem.writeInt(u16, info1[0..2], 32, .big);
     info1[2] = label1.len;
@@ -2303,35 +2276,17 @@ test "tls13Exporter matches RFC 8448-style HKDF-Expand-Label construction (SONNY
     @memcpy(info2[4 + label2.len ..], &empty);
     var want: [32]u8 = undefined;
     Hkdf.expand(&want, &info2, derived);
-    try std.testing.expectEqualSlices(u8, &want, &out);
+    try std.testing.expectEqualSlices(u8, &want, &library);
+
+    // Known answer (computed independently with Python hmac/hashlib).
+    var kat: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&kat, "9fb896eaa06183c132e861542ac2486ca30cd8ce6c910a98d465e5cbd4ec1867");
+    try std.testing.expectEqualSlices(u8, &kat, &library);
 
     // Another label, another value.
     var other: [32]u8 = undefined;
-    try tls13Exporter(&secret, "EXPORTER-other", &other);
-    try std.testing.expect(!std.mem.eql(u8, &out, &other));
-}
-
-// SONNY-6448 retirement detector. `exportTlsKeyingMaterial` computes the
-// exporter here because the pinned tls library's `Context.exportSecret` is
-// not RFC 8446 §7.5. This test FAILS once the pinned library computes the
-// RFC value (tls fix e29f289 on branch fix/sonny-6448-exporter-rfc8446,
-// released after v0.1.24). When it fails: make `exportTlsKeyingMaterial`
-// call `ctx.exportSecret(label, out)`, delete `tls13Exporter`,
-// `hkdfExpandLabel` and their tests, and delete this test.
-test "tls13Exporter still needed: the pinned tls Context.exportSecret is not RFC 8446 §7.5 (SONNY-6448: retire the geode exporter when this fails)" {
-    const TlsContext = std.meta.Child(std.meta.Child(@FieldType(Connection, "tls_context")));
-    var ctx = try TlsContext.init(.{ .allocator = std.testing.allocator, .role = .Client }, .{});
-    defer ctx.deinit();
-    const secret = [_]u8{0x42} ** 32;
-    const SecretT = @FieldType(@TypeOf(ctx.secrets.exporter_master), "value");
-    ctx.secrets.exporter_master.store(.Application, .sha256, SecretT.fromSlice(.sha256, &secret));
-
-    var library: [32]u8 = undefined;
-    try ctx.exportSecret("EXPORTER-geode-detector", &library);
-    var rfc: [32]u8 = undefined;
-    try tls13Exporter(&secret, "EXPORTER-geode-detector", &rfc);
-    // Equal means the library is fixed: retire the workaround (see above).
-    try std.testing.expect(!std.mem.eql(u8, &library, &rfc));
+    try ctx.exportSecret("EXPORTER-other", &other);
+    try std.testing.expect(!std.mem.eql(u8, &library, &other));
 }
 
 pub const QuicClient = struct {

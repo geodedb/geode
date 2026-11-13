@@ -2395,7 +2395,7 @@ pub fn build(b: *std.Build) void {
         .root_module = transport_quic_mod,
         // SONNY-1219c: "server-initiated close" adds the M-2a close-code tests.
         // Filters only — the step ROOT is untouched (that is ticket T-2).
-        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "tls13Exporter" },
+        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "exportSecret" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);

@@ -4,6 +4,19 @@
 
 ### Security
 
+- **The TLS exporter comes from the tls library again (SONNY-6448).** The
+  remote-KMS attestation binds each reply to its channel with the RFC 8446
+  §7.5 exporter (`EXPORTER-geode-kms-attest-v3`, SONNY-6442). geode computed
+  that value itself because tls before v0.1.25 exported something else from
+  a transcript the two ends did not share. quic v0.1.50 brings tls v0.1.27,
+  whose `Context.exportSecret` is the RFC value, so geode's copy and the
+  detector test that waited for the fix are removed. **Upgrade note:** the
+  exported value is byte-for-byte the same as before (both are RFC 8446
+  §7.5), so a KMS client and server on either side of this change still
+  agree and a rolling upgrade needs no ordering. The exporter is used only by
+  the remote-KMS channel; cluster peer TLS does not use it. Regression: the
+  `exportSecret` known-answer test in `zig build test-quic-transport`, and
+  `zig build test-sonny6442-kms-channel` end to end.
 - **A user's own password change is refused in cluster mode (SONNY-1332).**
   `ALTER USER <self> SET PASSWORD` (and the forced reset after a
   `password_reset_required` login) is handled by the QUIC and gRPC
