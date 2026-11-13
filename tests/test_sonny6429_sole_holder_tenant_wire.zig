@@ -26,6 +26,15 @@
 //     reveals another tenant's node, through the edges it writes or the error
 //     it answers.
 //
+// SONNY-6436 items 2-3 extend it: the composite-key endpoint resolver of the
+// MATCH ... MERGE edge fast path (`lookupPublicNodeIdByLabelAndAllProps`)
+// took the lowest of the nodes holding a registered composite key, where the
+// executor's MATCH binds each (in process, and over the wire with a
+// duplicated `{k, s}` endpoint); and MERGE's index answered a key lean
+// indexing left out of it as held by no node (`lookupMergeCandidate`,
+// `lookupNodeByMergeKey[ForTenant]`), so `bulkInsertEdge` skipped an edge
+// the executor makes. Both decline now.
+//
 // CANARY: REQ=REQ-SONNY-6429-SOLE-HOLDER-TENANT; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderTenantRegression; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
 
 const std = @import("std");
@@ -271,6 +280,108 @@ test "SONNY-6429: the tenant-scoped sole-holder lookup answers what the executor
 }
 
 // ---------------------------------------------------------------------------
+// SONNY-6436 items 2-3, in process: endpoint resolution never takes one of
+// several holders, nor answers "absent" from an index that cannot know.
+// ---------------------------------------------------------------------------
+
+/// `lookupPublicNodeIdByLabelAndAllProps` for `{k: 1, s: 'x'}` under `label`:
+/// the `t` of the node it names, "miss" or "not-unique".
+fn compositeAnswer(s: *Session, label: []const u8) ![]const u8 {
+    const a = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const filters = [_]gsa.StorageAdapter.PropKV{
+        .{ .key = "k", .value = .{ .Int = 1 } },
+        .{ .key = "s", .value = .{ .String = "x" } },
+    };
+    const id = a.lookupPublicNodeIdByLabelAndAllProps(G, label, &filters, error.SourceNodeNotFound) catch |err| switch (err) {
+        error.SourceNodeNotFound => return "miss",
+        error.MergeKeyNotUnique => return "not-unique",
+        else => return err,
+    };
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const node = (try store.nodes.getOrHydratePtr(id)) orelse return "vanished";
+    return switch (node.properties.get("t") orelse return "no-t") {
+        .String => |v| try s.arena.allocator().dupe(u8, v),
+        else => "t?",
+    };
+}
+
+fn expectComposite(s: *Session, f: *Failures, when: []const u8, label: []const u8, want: []const u8) !void {
+    const got = try compositeAnswer(s, label);
+    if (!std.mem.eql(u8, got, want)) try f.add("[composite {{k, s}}, {s}] {s}: resolver answered {s}, expected {s}", .{ when, label, got, want });
+}
+
+test "SONNY-6436: a registered composite key two nodes hold resolves to neither (the executor's MATCH binds both)" {
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    var s = try Session.init(.persisted);
+    defer s.deinit();
+    graph_store.registerCompositeMergeKey(&.{ "k", "s" });
+    defer graph_store.clearCompositeMergeKeysForTest();
+    try s.exec(null, "CREATE (:C6436 {k: 1, s: 'x', t: 'c1'})");
+    try s.exec(null, "CREATE (:C6436 {k: 1, s: 'x', t: 'c2'})");
+    try s.exec(null, "CREATE (:D6436 {k: 1, s: 'x', t: 'd'})");
+    try s.exec(null, "CREATE (:N6436 {k: 1, s: 'y', t: 'n'})");
+    for ([_][]const u8{ "fresh", "reopened" }) |when| {
+        try expectComposite(&s, &f, when, "C6436", "not-unique");
+        try expectComposite(&s, &f, when, "D6436", "d");
+        try expectComposite(&s, &f, when, "N6436", "miss");
+        if (std.mem.eql(u8, when, "fresh")) try s.reopen();
+    }
+    // Back to one holder: it answers again.
+    try s.exec(null, "MATCH (n:C6436 {t: 'c1'}) DELETE n");
+    try expectComposite(&s, &f, "one deleted", "C6436", "c2");
+    try f.check("composite endpoint resolution");
+}
+
+test "SONNY-6436: a key lean indexing left out of MERGE's index is never answered as held by no node" {
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    var s = try Session.init(.lean);
+    defer s.deinit();
+    // No MERGE registered `u6436`, so lean indexing keeps it out of MERGE's
+    // index although both nodes hold it.
+    try s.exec(null, "CREATE (:L6436 {u6436: 1, t: 'l'})");
+    try s.exec(null, "CREATE (:M6436 {u6436: 1, t: 'm'})");
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const a = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const one: graph_store.PropertyValue = .{ .Int = 1 };
+
+    var id: u64 = 0;
+    const r = store.lookupMergeCandidate(G, "L6436", "u6436", one, &id);
+    if (r != .not_indexable) try f.add("lookupMergeCandidate answered .{s}, expected .not_indexable (the index cannot know)", .{@tagName(r)});
+    const rt = store.lookupMergeCandidateForTenant(G, "L6436", "u6436", one, TA, &id);
+    if (rt != .not_indexable) try f.add("lookupMergeCandidateForTenant answered .{s}, expected .not_indexable", .{@tagName(rt)});
+
+    for ([_]?[]const u8{ null, UNSCOPED, TA }) |tenant| {
+        const name = tenant orelse "(lookupNodeByMergeKey)";
+        const res = if (tenant) |t|
+            a.lookupNodeByMergeKeyForTenant(G, "L6436", "u6436", one, t, error.SourceNodeNotFound)
+        else
+            a.lookupNodeByMergeKey(G, "L6436", "u6436", one, error.SourceNodeNotFound);
+        if (res) |got| {
+            _ = got;
+        } else |err| if (err != error.MergeKeyNotUnique) try f.add("{s}: answered {s}, expected MergeKeyNotUnique (decline)", .{ name, @errorName(err) });
+    }
+
+    // The bulk edge path: it skipped the edge as "source not found", where
+    // the executor's MATCH ... CREATE makes it. It declines now, and writes
+    // nothing.
+    if (a.bulkInsertEdge(G, "L6436", one, "u6436", "M6436", one, "u6436", "R6436", &.{}, null)) |_| {
+        try f.add("bulkInsertEdge wrote an edge; expected it to decline", .{});
+    } else |err| if (err != error.MergeKeyNotUnique) try f.add("bulkInsertEdge answered {s}, expected MergeKeyNotUnique (decline)", .{@errorName(err)});
+    var res = try s.run(null, "MATCH (:L6436)-[r:R6436]->(:M6436) RETURN count(r)");
+    defer res.deinit(s.arena.allocator());
+    const n: i64 = switch (res.rows[0][0]) {
+        .Int => |v| v,
+        else => -1,
+    };
+    if (n != 0) try f.add("{d} R6436 edge(s) after the declined bulkInsertEdge, expected 0", .{n});
+    try f.check("lean-unregistered key");
+}
+
+// ---------------------------------------------------------------------------
 // Over the wire: autocommit (fast paths may serve) against an explicit
 // transaction (the executor only), for each session and fixture.
 // ---------------------------------------------------------------------------
@@ -362,6 +473,10 @@ const Fixture = struct {
     name: []const u8,
     runner: Who,
     nodes: []const struct { who: Who, label: enum { P, Q }, t: []const u8 },
+    /// SONNY-6436: the endpoints carry, and the statements match on, the
+    /// registered composite merge key `{k, s}` (the merge-edge fast path
+    /// resolves it in one composite-index probe).
+    composite: bool = false,
 };
 
 const fixtures = [_]Fixture{
@@ -402,6 +517,16 @@ const fixtures = [_]Fixture{
     .{ .name = "d-sole", .runner = .admin, .nodes = &.{
         .{ .who = .b, .label = .P, .t = "b" }, .{ .who = .b, .label = .Q, .t = "qb" },
     } },
+    // SONNY-6436 item 2 (last: registering `{k, s}` registers `k` with lean
+    // indexing, and the fixtures above run with it unregistered): two nodes
+    // hold the source's composite key, then one.
+    .{ .name = "composite-two-holders", .runner = .admin, .composite = true, .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "p1" }, .{ .who = .admin, .label = .P, .t = "p2" },
+        .{ .who = .admin, .label = .Q, .t = "q" },
+    } },
+    .{ .name = "composite-sole", .runner = .admin, .composite = true, .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "p" }, .{ .who = .admin, .label = .Q, .t = "q" },
+    } },
 };
 
 const Sessions = struct {
@@ -423,15 +548,19 @@ const Route = enum { autocommit, transaction };
 /// Build `fx` under labels `P<tag>` / `Q<tag>`, run the edge statements as
 /// its runner over `route`, and describe what each session then sees.
 fn runFixture(aa: std.mem.Allocator, sessions: *Sessions, fx: Fixture, tag: []const u8, route: Route) ![]const u8 {
+    const key = if (fx.composite) "k: 1, s: 'x'" else "k: 1";
+    // SONNY-6436: a multi-property MERGE served by the node MERGE fast path
+    // registers the composite merge key `{k, s}` (idempotent).
+    if (fx.composite) try mustRun(aa, &sessions.admin, "MERGE (:Reg6436 {k: 1, s: 'x'})");
     for (fx.nodes) |n| {
-        const q = try std.fmt.allocPrint(aa, "CREATE (:{s}{s} {{k: 1, t: '{s}'}})", .{ @tagName(n.label), tag, n.t });
+        const q = try std.fmt.allocPrint(aa, "CREATE (:{s}{s} {{{s}, t: '{s}'}})", .{ @tagName(n.label), tag, key, n.t });
         try mustRun(aa, sessions.get(n.who), q);
     }
     const runner = sessions.get(fx.runner);
     const stmts = [_][]const u8{
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{k: 1}}), (b:Q{s} {{k: 1}}) CREATE (a)-[:E]->(b)", .{ tag, tag }),
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{k: 1}}), (b:Q{s} {{k: 1}}) MERGE (a)-[:M]->(b)", .{ tag, tag }),
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{k: 1}}), (b:Q{s} {{k: 1}}) MERGE (a)-[:M]->(b)", .{ tag, tag }),
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) CREATE (a)-[:E]->(b)", .{ tag, key, tag, key }),
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, key, tag, key }),
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, key, tag, key }),
     };
     var out: std.ArrayList(u8) = .empty;
     for (stmts, 0..) |stmt, i| {

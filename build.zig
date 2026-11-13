@@ -14286,7 +14286,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny6429_tests = b.addRunArtifact(sonny6429_tests);
     spawnsBuiltGeode(sonny6429_tests);
     shardDep(test_step, &run_sonny6429_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does)");
+    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does; SONNY-6436: a registered composite key two nodes hold, and a key lean indexing left out of MERGE's index, decline instead of naming one node or none)");
     sonny6429_step.dependOn(&run_sonny6429_tests.step);
 
     // SONNY-6425 items 1-2: a WHERE / FILTER / HAVING keeps a row only when

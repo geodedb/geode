@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:59:08.285355325Z",
+  "generated_at": "2026-11-13T00:10:31.887840454Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84660,6 +84660,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6436-RLS-RAW-TRUTHINESS",
+      "features": [
+        {
+          "feature": "RLSExpressionEvaluation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_rls_raw_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92345,7 +92364,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4803
+      "TESTED": 4804
     },
     "by_aspect": {
       "2PC": 3,
@@ -95431,7 +95450,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 280,
+      "Regression": 281,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
