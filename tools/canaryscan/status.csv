@@ -5114,6 +5114,7 @@ REQ-SONNY-6264-VARLEN-PATH-COUNT,VariableLengthPaths,OneRowPerPath,TESTED,tests/
 REQ-SONNY-6265-END-NODE-PROPERTY-MAP,PatternMatching,Regression,TESTED,tests/test_sonny6265_end_node_property_map.zig,tests/test_sonny6265_end_node_property_map.zig,,execution,2026-11-13
 REQ-SONNY-6266-EDGE-PROP-HEAD-IN,EdgeProperties,IncomingAdjacencyPropHead,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6266_planned_reverse_edge_props.zig,,storage,2026-11-13
 REQ-SONNY-6266-EDGE-PROP-HEAD-IN,EdgeProperties,Regression,TESTED,tests/test_sonny6266_planned_reverse_edge_props.zig,tests/test_sonny6266_planned_reverse_edge_props.zig,,storage,2026-11-13
+REQ-SONNY-6267-ABBREVIATED-EDGE-PATTERNS,PathPatterns,Regression,TESTED,tests/test_sonny6267_abbreviated_edge_patterns.zig,tests/test_sonny6267_abbreviated_edge_patterns.zig,,parser,2026-11-13
 REQ-SONNY-6268-EDGE-CREATE-ATOMIC,GraphStoreFailureAtomicity,EdgeCreateInMemory,TESTED,src/graph_store.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
 REQ-SONNY-6268-FAILURE-ATOMICITY,GraphStoreFailureAtomicity,Regression,TESTED,tests/test_sonny6268_graph_store_failure_atomicity.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11
 REQ-SONNY-6268-LABEL-ATOMIC,GraphStoreFailureAtomicity,NodeLabelAddRemove,TESTED,src/graph_store.zig,tests/test_sonny6268_graph_store_failure_atomicity.zig,,storage,2026-11-11

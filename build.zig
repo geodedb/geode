@@ -12081,6 +12081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-6267: the ISO abbreviated edge patterns parse and match. See tests/test_sonny6267_abbreviated_edge_patterns.zig.
+    const sonny6267_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6267_abbreviated_edge_patterns.zig"), .target = target, .optimize = optimize });
+    sonny6267_q_test_mod.addImport("geode", root_mod);
+    sonny6267_q_test_mod.addImport("logging", logging_mod);
+    sonny6267_q_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6267_q_tests = b.addTest(.{ .root_module = sonny6267_q_test_mod });
+    const run_sonny6267_q_tests = b.addRunArtifact(sonny6267_q_tests);
+    shardDep(test_step, &run_sonny6267_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6267_q_step = b.step("test-sonny6267-abbreviated-edge-patterns", "Run SONNY-6267 regression (ISO/IEC 39075 16.7 abbreviated edge patterns -, <-, ->, <-> and the full <-[ ]-> form parse and match; <-- is refused (16.7 NOTE 238); tilde forms stay refused: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6267_q_step.dependOn(&run_sonny6267_q_tests.step);
+
     // SONNY-6282: an integer and a string are never equal. See tests/test_sonny6282_int_string_equality.zig.
     const sonny6282_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6282_int_string_equality.zig"), .target = target, .optimize = optimize });
     sonny6282_q_test_mod.addImport("geode", root_mod);

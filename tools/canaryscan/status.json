@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:03:46.15304302Z",
+  "generated_at": "2026-11-13T12:03:51.254775866Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79788,6 +79788,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6267-ABBREVIATED-EDGE-PATTERNS",
+      "features": [
+        {
+          "feature": "PathPatterns",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6267_abbreviated_edge_patterns.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6267_abbreviated_edge_patterns.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6268-EDGE-CREATE-ATOMIC",
       "features": [
         {
@@ -93624,7 +93643,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4881
+      "TESTED": 4882
     },
     "by_aspect": {
       "2PC": 3,
@@ -96753,7 +96772,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 306,
+      "Regression": 307,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
