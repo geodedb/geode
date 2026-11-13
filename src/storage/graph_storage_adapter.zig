@@ -2305,6 +2305,7 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 }
 
 // CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=EdgePropHeadWalImage; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-13
 /// SONNY-6266: point both adjacency copies of edge `edge_id` and the edge
 /// index at its new property chain `new_head`, as graph_storage's own
 /// `engine_edge_props.setEdgeProperty` does. Since edge co-location (Phase
@@ -2314,10 +2315,26 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 /// chain instead, which a co-located edge is never in, so an edge walked
 /// from its target had no properties: `MATCH (a)<-[{w: 2}]-(b)` and every
 /// undirected match taken backwards lost the edge on the planned read.
-fn publishEdgePropHead(shard: *gs.GraphEngine, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
-    _ = try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head);
+///
+/// SONNY-6471: and WAL-image, in `txn` (the txn the property pages were
+/// written in), every page this rewrites, page for page as graph_storage's
+/// `setEdgeProperty` does: the outgoing adjacency page, the source's node
+/// page (it puts the source in recovery's tail-affected set, so the edge
+/// index is re-derived from its adjacency on first access after a crash)
+/// and the incoming adjacency page. graph_storage has no variant of its
+/// `setEdgeProperty` that joins a caller's txn, so the adapter's writers
+/// (which join the statement or session engine txn) do it here. Without
+/// the images the property pages reached the WAL with nothing that
+/// pointed at them, and a crash lost the properties.
+fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
+    if (try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head)) |page| {
+        try shard.logPagePublic(txn, .adj_out, page);
+        try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+    }
     const in_head = try shard.in_head_dir.getHead(to_id);
-    _ = try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head);
+    if (try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head)) |page| {
+        try shard.logPagePublic(txn, .in_idx, page);
+    }
     // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
     // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
     try shard.edge_index.updatePropHead(edge_id, new_head);
@@ -8405,7 +8422,7 @@ pub const StorageAdapter = struct {
                     return mapPropertyEntryError(err, key);
 
             if (new_head != found_prop_head) {
-                try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, new_head);
+                try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, new_head);
             }
 
             if (found_prop_head != 0 and found_prop_head != new_head) {
@@ -8446,7 +8463,7 @@ pub const StorageAdapter = struct {
                 return mapPropertyEntryError(err, key);
 
         if (fb_new_head != fb_found_prop_head) {
-            try publishEdgePropHead(from_shard, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
+            try publishEdgePropHead(from_shard, fb_local_txn, from_id, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
         }
 
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
@@ -8538,7 +8555,7 @@ pub const StorageAdapter = struct {
         }
 
         if (running_prop_head != orig_prop_head) {
-            try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, running_prop_head);
+            try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, running_prop_head);
         }
 
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {

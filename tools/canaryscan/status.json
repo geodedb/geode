@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:49:12.842333061Z",
+  "generated_at": "2026-11-13T13:00:15.027944061Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86406,6 +86406,20 @@
       "features": [
         {
           "feature": "TransactionManagement",
+          "aspect": "EdgePropHeadWalImage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6471_edge_prop_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TransactionManagement",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94088,7 +94102,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4907
+      "TESTED": 4908
     },
     "by_aspect": {
       "2PC": 3,
@@ -95173,6 +95187,7 @@
       "EdgeListBinding": 1,
       "EdgeLookup": 3,
       "EdgePersistence": 1,
+      "EdgePropHeadWalImage": 1,
       "EdgePropertyEncryption": 1,
       "EdgePropertyRemove": 1,
       "EdgePropertySet": 1,

@@ -2069,6 +2069,24 @@
 
 ### Fixed
 
+- **Data loss: relationship properties survive a crash (SONNY-6471).**
+  Writing a relationship property moves the head of its property chain,
+  which the relationship's adjacency entries and the edge index hold.
+  `StorageAdapter.setEdgeProperty` and `setEdgePropertiesBatch` rewrote
+  those entries without logging the pages in the engine transaction, so
+  after a SIGKILL the property pages came back with nothing pointing at
+  them: properties set by `SET r.p`, `SET r = {...}` and, in part, by
+  CREATE and MERGE with inline relationship properties (the QUIC fast
+  paths, the executor, a `/*+BATCH*/` program) were lost, inside and
+  outside a transaction. `publishEdgePropHead` now logs the outgoing
+  adjacency page, the source's node page and the incoming adjacency page
+  in the same transaction as the property pages, as graph_storage's own
+  `setEdgeProperty` does. Cost: three more 8 KiB page images in the WAL
+  per relationship-property write that moves a head (no extra fsync).
+  Regression: `zig build test-sonny6471-edge-prop-crash` (every write
+  shape, outside and inside a transaction, same- and cross-shard, with and
+  without TDE; read back outgoing, incoming and by an unlabeled scan after
+  the restart).
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE
