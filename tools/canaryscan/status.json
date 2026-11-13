@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:53:51.545060869Z",
+  "generated_at": "2026-11-13T10:54:09.173218322Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -72224,6 +72224,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2734-AGGREGATE-RESIDUALS",
+      "features": [
+        {
+          "feature": "GroupedAggregates",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2734_aggregate_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2734_aggregate_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2734-LEGACY-AGGREGATES",
       "features": [
         {
@@ -93553,7 +93572,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4877
+      "TESTED": 4878
     },
     "by_aspect": {
       "2PC": 3,
@@ -96681,7 +96700,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 303,
+      "Regression": 304,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

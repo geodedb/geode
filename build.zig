@@ -12081,6 +12081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-2734: residual computed-argument and pattern aggregates. See tests/test_sonny2734_aggregate_residuals.zig.
+    const sonny2734_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2734_aggregate_residuals.zig"), .target = target, .optimize = optimize });
+    sonny2734_q_test_mod.addImport("geode", root_mod);
+    sonny2734_q_test_mod.addImport("logging", logging_mod);
+    sonny2734_q_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2734_q_tests = b.addTest(.{ .root_module = sonny2734_q_test_mod });
+    const run_sonny2734_q_tests = b.addRunArtifact(sonny2734_q_tests);
+    shardDep(test_step, &run_sonny2734_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2734_q_step = b.step("test-sonny2734-aggregate-residuals", "Run SONNY-2734 residual regression (computed aggregate arguments, outdegree under restricted sessions, disconnected multi-patterns: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2734_q_step.dependOn(&run_sonny2734_q_tests.step);
+
     // SONNY-6265: an end node's inline property map applies behind an unlabelled start node. See tests/test_sonny6265_end_node_property_map.zig.
     const sonny6265_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6265_end_node_property_map.zig"), .target = target, .optimize = optimize });
     sonny6265_q_test_mod.addImport("geode", root_mod);
