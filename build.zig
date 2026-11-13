@@ -8023,6 +8023,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
     sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
+    // SONNY-6511 (4): MCP validate places each recommendation on its token.
+    const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
+    sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);
+    sonny6511_rec_pos_mod.link_libc = true;
+    const sonny6511_rec_pos_tests = b.addTest(.{ .root_module = sonny6511_rec_pos_mod });
+    const run_sonny6511_rec_pos_tests = b.addRunArtifact(sonny6511_rec_pos_tests);
+    shardDep(test_step, &run_sonny6511_rec_pos_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-recommendation-positions", "Run SONNY-6511 item 4 regression (MCP validate, through the real tools/call dispatch, reports each recommendation at the line and columns of the property, field, count or * it is about, skipping string literals; the LSP side runs in test-lsp)").dependOn(&run_sonny6511_rec_pos_tests.step);
 
     // Task 6 (hybrid-RAG audit spec): MCP server read-only mode. Roots the
     // regression file through src/mcp/server.zig exposed as `mcp_server`,
