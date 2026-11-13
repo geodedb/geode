@@ -118,6 +118,51 @@
   with a lost node could not be opened. The check takes its table of lost
   slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
   test-sonny6452-tde-page-tail-repair`.
+- **graph-storage v0.4.14 (SONNY-6473, SONNY-6491, SONNY-6470): crash
+  recovery and checkpoint ordering.** Crash recovery applies only the
+  newest committed image of each page (by LSN): transactions that overlapped
+  a batched transaction on the same shard no longer lose committed writes
+  after a crash, including in logs written by older releases that are still
+  on disk at upgrade. A checkpoint now makes `free.store` durable before the
+  manifest, and the manifest rename durable before the WAL truncate; a stale
+  `free.store` left by a crash during an older release's checkpoint is
+  detected at open and rebuilt from the store files (logged as a warning).
+  A new label or relationship-type name is made durable (fsync, rename,
+  directory fsync of each shard's `labels.dict`) when it is first assigned;
+  checkpoints no longer write `labels.dict`, and creating a graph writes an
+  empty one. A store whose `labels.dict` lost names to a crash during an
+  older release's checkpoint logs a warning at open; those names cannot be
+  recovered. WAL record checksums use the CPU's CRC32C instruction, which
+  took about 50 us off each operation of the commit path without fsync in
+  both TDE arms of `zig build test-sonny6435-tde-overhead`; encryption still
+  costs about 26 us there, so the published TDE overhead on that path is
+  now about +29% (four runs: +28.8% to +38.1%, the high one at load average
+  99; 0.4.13: about +20%). With the default per-commit fsync it is about
+  +1%, on buffer-pool misses about +60%; the gates (35%, 5%, 80%) are
+  unchanged. docs/TDE_FILE_LEVEL_ENCRYPTION.md, README, KMS_PROVIDER_SYSTEM,
+  DESIGN_TDE_KMS and SERVER_FEATURES carry the new figures.
+  **Upgrade notes:** no store format change and no downgrade restriction
+  from 0.4.13. The first record of each new label name now costs 16
+  directory fsyncs and 16 more file fsyncs (one per shard, on top of geode's
+  own first-sight write, GAP-0915); writes that reuse existing names are
+  unchanged. Measured against a real server, 0.4.13 and 0.4.14 binaries in
+  5 interleaved rounds, medians, on a heavily loaded dev host (load average
+  about 99, so absolute fsync times are inflated): a CREATE or MERGE that
+  introduces one new label 320 -> 450 ms and 319 -> 468 ms; one CREATE that
+  introduces 30 new labels 5.9 -> 13.7 s; a `/*+BATCH*/` bulk-MERGE that
+  introduces 10 new labels 2.5 -> 4.9 s; CREATE and MERGE on existing labels
+  unchanged (about 15-22 ms in both). Ingest that introduces many distinct
+  labels pays this once per name. **Known issue (open):** a label whose
+  name is first seen by `MATCH (n:L) RETURN n.k ORDER BY n.k LIMIT m`
+  (before any node carries it) is named by the ordered-index auto-build
+  directly in shard 0's dictionary, bypassing the engine
+  (`StorageAdapter.createOrderedIndex`). 0.4.13 wrote that name at the
+  next checkpoint or clean shutdown; 0.4.14 never does, so unless a later
+  new name rewrites the dictionary, `db.labels()` no longer lists `L`
+  after a restart, clean or not, and after a crash `MATCH (n:L)` finds
+  nothing. Regression: `zig build test-sonny6491-label-name-crash` (every
+  label-creating write shape, SIGKILL, restart, counted by label and listed
+  by `db.labels()`).
 - **graph-storage v0.4.13 (SONNY-6461).** Adds `repairAdjTailEntries`,
   hardware CRC32C page checksums (an 8 KiB page about 15.6 us -> 0.75 us,
   on every buffer-pool miss and flush), an offline `free.store` reader and

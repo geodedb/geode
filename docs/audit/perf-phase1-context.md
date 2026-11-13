@@ -44,7 +44,7 @@ Top-level `src/main.zig` is the default Zig scaffold (32 LOC placeholder) — NO
 | WAL fsync target | < 1 ms avg | BENCHMARK_REPORT.md:56 | confirmed (target) |
 | WAL write throughput | > 10 MB/s (4 KB pages) | BENCHMARK_REPORT.md:57 | confirmed (target) |
 | TDE page-encryption throughput | > 30 MB/s | BENCHMARK_REPORT.md:94 | confirmed (target) |
-| TDE OLTP overhead | measured: +0.7% with per-commit fsync, ~+20% commit path without fsync | `zig build test-sonny6435-tde-overhead` | corrected 2026-11-12 (SONNY-6435) |
+| TDE OLTP overhead | measured: ~+1% with per-commit fsync, ~+29% commit path without fsync | `zig build test-sonny6435-tde-overhead` | corrected 2026-11-12 (SONNY-6435); re-measured 2026-11-13 on graph_storage 0.4.14 |
 | RBAC check | < 1 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |
 | ABAC (5 policies) | < 10 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |
 | RLS filter generation | < 100 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |

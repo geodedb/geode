@@ -152,20 +152,26 @@ storage engine geode opens every graph with, the same workload with page and
 WAL encryption off and on (one operation inserts a node with a 512-byte
 property and reads an earlier node's property), the two arms interleaved
 batch by batch, medians, built ReleaseFast with the production-default
-buffer pool. 2026-11-13, graph_storage 0.4.13, a shared and loaded 16-core
-Threadripper PRO 3955WX dev host (load average about 11):
+buffer pool. 2026-11-13, graph_storage 0.4.14, a shared and loaded 16-core
+Threadripper PRO 3955WX dev host (load average 42 to 99 during the runs):
 
 | Workload (WAL sync) | Plain | TDE | Overhead |
 | --- | --- | --- | --- |
-| `each_commit` (the default) | 54.6 ms/op | 55.1 ms/op | +1.1% (four runs: -0.5% to +1.9%) |
-| `deferred`, no checkpoint in the timed window | 136.7 us/op | 164.8 us/op | +20.6% (four runs: +18.7% to +20.9%) |
-| Reads that miss the buffer pool (8-page pool per shard) | 6.2 us/op | 9.8 us/op | +56.9% (four runs: +55.7% to +61.4%) |
+| `each_commit` (the default) | 53.5 ms/op | 54.1 ms/op | +1.0% (four runs: -0.0% to +1.2%) |
+| `deferred`, no checkpoint in the timed window | 88.2 us/op | 114.0 us/op | +29.1% (four runs: +28.8% to +38.1%) |
+| Reads that miss the buffer pool (8-page pool per shard) | 6.6 us/op | 10.6 us/op | +60.4% (four runs: +57.2% to +61.9%) |
 
 With an fsync per commit the encryption disappears in the disk latency on
 this host (an operation is three commits, about 18 ms per fsync). Without
-it, encrypting the WAL records costs about a fifth of the commit path's CPU
-time. Storage with a faster fsync lands between the two figures, so neither
-"<1%" nor "<5%" holds in general. The step asserts that the encrypted arm
+it, encrypting the WAL records costs a little under a third of the commit
+path's CPU time: about 26 us per operation, as on 0.4.13 (28 us), but
+graph_storage 0.4.14 checksums WAL records with the CPU's CRC32C
+instruction, which took about 50 us off both arms (0.4.13: 136.7 against
+164.8 us/op, +18.7% to +20.9% over four runs), so the same cost is a larger
+share. The +38.1% run was the first, at load average 99; the other three
+were +28.8% to +29.6%, below the step's 35% bound. Storage with a faster
+fsync lands between the two figures, so neither "<1%" nor "<5%" holds in
+general. The step asserts that the encrypted arm
 writes no plaintext, and checks the durable overhead below 5% and the
 commit path's below 35% through `tests/perf_gate.zig` (reported by default,
 enforced in the scheduled perf-gates CI job).
@@ -177,7 +183,7 @@ checkpointed stores of 16000 nodes with a 512-byte property, an exact
 random node; the engines' own counters show 2.00 buffer-pool misses per
 read in both arms. The store files sit in the OS page cache, so this is the
 CPU cost of a miss, not disk latency. An encrypted miss decrypts the page
-(AES-256-GCM, hardware AES): about 1.8 us more per miss than a plaintext
+(AES-256-GCM, hardware AES): about 2 us more per miss than a plaintext
 one, which only verifies the page's CRC32C. graph_storage 0.4.13 computes
 that CRC with the CPU's CRC32C instructions (SSE4.2 / ARMv8, software
 fallback; about 0.75 us per 8 KiB page instead of 15.6 us, by the library's
