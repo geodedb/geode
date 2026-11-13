@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:25:11.969177616Z",
+  "generated_at": "2026-11-13T03:28:32.185024391Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85678,6 +85678,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6451-UNKNOWN-SECRET",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "UndeclaredSecretIsAnError",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6436_fixture_secrets.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93308,7 +93327,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4862
+      "TESTED": 4863
     },
     "by_aspect": {
       "2PC": 3,
@@ -97197,6 +97216,7 @@
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundedWithoutLimit": 1,
+      "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
       "UndoApplication": 1,

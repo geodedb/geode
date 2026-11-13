@@ -32,6 +32,13 @@
 // defaulted it to "UserPass123!" and clients/zig/example_minimal.zig set
 // "GeodeTestPassword123!" (one word).
 //
+// SONNY-6451 item 5: both Python runners substituted any other
+// `${secret:NAME}` with `secrets.get(match, f"default-{match}")`, a value
+// nobody chose (and one the password policy refuses for a password-named
+// secret). The scan refuses a computed-name secret lookup with a fallback;
+// the runners now fail the test with UnknownSecretError instead.
+//
+// CANARY: REQ=REQ-SONNY-6451-UNKNOWN-SECRET; FEATURE="GQL Auth DDL"; ASPECT=UndeclaredSecretIsAnError; STATUS=TESTED; TEST=tests/test_sonny6436_fixture_secrets.zig; OWNER=security; UPDATED=2026-11-12
 // CANARY: REQ=REQ-SONNY-6447-FIXTURE-SECRETS; FEATURE="GQL Auth DDL"; ASPECT=ClientsAndUserPasswords; STATUS=TESTED; TEST=tests/test_sonny6436_fixture_secrets.zig; OWNER=security; UPDATED=2026-11-12
 // CANARY: REQ=REQ-SONNY-6436-FIXTURE-SECRETS; FEATURE="GQL Auth DDL"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6436_fixture_secrets.zig; OWNER=security; UPDATED=2026-11-12
 
@@ -193,6 +200,7 @@ const Scan = struct {
     bad: usize = 0,
     passwords_checked: usize = 0,
     hmac_checked: usize = 0,
+    secret_lookups_checked: usize = 0,
     files: usize = 0,
 
     fn lineOf(text: []const u8, pos: usize) usize {
@@ -326,6 +334,40 @@ const Scan = struct {
         }
     }
 
+    /// SONNY-6451 item 5: `secrets.get(name, fallback)` with a computed name
+    /// invents a value for a secret the spec never declared (the runners
+    /// used `f"default-{match}"`, which fails the password policy for a
+    /// password-named secret and is a value nobody chose for any other).
+    /// An unknown secret must be an error, so a computed-name lookup may
+    /// not carry a fallback.
+    fn pythonSecretFallbacks(self: *Scan, path: []const u8, text: []const u8) void {
+        const marker = "secrets.get(";
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, text, pos, marker)) |i| {
+            pos = i + marker.len;
+            if (isComment(text, i)) continue;
+            if (pos >= text.len or text[pos] == '"' or text[pos] == '\'') continue; // a literal name, see pythonDefaults
+            var depth: usize = 0;
+            var j = pos;
+            const fallback = while (j < text.len) : (j += 1) {
+                switch (text[j]) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => {
+                        if (depth == 0) break false;
+                        depth -= 1;
+                    },
+                    ',' => if (depth == 0) break true,
+                    '\n' => break false,
+                    else => {},
+                }
+            } else false;
+            self.secret_lookups_checked += 1;
+            if (!fallback) continue;
+            std.debug.print("{s}:{d}: invents a fallback for an undeclared secret: an unknown secret must be an error\n", .{ path, lineOf(text, i) });
+            self.bad += 1;
+        }
+    }
+
     /// SONNY-6447: a Zig client example's `password = "literal"` field.
     fn zigPasswords(self: *Scan, path: []const u8, text: []const u8) !void {
         const marker = "password = \"";
@@ -355,6 +397,7 @@ const Scan = struct {
         }
         if (std.mem.endsWith(u8, base, ".py")) {
             try self.pythonDefaults(path, text);
+            self.pythonSecretFallbacks(path, text);
         } else {
             try self.assignedValues(text, &password_keys, onPassword, path);
             try self.assignedValues(text, &hmac_keys, onHmac, path);
@@ -446,6 +489,25 @@ test "SONNY-6447: the scan reads a Zig client's password field and a Python user
     // The two fields and the two Python defaults are checked; the one-word
     // field and "UserPass123!" are refused.
     try testing.expectEqual(@as(usize, 4), scan.passwords_checked);
+    try testing.expectEqual(@as(usize, 2), scan.bad);
+}
+
+test "SONNY-6451: the scan refuses a fallback value for an undeclared secret" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var scan: Scan = .{ .aa = arena.allocator(), .policy = PasswordPolicy.geodeSecure() };
+    scan.pythonSecretFallbacks("fixture.py",
+        \\    text = text.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
+        \\    v = _secrets.get(name_of(match, 1), "x")
+        \\    v = secrets.get(match)
+        \\    # secrets.get(match, "commented")
+        \\    v = secrets.get("admin_password", "Geode Test Admin Passphrase")
+        \\
+    );
+    // The two computed-name lookups with a fallback are refused; the one
+    // without, the comment and the literal name (pythonDefaults checks it)
+    // are not.
+    try testing.expectEqual(@as(usize, 3), scan.secret_lookups_checked);
     try testing.expectEqual(@as(usize, 2), scan.bad);
 }
 
