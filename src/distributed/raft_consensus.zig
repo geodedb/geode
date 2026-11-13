@@ -378,62 +378,124 @@ pub const Statistics = struct {
 // ---- RPC / Transport stubs ----
 
 const builtin = @import("builtin");
-const quic = if (builtin.is_test) struct {
-    // A single shared, well-defined stub stream that every test-mode
-    // `getStream()` hands back. Returning `undefined` here (the prior
-    // behavior) made `conn.send_stream = getStream()` an undefined optional
-    // pointer; the subsequent `conn.send_stream.?` unwrap in `Transport.send`
-    // is illegal behavior whose bit pattern Debug happened to leave non-null
-    // but ReleaseSafe's optional-unwrap safety check caught as
-    // "attempt to use null value" (SIGABRT). `QuicClientStream` is a
-    // zero-field struct, so a single static instance is sufficient and all
-    // of its methods (`writeAll`/`finish`/`deinit`) are no-ops.
+const real_quic = @import("transport/quic");
+
+/// SONNY-6456: whether this test binary's raft transport uses the real QUIC
+/// client (`useRealQuicInTests`). Read when a client or listener is created.
+var test_real_quic = std.atomic.Value(bool).init(false);
+
+/// SONNY-6456 (test builds only): make the raft transport's QUIC clients and
+/// listeners created from now on real ones, so an in-process test can drive
+/// the real sender (`Transport.send`, its client poll thread, TLS and the
+/// wire). Off by default: unit tests keep the no-op stub. A connection keeps
+/// the kind it was created with.
+pub fn useRealQuicInTests(on: bool) void {
+    if (!builtin.is_test) @compileError("useRealQuicInTests is for test builds only");
+    test_real_quic.store(on, .release);
+}
+
+const quic = if (builtin.is_test) test_quic else real_quic;
+
+/// The raft transport's QUIC in test builds: a no-op stub (nothing is sent),
+/// or the real client and listener once a test calls `useRealQuicInTests`.
+const test_quic = struct {
+    fn useReal() bool {
+        return test_real_quic.load(.acquire);
+    }
+    // A single shared, well-defined stub stream that every stub `getStream()`
+    // hands back. Returning `undefined` here (the prior behavior) made
+    // `conn.send_stream = getStream()` an undefined optional pointer; the
+    // subsequent `conn.send_stream.?` unwrap in `Transport.send` is illegal
+    // behavior whose bit pattern Debug happened to leave non-null but
+    // ReleaseSafe's optional-unwrap safety check caught as "attempt to use
+    // null value" (SIGABRT). Its methods are no-ops.
     var stub_stream: QuicClientStream = .{};
     pub const QuicClient = struct {
-        pub fn init(_: anytype) QuicClient {
-            return .{};
+        allocator: ?std.mem.Allocator = null,
+        real: ?real_quic.QuicClient = null,
+
+        pub fn init(allocator: std.mem.Allocator) QuicClient {
+            if (!useReal()) return .{};
+            return .{ .allocator = allocator, .real = real_quic.QuicClient.init(allocator) };
         }
-        pub fn connect(_: *QuicClient, _: []const u8, _: u16) !void {}
-        pub fn connectInsecure(_: *QuicClient, _: []const u8, _: u16, _: bool) !void {}
-        pub fn connectEx(_: *QuicClient, _: []const u8, _: u16, _: ?[]const u8, _: ?[]const u8, _: ?[]const u8) !void {}
-        pub fn waitForHandshake(_: *QuicClient, _: u32) !void {}
-        pub fn deinit(_: *QuicClient) void {}
-        pub fn getStream(_: *QuicClient) !*QuicClientStream {
-            return &stub_stream;
+        pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {
+            if (self.real) |*c| return c.connect(host, port);
         }
-        // Task A6b: test-mode stub for the same poll() call the production
-        // path uses to flush in-flight FIN before tearing the client down.
-        pub fn poll(_: *QuicClient, _: u32) !void {}
-        // SONNY-6451: test-mode stub for the closed-connection check in
-        // `Transport.send` (a stub connection never closes).
-        pub fn isClosed(_: *const QuicClient) bool {
+        pub fn connectInsecure(self: *QuicClient, host: []const u8, port: u16, allow_insecure: bool) !void {
+            if (self.real) |*c| return c.connectInsecure(host, port, allow_insecure);
+        }
+        pub fn connectEx(self: *QuicClient, host: []const u8, port: u16, ca: ?[]const u8, cert: ?[]const u8, key: ?[]const u8) !void {
+            if (self.real) |*c| return c.connectEx(host, port, ca, cert, key);
+        }
+        pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
+            if (self.real) |*c| return c.waitForHandshake(timeout_secs);
+        }
+        pub fn deinit(self: *QuicClient) void {
+            if (self.real) |*c| c.deinit();
+            self.real = null;
+        }
+        pub fn getStream(self: *QuicClient) !*QuicClientStream {
+            const c = if (self.real) |*r| r else return &stub_stream;
+            const s = try c.getStream();
+            errdefer s.deinit();
+            const w = try self.allocator.?.create(QuicClientStream);
+            w.* = .{ .allocator = self.allocator, .real = s };
+            return w;
+        }
+        // Task A6b: the poll() call the production path uses to flush.
+        pub fn poll(self: *QuicClient, timeout_ms: u32) !void {
+            if (self.real) |*c| return c.poll(timeout_ms);
+        }
+        // SONNY-6451: the closed-connection check in `Transport.send` (a stub
+        // connection never closes).
+        pub fn isClosed(self: *const QuicClient) bool {
+            if (self.real) |*c| return c.isClosed();
             return false;
         }
     };
     pub const QuicClientStream = struct {
-        pub fn writeAll(_: *QuicClientStream, _: []const u8) !void {}
-        pub fn deinit(_: *QuicClientStream) void {}
-        // Task A6b: test-mode stub for the finish() call the production
-        // path uses to signal stream FIN to the peer.
-        pub fn finish(_: *QuicClientStream) !void {}
+        allocator: ?std.mem.Allocator = null,
+        real: ?*real_quic.QuicClientStream = null,
+
+        pub fn writeAll(self: *QuicClientStream, data: []const u8) !void {
+            if (self.real) |s| return s.writeAll(data);
+        }
+        pub fn deinit(self: *QuicClientStream) void {
+            const s = self.real orelse return;
+            s.deinit();
+            self.allocator.?.destroy(self);
+        }
+        // Task A6b: the finish() call the production path uses for FIN.
+        pub fn finish(self: *QuicClientStream) !void {
+            if (self.real) |s| return s.finish();
+        }
     };
     pub const QuicTransport = struct {
-        pub fn init(_: anytype, _: anytype) !QuicTransport {
-            return .{};
+        real: ?real_quic.QuicTransport = null,
+
+        pub fn init(allocator: std.mem.Allocator, config: real_quic.QuicTransport.Config) !QuicTransport {
+            if (!useReal()) return .{};
+            return .{ .real = try real_quic.QuicTransport.init(allocator, config) };
         }
-        pub fn listen(_: *QuicTransport) !void {}
-        pub fn deinit(_: *QuicTransport) void {}
+        pub fn listen(self: *QuicTransport) !void {
+            if (self.real) |*t| return t.listen();
+        }
+        pub fn deinit(self: *QuicTransport) void {
+            if (self.real) |*t| t.deinit();
+            self.real = null;
+        }
         pub fn getStream(_: *QuicTransport) !*QuicClientStream {
             return &stub_stream;
         }
     };
-    // Test-mode stub for the peer re-resolution used by clientPollLoop. Tests
-    // address peers by IP literal, so "resolution" returns the host unchanged
-    // and the periodic IP-change reaper never evicts.
+    // Peer re-resolution used by clientPollLoop. With the stub, tests address
+    // peers by IP literal, so "resolution" returns the host unchanged and the
+    // periodic IP-change reaper never evicts.
     pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
+        if (useReal()) return real_quic.resolveHostIpAlloc(allocator, host);
         return allocator.dupe(u8, host);
     }
-} else @import("transport/quic");
+};
 
 pub const RpcClient = struct {
     allocator: Allocator,
@@ -1706,7 +1768,10 @@ pub const Transport = struct {
     /// for k8s churn validation via GEODE_RAFT_DEAD_CONN_REAP_MS (0 disables).
     pub const default_server_dead_conn_reap_ms: u64 = 30000;
 
-    fn serverDeadConnReapMs(allocator: Allocator) u64 {
+    /// The raft listener's dead-connection reap budget: GEODE_RAFT_DEAD_CONN_REAP_MS
+    /// or `default_server_dead_conn_reap_ms`. Also used by the cluster
+    /// coordinator's listener (`ClusterCoordinator.start`, SONNY-6456).
+    pub fn serverDeadConnReapMs(allocator: Allocator) u64 {
         const raw = getEnvVarOwned(allocator, "GEODE_RAFT_DEAD_CONN_REAP_MS") catch return default_server_dead_conn_reap_ms;
         defer allocator.free(raw);
         return std.fmt.parseInt(u64, std.mem.trim(u8, raw, " \t\r\n"), 10) catch default_server_dead_conn_reap_ms;
@@ -4139,8 +4204,9 @@ test "raft_consensus: OutOfStreams/WouldBlock are transient (no evict); other er
 // CANARY: REQ=REQ-DIST-RAFT-STALL-LIVENESS; FEATURE="Raft transport stalled-stream liveness"; ASPECT=StallEvictDecision; STATUS=TESTED; OWNER=distributed; UPDATED=2026-06-11
 
 /// Build a heap-allocated PeerConnection suitable for the PURE stall-decision
-/// unit tests. In test mode `quic.QuicClient.init` is a no-op stub, so no real
-/// QUIC/TLS connection is created. The endpoint is a dup so deinit's free is
+/// unit tests. In test mode `quic.QuicClient.init` is a no-op stub (unless a
+/// test called `useRealQuicInTests`), so no real QUIC/TLS connection is
+/// created. The endpoint is a dup so deinit's free is
 /// balanced. `established=true` mirrors a live connection.
 fn makeStallTestPeerConnection(
     allocator: std.mem.Allocator,

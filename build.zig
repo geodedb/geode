@@ -15809,6 +15809,37 @@ pub fn build(b: *std.Build) void {
     const sonny6451_restart_step = b.step("test-sonny6451-raft-restarted-peer", "Run the SONNY-6451 item 1 regression (a raft peer that restarts more times than the receiver has connection workers still reaches it: an inbound handler whose multiplexed stream goes silent releases its worker after the idle deadline)");
     sonny6451_restart_step.dependOn(&run_sonny6451_restart_tests.step);
 
+    // SONNY-6456 item 2: the cluster listener reaps an inbound connection
+    // whose peer went silent (the QUIC dead-connection reaper is on in the
+    // production `ClusterCoordinator.start` path).
+    const sonny6456_reap_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_cluster_dead_conn_reap.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_reap_tests.root_module.addImport("geode", root_mod);
+    sonny6456_reap_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny6456_reap_tests.root_module.link_libc = true;
+    const run_sonny6456_reap_tests = b.addRunArtifact(sonny6456_reap_tests);
+    shardDep(test_step, &run_sonny6456_reap_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_reap_step = b.step("test-sonny6456-cluster-dead-conn-reap", "Run the SONNY-6456 item 2 regression (a started ClusterCoordinator's QUIC listener reaps an inbound connection whose peer went silent, with GEODE_RAFT_DEAD_CONN_REAP_MS, well before the inbound idle deadline)");
+    sonny6456_reap_step.dependOn(&run_sonny6456_reap_tests.step);
+
+    // SONNY-6456 item 3: the REAL raft sender (opted into real QUIC in a test
+    // build) reconnects after the peer closes its connection and after the
+    // peer restarts.
+    const sonny6456_sender_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_raft_real_sender.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_sender_tests.root_module.addImport("geode", root_mod);
+    sonny6456_sender_tests.root_module.link_libc = true;
+    const run_sonny6456_sender_tests = b.addRunArtifact(sonny6456_sender_tests);
+    shardDep(test_step, &run_sonny6456_sender_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_sender_step = b.step("test-sonny6456-raft-real-sender", "Run the SONNY-6456 item 3 regression (the real raft sender, opted into real QUIC with raft_consensus.useRealQuicInTests, reaches a started receiver, reconnects after the receiver closes its connection, and reaches the receiver after it restarts)");
+    sonny6456_sender_step.dependOn(&run_sonny6456_sender_tests.step);
+
     // SONNY-6451 item 3: SIGTERM stops a cluster node's raft transport before
     // the final flush and the node exits well inside the teardown watchdog
     // (spawns two cluster nodes of the built geode).
@@ -15823,6 +15854,34 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6451_sigterm_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6451_sigterm_step = b.step("test-sonny6451-cluster-sigterm", "Run the SONNY-6451 item 3 regression (SIGTERM stops a cluster node's raft transport before the final flush: no raft activity, pool-join timeout or watchdog exit after it, exit within 15 s; spawns two cluster nodes)");
     sonny6451_sigterm_step.dependOn(&run_sonny6451_sigterm_tests.step);
+
+    // SONNY-6456 item 1: the cluster health monitor reports a peer failed
+    // only when it stops being heard from (spawns three cluster nodes).
+    const sonny6456_health_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_cluster_health_liveness.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_health_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6456_health_tests);
+    const run_sonny6456_health_tests = b.addRunArtifact(sonny6456_health_tests);
+    shardDep(test_step, &run_sonny6456_health_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_health_step = b.step("test-sonny6456-cluster-health-liveness", "Run the SONNY-6456 item 1 regression (three cluster nodes: no peer is reported failed while all are up; the leader reports a killed follower failed and active again after it restarts)");
+    sonny6456_health_step.dependOn(&run_sonny6456_health_tests.step);
+
+    // SONNY-6456 item 4: SIGTERM stops the persistence thread within 3 s on an
+    // idle single-node server and an idle cluster node (spawns the built geode).
+    const sonny6456_shutdown_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_shutdown_persistence_stop.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_shutdown_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6456_shutdown_tests);
+    const run_sonny6456_shutdown_tests = b.addRunArtifact(sonny6456_shutdown_tests);
+    shardDep(test_step, &run_sonny6456_shutdown_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_shutdown_step = b.step("test-sonny6456-shutdown-persistence-stop", "Run the SONNY-6456 item 4 regression (SIGTERM stops the persistence thread within 3 s and the process exits within 10 s on an idle single-node server and an idle cluster node; no light checkpoint of the default graph is skipped)");
+    sonny6456_shutdown_step.dependOn(&run_sonny6456_shutdown_tests.step);
 
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.

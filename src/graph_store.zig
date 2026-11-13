@@ -18043,10 +18043,14 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
             sync_fn();
         }
         if (g_wal_checkpoint_fn) |checkpoint_fn| {
-            // P1: Use per-graph read lock for final WAL checkpoint; fall back to global.
-            const ckpt_handle = acquireGraphReadLockTagged(DEFAULT_GRAPH_NAME, .misc);
-            checkpoint_fn(store_ptr);
-            releaseGraphLock(ckpt_handle);
+            // SONNY-6456: no graph lock around the hook — see persistenceLoop.
+            if (global_adapter != null) {
+                checkpoint_fn(store_ptr);
+            } else {
+                acquireStoreLock();
+                defer releaseStoreLock();
+                checkpoint_fn(store_ptr);
+            }
         } else {
             persistSplitPhase(store_ptr);
         }
@@ -18122,11 +18126,14 @@ fn persistenceLoop() void {
                 // falling back to the global shared lock for backward compatibility.
                 if (global_adapter) |adapter| {
                     if (g_wal_checkpoint_fn) |checkpoint_fn| {
-                        // Acquire a read lock on the default graph while running the
-                        // WAL checkpoint (which reads store state).
-                        const ckpt_handle = acquireGraphReadLockTagged(DEFAULT_GRAPH_NAME, .misc);
+                        // SONNY-6456: run the hook holding NO graph lock. It
+                        // checkpoints through the adapter, which takes each
+                        // graph's EXCLUSIVE lock itself; a read lock on the
+                        // default graph held here made that wait on this very
+                        // thread until its 5 s deadline, skip the default
+                        // graph on every tick, and stall SIGTERM by up to two
+                        // deadlines (this tick, then the final flush).
                         checkpoint_fn(store_ptr);
-                        releaseGraphLock(ckpt_handle);
                     }
                     // Checkpoint per-graph storage on WAL checkpoint ticks.
                     // GAP-0900 Layer-2: LIGHT — a runtime checkpoint must stay

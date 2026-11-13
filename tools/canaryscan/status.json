@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:54:57.771647354Z",
+  "generated_at": "2026-11-13T07:55:02.67248119Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28338,20 +28338,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-20"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggDistinctHighCardVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_distinct_variance.zig"
-          ],
-          "tests": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
         },
         {
           "feature": "GROUP BY/Aggregation",
@@ -85828,6 +85814,82 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ClusterListenerReapsDeadConnections",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_cluster_dead_conn_reap.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_cluster_dead_conn_reap.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6456-CLUSTER-HEALTH-LIVENESS",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HealthLivenessFromRaftTraffic",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_cluster_health_liveness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_cluster_health_liveness.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6456-RAFT-REAL-SENDER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RaftSenderReconnectsInProcess",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_raft_real_sender.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_raft_real_sender.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP",
+      "features": [
+        {
+          "feature": "Persistence",
+          "aspect": "PersistenceStopIsPrompt",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_shutdown_persistence_stop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_shutdown_persistence_stop.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93458,11 +93520,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 209,
+      "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4871
+      "TESTED": 4875
     },
     "by_aspect": {
       "2PC": 3,
@@ -94001,6 +94063,7 @@
       "ClusterBootstrap": 3,
       "ClusterCa": 1,
       "ClusterErrorSqlstateMapping": 1,
+      "ClusterListenerReapsDeadConnections": 1,
       "ClusterMergePrePass": 1,
       "ClusterPort": 1,
       "ClusterSetPrePass": 1,
@@ -95113,13 +95176,13 @@
       "HarnessRuntimeMetricsScrape": 1,
       "HasGraphGrant": 2,
       "HasGraphGrantLocked": 1,
-      "HashAggDistinctHighCardVarianceEnvelope": 1,
       "HashBeforeStore": 1,
       "Hashing": 1,
       "HavingCountDistinctFilter": 1,
       "HavingFilter": 1,
       "HeadElement": 1,
       "HealthCheck": 1,
+      "HealthLivenessFromRaftTraffic": 1,
       "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,
@@ -96124,6 +96187,7 @@
       "PersistableLengths": 1,
       "Persistence": 1,
       "PersistenceDeleteFailure": 1,
+      "PersistenceStopIsPrompt": 1,
       "PersistentFollowupBackoff": 1,
       "PersistentResolver": 1,
       "PersistentStorage": 2,
@@ -96502,6 +96566,7 @@
       "RaftDropGraphLock": 1,
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
+      "RaftSenderReconnectsInProcess": 1,
       "RaftState": 1,
       "RandAlias": 1,
       "RandomizedEncryption": 1,

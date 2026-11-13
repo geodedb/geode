@@ -3834,7 +3834,12 @@ pub fn main() !void {
         // Runs on this thread BEFORE any pool-deinit defer can wedge on a
         // stuck handler, and before the teardown watchdog is armed. However
         // long the checkpoint takes, the watchdog cannot cut it short.
+        const pstop_t0 = compat_milliTimestamp();
         graph_store.stopPersistenceThread(gpa);
+        std.debug.print(
+            "[shutdown] persistence thread stopped ({d}ms)\n",
+            .{compat_milliTimestamp() - pstop_t0},
+        );
         // GAP-0065 FIX D: `stopPersistenceThread` only runs the LIGHT engine
         // checkpoint (flush + engine-WAL truncate); it does NOT write the FIX-B
         // idmap/loop2 reload snapshots. Those were written by the FULL

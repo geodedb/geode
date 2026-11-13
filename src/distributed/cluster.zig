@@ -824,6 +824,15 @@ pub const ClusterCoordinator = struct {
     inbound_conns: std.ArrayList(*InboundConnRecord) = .empty,
     inbound_conns_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
+    /// SONNY-6456: guards `cluster_state.nodes` and `cluster_state.shards`,
+    /// which the health loop, the inbound raft workers (liveness stamps) and
+    /// shard forwarding share. A LEAF lock like `inbound_conns_mutex`: brief
+    /// holds, and no other geode lock is ever acquired while it is held (take
+    /// raft state such as `role()` before it). Entries are never removed from
+    /// `nodes` and an entry's `endpoint` never changes, so an endpoint slice
+    /// read under the lock stays valid after it is released.
+    cluster_state_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
         return self.cluster_state.replication_map;
@@ -1281,6 +1290,12 @@ pub const ClusterCoordinator = struct {
             var qt_config = quic.QuicTransport.Config{
                 .address = self.listen_address,
                 .port = self.cluster_port,
+                // SONNY-6456: this listener IS the raft listener in production
+                // (`raft_consensus.Transport.listen` is never called), so it
+                // must carry the dead-connection reap: an inbound connection
+                // whose peer vanished without CONNECTION_CLOSE is closed after
+                // GEODE_RAFT_DEAD_CONN_REAP_MS (default 30 s; 0 disables).
+                .dead_conn_reap_ms = raft_consensus.Transport.serverDeadConnReapMs(self.allocator),
             };
             if (self.cert_path.len > 0) qt_config.cert_path = self.cert_path;
             if (self.key_path.len > 0) qt_config.key_path = self.key_path;
@@ -1480,7 +1495,8 @@ pub const ClusterCoordinator = struct {
                     Attr.uint("active", self.active_connections.load(.acquire)),
                     Attr.uint("max", self.max_connections),
                 });
-                // Connection will be cleaned up when it goes out of scope
+                // SONNY-6456: close and untrack it (it used to stay tracked).
+                self.network_transport.quic_server.?.destroyConnection(conn);
                 continue;
             }
 
@@ -1501,6 +1517,7 @@ pub const ClusterCoordinator = struct {
                 })) {
                     self.allocator.destroy(ctx);
                     log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                    self.network_transport.quic_server.?.destroyConnection(conn);
                 }
             }
         }
@@ -1520,7 +1537,11 @@ pub const ClusterCoordinator = struct {
         };
 
         while (!self.shutdown.load(.acquire)) {
-            try self.healthPass();
+            // SONNY-6456: a failed pass is logged; it must not end the loop
+            // (which also drives the inbound-occupancy sweep below).
+            self.healthPass() catch |err| {
+                log.err("cluster health pass failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // RC-A: independent inbound-pool occupancy sweep. Frees worker slots
             // pinned by zombie half-open inbound conns so a rebuilt leader conn
@@ -1536,7 +1557,21 @@ pub const ClusterCoordinator = struct {
     /// is failed over once, when it turns unhealthy, and is active again when
     /// it is heard from. SONNY-6451: nothing in the pass adds to or removes
     /// from `cluster_state.nodes` (the slice iterated here).
+    ///
+    /// SONNY-6456: a peer's `last_heartbeat` is the last time an
+    /// authenticated raft frame from it arrived (`noteHeardFrom`), so
+    /// "unhealthy" means "not heard from within the threshold". A peer is
+    /// failed over only when this node expects to hear from it
+    /// (`expectsTrafficFrom`): a follower of a known leader hears only from
+    /// that leader, so its silence about the other followers says nothing. A
+    /// failover error is logged and the pass goes on to the next peer.
     fn healthPass(self: *ClusterCoordinator) !void {
+        // Raft state first: `cluster_state_mutex` is a leaf lock.
+        const r = self.role();
+        const leader_id = self.raft.leaderId();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
         for (self.cluster_state.nodes.items) |*node| {
             if (node.id == self.node_id) continue;
 
@@ -1544,10 +1579,41 @@ pub const ClusterCoordinator = struct {
             try self.updateHealthStatus(node.id, health_status);
 
             if (health_status == .unhealthy) {
-                if (node.state != .failed) try self.handleNodeFailure(node.id);
+                if (node.state == .failed) continue;
+                if (!expectsTrafficFrom(r, leader_id, self.node_id, node.id)) continue;
+                self.handleNodeFailure(node.id) catch |err| {
+                    log.err("Failover for a failed node did not complete", &.{
+                        Attr.uint("node_id", node.id),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             } else if (node.state == .failed) {
                 node.state = .active;
+                log.info("Node is active again", &.{Attr.uint("node_id", node.id)});
             }
+        }
+    }
+
+    /// SONNY-6456: whether a node in raft state `r` that knows `leader_id`
+    /// should be hearing from `peer`. A leader or candidate gets a response
+    /// to every frame it sends each peer; a follower of a known leader hears
+    /// only from that leader; with no known leader, every peer is expected
+    /// to be campaigning or answering.
+    pub fn expectsTrafficFrom(r: raft_consensus.State, leader_id: ?u64, self_id: u64, peer: u64) bool {
+        if (r == .leader or r == .candidate) return true;
+        const l = leader_id orelse return true;
+        if (l == self_id) return true;
+        return l == peer;
+    }
+
+    /// SONNY-6456: record that an authenticated raft frame from `node_id`
+    /// arrived at `now_ms` (the health monitor's liveness signal).
+    fn noteHeardFrom(self: *ClusterCoordinator, node_id: u64, now_ms: i64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == node_id) node.last_heartbeat = now_ms;
         }
     }
 
@@ -1634,6 +1700,13 @@ pub const ClusterCoordinator = struct {
         task_ctx.coordinator.handleQuicConnection(task_ctx.conn, accepted_ms) catch |err| {
             log.err("Cluster connection handler failed", &.{Attr.string("error", @errorName(err))});
         };
+        // SONNY-6456: give the connection back to the listener. Without this
+        // the handler released its worker but the wrapper stayed in the
+        // listener's tracked list for the life of the process and no
+        // CONNECTION_CLOSE ever reached the peer (a reaped or abandoned
+        // connection was never closed by this side). `stop()` joins this pool
+        // before it frees the server, so the server is live here.
+        task_ctx.coordinator.network_transport.quic_server.?.destroyConnection(task_ctx.conn);
     }
 
     /// RC-A: register an inbound connection in the live occupancy registry,
@@ -2116,6 +2189,9 @@ pub const ClusterCoordinator = struct {
         // that peer yet (built lazily on first send) — it can never cause a
         // false eviction of a healthy peer.
         const now_inbound_ms = compat_milliTimestamp();
+        // SONNY-6456: any authenticated frame (request or response) proves its
+        // sender is alive now — the health monitor's liveness signal.
+        self.noteHeardFrom(frame_res.from, now_inbound_ms);
         if (raft_consensus.frameProvesOurOutboundDelivered(frame_res.body)) {
             self.raft_transport.notePeerProgress(frame_res.from, now_inbound_ms);
         } else {
@@ -2394,6 +2470,14 @@ pub const ClusterCoordinator = struct {
     }
 
     fn findNodeEndpoint(self: *ClusterCoordinator, node_id: u64) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
+        return self.findNodeEndpointLocked(node_id);
+    }
+
+    /// `findNodeEndpoint` for a caller holding `cluster_state_mutex`.
+    fn findNodeEndpointLocked(self: *ClusterCoordinator, node_id: u64) ![]const u8 {
         for (self.cluster_state.nodes.items) |node| {
             if (node.id == node_id) return node.endpoint;
         }
@@ -2991,7 +3075,16 @@ pub const ClusterCoordinator = struct {
     fn forwardToShard(self: *ClusterCoordinator, shard_id: u64, msg: Message) !Response {
         // Find the shard descriptor.  Returns ShardNotFound if no
         // shard with this id is currently in `cluster_state.shards`.
-        const shard = self.findShard(shard_id) orelse return error.ShardNotFound;
+        // SONNY-6456: pick the target under `cluster_state_mutex` (the health
+        // loop rewrites shards on failover); do the I/O after releasing it.
+        const target: ?u64 = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.cluster_state_mutex.lockUncancelable(io);
+            defer self.cluster_state_mutex.unlock(io);
+            const shard = self.findShard(shard_id) orelse return error.ShardNotFound;
+            if (self.ownsShard(shard)) break :blk null;
+            break :blk self.pickReachableShardOwner(shard) orelse return error.NoReachableShardOwner;
+        };
 
         // Local short-circuit.  When this coordinator already owns
         // the shard, executing through `executeLocalRead` is
@@ -3001,13 +3094,9 @@ pub const ClusterCoordinator = struct {
         // `handleClusterMessage` / `handleShardQuery` because those
         // would recompute the target shard and could loop back into
         // `forwardToShard`.
-        if (self.ownsShard(shard)) {
-            return self.executeLocalRead(msg);
-        }
+        const target_node = target orelse return self.executeLocalRead(msg);
 
-        // Pick a target node.  Primary first, then replicas in order.
-        const target_node = self.pickReachableShardOwner(shard) orelse return error.NoReachableShardOwner;
-
+        // Target node: primary first, then replicas in order.
         return self.sendClusterRpcToNode(target_node, msg);
     }
 
@@ -3044,8 +3133,9 @@ pub const ClusterCoordinator = struct {
         return null;
     }
 
+    /// Caller holds `cluster_state_mutex`.
     fn hasEndpoint(self: *ClusterCoordinator, node_id: u64) bool {
-        _ = self.findNodeEndpoint(node_id) catch return false;
+        _ = self.findNodeEndpointLocked(node_id) catch return false;
         return true;
     }
 
