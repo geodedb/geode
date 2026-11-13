@@ -2161,6 +2161,14 @@
 
 ### Fixed
 
+- **A MERGE's or CREATE's RETURN map is freed with the result
+  (SONNY-3378).** A write step's RETURN items (and a CREATE's WITH items)
+  were evaluated on the result's allocator while the result borrows its
+  cells, so `MERGE (m:M {k: 1}) RETURN {k: m.k}` leaked the map on every
+  statement. They are lent from the statement's scratch arena, as every
+  other projection's are. Regression: `zig build
+  test-sonny3378-map-projection-leak`; the m-4 case of `zig build
+  test-sonny-write-allowlist-r4b` runs on the testing allocator.
 - **Query residuals: an aggregating WITH followed by another WITH, aggregates
   without MATCH under RLS, undirected self-loops, failing property maps
   (SONNY-6483).** (1) `MATCH (z:Z) WITH z.g AS g, sum(z.k) AS s WITH g, s

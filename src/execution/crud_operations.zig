@@ -1818,7 +1818,8 @@ pub fn executeCreateQuery(
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-3378: lent, as a MERGE's RETURN item is.
+                row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
             }
         }
         rows[0] = row;
@@ -1974,7 +1975,8 @@ pub fn executeCreateQuery(
             };
 
             for (q.ret.items, 0..) |item, col_idx| {
-                return_row[col_idx] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-3378: lent, as a MERGE's RETURN item is.
+                return_row[col_idx] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
             }
             return_rows[row_idx] = return_row;
         }
@@ -4127,7 +4129,10 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             };
 
             for (ret.items, 0..) |item, i| {
-                row[i] = try eval.evalExpr(allocator, item.expr, env);
+                // SONNY-3378: the result borrows its cells, so what an item
+                // computes (a map, a string) is lent from the statement's
+                // scratch arena; on `allocator` nothing freed it.
+                row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
                 // SONNY-3322: the scope's copy of a relationship dies with it.
                 try scope.residentEdges(allocator, store, &row[i]);
             }
