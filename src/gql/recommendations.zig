@@ -91,12 +91,15 @@ pub const RecommendationEngine = struct {
             try self.walkExprForIndexHints(where, &label_map);
             try self.walkExprForCoalesce(where);
         }
+        if (query.filter_clause) |filter| {
+            try self.walkExprForIndexHints(filter, &label_map);
+            try self.walkExprForCoalesce(filter);
+        }
 
         // Check ORDER BY for index suggestions
         if (query.order_by) |ob| {
             for (ob.keys) |key| {
-                if (key.expr == .PropertyAccess) {
-                    const pa = key.expr.PropertyAccess;
+                if (propertyRef(key.expr)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "Consider creating a btree index for ORDER BY: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
                     try self.appendOwned(.{
@@ -245,8 +248,7 @@ pub const RecommendationEngine = struct {
             .Binary => |bin| {
                 if (bin.op == .Eq) {
                     // Check if one side is PropertyAccess
-                    if (bin.left.* == .PropertyAccess) {
-                        const pa = bin.left.PropertyAccess;
+                    if (propertyRef(bin.left.*)) |pa| {
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
                         try self.appendOwned(.{
@@ -256,8 +258,7 @@ pub const RecommendationEngine = struct {
                             .code = "geode/suggest-index",
                             .message = msg,
                         });
-                    } else if (bin.right.* == .PropertyAccess) {
-                        const pa = bin.right.PropertyAccess;
+                    } else if (propertyRef(bin.right.*)) |pa| {
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
                         try self.appendOwned(.{
@@ -274,8 +275,7 @@ pub const RecommendationEngine = struct {
                 try self.walkExprForIndexHints(bin.right.*, label_map);
             },
             .Contains => |c| {
-                if (c.value.* == .PropertyAccess) {
-                    const pa = c.value.PropertyAccess;
+                if (propertyRef(c.value.*)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "CONTAINS on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
                     try self.appendOwned(.{
@@ -288,8 +288,7 @@ pub const RecommendationEngine = struct {
                 }
             },
             .StartsWith => |sw| {
-                if (sw.value.* == .PropertyAccess) {
-                    const pa = sw.value.PropertyAccess;
+                if (propertyRef(sw.value.*)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "STARTS WITH on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
                     try self.appendOwned(.{
@@ -309,8 +308,7 @@ pub const RecommendationEngine = struct {
         switch (expr) {
             .IsNull => |is_null| {
                 if (!is_null.negated) {
-                    if (is_null.target.* == .PropertyAccess) {
-                        const pa = is_null.target.PropertyAccess;
+                    if (propertyRef(is_null.target.*)) |pa| {
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider using coalesce({s}.{s}, default_value) as an alternative to IS NULL checks.", .{ pa.object, pa.property });
                         try self.appendOwned(.{
                             .line = 0,
@@ -385,6 +383,19 @@ fn isVectorPropertyName(name: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(name, vn)) return true;
     }
     return false;
+}
+
+const PropertyRef = struct { object: []const u8, property: []const u8 };
+
+/// SONNY-6494: the parser writes `n.prop` as `.Member` on an `.Ident`
+/// target; `.PropertyAccess` is built only by internal rewrites. Matching
+/// `.PropertyAccess` alone left every WHERE / ORDER BY recommendation dead.
+fn propertyRef(expr: ast.Expr) ?PropertyRef {
+    return switch (expr) {
+        .PropertyAccess => |pa| .{ .object = pa.object, .property = pa.property },
+        .Member => |m| if (m.target.* == .Ident) .{ .object = m.target.Ident.orig, .property = m.field } else null,
+        else => null,
+    };
 }
 
 /// Collect variable→label mapping from a GraphPattern.

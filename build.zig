@@ -535,8 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6494-mcp-validate-recommendations", .reason = "intentionally red TDD reproduction (SONNY-6494 item 1); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6494-recommendations-inline", .reason = "intentionally red TDD reproduction (SONNY-6494 item 1); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
 };
 
@@ -7993,7 +7991,7 @@ pub fn build(b: *std.Build) void {
     sonny6494_mcp_test_mod.link_libc = true;
     const sonny6494_mcp_tests = b.addTest(.{ .root_module = sonny6494_mcp_test_mod });
     const run_sonny6494_mcp_tests = b.addRunArtifact(sonny6494_mcp_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6494_mcp_tests.step);
+    shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
     sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
 
@@ -16025,7 +16023,7 @@ pub fn build(b: *std.Build) void {
     // geode lib module as test-sonny6460-exec-inline does.
     const sonny6494_rec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"recommendations:"} });
     const run_sonny6494_rec_inline_tests = b.addRunArtifact(sonny6494_rec_inline_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6494_rec_inline_tests.step);
+    shardDep(test_step, &run_sonny6494_rec_inline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_rec_inline_step = b.step("test-sonny6494-recommendations-inline", "Run src/gql/recommendations.zig inline unit tests (FLE/index/fulltext/vector/path-mode/coalesce/degree recommendations behind MCP validate and LSP diagnostics; SONNY-6494)");
     sonny6494_rec_inline_step.dependOn(&run_sonny6494_rec_inline_tests.step);
 

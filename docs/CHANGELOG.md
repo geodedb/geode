@@ -2218,6 +2218,19 @@
 
 ### Fixed
 
+- **MCP `validate` and LSP diagnostics show the WHERE, FILTER and ORDER BY
+  recommendations again (SONNY-6494 item 1).** The recommendation engine
+  (`src/gql/recommendations.zig`) recognised a property reference only as
+  `.PropertyAccess`, but the parser writes `n.prop` as `.Member` on an
+  identifier, so the index (`WHERE n.p = …`, `ORDER BY n.p`), fulltext
+  index (`CONTAINS`, `STARTS WITH`) and coalesce (`IS NULL`) suggestions
+  never fired. It now reads both forms and also checks the ISO `FILTER`
+  statement. The suggestions and their triggers are listed in
+  [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). Regression:
+  `zig build test-sonny6494-recommendations-inline` (the file's inline tests,
+  which no step ran) and `zig build
+  test-sonny6494-mcp-validate-recommendations` (MCP `tools/call` →
+  `validate`).
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a

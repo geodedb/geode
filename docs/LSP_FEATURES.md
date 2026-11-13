@@ -151,6 +151,29 @@ The diagnostic is identified by `source: "geode-lsp"` (distinct from
 `"geode"` used by parser-level errors) so clients can attribute the warning
 separately.
 
+## Recommendations
+
+After a document parses, the recommendation engine
+(`src/gql/recommendations.zig`) adds `Information` and `Hint` diagnostics
+(`source: "geode"`) suggesting Geode features. The MCP `validate` and
+`diagnostics` tools return the same suggestions. They are static: the
+engine reads the query only, not the schema or the indexes that exist, and
+reports every suggestion at line 0, column 0.
+
+| Code | Severity | Fires on |
+| ---- | -------- | -------- |
+| `geode/suggest-encrypted` | Information | A pattern property or graph-type field named `password`, `secret`, `token`, `api_key`, `apikey`, `ssn`, `credit_card`, `creditcard`, `pin`, `private_key` or `privatekey` (a graph-type field already annotated `@encrypted` or `@searchable` is skipped) |
+| `geode/suggest-searchable` | Hint | The same for `email`, `phone`, `address`, `dob`, `date_of_birth`, `passport`, `phone_number`, `phonenumber` |
+| `geode/suggest-vector-index` | Hint | A pattern property named `embedding`, `embeddings`, `vector`, `vectors` or `features` |
+| `geode/suggest-index` | Hint | `n.p = …` in a `WHERE` or `FILTER`, and `ORDER BY n.p` |
+| `geode/suggest-fulltext-index` | Hint | `n.p CONTAINS …` or `n.p STARTS WITH …` in a `WHERE` or `FILTER` |
+| `geode/suggest-coalesce` | Hint | `n.p IS NULL` in a `WHERE` or `FILTER` |
+| `geode/suggest-path-mode` | Information | A variable-length relationship (`-[*1..5]->`) under the default `WALK` mode, outside a shortest-path search |
+| `geode/suggest-degree` | Hint | `count(x)` of a variable in `RETURN` |
+
+The label in an index suggestion is the first label of the node the
+variable is bound to in the `MATCH` (`Label` when it has none).
+
 ## TTL cache and DDL invalidation
 
 `SchemaProvider` (`src/cli/lsp/schema_provider.zig`) sits between the LSP
