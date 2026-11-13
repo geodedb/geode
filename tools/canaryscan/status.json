@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:50:38.551641164Z",
+  "generated_at": "2026-11-13T01:53:00.410689263Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84524,6 +84524,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-LEAN-KEY-OVERFLOW",
+      "features": [
+        {
+          "feature": "LeanMergeKeyIndexing",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_lean_key_overflow.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-RLS-RAW-TOKENIZE",
       "features": [
         {
@@ -92204,7 +92223,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4798
+      "TESTED": 4799
     },
     "by_aspect": {
       "2PC": 3,
@@ -95282,7 +95301,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 283,
+      "Regression": 284,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

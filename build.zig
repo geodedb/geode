@@ -15267,6 +15267,16 @@ pub fn build(b: *std.Build) void {
     const sonny6447_rls_step = b.step("test-sonny6447-rls-raw-tokenize", "Run the SONNY-6447 item 4 regression (the raw-string RLS interpreter splits AND/OR, comparisons and call arguments only outside quotes and parentheses, and denies a policy that does not parse)");
     sonny6447_rls_step.dependOn(&run_sonny6447_rls_tests.step);
 
+    // SONNY-6447 item 3: lean indexing registers (and indexes) every MERGE
+    // key, the 65th and a key longer than 128 bytes included.
+    const sonny6447_lean_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6447_lean_key_overflow.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6447_lean_test_mod.addImport("geode", root_mod);
+    const sonny6447_lean_tests = b.addTest(.{ .root_module = sonny6447_lean_test_mod });
+    const run_sonny6447_lean_tests = b.addRunArtifact(sonny6447_lean_tests);
+    shardDep(test_step, &run_sonny6447_lean_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6447_lean_step = b.step("test-sonny6447-lean-key-overflow", "Run the SONNY-6447 item 3 regression (lean indexing registers and indexes a MERGE key past the 64th and one longer than 128 bytes; a MERGE lookup on the 65th key is answered by the index)");
+    sonny6447_lean_step.dependOn(&run_sonny6447_lean_tests.step);
+
     // SONNY-6436 item 7: geode query --file over QUIC stops the run, with the
     // summary, when a statement of a rejected chunk, retried on its own, was
     // sent and got no answer.
