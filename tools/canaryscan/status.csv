@@ -4521,6 +4521,7 @@ REQ-SONNY-2669-PLANNED-EXT-PROPERTY-LEAK,PlannedReadStorageReads,Regression,TEST
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,Regression,TESTED,tests/test_sonny2670_fle_singletons_process_allocator.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,SingletonsOnProcessAllocator,TESTED,src/fle_integration.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
 REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny2671_scan_page_append_oom.zig,tests/test_sonny2671_scan_page_append_oom.zig,,engine,2026-11-13
+REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM,EngineDirectNodeOwnership,ReserveBeforeBuild,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2671_scan_page_append_oom.zig,,engine,2026-11-13
 REQ-SONNY-2672-READ-SEMANTICS-BATCH,ReadSemanticsBatch,Regression,TESTED,tests/test_sonny2672_read_semantics_batch.zig,tests/test_sonny2672_read_semantics_batch.zig,,engine,2026-11-12
 REQ-SONNY-2674-LEGACY-RETURN,LegacyReturnProjection,Regression,TESTED,tests/test_sonny2674_legacy_return.zig,tests/test_sonny2674_legacy_return.zig,,engine,2026-09-25
 REQ-SONNY-2674-LEGACY-RETURN,LegacyReturnProjection,SharedProjection,TESTED,src/execution/match_operations.zig,tests/test_sonny2674_legacy_return.zig,,engine,2026-09-25

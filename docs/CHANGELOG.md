@@ -2161,6 +2161,12 @@
 
 ### Fixed
 
+- **Memory safety: the engine-direct node scan frees what a page built when
+  an allocation fails (SONNY-2671).** A page over 256 rows dropped the row it
+  had just built when growing its row list failed, and a failure while
+  copying the column names freed column slots never filled (a crash). The
+  row's slot is reserved before the row is built and only copied names are
+  freed. Regression: `zig build test-sonny2671-scan-page-append-oom`.
 - **A list literal over a relationship pattern reads its members on the
   planned read (SONNY-3126).** `MATCH (a:P)-[:R]->(b:Q) RETURN [a.s, b.s]`
   answered `[null, null]` on a persisted session: a bracket list literal

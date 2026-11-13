@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:44:24.687546128Z",
+  "generated_at": "2026-11-13T15:44:32.217351275Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70487,6 +70487,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "EngineDirectNodeOwnership",
+          "aspect": "ReserveBeforeBuild",
+          "status": "TESTED",
+          "files": [
+            "src/server/node_scan_stream.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2671_scan_page_append_oom.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -94633,7 +94647,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4937
+      "TESTED": 4938
     },
     "by_aspect": {
       "2PC": 3,
@@ -97851,6 +97865,7 @@
       "RequiredExpand": 1,
       "Reseal": 1,
       "ResealRefusesUnsignedLegacy": 1,
+      "ReserveBeforeBuild": 1,
       "ResetGuardrails": 1,
       "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,
