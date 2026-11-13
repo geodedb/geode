@@ -2036,6 +2036,23 @@
 
 ### Fixed
 
+- **Persisted sessions: a relationship walked from its target keeps its
+  properties (SONNY-6266).** `MATCH (a)<-[{w: 2}]-(b)` answered 0, and an
+  undirected hop with a relationship property map or a WHERE on the
+  relationship lost every match taken backwards, on the planned read only.
+  Writing an edge's properties (`StorageAdapter.setEdgeProperty` and
+  `setEdgePropertiesBatch`) moved the new property head into the outgoing
+  adjacency and into the target shard's legacy incoming chain; since
+  graph_storage's edge co-location, incoming walks read the source shard's
+  `adj_in_remote`, which kept head 0. Both copies and the edge index are
+  now updated as graph_storage's own `setEdgeProperty` does. **Existing
+  stores** keep a stale head 0 in the incoming entries of edges written
+  before this fix; the planned read takes an incoming edge's property head
+  from the edge index, which was always current, so they answer correctly
+  without a rewrite.
+  Regression: `zig build test-sonny6266-planned-reverse-edge-props` (new),
+  and five `match_wrong` cases of `test-sonny2707-count-direction` now held
+  to the test's own walk, warm and after a checkpoint and reload.
 - **A variable-length MATCH returns one row per path, also through
   parallel edges and diamonds (SONNY-6264). User-visible: counts
   grow.** The traversal (`execution.PathIterator`, shared by the MATCH

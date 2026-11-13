@@ -475,16 +475,18 @@ const unbound_relationship_cases = [_]Case{
     .{ .q = "RETURN COUNT { (a:A)-[:S]-(b) } AS c", .oracle = "MATCH (a:A)-[:S]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "S", .start_label = "A" } },
     .{ .q = "RETURN COUNT { (a)-[:R]-(b:A) } AS c", .oracle = "MATCH (a)-[:R]-(b:A) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "R", .end_label = "A" } },
     // A property map on the relationship, and on the end node. MATCH is
-    // wrong for one: the persisted planned read answers 0 for an untyped
-    // relationship with a property map. (The legacy executor ignored the end
-    // node's property map behind an unlabelled start: SONNY-6265, fixed.)
+    // wrong for none now: the persisted planned read answered 0 for an
+    // incoming relationship with a property map (SONNY-6266, fixed), and the
+    // legacy executor ignored the end node's property map behind an
+    // unlabelled start (SONNY-6265, fixed).
     .{ .q = "RETURN COUNT { (a)-[r:R {w: 1}]->(b) } AS c", .oracle = "MATCH (a)-[r:R {w: 1}]->(b) RETURN count(*) AS c", .walk = .{ .dir = .out, .rel = "R", .w = 1 } },
-    .{ .q = "RETURN COUNT { (a)<-[{w: 2}]-(b) } AS c", .oracle = "MATCH (a)<-[{w: 2}]-(b) RETURN count(*) AS c", .walk = .{ .dir = .in, .w = 2 }, .match_wrong = true },
+    .{ .q = "RETURN COUNT { (a)<-[{w: 2}]-(b) } AS c", .oracle = "MATCH (a)<-[{w: 2}]-(b) RETURN count(*) AS c", .walk = .{ .dir = .in, .w = 2 } },
     .{ .q = "RETURN COUNT { (a)<-[:R]-(b:V {k: 4}) } AS c", .oracle = "MATCH (a)<-[:R]-(b:V {k: 4}) RETURN count(*) AS c", .walk = .{ .dir = .in, .rel = "R", .end_k = 4 } },
     // A WHERE inside the subquery, on the relationship and on both ends.
-    // The persisted planned read misses matches of an undirected pattern
-    // with a WHERE or a property map on the relationship.
-    .{ .q = "RETURN COUNT { (a:B)-[r]-(b) WHERE r.w >= 2 } AS c", .oracle = "MATCH (a:B)-[r]-(b) WHERE r.w >= 2 RETURN count(*) AS c", .walk = .{ .dir = .both, .start_label = "B", .w_min = 2 }, .match_wrong = true },
+    // The persisted planned read missed the reverse half of an undirected
+    // pattern with a WHERE or a property map on the relationship
+    // (SONNY-6266, fixed).
+    .{ .q = "RETURN COUNT { (a:B)-[r]-(b) WHERE r.w >= 2 } AS c", .oracle = "MATCH (a:B)-[r]-(b) WHERE r.w >= 2 RETURN count(*) AS c", .walk = .{ .dir = .both, .start_label = "B", .w_min = 2 } },
     .{ .q = "RETURN COUNT { MATCH (a)<-[r]-(b) WHERE a.k < b.k } AS c", .oracle = "MATCH (a)<-[r]-(b) WHERE a.k < b.k RETURN count(*) AS c" },
     // EXISTS, true and false, where only the direction decides.
     .{ .q = "RETURN EXISTS { (a:B)<-[:S]-(b:A) } AS e", .oracle = "MATCH (a:B)<-[:S]-(b:A) RETURN count(*) AS c", .kind = .exists, .walk = .{ .dir = .in, .rel = "S", .start_label = "B", .end_label = "A" } },
@@ -493,16 +495,16 @@ const unbound_relationship_cases = [_]Case{
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)<-[r]-(b) } AS c", .oracle = "MATCH (a:V)<-[r]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in }, .rows = .by_start },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) } AS c", .oracle = "MATCH (a:V)-[r]-(b) RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start, .match_wrong = true },
     .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[:R {w: 1}]->() } AS c", .oracle = "MATCH (a:V)-[:R {w: 1}]->() RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .out, .rel = "R", .w = 1 }, .rows = .by_start },
-    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) WHERE r.w = 2 } AS c", .oracle = "MATCH (a:V)-[r]-(b) WHERE r.w = 2 RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .w = 2 }, .rows = .by_start, .match_wrong = true },
+    .{ .q = "MATCH (a:V) RETURN a.k, COUNT { (a)-[r]-(b) WHERE r.w = 2 } AS c", .oracle = "MATCH (a:V)-[r]-(b) WHERE r.w = 2 RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .both, .w = 2 }, .rows = .by_start },
     .{ .q = "MATCH (b:V) RETURN b.k, COUNT { (a:A)<-[:R]-(b) } AS c", .oracle = "MATCH (a:A)<-[:R]-(b:V) RETURN b.k, count(*) AS c GROUP BY b.k", .drop_zero = true, .walk = .{ .dir = .in, .rel = "R", .start_label = "A" }, .rows = .by_end },
     .{ .q = "MATCH (a:V), (b:V) RETURN a.k, b.k, COUNT { (a)-[]-(b) } AS c", .oracle = "MATCH (a:V)-[]-(b:V) RETURN a.k, b.k, count(*) AS c GROUP BY a.k, b.k", .drop_zero = true, .walk = .{ .dir = .both }, .rows = .by_start_end, .match_wrong = true },
     .{ .q = "MATCH (a:V) WHERE EXISTS { (a)<-[:S]-() } RETURN a.k", .oracle = "MATCH (a:V)<-[:S]-() RETURN DISTINCT a.k", .walk = .{ .dir = .in, .rel = "S" }, .rows = .starts },
     .{ .q = "MATCH (a:V) WHERE EXISTS { (a)-[:S]-(:A) } RETURN a.k", .oracle = "MATCH (a:V)-[:S]-(:A) RETURN DISTINCT a.k", .walk = .{ .dir = .both, .rel = "S", .end_label = "A" }, .rows = .starts },
     // A pattern comprehension, incoming and undirected. The persisted planned
-    // read returns no group at all for the first oracle, and misses a match
-    // of the second.
-    .{ .q = "MATCH (a:V) RETURN a.k, size([(a)<-[r]-(b) WHERE r.w <= 2 | b.k]) AS n", .oracle = "MATCH (a:V)<-[r]-(b) WHERE r.w <= 2 RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in, .w_max = 2 }, .rows = .by_start, .match_wrong = true },
-    .{ .q = "RETURN size([(a:A)-[:R {w: 3}]-(b) | b.k]) AS n", .oracle = "MATCH (a:A)-[:R {w: 3}]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "R", .w = 3, .start_label = "A" }, .match_wrong = true },
+    // read returned no group at all for the first oracle, and missed a match
+    // of the second (SONNY-6266, fixed).
+    .{ .q = "MATCH (a:V) RETURN a.k, size([(a)<-[r]-(b) WHERE r.w <= 2 | b.k]) AS n", .oracle = "MATCH (a:V)<-[r]-(b) WHERE r.w <= 2 RETURN a.k, count(*) AS c GROUP BY a.k", .drop_zero = true, .walk = .{ .dir = .in, .w_max = 2 }, .rows = .by_start },
+    .{ .q = "RETURN size([(a:A)-[:R {w: 3}]-(b) | b.k]) AS n", .oracle = "MATCH (a:A)-[:R {w: 3}]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "R", .w = 3, .start_label = "A" } },
 };
 
 test "SONNY-2707 (2): COUNT {} and EXISTS {} over an unbound relationship agree with MATCH, in every direction" {

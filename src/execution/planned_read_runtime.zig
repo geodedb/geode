@@ -2993,7 +2993,8 @@ fn collectHopEdges(
                     .actual_to_slot = node_slot,
                     .next_slot = entry.neighbor,
                     .rel_type = entry.rel_type,
-                    .prop_head = entry.prop_head,
+                    // SONNY-6266: from the edge index (`edgePropHeadFromIndex`).
+                    .prop_head = try adapter.edgePropHeadFromIndex(graph_name, entry.neighbor, entry.edge_id, entry.prop_head),
                 });
             }
         },
@@ -3027,7 +3028,8 @@ fn collectHopEdges(
                     .actual_to_slot = node_slot,
                     .next_slot = entry.neighbor,
                     .rel_type = entry.rel_type,
-                    .prop_head = entry.prop_head,
+                    // SONNY-6266: from the edge index (`edgePropHeadFromIndex`).
+                    .prop_head = try adapter.edgePropHeadFromIndex(graph_name, entry.neighbor, entry.edge_id, entry.prop_head),
                 });
             }
         },

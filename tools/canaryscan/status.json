@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:24:47.800187888Z",
+  "generated_at": "2026-11-13T12:02:53.44576859Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79759,6 +79759,20 @@
       "features": [
         {
           "feature": "EdgeProperties",
+          "aspect": "IncomingAdjacencyPropHead",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EdgeProperties",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93591,7 +93605,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4879
+      "TESTED": 4880
     },
     "by_aspect": {
       "2PC": 3,
@@ -95335,6 +95349,7 @@
       "InboundOccupancySweeper": 1,
       "InboundReapCountForCapacity": 1,
       "InboundStreamReleasesWorker": 1,
+      "IncomingAdjacencyPropHead": 1,
       "IncrementalPathReachableOnWirePath": 1,
       "IncrementalRefresh": 1,
       "IncrementalSnapshot": 1,
