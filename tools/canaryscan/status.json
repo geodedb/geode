@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:18:19.202656943Z",
+  "generated_at": "2026-11-13T09:19:11.716322063Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85565,6 +85565,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6460-CLUSTER-TEST-ADDRESSES",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DisjointLoopbackAddresses",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_cluster_test_addresses.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_cluster_test_addresses.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6460-GQL-GROUP-OWNERSHIP",
       "features": [
         {
@@ -93237,7 +93256,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4857
+      "TESTED": 4858
     },
     "by_aspect": {
       "2PC": 3,
@@ -94191,6 +94210,7 @@
       "DisabledPolicy": 1,
       "DiscardGraphGrant": 1,
       "DiscoveryRows": 2,
+      "DisjointLoopbackAddresses": 1,
       "DiskEncryption": 1,
       "Dispatch": 11,
       "DispatchArm": 1,

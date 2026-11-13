@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6460-cluster-test-addresses", .reason = "intentionally red TDD reproduction (SONNY-6460 item 6); register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -15000,6 +15001,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_exec_inline_step = b.step("test-sonny6460-exec-inline", "Run src/exec.zig inline unit tests (grouping, HAVING, ORDER BY, set operations; SONNY-6460)");
     sonny6460_exec_inline_step.dependOn(&run_sonny6460_exec_inline_tests.step);
+
+    // SONNY-6460 item 6: every cluster test step binds loopback addresses no
+    // other test uses, so the aggregate can run them at the same time.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_cluster_test_addresses.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6460_addresses_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        b.step("test-sonny6460-cluster-test-addresses", "Run SONNY-6460 item 6 regression (each cluster test step - the steady-state and replicable-mutations subprocess clusters, the SONNY-6451/6453/6456 cluster steps, GAP-0838 peer TLS - names loopback addresses no other test source uses)").dependOn(&run_tests.step);
+    }
 
     const sonny6334_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6334_fle_authorization.zig"), .target = target, .optimize = optimize });
     sonny6334_test_mod.link_libc = true; // setenv/unsetenv/chmod
