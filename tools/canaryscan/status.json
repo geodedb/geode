@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:15:28.793902949Z",
+  "generated_at": "2026-11-13T13:16:28.3346265Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -35155,90 +35155,6 @@
     {
       "id": "REQ-GQL-086",
       "features": [
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "CtrlCCancelBuffer",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_CtrlCCancelBuffer"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "HistoryPersistence",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_HistoryPersistence"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "MetaCommandsBasic",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_MetaCommandsBasic"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "MultilineBuffering",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_MultilineBuffering"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "ReplLaunchPrompt",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_ReplLaunchPrompt"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "TxnPromptIndicator",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_TxnPromptIndicator"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
         {
           "feature": "Temporal Types",
           "aspect": "DateParsing",
@@ -93975,7 +93891,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4902
+      "TESTED": 4896
     },
     "by_aspect": {
       "2PC": 3,
@@ -94770,7 +94686,6 @@
       "Crypto": 1,
       "CryptoIndep": 1,
       "Cryptography": 1,
-      "CtrlCCancelBuffer": 1,
       "CudaDynamicLoader": 1,
       "CurrentGraphEquality": 1,
       "CurrentTenantEquality": 1,
@@ -95668,7 +95583,6 @@
       "HintExtraction": 1,
       "HistogramMaintenance": 1,
       "HistogramStats": 1,
-      "HistoryPersistence": 1,
       "HitCounter": 1,
       "HmacKeyFileVsTdeKeyExplained": 1,
       "HomogeneousDetection": 1,
@@ -96143,7 +96057,6 @@
       "Messaging": 1,
       "MetaCommand": 1,
       "MetaCommandDispatch": 1,
-      "MetaCommandsBasic": 1,
       "MetadataDerived": 3,
       "MetadataOwnership": 1,
       "MetadataReadOnly": 1,
@@ -96210,7 +96123,6 @@
       "MultiPropertyMergeIndexedProbe": 1,
       "MultiTenantSignal": 1,
       "MultiWayOptimization": 1,
-      "MultilineBuffering": 1,
       "MultipleNodeBinding": 1,
       "MultipleOptional": 1,
       "MultipleRoles": 1,
@@ -97163,7 +97075,6 @@
       "RepeatedTarget": 1,
       "ReplConfigXdg": 1,
       "ReplDispatchRegression": 1,
-      "ReplLaunchPrompt": 1,
       "ReplLoopError": 1,
       "ReplParseDelegation": 1,
       "ReplaceDefaultRefused": 1,
@@ -97863,7 +97774,6 @@
       "TxnGate": 1,
       "TxnGraph": 1,
       "TxnGraphHolds": 1,
-      "TxnPromptIndicator": 1,
       "TxnStatementCount": 1,
       "TypeAliases": 1,
       "TypeCastFunctions": 1,

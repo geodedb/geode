@@ -3575,10 +3575,6 @@ pub fn build(b: *std.Build) void {
     const selectivity_estimator_mod_tests = b.createModule(.{ .root_source_file = b.path("src/optimizer/selectivity_estimator.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("optimizer/selectivity_estimator.zig", selectivity_estimator_mod_tests);
 
-    // Interactive REPL module (launch prompt skeleton)
-    const repl_mod_tests = b.createModule(.{ .root_source_file = b.path("src/client/repl.zig"), .target = target, .optimize = optimize });
-    custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
-
     // Note: transport/quic comes through the geode module (root_mod) which already has it
     // No separate transport/quic import needed here to avoid duplicate module conflicts
 

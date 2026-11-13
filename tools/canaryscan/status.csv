@@ -2349,12 +2349,6 @@ REQ-GQL-084,SelectivityEstimator,FrequencySampler,TESTED,src/optimizer/selectivi
 REQ-GQL-084,String Types,CharPadComparison,TESTED,src/canary.zig,TestCANARY_REQ_GQL_084_CharPadComparison,,types,2025-09-27
 REQ-GQL-085,ParenthesizedSetOperations,ParserSupport,TESTED,src/gql/parser.zig,,,parser,2025-10-14
 REQ-GQL-085,String Types,VarcharBounds,TESTED,src/canary.zig,TestCANARY_REQ_GQL_085_VarcharBounds,,types,2025-09-27
-REQ-GQL-086,InteractiveRepl,CtrlCCancelBuffer,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_CtrlCCancelBuffer,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,HistoryPersistence,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_HistoryPersistence,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,MetaCommandsBasic,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_MetaCommandsBasic,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,MultilineBuffering,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_MultilineBuffering,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_ReplLaunchPrompt,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-23
 REQ-GQL-086,Temporal Types,DateParsing,TESTED,src/canary.zig,TestCANARY_REQ_GQL_086_DateParsing,,types,2025-09-27
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,src/eval.zig,,,eval,2025-10-14
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,src/eval/call_handlers.zig,,,eval,2025-10-14
