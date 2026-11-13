@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:25:16.285170703Z",
+  "generated_at": "2026-11-13T13:41:10.447843315Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70886,6 +70886,20 @@
       "features": [
         {
           "feature": "LegacyMatchExecutor",
+          "aspect": "NoFallbackSnapshot",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2681_read_view_snapshot_lifetime.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "LegacyMatchExecutor",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94430,7 +94444,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4925
+      "TESTED": 4926
     },
     "by_aspect": {
       "2PC": 3,
@@ -96730,6 +96744,7 @@
       "NoFabricatedResults": 1,
       "NoFakeOverheadMeasurement": 1,
       "NoFakePerformanceImpact": 1,
+      "NoFallbackSnapshot": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,
       "NoFixedSharedPaths": 1,

@@ -7859,7 +7859,11 @@ fn executeSingleHopEdgeTraversal(
                 row = try allocator.alloc(Value, items.len);
                 for (items, 0..) |item, i| {
                     // SONNY-6351 item 1: an item that fails frees the row.
-                    row[i] = eval.evalExpr(allocator, item.expr, env) catch |err| {
+                    // SONNY-2681: the rows borrow their cells, so what an
+                    // item computes (`a.s || '/' || b.s`) is lent from the
+                    // statement's scratch arena (`lentAllocator`); on
+                    // `allocator` nothing freed it.
+                    row[i] = eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env) catch |err| {
                         allocator.free(row);
                         return err;
                     };
@@ -9068,16 +9072,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // instead of the live store. The handler takes the graph read lock only
     // long enough to snapshot; by the time we get here the lock is dropped
     // and we read from the session's arena-owned store. When no session is
-    // installed this falls back to the live store + ReadView as before.
-    const writable_store = graph_store.getGlobalStore(allocator);
-
-    // Lightweight read view with epoch-based invalidation.
-    // Zero overhead when no concurrent writes (common case).
-    // Lazy deep-clone fallback when mutations detected (rare case).
-    var read_view = graph_store.ReadView.init(allocator, writable_store);
-    defer read_view.deinit();
-
-    const store = read_view.getReadStore();
+    // installed this reads the live store.
+    //
+    // CANARY: REQ=REQ-SONNY-2681-READ-VIEW-LIFETIME; FEATURE="LegacyMatchExecutor"; ASPECT=NoFallbackSnapshot; STATUS=TESTED; TEST=tests/test_sonny2681_read_view_snapshot_lifetime.zig; OWNER=engine; UPDATED=2026-11-13
+    // SONNY-2681: no `ReadView` here. Its fallback deep-copied the store
+    // whenever a write anywhere bumped the mutation epoch between its init
+    // and `getReadStore`, and freed the copy when this function returned,
+    // while the rows still held its nodes and property strings (and the
+    // shared projection and every caller read them afterwards). The copy
+    // gave no isolation either: the epoch is checked once, so a write after
+    // the check reached the live store's read all the same.
+    const store = graph_store.getGlobalStore(allocator);
     // SONNY-2679: the graph, tenant and RLS scope every traversal below applies
     // to each edge it walks and each node it reaches, not only to the start
     // node it scans.

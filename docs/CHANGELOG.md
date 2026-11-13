@@ -2161,6 +2161,19 @@
 
 ### Fixed
 
+- **Memory safety: the legacy MATCH executor no longer returns rows that
+  point into a freed snapshot (SONNY-2681).** The in-memory, tenant-scoped
+  and RLS-policy sessions read through a `ReadView` that deep-copied the
+  store whenever any write (to any graph or tenant) bumped the mutation
+  epoch between its creation and its first read, and freed the copy when
+  the read returned while its rows still held the copy's nodes and
+  strings (a use-after-free: a crash or garbage cells under concurrent
+  writes). The copy gave no isolation either (the epoch was checked once),
+  so the executor now reads the store `getGlobalStore` gives it. The
+  single-hop traversal also computed its RETURN items on the result's
+  allocator, which no one freed (`a.s || '/' || b.s` leaked per row); they
+  are lent from the statement's scratch arena as the other projections'
+  are. Regression: `zig build test-sonny2681-read-view-snapshot-lifetime`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE
