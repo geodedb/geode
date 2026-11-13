@@ -2189,6 +2189,18 @@
 
 ### Fixed
 
+- **`geode shell --plain` no longer drops non-ASCII text (SONNY-6484 item
+  2).** The plain-mode line reader kept only bytes 32-126, so every byte of
+  a multi-byte UTF-8 character, and a tab, vanished without a word:
+  `CREATE (:P {s: 'café'})` stored `'caf'`. Bytes pass through now;
+  Backspace erases a whole character; a line that is not valid UTF-8 is
+  refused (`Error: the line is not valid UTF-8; it was not run`) instead of
+  being sent. Not fixed: the interactive (TTY) editor still drops typed
+  non-ASCII keys (`keymap_emacs.zig`/`keymap_vi.zig` insert only 0x20-0x7e;
+  pasted text keeps it). Regression: `zig build test-sonny6484-shell-utf8`
+  (the real shell and server, 2-, 3- and 4-byte sequences and combining
+  marks through CREATE and RETURN, read back over QUIC).
+
 - **MCP language tools: three defects and two leaks found by running the
   inline tests of `src/mcp`, `src/storage/user_storage.zig` and
   `src/transactions/manager.zig` (SONNY-6484 item 1).** No step ran those
