@@ -169,10 +169,11 @@ writes no plaintext, and checks the durable overhead below 5% and the
 commit path's below 35% through `tests/perf_gate.zig` (reported by default,
 enforced in the scheduled perf-gates CI job).
 
-Not measured: reads that miss the buffer pool. With a pool smaller than the
-store, the encrypting engine loses committed node records (graph_storage
-0.4.10; `test-sonny6435-tde-small-pool-node-loss`, intentionally red), so a
-cold-read figure would time that defect. The layers above the engine
+Not measured yet: reads that miss the buffer pool (SONNY-6452). Until
+graph_storage 0.4.12 the encrypting engine lost the last 16 bytes of every
+encrypted page (SONNY-6441; regression
+`test-sonny6435-tde-small-pool-node-loss`), so no cold-read figure was
+taken. The layers above the engine
 (executor, query, network) do the same work in both arms and dilute the
 figure.
 

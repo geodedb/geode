@@ -422,8 +422,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=8a17e4080f77f45c6c9169682105dc31fef7ec8d#8a17e4080f77f45c6c9169682105dc31fef7ec8d",
-            .hash = "wal-0.1.22-EqPqppQ5BwBoP4VyV5UqOInJ4UWxA3xfjxdRTfixr7j-",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.23#e90dc1e949597cd17ec6d440820f59721c46cfe0",
+            .hash = "wal-0.1.23-EqPqpgZQBwAoa0xblHlawItWiYJwUHuPsLJskTkCehVi",
         },
 
         // Page-based graph storage engine
@@ -530,8 +530,8 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.11#7bd238b0bdde8d707e7307d0433fd133640bcbd0",
-            .hash = "graph_storage-0.4.11-9UyJSwIuLQD2C6OSWZFCg7lKXqa2keAnnDCuQoljHn-t",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.12#96fc205a1746e1494f0e5f92bb7b666b5cb970ac",
+            .hash = "graph_storage-0.4.12-9UyJS13yLQAnJ_yeBna03v22bnUkILYbZGda-HOqpaiZ",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -547,8 +547,8 @@
         // residual). After N consecutive failed elections the candidate now steps
         // down + backs off (Config.candidate_demote_threshold, default 4).
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=b80fd49f7bb445636b4c23d63e6f171b9ecc28dc#b80fd49f7bb445636b4c23d63e6f171b9ecc28dc",
-            .hash = "raft-0.1.21-PqJyvpinCADH3w-cgzAwsvA0eSk703D7J5yFyKr6TjJ0",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.22#b49eab52f131565f83ef96d2bdda913b04b9ed62",
+            .hash = "raft-0.1.22-PqJyvnenCACLqibpdGproIIctA3uEaUYC1WF5IziPoQS",
         },
 
         // =======================================================================
@@ -600,8 +600,8 @@
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.19#21e9df99bbbe3cc5244c166a06b81ac9e2d06eb3",
-            .hash = "timeseries_storage-0.2.19-5wzBJFBRFABkU8ecwbJRpnzGVRKIcXpz87_lY1F4kUgk",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.20#9b52189748a43f48df458bc3126cff2d151a7e0a",
+            .hash = "timeseries_storage-0.2.20-5wzBJNRSFAAC5RKVAhQm22TKlUa8qRACnjDboRbEdJnM",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{

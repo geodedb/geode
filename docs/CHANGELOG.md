@@ -4,6 +4,24 @@
 
 ### Security
 
+- **Encrypted (TDE) stores no longer lose committed records
+  (SONNY-6441; graph_storage 0.4.12).** The storage engine wrote the 16-byte
+  AES-GCM tag over the last 16 bytes of every encrypted page. At the default
+  8 KiB page size every node in the last slot of a node page (slot 169) lost
+  its label count and flags and usually read back as deleted, and the last
+  two incoming-edge heads of each directory page were lost; nothing errored
+  because the page still authenticated. Fixed in the engine; a tampered page
+  now fails instead of reading as empty. **Existing encrypted stores:** the
+  fixed version reads them, but bytes already lost are not recoverable
+  (affected nodes come back with a label count of zero; a deleted node in
+  that slot reappears) and there is no repair tool yet (SONNY-6452).
+  **No downgrade:** once pages are rewritten, older binaries fail with
+  `DecryptionFailed`. Regression: `zig build
+  test-sonny6435-tde-small-pool-node-loss` (now in the aggregate).
+- **Crash durability (SONNY-6424): wal v0.1.23, graph-storage v0.4.12,
+  raft v0.1.22, timeseries-storage v0.2.20.** The storage engine anchors its
+  WAL sequence at the last checkpoint on open, and the WAL keeps its
+  sequence file when compaction empties the log.
 - **BREAKING (operator): QUIC clients verify against the CA bundle they are
   given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
   (the cluster, Raft and 2PC peer path, which reads
