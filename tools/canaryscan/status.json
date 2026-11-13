@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:28:57.687102029Z",
+  "generated_at": "2026-11-13T09:30:01.148702201Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85584,6 +85584,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6460-FILTER-STATEMENT",
+      "features": [
+        {
+          "feature": "FilterStatement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6460-GQL-GROUP-OWNERSHIP",
       "features": [
         {
@@ -93289,7 +93308,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4860
+      "TESTED": 4861
     },
     "by_aspect": {
       "2PC": 3,
@@ -96408,7 +96427,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 299,
+      "Regression": 300,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
