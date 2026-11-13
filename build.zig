@@ -9613,6 +9613,16 @@ pub fn build(b: *std.Build) void {
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
     // design fix lands; compiled by test-compile.
+    // SONNY-2409: zeroed page headers and zeroed pages (page 0 included) fail
+    // labeled and unlabeled reads closed, with and without rebuilt indexes.
+    const sonny2409_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2409_zeroed_page_header.zig"), .target = target, .optimize = optimize });
+    sonny2409_test_mod.addImport("geode", root_mod);
+    const sonny2409_tests = b.addTest(.{ .root_module = sonny2409_test_mod });
+    const run_sonny2409_tests = b.addRunArtifact(sonny2409_tests);
+    shardDep(test_step, &run_sonny2409_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2409_step = b.step("test-sonny2409-zeroed-page-header", "Run SONNY-2409 regression (a node or property page whose header alone, or whole page, is zeroed fails labeled, unlabeled and count reads closed on a cold reopen, page 0 included, with the derived indexes loaded or rebuilt)");
+    sonny2409_step.dependOn(&run_sonny2409_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);
