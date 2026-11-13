@@ -548,8 +548,19 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.12#96fc205a1746e1494f0e5f92bb7b666b5cb970ac",
-            .hash = "graph_storage-0.4.12-9UyJS13yLQAnJ_yeBna03v22bnUkILYbZGda-HOqpaiZ",
+            // v0.4.13 (2026-11-13, SONNY-6461): `GraphEngine.repairAdjTailEntries`
+            // restores the adjacency-entry fields that stores written by <= 0.4.11
+            // with TDE lost to the page-tail tag (the last entry of a full v3
+            // block at 4 KiB, a full v1 block at 8 KiB) from the opposite-direction
+            // mirror, and reports what it cannot restore; `edge.legacyTailLoss`
+            // owns the loss table. Page checksums use hardware CRC32C (SSE4.2 /
+            // ARMv8 CRC, software fallback): an 8 KiB page ~15.6 us -> ~0.75 us on
+            // every buffer-pool miss and flush. Adds an offline `free_space.FreeStore`
+            // reader (`FreeSpaceManager.buffer_pool` is now `?*BufferPool`) and
+            // fixes the compare-bench zero-baseline PASS. No geode dependency
+            // other than geode itself consumes graph-storage (no diamond on it).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.13#df5fa574e41c382b87bc7c735cdca9f9e9866776",
+            .hash = "graph_storage-0.4.13-9UyJS1EnLwD40TjKwbxR6C62LWH7chWbCTeuHdfRqjKJ",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

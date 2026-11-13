@@ -152,14 +152,14 @@ storage engine geode opens every graph with, the same workload with page and
 WAL encryption off and on (one operation inserts a node with a 512-byte
 property and reads an earlier node's property), the two arms interleaved
 batch by batch, medians, built ReleaseFast with the production-default
-buffer pool. 2026-11-12, a shared and loaded 16-core Threadripper PRO 3955WX
-dev host:
+buffer pool. 2026-11-13, graph_storage 0.4.13, a shared and loaded 16-core
+Threadripper PRO 3955WX dev host (load average about 11):
 
 | Workload (WAL sync) | Plain | TDE | Overhead |
 | --- | --- | --- | --- |
-| `each_commit` (the default) | 53.3 ms/op | 53.7 ms/op | +0.7% (four runs: -1.3% to +0.7%) |
-| `deferred`, no checkpoint in the timed window | 151.9 us/op | 181.5 us/op | +19.5% (three runs: +19.5% to +21.0%) |
-| Reads that miss the buffer pool (8-page pool per shard) | 36.6 us/op | 10.1 us/op | -72.5% (two runs, 2026-11-13: -72.8% and -72.5%) |
+| `each_commit` (the default) | 54.6 ms/op | 55.1 ms/op | +1.1% (four runs: -0.5% to +1.9%) |
+| `deferred`, no checkpoint in the timed window | 136.7 us/op | 164.8 us/op | +20.6% (four runs: +18.7% to +20.9%) |
+| Reads that miss the buffer pool (8-page pool per shard) | 6.2 us/op | 9.8 us/op | +56.9% (four runs: +55.7% to +61.4%) |
 
 With an fsync per commit the encryption disappears in the disk latency on
 this host (an operation is three commits, about 18 ms per fsync). Without
@@ -176,14 +176,18 @@ checkpointed stores of 16000 nodes with a 512-byte property, an exact
 8-page pool per shard (auto-size off), one operation reads the property of a
 random node; the engines' own counters show 2.00 buffer-pool misses per
 read in both arms. The store files sit in the OS page cache, so this is the
-CPU cost of a miss, not disk latency. Encrypted misses cost less: a
-plaintext page is checked with CRC32C on every read, and the standard
-library's software CRC32C takes about 15.9 us per 8 KiB page on this host,
-while AES-256-GCM (hardware AES) takes about 2.5 us, and an encrypted page
-skips the CRC. The step checks the cold-read overhead below 10%. On a CPU
-without AES instructions the decrypt is slower and the figure differs. The
-layers above the engine (executor, query, network) do the same work in both
-arms and dilute every figure here.
+CPU cost of a miss, not disk latency. An encrypted miss decrypts the page
+(AES-256-GCM, hardware AES): about 1.8 us more per miss than a plaintext
+one, which only verifies the page's CRC32C. graph_storage 0.4.13 computes
+that CRC with the CPU's CRC32C instructions (SSE4.2 / ARMv8, software
+fallback; about 0.75 us per 8 KiB page instead of 15.6 us, by the library's
+own measurement), and an encrypted page skips it. Before 0.4.13 the
+software CRC made the plaintext miss the slower one (2026-11-13 with
+graph_storage 0.4.12: 36.6 against 10.1 us/op, -72.5%). The step checks the
+cold-read overhead below 80%. On a CPU without AES or CRC32C instructions
+both arms are slower and the figure differs. The layers above the engine
+(executor, query, network) do the same work in both arms and dilute every
+figure here.
 
 ## Security Properties
 
@@ -294,11 +298,14 @@ geode uses:
 | --- | --- | --- |
 | `nodes.store` | node in slot 169 of each page: `label_count`, `flags` (the deleted bit), `txn_stamp` | the node is present with label count 0 (its labels still read correctly); a deleted node in that slot is back; a node with no labels, properties or edges reads as absent |
 | `adj_in_dir.store` | the last two incoming-edge heads of each page (destination ids `1020p + 1018`, `1020p + 1019`) | incoming edges to those nodes from that shard are invisible; the outgoing side is intact |
-| adjacency chain blocks | an entry whose bytes reach the page end: the last v1 (24-byte) entry of a full 8 KiB block (`rel_type`, low half of `prop_head`) | that edge reads with the wrong type or properties |
+| adjacency chain blocks | the last entry of a full v1 (24-byte entry) block: entry 338 lost `rel_type` and `prop_head` (a v1 entry stores only its low 32 bits) | that edge reads with the wrong type and no properties: a typed MATCH misses it, and its properties, including the persisted public id of an edge written before inline edge ids, are unreachable |
 
-Property and variable-length stores, and slab adjacency blocks, kept the
-tail free and lost nothing. (4 KiB pages also lose the last v3 adjacency
-entry; geode does not use them.)
+v1 blocks are what stores kept before inline edge ids (graph_storage
+0.2.24); later blocks (v2/v3) end before the tail at 8 KiB. Property and
+variable-length stores, and slab adjacency blocks, kept the tail free and
+lost nothing. graph_storage's `edge.legacyTailLoss` is the table of which
+slot and bytes each entry format lost at each page size (at 4 KiB pages the
+last v3 entry, at 32 KiB v1 and v3, at 64 KiB v3; geode uses 8 KiB).
 
 **Before the first start of the new build:** stop the old server cleanly (a
 clean shutdown checkpoints; a WAL tail replayed by the new engine is not seen
@@ -317,12 +324,14 @@ It reads the store files without opening the store (unlike the
 directory's lock (stop the server), and prints one JSON report: per graph
 and shard, the pages still in the old format per store file
 (`old_format_pages`) and what they lost: `nodes_liveness_unknown`,
-`nodes_lost`, `in_dir_lost_heads` and `adjacency_entries`. Exit 0: nothing
-lost; exit 1: something lost, or old pages found and no key to read them.
+`nodes_lost`, `in_dir_lost_heads` and `adjacency_entries` (file, page,
+slot, edge id and neighbour of each damaged entry). Exit 0: nothing lost;
+exit 1: something lost, or old pages found and no key to read them.
 Without `GEODE_TDE_KEY` it can count old pages (their header carries no
 checksum of their body and no new-format flag) but not list the records.
 `adjacency_entries` reads blocks without consulting free space, so it can
-name a block on a freed page.
+name a block on a freed page; the repair walks only chains a node or a
+directory head reaches, so such an entry stays listed.
 
 **Repair:**
 
@@ -334,16 +343,34 @@ Offline: it takes the data directory's lock, refuses without
 `--i-have-a-backup` (exit 2) or without the key (exit 1), checks first (the
 `before` report, printed before anything is written), then repairs and checks
 again (`after`). Exit 0 when the `after` report is clean. Keep its output: it
-is the only record of the nodes whose liveness was lost. It restores:
+is the only record of the nodes whose liveness was lost. Per shard, in the
+order graph_storage's operations guide requires, it restores:
 
+- damaged adjacency entries, first and before any other write
+  (graph_storage 0.4.13 `repairAdjTailEntries`): every edge is stored twice,
+  in its source's outgoing chain and in an incoming chain keyed by its
+  destination, and only the last slot of a full block can have lost bytes,
+  so the lost fields are copied back from the other copy. geode never kept
+  the incoming copy's `prop_head` current when it set an edge property
+  after creating the edge, so before that the repair sets it from the edge
+  index the old build wrote at its clean shutdown, where the index provably
+  does not come from the damaged entry (`adjacency_mirrors_realigned`);
 - `label_count` of each slot-169 node, from the node's label block (stored
   elsewhere, intact), and its creation stamp (geode always writes 1);
+- the shard's live-node count, lowered by the nodes in `nodes_lost`
+  (`node_count_corrected`): it still counted them, and geode refuses to load
+  a graph whose shard holds fewer live nodes than it counts;
 - the incoming-edge directory and chains of every shard with old directory
-  pages, rebuilt from that shard's outgoing edges (graph_storage's
-  `migrateColocateInEdges`).
+  pages, rebuilt from that shard's outgoing edges, after the adjacency repair
+  (graph_storage's `migrateColocateInEdges`).
 
 It rewrites those pages in the new format; a page holding only a lost node
 is moved to the new format by rewriting another live node on it unchanged.
+The `repaired` summary counts each step (`nodes_repaired`,
+`adjacency_entries_repaired`, `adjacency_entries_unrepaired`,
+`in_dir_rebuilt_shards`, `in_dir_blocked_shards`, ...) and lists each
+adjacency entry it left, with graph_storage's reason, in
+`adjacency_unrepaired`. A second run finds nothing to do.
 
 **Not recoverable:**
 
@@ -355,11 +382,25 @@ is moved to the new format by rewriting another live node on it unchanged.
   delete the ones that should be gone.
 - A slot-169 node with no labels, properties or edges: its whole record was
   the lost bytes. It stays absent and is listed in `nodes_lost`.
-- A damaged adjacency chain entry (`adjacency_entries` in `adj_out` or
-  `adj_in`): no graph_storage API rewrites one entry of a block. The
-  directory of a shard with such an entry is not rebuilt either (it would
-  copy the damage over the intact incoming copy of the edge); the `repaired`
-  summary counts it under `in_dir_blocked_shards`.
+- An adjacency entry whose other copy cannot supply the lost bytes, listed
+  in `adjacency_unrepaired` with the reason: `mirror_in_tail` (the same edge
+  sits in the tail slot of both directions' full blocks, for example
+  parallel edges between the same two nodes, and both copies lost the same
+  bytes), `no_mirror` (no copy of the edge in the other direction on that
+  shard), `prop_head_not_mirrored` (the only other copy is a legacy `adj_in`
+  entry, whose property head is not kept current) or
+  `wide_head_in_narrow_entry`. The entry is left as it is, and the directory
+  of a shard with such an outgoing entry is not rebuilt (it would copy the
+  damage over the incoming copy; `in_dir_blocked_shards`).
+- The property head of a repaired outgoing entry when the edge index was
+  rebuilt from the damaged pages (the old build did not shut down cleanly,
+  or its index snapshot was missing): the head then comes from the incoming
+  copy, which for an edge geode created before setting its properties
+  still holds the head from creation, so the edge keeps its type but not
+  its properties.
+- An edge that an old build removed from a damaged full block: the removal
+  moved the block's damaged last entry into the freed slot, where nothing
+  marks it as damaged, so neither the check nor the repair can find it.
 
 **No downgrade.** A build with graph_storage 0.4.11 or older cannot read a
 page in the new format (`DecryptionFailed`), and the new build writes it on

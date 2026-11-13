@@ -5494,6 +5494,7 @@ REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,T
 REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,tests/test_sonny6451_raft_restarted_peer.zig,tests/test_sonny6451_raft_restarted_peer.zig,,distributed,2026-11-12
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
 REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR,Storage CLI,RepairsDerivableOldEnvelopeDamage,TESTED,src/cli/storage_cli.zig,tests/test_sonny6452_tde_page_tail_repair.zig,,storage,2026-11-13
+REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR,Storage CLI,RestoresAdjacencyEntriesFromMirror,TESTED,src/storage/tde_page_tail.zig,tests/test_sonny6452_tde_page_tail_repair.zig,,storage,2026-11-13
 REQ-SONNY-6452-TDE-PAGE-TAIL-VERIFY,Storage CLI,ReportsOldEnvelopePageDamage,TESTED,src/cli/storage_cli.zig,tests/test_sonny6452_tde_page_tail_repair.zig,,storage,2026-11-13
 REQ-SONNY-6453-HYGIENE,Docs,ComposePidsAndTestSteps,TESTED,tests/test_sonny6453_hygiene.zig,tests/test_sonny6453_hygiene.zig,,docs,2026-11-13
 REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP,DistributedCluster,ClusterListenerReapsDeadConnections,TESTED,tests/test_sonny6456_cluster_dead_conn_reap.zig,tests/test_sonny6456_cluster_dead_conn_reap.zig,,distributed,2026-11-13

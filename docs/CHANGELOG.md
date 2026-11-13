@@ -42,11 +42,14 @@
   test-sonny6435-tde-small-pool-node-loss` (now in the aggregate).
 - **TDE cold-read overhead measured (SONNY-6452 item 3).** `zig build
   test-sonny6435-tde-overhead` now also times reads that miss the buffer
-  pool (8-page pool per shard, 2.00 misses per read in both arms): -72.5%
-  on the dev host, i.e. encrypted misses are cheaper, because a plaintext
-  page read verifies a software CRC32C (about 15.9 us per 8 KiB page) that
-  an encrypted page (AES-256-GCM, about 2.5 us) skips. Published in
-  docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Measured overhead"; gated below +10%.
+  pool (8-page pool per shard, 2.00 misses per read in both arms). With
+  graph-storage v0.4.13 (hardware CRC32C) it is +55.7% to +61.4% on the dev
+  host (about 6.2 against 9.8 us per read): an encrypted miss decrypts the
+  page, a plaintext miss only checks its CRC. With 0.4.12's software CRC32C
+  (about 15.9 us per 8 KiB page) the plaintext miss was the slower one
+  (-72.5%). Published in docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Measured
+  overhead", with the other figures re-measured on 0.4.13; gated below
+  +80%.
 - **`geode storage verify --check tde-page-tail` and `geode storage repair
   --tde-page-tail` for encrypted stores written by graph_storage <= 0.4.11
   (SONNY-6452).** The check reads the store files without opening the store
@@ -64,6 +67,31 @@
   graph_storage 0.4.12". Regression: `zig build
   test-sonny6452-tde-page-tail-repair` (a store rewritten in the old page
   format).
+- **`geode storage repair --tde-page-tail` restores damaged adjacency
+  entries (SONNY-6452 item 1; graph-storage v0.4.13, SONNY-6461).** The last
+  entry of a full v1 adjacency block (stores from before inline edge ids)
+  lost its edge type and property head to the old page envelope, so the
+  edge read untyped and without properties. The repair now runs
+  graph_storage's `repairAdjTailEntries` first, which copies the lost
+  fields back from the same edge's entry in the other direction's chain,
+  then the node and directory repairs; the summary reports
+  `adjacency_entries_repaired` and lists each entry it could not repair,
+  with the reason, in `adjacency_unrepaired` (for example `mirror_in_tail`,
+  when both copies lost the same bytes). geode had never updated the
+  incoming copy's property head when it set an edge property, so the repair
+  first sets it from the edge index the old build wrote
+  (`adjacency_mirrors_realigned`); without that the edge would have been
+  restored with no properties and, for an edge without an inline id, no
+  public id. The repair also lowers a shard's live-node count by the nodes
+  it reports lost (`node_count_corrected`): geode refused to load a graph
+  whose shard counted more live nodes than it held, so a repaired store
+  with a lost node could not be opened. The check takes its table of lost
+  slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
+  test-sonny6452-tde-page-tail-repair`.
+- **graph-storage v0.4.13 (SONNY-6461).** Adds `repairAdjTailEntries`,
+  hardware CRC32C page checksums (an 8 KiB page about 15.6 us -> 0.75 us,
+  on every buffer-pool miss and flush), an offline `free.store` reader and
+  the compare-bench zero-baseline fix.
 - **Crash durability (SONNY-6424): wal v0.1.23, graph-storage v0.4.12,
   raft v0.1.22, timeseries-storage v0.2.20.** The storage engine anchors its
   WAL sequence at the last checkpoint on open, and the WAL keeps its

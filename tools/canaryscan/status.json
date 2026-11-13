@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:08:50.62490169Z",
+  "generated_at": "2026-11-13T13:27:03.911252819Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86190,6 +86190,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "Storage CLI",
+          "aspect": "RestoresAdjacencyEntriesFromMirror",
+          "status": "TESTED",
+          "files": [
+            "src/storage/tde_page_tail.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6452_tde_page_tail_repair.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -94411,7 +94425,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4924
+      "TESTED": 4925
     },
     "by_aspect": {
       "2PC": 3,
@@ -97645,6 +97659,7 @@
       "RestartApplyIdempotency": 1,
       "RestartSameMeaning": 1,
       "RestoreDataIntegrity": 1,
+      "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultGuard": 1,
       "ResultSerialization": 1,
       "ResultStreaming": 2,
