@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:14:31.577170821Z",
+  "generated_at": "2026-11-13T02:20:31.865995166Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84557,6 +84557,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-NUMERIC-KEY-PARITY",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "IntFloatEqualEndpointKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-RLS-RAW-TOKENIZE",
       "features": [
         {
@@ -92237,7 +92256,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4800
+      "TESTED": 4801
     },
     "by_aspect": {
       "2PC": 3,
@@ -94014,6 +94033,7 @@
       "InstallUnderStoreLock": 1,
       "Instrumentation": 1,
       "IntComparison": 1,
+      "IntFloatEqualEndpointKeys": 1,
       "IntOverflow": 1,
       "IntWidths": 1,
       "IntegerType": 1,

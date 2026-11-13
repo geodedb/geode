@@ -35,6 +35,15 @@
 // `lookupNodeByMergeKey[ForTenant]`), so `bulkInsertEdge` skipped an edge
 // the executor makes. Both decline now.
 //
+// SONNY-6447 item 5 extends it: endpoints whose key is a number held as an
+// integer by one node and as an equal float by another (`{k: 1}`,
+// `{k: 1.0}`). The executor's MATCH binds both (1 = 1.0) and a node MERGE
+// of either form finds the existing node; MERGE's index keeps them as one
+// key, while the exact property index the merge-edge resolver
+// (`lookupPublicNodeIdByLabelAndAllProps`) counts postings in keys each
+// form separately.
+//
+// CANARY: REQ=REQ-SONNY-6447-NUMERIC-KEY-PARITY; FEATURE="WriteFastPathParity"; ASPECT=IntFloatEqualEndpointKeys; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
 // CANARY: REQ=REQ-SONNY-6429-SOLE-HOLDER-TENANT; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderTenantRegression; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
 
 const std = @import("std");
@@ -472,11 +481,16 @@ const Who = enum { a, b, admin };
 const Fixture = struct {
     name: []const u8,
     runner: Who,
-    nodes: []const struct { who: Who, label: enum { P, Q }, t: []const u8 },
+    nodes: []const struct { who: Who, label: enum { P, Q }, t: []const u8, key: ?[]const u8 = null },
     /// SONNY-6436: the endpoints carry, and the statements match on, the
     /// registered composite merge key `{k, s}` (the merge-edge fast path
     /// resolves it in one composite-index probe).
     composite: bool = false,
+    /// SONNY-6447: the key the statements match on, when not the nodes'
+    /// (a node's `key` overrides the fixture's for it). A numeric fixture
+    /// also runs a node MERGE of `merge_key` and reports the `P` nodes.
+    match_key: ?[]const u8 = null,
+    merge_key: ?[]const u8 = null,
 };
 
 const fixtures = [_]Fixture{
@@ -527,6 +541,23 @@ const fixtures = [_]Fixture{
     .{ .name = "composite-sole", .runner = .admin, .composite = true, .nodes = &.{
         .{ .who = .admin, .label = .P, .t = "p" }, .{ .who = .admin, .label = .Q, .t = "q" },
     } },
+    // SONNY-6447 item 5: the source key held as 1 by one node and 1.0 by
+    // another, matched as 1 and as 1.0 (the executor binds both).
+    .{ .name = "num-int-and-float-match-int", .runner = .admin, .match_key = "k: 1", .merge_key = "k: 1.0", .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "pi", .key = "k: 1" }, .{ .who = .admin, .label = .P, .t = "pf", .key = "k: 1.0" },
+        .{ .who = .admin, .label = .Q, .t = "q", .key = "k: 1" },
+    } },
+    .{ .name = "num-int-and-float-match-float", .runner = .admin, .match_key = "k: 1.0", .merge_key = "k: 1", .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "pi", .key = "k: 1" }, .{ .who = .admin, .label = .P, .t = "pf", .key = "k: 1.0" },
+        .{ .who = .admin, .label = .Q, .t = "q", .key = "k: 1" },
+    } },
+    // Only the other form is held (the executor still binds it).
+    .{ .name = "num-float-held-match-int", .runner = .admin, .match_key = "k: 1", .merge_key = "k: 1", .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "pf", .key = "k: 1.0" }, .{ .who = .admin, .label = .Q, .t = "q", .key = "k: 1.0" },
+    } },
+    .{ .name = "num-int-held-match-float", .runner = .admin, .match_key = "k: 1.0", .merge_key = "k: 1.0", .nodes = &.{
+        .{ .who = .admin, .label = .P, .t = "pi", .key = "k: 1" }, .{ .who = .admin, .label = .Q, .t = "q", .key = "k: 1" },
+    } },
 };
 
 const Sessions = struct {
@@ -553,17 +584,24 @@ fn runFixture(aa: std.mem.Allocator, sessions: *Sessions, fx: Fixture, tag: []co
     // registers the composite merge key `{k, s}` (idempotent).
     if (fx.composite) try mustRun(aa, &sessions.admin, "MERGE (:Reg6436 {k: 1, s: 'x'})");
     for (fx.nodes) |n| {
-        const q = try std.fmt.allocPrint(aa, "CREATE (:{s}{s} {{{s}, t: '{s}'}})", .{ @tagName(n.label), tag, key, n.t });
+        const q = try std.fmt.allocPrint(aa, "CREATE (:{s}{s} {{{s}, t: '{s}'}})", .{ @tagName(n.label), tag, n.key orelse key, n.t });
         try mustRun(aa, sessions.get(n.who), q);
     }
     const runner = sessions.get(fx.runner);
-    const stmts = [_][]const u8{
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) CREATE (a)-[:E]->(b)", .{ tag, key, tag, key }),
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, key, tag, key }),
-        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, key, tag, key }),
-    };
+    const mk = fx.match_key orelse key;
+    var stmts: std.ArrayList([]const u8) = .empty;
+    try stmts.appendSlice(aa, &.{
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) CREATE (a)-[:E]->(b)", .{ tag, mk, tag, mk }),
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, mk, tag, mk }),
+        try std.fmt.allocPrint(aa, "MATCH (a:P{s} {{{s}}}), (b:Q{s} {{{s}}}) MERGE (a)-[:M]->(b)", .{ tag, mk, tag, mk }),
+    });
+    // SONNY-6447: a node MERGE of the other numeric form, and the P nodes.
+    if (fx.merge_key) |m| {
+        try stmts.append(aa, try std.fmt.allocPrint(aa, "MERGE (:P{s} {{{s}}})", .{ tag, m }));
+        try stmts.append(aa, try std.fmt.allocPrint(aa, "MATCH (p:P{s}) RETURN coalesce(p.t, 'merged')", .{tag}));
+    }
     var out: std.ArrayList(u8) = .empty;
-    for (stmts, 0..) |stmt, i| {
+    for (stmts.items, 0..) |stmt, i| {
         if (route == .transaction) {
             var began = try runner.begin(testing.allocator);
             began.deinit(testing.allocator);
