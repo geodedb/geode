@@ -155,10 +155,11 @@ batch by batch, medians, built ReleaseFast with the production-default
 buffer pool. 2026-11-12, a shared and loaded 16-core Threadripper PRO 3955WX
 dev host:
 
-| WAL sync | Plain | TDE | Overhead |
+| Workload (WAL sync) | Plain | TDE | Overhead |
 | --- | --- | --- | --- |
 | `each_commit` (the default) | 53.3 ms/op | 53.7 ms/op | +0.7% (four runs: -1.3% to +0.7%) |
 | `deferred`, no checkpoint in the timed window | 151.9 us/op | 181.5 us/op | +19.5% (three runs: +19.5% to +21.0%) |
+| Reads that miss the buffer pool (8-page pool per shard) | 36.6 us/op | 10.1 us/op | -72.5% (two runs, 2026-11-13: -72.8% and -72.5%) |
 
 With an fsync per commit the encryption disappears in the disk latency on
 this host (an operation is three commits, about 18 ms per fsync). Without
@@ -169,13 +170,20 @@ writes no plaintext, and checks the durable overhead below 5% and the
 commit path's below 35% through `tests/perf_gate.zig` (reported by default,
 enforced in the scheduled perf-gates CI job).
 
-Not measured yet: reads that miss the buffer pool (SONNY-6452). Until
-graph_storage 0.4.12 the encrypting engine lost the last 16 bytes of every
-encrypted page (SONNY-6441; regression
-`test-sonny6435-tde-small-pool-node-loss`), so no cold-read figure was
-taken. The layers above the engine
-(executor, query, network) do the same work in both arms and dilute the
-figure.
+Reads that miss the buffer pool (SONNY-6452; taken once graph_storage
+0.4.12 stopped losing the last 16 bytes of encrypted pages, SONNY-6441): two
+checkpointed stores of 16000 nodes with a 512-byte property, an exact
+8-page pool per shard (auto-size off), one operation reads the property of a
+random node; the engines' own counters show 2.00 buffer-pool misses per
+read in both arms. The store files sit in the OS page cache, so this is the
+CPU cost of a miss, not disk latency. Encrypted misses cost less: a
+plaintext page is checked with CRC32C on every read, and the standard
+library's software CRC32C takes about 15.9 us per 8 KiB page on this host,
+while AES-256-GCM (hardware AES) takes about 2.5 us, and an encrypted page
+skips the CRC. The step checks the cold-read overhead below 10%. On a CPU
+without AES instructions the decrypt is slower and the figure differs. The
+layers above the engine (executor, query, network) do the same work in both
+arms and dilute every figure here.
 
 ## Security Properties
 
