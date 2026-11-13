@@ -352,13 +352,11 @@ pub const Peer = struct {
     id: u64,
     endpoint: []const u8,
     port: u16,
-    alive: bool,
     /// Wall-clock ms of the last authenticated raft frame from this peer
     /// (start time until the first). SONNY-6459: written by the cluster's
     /// inbound handlers (`ClusterCoordinator.noteHeardFrom`) while other
     /// threads read it, so access it with `@atomicLoad` / `@atomicStore`.
     last_contact: i64,
-    rpc_client: ?*RpcClient,
 };
 
 pub const Statistics = struct {
@@ -498,33 +496,6 @@ const test_quic = struct {
     pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 {
         if (useReal()) return real_quic.resolveHostIpAlloc(allocator, host);
         return allocator.dupe(u8, host);
-    }
-};
-
-pub const RpcClient = struct {
-    allocator: Allocator,
-    host: []const u8,
-    port: u16,
-    client: ?quic.QuicClient = null,
-    stream: ?*quic.QuicClientStream = null,
-
-    pub fn deinit(self: *RpcClient) void {
-        if (self.stream) |s| s.deinit();
-        if (self.client) |*c| c.deinit();
-        self.stream = null;
-        self.client = null;
-    }
-
-    // SEC-D011: TLS-aware connection establishment for Raft RPC.
-    // CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=RpcClientConnect; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
-    pub fn sendMessage(self: *RpcClient, from: u64, term: u64, msg: Message) !void {
-        if (self.client == null) {
-            var qc = quic.QuicClient.init(self.allocator);
-            try connectWithTLS(&qc, self.host, self.port);
-            self.client = qc;
-            self.stream = try self.client.?.getStream();
-        }
-        try writeRaftFrame(self.allocator, self.stream.?, from, term, msg);
     }
 };
 
@@ -3629,9 +3600,7 @@ pub const RaftNode = struct {
                 .id = p.id,
                 .endpoint = p.endpoint,
                 .port = p.port,
-                .alive = p.alive,
                 .last_contact = @atomicLoad(i64, &p.last_contact, .monotonic),
-                .rpc_client = p.rpc_client,
             };
         }
         return null;
@@ -4494,9 +4463,7 @@ test "raft_consensus: Transport.send uses TLS-aware connection" {
         .id = 1,
         .endpoint = "127.0.0.1",
         .port = 7890,
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
 
     // In test mode the QUIC stubs are no-ops; writeRaftFrame uses the stub stream.

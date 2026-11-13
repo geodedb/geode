@@ -532,7 +532,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-grpc-shutdown-drain", .reason = "subprocess e2e (SIGTERM with an in-flight gRPC query); promotion owes a green run" },
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
-    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "flaky: the SONNY-3368 QUIC abandoned-join check (server idle within 100 s of the client leaving) failed 3 of 7 runs on a loaded host; the seed timeout is fixed (SONNY-738); KNOWN_TEST_ISSUES" },
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
@@ -3578,10 +3577,6 @@ pub fn build(b: *std.Build) void {
     const selectivity_estimator_mod_tests = b.createModule(.{ .root_source_file = b.path("src/optimizer/selectivity_estimator.zig"), .target = target, .optimize = optimize });
     custom_tests.root_module.addImport("optimizer/selectivity_estimator.zig", selectivity_estimator_mod_tests);
 
-    // Interactive REPL module (launch prompt skeleton)
-    const repl_mod_tests = b.createModule(.{ .root_source_file = b.path("src/client/repl.zig"), .target = target, .optimize = optimize });
-    custom_tests.root_module.addImport("client/repl.zig", repl_mod_tests);
-
     // Note: transport/quic comes through the geode module (root_mod) which already has it
     // No separate transport/quic import needed here to avoid duplicate module conflicts
 
@@ -5968,6 +5963,69 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny3390-quic-disconnect-cancels-read", "Run SONNY-3390 regression (a real geode serve: a client that closes its QUIC connection (CONNECTION_CLOSE) 1 s into a comma join whose WHERE keeps nothing leaves the server idle within 20 s, well before the 60 s stall watchdog, and the server answers a new connection)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6466: an abandoned QUIC read stops promptly — a client that
+    // vanishes without CONNECTION_CLOSE (at GEODE_QUIC_STALL_CANCEL_MS, not
+    // hidden by another connection from its address) and a client that closes
+    // while its read runs on a sibling stream.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6466_abandoned_read_cancel.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6466-abandoned-read-cancel", "Run SONNY-6466 regression (a real geode serve, a comma join that runs for minutes: a client that vanishes without CONNECTION_CLOSE has its read cancelled at GEODE_QUIC_STALL_CANCEL_MS (10 s here; idle within 30 s) although another connection from its address stays open and keeps answering; a client that closes while its read runs on a sibling stream, after the first stream ended, leaves the server idle within 20 s)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6466 item 2: a FOR statement with a write body is atomic.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6466_for_statement_atomicity.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6466-for-statement-atomicity", "Run SONNY-6466 item 2 regression (a real geode serve over QUIC: a FOR whose CREATE or MATCH ... SET body fails at its third element leaves nothing of the earlier elements, also after a restart; ISO/IEC 39075:2024 4.9.3, 14.8)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-3383: a refused COMMIT is unambiguous on the QUIC wire.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3383_commit_refused_wire.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3383-commit-refused-wire", "Run SONNY-3383 engine-side regression (a real geode serve over QUIC: a COMMIT of a transaction whose statement failed answers CommitResponse success=false with SQLSTATE 40000 and keeps nothing; an accepted COMMIT answers success=true with no error)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6476 item 2: the plain shell runs a line longer than 4,095 bytes.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6476_shell_long_line.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6476-shell-long-line", "Run SONNY-6476 item 2 regression (the real geode shell --plain against a real server runs a 6,000-byte statement whole: no 4,095-byte truncation)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6463 (5): source files outside src/distributed whose inline tests
     // no step ran. Each file is its own test root (its inline tests only).
     {
@@ -5983,6 +6041,8 @@ pub fn build(b: *std.Build) void {
             "src/tools/bulk_loader.zig",
             "src/cli/tenant_cli.zig",
             "src/transactions/range_tracker.zig",
+            "src/std_shim.zig", // with src/policy.zig, which only it imports
+            "src/gpu/performance_profiler.zig",
         }) |path| {
             const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
             const tests = b.addTest(.{ .root_module = mod });
@@ -6302,20 +6362,13 @@ pub fn build(b: *std.Build) void {
     }
     const distributed_inline_tests = b.addTest(.{
         .root_module = distributed_inline_mod,
-        // twophase.zig: every test except the two that call
-        // `TwoPCCoordinator.handleMessage`, which cannot compile (protobuf
-        // 0.1.6 cannot decode TwoPhaseMessage's union submessages).
+        // twophase.zig: every test (SONNY-6463 removed the two that called
+        // `TwoPCCoordinator.handleMessage`, which could not compile).
         .filters = &.{
             "distributed.raft_consensus.test.",
             "distributed.cluster.test.",
             "distributed.cluster_auth.test.",
-            "distributed.twophase.test.applyUndoOperation ",
-            "distributed.twophase.test.Transaction.",
-            "distributed.twophase.test.getClusterToken ",
-            "distributed.twophase.test.prepare message ",
-            "distributed.twophase.test.2PC nonce generation ",
-            "distributed.twophase.test.captureNodePreImage ",
-            "distributed.twophase.test.captureEdgePreImage ",
+            "distributed.twophase.test.",
         },
     });
     const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);
@@ -11866,7 +11919,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny3232_tests = b.addRunArtifact(sonny3232_tests);
     spawnsBuiltGeode(sonny3232_tests);
     shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
+    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351: quic v0.1.47 keeps lost STREAM data until retransmitted), one past the 16 MiB maximum is not; the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
     // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the
@@ -12662,6 +12715,8 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         spawnsBuiltGeode(tests);
+        // SONNY-6466: back in the aggregate (7 of 7 runs alone).
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4-transport", "Run the Task W round 4a regression over gRPC (in process) and QUIC (a spawned server): the round-3 review's PROFILE repros are refused (0A000) with nothing written; MERGE actions and later chains read the statement's variables (go/oidc ClaimJTI replay, TOTP); a SET swap swaps; an unsupplied parameter is refused (42P02) on every path, the QUIC MERGE fast path too; the parser's limits answer 54000 and 54001");
         step.dependOn(&run_tests.step);
     }
@@ -14958,12 +15013,75 @@ pub fn build(b: *std.Build) void {
             "sonny1835_sibling_stream_unbound_refuse_predicate",
             "sonny1837_sibling_idle_reap_override_predicate",
             "sonny1841_request_cancel_by_stream_id",
+            // SONNY-6466: the registry's own cases (connection grouping, the
+            // per-connection and process-wide cancels), which no step ran.
+            "Registry ",
+            "GAP-0895",
+            "GAP-ENT-0045",
+            "SONNY-6466",
         },
     });
     const run_sonny_quic_stream_tests = b.addRunArtifact(sonny_quic_stream_tests);
-    const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id)");
+    const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id) and the proto-reader registry's cases (per-connection stall grouping by connection identity, SONNY-6466; the per-connection and process-wide cancels)");
     sonny_quic_stream_step.dependOn(&run_sonny_quic_stream_tests.step);
     shardDep(test_step, &run_sonny_quic_stream_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6463 (5), second batch: live files whose inline tests no step
+    // ran because the build only ever imports them as NAMED modules or
+    // compiles them into an executable (Zig collects a test block from the
+    // test root's own module only). Each gets a test root that copies the
+    // import table the build already gives the file, so it compiles exactly
+    // as it ships; the CLI files and the fuzz harness copy geode_exe's.
+    // Not yet here (their inline tests fail; SONNY-6463 follow-up): the MCP
+    // files (src/sonny6463_mcp_test_root.zig: 52 pass, 3 fail, 1 leak),
+    // src/storage/user_storage.zig (7 pass, 1 fail) and
+    // src/transactions/manager.zig (6 pass, 2 fail).
+    {
+        const sonny6463b_step = b.step("test-sonny6463-inline-wired", "Run SONNY-6463 item 5 (second batch): the inline tests of live files the build imports only as named modules or executable sources, each rooted with the import table the build gives it");
+        const Root = struct { name: []const u8, path: ?[]const u8 = null, from: *std.Build.Module, exe: bool = false };
+        for ([_]Root{
+            .{ .name = "thread-pool", .from = thread_pool_mod },
+            .{ .name = "thread-pool-parallel", .from = parallel_wrapper_mod },
+            .{ .name = "logging", .from = logging_mod },
+            .{ .name = "fle-hkdf", .from = fle_hkdf_mod },
+            .{ .name = "fle-hmac", .from = fle_hmac_mod },
+            .{ .name = "fle-key-manager", .from = fle_key_manager_mod },
+            .{ .name = "fle-blind-index", .from = fle_blind_index_mod },
+            .{ .name = "cli-auth-helpers", .path = "src/cli/cli_auth_helpers.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "auth-init-cli", .path = "src/cli/auth_init_cli.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "cli-backup-dispatcher", .path = "src/sonny6463_cli_test_root.zig", .from = geode_exe.root_module, .exe = true },
+            .{ .name = "fuzz-main", .path = "src/fuzz/main.zig", .from = geode_exe.root_module, .exe = true },
+        }) |entry| {
+            const mod = b.createModule(.{
+                .root_source_file = if (entry.path) |p| b.path(p) else entry.from.root_source_file,
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            });
+            var it = entry.from.import_table.iterator();
+            while (it.next()) |imp| mod.addImport(imp.key_ptr.*, imp.value_ptr.*);
+            if (entry.exe) {
+                if (enable_openssl) {
+                    mod.linkSystemLibrary("ssl", .{});
+                    mod.linkSystemLibrary("crypto", .{});
+                }
+                if (target.result.os.tag == .linux and (is_native or enable_openssl)) mod.linkSystemLibrary("dl", .{});
+            }
+            const tests = b.addTest(.{ .name = b.fmt("sonny6463-{s}", .{entry.name}), .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463b_step.dependOn(&run_tests.step);
+        }
+        // backup.zig is imported by the geode module it itself imports, so a
+        // second module rooted at it would own the file twice: its own module
+        // is the test root.
+        for ([_]*std.Build.Module{storage_backup_mod}) |mod| {
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463b_step.dependOn(&run_tests.step);
+        }
+    }
 
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
     const gap0929_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0929_geode_port.zig"), .target = target, .optimize = optimize });

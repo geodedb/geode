@@ -141,26 +141,31 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
 
     var coords_storage: [3]*ClusterCoordinator = undefined;
     var alive: usize = 0;
-    errdefer {
-        for (coords_storage[0..alive]) |c| {
-            c.deinit();
-            a.destroy(c);
+    // SONNY-6463: the cleanup of a partial setup is scoped to the setup.
+    // It used to be a function-level errdefer beside the `defer` below, so
+    // any failed assertion later deinitialized every coordinator twice and
+    // the test died with a segfault instead of reporting the assertion.
+    {
+        errdefer {
+            for (coords_storage[0..alive]) |c| {
+                c.deinit();
+                a.destroy(c);
+            }
         }
-    }
-
-    for (0..3) |i| {
-        const cfg = ClusterCoordinator.Config{
-            .peers = peer_lists[i][0..],
-            .listen_address = "127.0.0.1",
-            .cluster_port = ports[i],
-            .cluster_token = "test-show-cluster-status",
-            .cluster_name = "test-cluster",
-            .election_timeout_ms = 250,
-        };
-        coords_storage[i] = try a.create(ClusterCoordinator);
-        errdefer a.destroy(coords_storage[i]);
-        coords_storage[i].* = try ClusterCoordinator.init(a, @intCast(i + 1), cfg);
-        alive += 1;
+        for (0..3) |i| {
+            const cfg = ClusterCoordinator.Config{
+                .peers = peer_lists[i][0..],
+                .listen_address = "127.0.0.1",
+                .cluster_port = ports[i],
+                .cluster_token = "test-show-cluster-status",
+                .cluster_name = "test-cluster",
+                .election_timeout_ms = 250,
+            };
+            coords_storage[i] = try a.create(ClusterCoordinator);
+            errdefer a.destroy(coords_storage[i]);
+            coords_storage[i].* = try ClusterCoordinator.init(a, @intCast(i + 1), cfg);
+            alive += 1;
+        }
     }
     defer {
         for (coords_storage) |c| {
@@ -245,13 +250,19 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
     var seen_self_row = false;
     for (res.rows) |row| {
         // node_id is Int, role is Str, term is Int, leader_id is Int,
-        // endpoint is Str, last_contact_ms is Int.
+        // endpoint is Str. last_contact_ms is 0 for this node and NULL for
+        // a peer never heard from (SONNY-6463): raft runs over the
+        // in-process transport here, so no cluster frame ever arrives.
         try std.testing.expect(row[0] == .Int);
         try std.testing.expect(row[1] == .Str);
         try std.testing.expect(row[2] == .Int);
         try std.testing.expect(row[3] == .Int);
         try std.testing.expect(row[4] == .Str);
-        try std.testing.expect(row[5] == .Int);
+        if (row[0].Int == @as(i64, @intCast(leader.?.node_id))) {
+            try std.testing.expectEqual(@as(i64, 0), row[5].Int);
+        } else {
+            try std.testing.expect(row[5] == .Null);
+        }
 
         const role_str = row[1].Str;
         if (std.mem.eql(u8, role_str, "leader")) {
@@ -285,6 +296,22 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
     for (res.rows) |row| {
         try std.testing.expect(row[2].Int >= 1);
     }
+
+    // SONNY-6463: once a peer has been heard from (the cluster's inbound
+    // handlers store the frame's time in `last_contact`), its row reports
+    // the time since, not NULL.
+    const heard = &leader.?.raft.peers[0];
+    @atomicStore(i64, &heard.last_contact, nowMillis() - 1500, .monotonic);
+    var res2 = try admin_ddl.executeShowClusterStatus(a, ctx);
+    defer res2.deinit(a);
+    var saw_heard = false;
+    for (res2.rows) |row| {
+        if (row[0].Int != @as(i64, @intCast(heard.id))) continue;
+        saw_heard = true;
+        try std.testing.expect(row[5] == .Int);
+        try std.testing.expect(row[5].Int >= 1500 and row[5].Int < 60_000);
+    }
+    try std.testing.expect(saw_heard);
 
     _ = value_types; // touch the import so unused-import lint is quiet if
     // the file is ever stripped of explicit Value typings.

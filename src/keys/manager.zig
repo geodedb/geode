@@ -182,7 +182,10 @@ pub fn currentKeyVersion(manager: *KeyManager, key_path: []const u8) u16 {
     return manager.key_versions.get(key_path) orelse 1;
 }
 
-pub fn cacheStats(manager: *KeyManager) struct { hits: u64, misses: u64 } {
+/// SONNY-6463: the fle KeyManager's own stats type (an anonymous struct
+/// declared there; one declared here is a different type, so this did not
+/// compile once a caller, the inline test, used it).
+pub fn cacheStats(manager: *KeyManager) @typeInfo(@TypeOf(KeyManager.cacheStats)).@"fn".return_type.? {
     return manager.cacheStats();
 }
 

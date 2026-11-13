@@ -9,7 +9,7 @@
 // adapter sub-operation committed on its own, a node on whichever shard
 // round-robin gave it, so `CREATE (:A {i: 1})-[:E]->(:B {i: 1})` committed
 // about seven transactions (seven fsyncs, on seven shards). A FOR body runs
-// its CREATE that way once per element: the 1,500-element seed of
+// its CREATE that way once per element: the 1,499-element seed of
 // `test-sonny-write-allowlist-r4-transport` committed ~10,500 transactions
 // and took 190 s against a spawned server on an ext4 data dir, past the QUIC
 // test client's 120 s reply cap.

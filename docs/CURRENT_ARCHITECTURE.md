@@ -771,7 +771,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | txn | Transaction management | ~5 | manager.zig (680) |
 | types | Advanced data types | ~15 | evaluator_functions.zig (1,271), geographic.zig (853), vector.zig (597) |
 | unicode | Unicode support | - | - |
-| util | Utility functions | ~10 | text_formatter.zig (948), yaml.zig (686), yaml_test.zig (525) |
+| util | Utility functions | 1 | feature_flags.zig (76) |
 | utils | Additional utilities | - | - |
 | wal | Write-ahead logging | ~5 | wal.zig (840) |
 

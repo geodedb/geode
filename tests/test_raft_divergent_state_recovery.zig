@@ -140,9 +140,7 @@ fn seedDivergentTerm(
         .id = if (id == 1) 2 else 1,
         .endpoint = "127.0.0.1",
         .port = 21099,
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
 
     var node = try RaftNode.initWithStorageDir(allocator, id, peers, 250, raft_dir);

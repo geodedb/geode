@@ -2189,6 +2189,91 @@
 
 ### Fixed
 
+- **QUIC: a read a client abandons stops promptly (SONNY-6466).** A client
+  that closed its connection (CONNECTION_CLOSE) while its read ran on a
+  sibling stream, after the connection's first stream had ended, kept a
+  server core busy until the per-connection stall watchdog (60 s): the
+  accept reactor set the connection's cancel flag only while the first
+  stream still owned the connection. Every read on a drained connection is
+  now cancelled at its next row. A client that vanishes without
+  CONNECTION_CLOSE is bounded by that watchdog, which grouped streams by the
+  peer's IP: any other open connection from the same address (every client
+  behind one NAT, every loopback client) hid the abandoned read — the
+  regression stayed busy past 75 s — and could have its own reads cancelled
+  with it. It now groups by connection, and its threshold is configurable:
+  **`GEODE_QUIC_STALL_CANCEL_MS`** (default 60000, 1000-3600000; checked
+  every 5 s). It also caps a single read that runs that long on a connection
+  with no other stream reading, so set it above your longest read. The
+  vendored quic v0.1.49 sends no PINGs and does not enforce the idle timeout
+  it advertises, so a silent live client and a vanished one cannot be told
+  apart sooner. Test clients (`QuicProtoClient.deinit`) now send
+  CONNECTION_CLOSE (SONNY-6475 item 2; `abandon()` vanishes instead), and
+  `test-sonny-write-allowlist-r4-transport` (SONNY-3368's abandoned join)
+  runs in the aggregate again. Regression: `zig build
+  test-sonny6466-abandoned-read-cancel`.
+- **`range(start, end[, step])` is documented as what it is: a Geode
+  extension with an exclusive end (SONNY-6466 item 3).** ISO/IEC 39075:2024
+  defines no `range` function, yet the language metadata (LSP hover and
+  completion) labelled it ISO GQL, and no document stated whether its end
+  is included. It is half-open, as in Python: `range(1, 1500)` has 1,499
+  elements, `range(1, 7, 2)` is `[1, 3, 5]`. openCypher's `range()` includes
+  its end, so a query ported from Cypher must move the end by one step. The
+  behaviour is unchanged (not breaking); the metadata now says "Geode
+  extension", docs/TYPES_AND_FUNCTIONS.md, docs/GQL_COMPLIANCE.md and
+  docs/API_REFERENCE_GENERATED.md state the contract, and the tests that
+  called a `range(1, 1500)` seed "1,500 pairs" say 1,499.
+- **`geode shell --plain` runs a line longer than 4,095 bytes whole
+  (SONNY-6476 item 2).** The plain-mode reader used a fixed 4,096-byte line
+  buffer and cut a longer line without a word: the first 4,095 bytes ran as
+  one statement and the rest as another. The line now grows as it is read,
+  up to 16 MiB (the server's largest request); a longer line is refused
+  whole with an error. Regression: `zig build
+  test-sonny6476-shell-long-line`.
+- **macOS/BSD: the CLI session fingerprint reads the uid through libc
+  (SONNY-6476 item 3).** `getSystemFingerprint` called the Linux `getuid`
+  syscall on every non-Windows target. Regression: the inline test in
+  `src/cli/security/session_storage.zig` (`zig build test-sonny6463-inline`).
+- **`test-transport-parity` no longer depends on a leftover data directory
+  (SONNY-6476 item 1).** The varlen dataset parity smoke ran against the
+  fixed relative `./data/varlen_determinism`, which outlived every run; a
+  store left there with other credentials failed the step (11/12), and the
+  "curated dataset" was never seeded, so it compared two empty answers. It
+  now seeds its dataset into a fresh temporary directory and asserts the
+  rows.
+- **Inline tests of 15 more live files now run (SONNY-6463 item 5).** The
+  build imports them only as named modules or compiles them into an
+  executable, so no test root collected their tests. `zig build
+  test-sonny6463-inline-wired` (in the aggregate) roots each with the import
+  table the build gives it: the thread pool and its parallel wrapper,
+  logging, the FLE HKDF/HMAC/key-manager/blind-index wrappers, the storage
+  backup module, the CLI auth helpers and auth init, `backup_cli.zig` and
+  `cli_dispatcher.zig` (through `src/sonny6463_cli_test_root.zig`), and the
+  fuzz harness; `test-sonny6463-inline` gains `std_shim.zig` (with
+  `policy.zig`) and the GPU profiler. Fixed on the way: the profiler and the
+  thread pool's tests used `std.time.nanoTimestamp` / `std.Thread.sleep`
+  (removed in Zig 0.16), and `keys/manager.zig cacheStats` declared its own
+  anonymous return type instead of the fle KeyManager's, so it did not
+  compile once used. Still unwired, with failing tests: the MCP files (3
+  failures, 1 leak), `storage/user_storage.zig` (1) and
+  `transactions/manager.zig` (2).
+- **Operator-visible: SHOW CLUSTER STATUS `last_contact_ms` is NULL for a
+  peer never heard from (SONNY-6463 item 4).** A peer's `last_contact`
+  started at the node's start time, so "never heard from" and "heard from
+  at startup" read the same (the column grew from start until the first
+  authenticated raft frame). It now starts unset and the column is NULL
+  until that frame arrives; this node's own row stays 0. Regression: `zig
+  build test-show-cluster-status`.
+- **Dead distributed code removed (SONNY-6463 items 1-3).**
+  `twophase.TwoPCCoordinator` (with `CoordinatorConfig` and the
+  `twophase_participant.zig` participant only it used) had no user, and its
+  `handleMessage` could not compile (protobuf cannot decode
+  `TwoPhaseMessage`'s union submessages); `raft_consensus.Peer.alive`,
+  `Peer.rpc_client` and the `RpcClient` type were never read or updated;
+  `ClusterCoordinator.handleClusterMessage` → `handleShardQuery` (a 2PC
+  write path that could not compile: `std.ArrayList(...).init`,
+  `std.atomic.Atomic`) and its helpers had no caller. The live inbound
+  cluster RPC path is `handleClusterRpcLocal`, unchanged. No inbound 2PC
+  path existed, so no replay check was lost.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

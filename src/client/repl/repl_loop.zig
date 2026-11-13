@@ -11,6 +11,11 @@ const keymap_emacs = @import("keymap_emacs.zig");
 const keymap_vi = @import("keymap_vi.zig");
 const platform = @import("platform.zig");
 
+/// SONNY-6476: the longest line the plain-mode reader takes: the largest
+/// request the server accepts (`max_client_message_bytes`, 16 MiB). A longer
+/// line is refused whole instead of being cut.
+const max_plain_line_bytes: usize = 16 * 1024 * 1024;
+
 fn replIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -244,8 +249,13 @@ pub const ReplLoop = struct {
         const original_termios = enterPlainRawMode() catch null;
         defer if (original_termios) |term| restoreTerminalMode(term) catch {};
 
-        // Simple line buffer
-        var line_buf: [4096]u8 = undefined;
+        // CANARY: REQ=REQ-SONNY-6476-SHELL-LONG-LINE; FEATURE="ShellPlainMode"; ASPECT=LineLongerThan4095Bytes; STATUS=TESTED; TEST=tests/test_sonny6476_shell_long_line.zig; OWNER=cli; UPDATED=2026-11-13
+        // SONNY-6476: the line grows as it is read. It was a fixed 4,096-byte
+        // buffer, and a longer line was cut at 4,095 bytes without a word:
+        // the first part ran as one statement and the rest as another. A
+        // line past the largest request the server takes is refused whole.
+        var line_buf: std.ArrayList(u8) = .empty;
+        defer line_buf.deinit(opts.allocator);
 
         // Main loop - simple line-based input
         while (!state.quit_requested) {
@@ -260,8 +270,9 @@ pub const ReplLoop = struct {
             // zero-length read; it used to only break this byte loop, so the
             // shell printed prompts forever. A last line without a newline
             // still runs before the shell exits.
-            var pos: usize = 0;
-            while (pos < line_buf.len - 1) {
+            line_buf.clearRetainingCapacity();
+            var too_long = false;
+            while (true) {
                 var byte: [1]u8 = undefined;
                 const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch |err| switch (err) {
                     error.EndOfStream => 0,
@@ -277,34 +288,48 @@ pub const ReplLoop = struct {
                     try stdout_file.writeStreamingAll(replIo(), "\n");
                     break;
                 } else if (byte[0] == 4) { // Ctrl+D
-                    if (pos == 0) {
+                    if (line_buf.items.len == 0 and !too_long) {
                         try stdout_file.writeStreamingAll(replIo(), "\n");
                         state.quit_requested = true;
                         break;
                     }
                 } else if (byte[0] == 3) { // Ctrl+C
                     try stdout_file.writeStreamingAll(replIo(), "^C\n");
-                    pos = 0;
+                    line_buf.clearRetainingCapacity();
+                    too_long = false;
                     break;
                 } else if (byte[0] == 127 or byte[0] == 8) { // Backspace
-                    if (pos > 0) {
-                        pos -= 1;
+                    if (line_buf.items.len > 0) {
+                        _ = line_buf.pop();
                         try stdout_file.writeStreamingAll(replIo(), "\x08 \x08"); // Erase character
                     }
                 } else if (byte[0] >= 32 and byte[0] < 127) {
-                    line_buf[pos] = byte[0];
-                    pos += 1;
+                    if (too_long) continue; // read the rest of the line, keep none
+                    if (line_buf.items.len >= max_plain_line_bytes) {
+                        too_long = true;
+                        line_buf.clearRetainingCapacity();
+                        continue;
+                    }
+                    try line_buf.append(opts.allocator, byte[0]);
                     // Echo character in plain mode (we disabled terminal echo)
                     try stdout_file.writeStreamingAll(replIo(), &byte);
                 }
             }
 
-            if (pos == 0) {
+            if (too_long) {
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Error: the line is longer than {d} bytes; it was not run\n", .{max_plain_line_bytes}) catch "Error: the line is too long; it was not run\n";
+                try stdout_file.writeStreamingAll(replIo(), msg);
                 if (state.quit_requested) break;
                 continue;
             }
 
-            const line = line_buf[0..pos];
+            if (line_buf.items.len == 0) {
+                if (state.quit_requested) break;
+                continue;
+            }
+
+            const line = line_buf.items;
 
             // CANARY: REQ=REQ-SHELL-PLAIN-012; FEATURE="ShellPlainMode"; ASPECT=MetaCommandDispatch; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
             // Handle meta-commands - use full dispatch for all supported commands

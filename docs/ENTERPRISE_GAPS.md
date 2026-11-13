@@ -38,9 +38,10 @@ no-op config keys, unparsed DDL forms) are tracked in the harness repo at
 
 ---
 
-# Critical
+## Critical
 
-## GAP-0901 — gRPC transport is wholesale non-functional
+### GAP-0901 — gRPC transport is wholesale non-functional
+
 **Severity:** Critical · **Status:** FIXED — repo-side global-init fixed 2026-07-10; the remaining end-to-end blocker (GAP-0893) was re-diagnosed as geode-side and fixed 2026-08-25 · **Area:** Transport / gRPC · **Found:** 2026-07-10
 **Fix (repo-side):** the transport-agnostic globals a gRPC handler consults —
 the per-IP auth rate limiter, both RLS filter engines, the RLS deny-policy DDL
@@ -74,7 +75,8 @@ managed-server tests time out.
 **Test:** `security_graph_bind_authorization_861.yml` (self-activating
 gRPC-liveness gate), `security_grpc_cdc_admin_gate_849.yml`.
 
-## GAP-0902 — `geode migrate run --server` hangs and crashes the server
+### GAP-0902 — `geode migrate run --server` hangs and crashes the server
+
 **Severity:** Critical · **Status:** PARTIAL — stream-hygiene hardening applied + apply-path pinned; live-crash verification owed · **Area:** Migrations · **Found:** 2026-07-10
 **Fix (hardening):** `execMigrationScript` now closes the QUIC stream (FIN)
 before tearing down the client (`quic_client.closeStream()` in the `defer`),
@@ -108,7 +110,8 @@ step, which precedes the hang).
 **Test:** `migration_failure_handling.yml` (local surface tested; live run
 documented-only + a safe dead-port `migrate run` pin).
 
-## GAP-0903 — repeated failing `CREATE INDEX` double-frees (segfault)
+### GAP-0903 — repeated failing `CREATE INDEX` double-frees (segfault)
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Storage / catalog · **Found:** 2026-07-10
 **Fix:** the duplicate branch in `Catalog.addIndex` freed `scoped_key`
 explicitly while the function's `errdefer` also freed it on the error return
@@ -124,7 +127,8 @@ identical statement 4–5 times.
 **Test:** `index_ddl_errors.yml` (single duplicate attempt is safe/tested; the
 repeat-crash is documented, not exercised).
 
-## GAP-0904 — `ORDER BY 0` (non-positive ordinal) panics via integer underflow
+### GAP-0904 — `ORDER BY 0` (non-positive ordinal) panics via integer underflow
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / sorting · **Found:** 2026-07-10
 **Fix:** non-positive ordinals now sort as a NULL key (same policy as the
 pre-existing out-of-range-high ordinal). Regression: `zig build test-gap0904`
@@ -137,7 +141,8 @@ kills the process.
 **Test:** `order_by_negative.yml` (executes only the safe `ORDER BY 99`; the crash
 is documented, not exercised).
 
-## GAP-0905 — `CAST(<huge-float> AS INTEGER)` panics (out-of-bounds)
+### GAP-0905 — `CAST(<huge-float> AS INTEGER)` panics (out-of-bounds)
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / CAST · **Found:** 2026-07-10
 **Fix:** two panic sites guarded — the parser's scientific-notation
 float-literal → scale-15 Decimal conversion (huge literals now fall back to a
@@ -151,7 +156,8 @@ floating point value out of bounds" and kills the server.
 **Test:** `cast_invalid.yml` (uses a safe string-literal overflow that errors
 cleanly; the float-overflow crash is documented, not exercised).
 
-## GAP-0906 — `Interval('P999999999Y')` panics (i32 multiply overflow)
+### GAP-0906 — `Interval('P999999999Y')` panics (i32 multiply overflow)
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Types / interval · **Found:** 2026-07-10
 **Fix:** `Interval.fromStr` accumulates every component with checked
 arithmetic; overflow reports `ParseError` (mapped to `EvalError.TimeParse` at
@@ -164,7 +170,8 @@ overflow.
 **Test:** `advanced_types_boundary.yml` (executes the cleanly-erroring 10-digit
 `P9999999999Y`; the 9-digit crash form is documented, not exercised).
 
-## GAP-0907 — `MakeInterval(2147483648, …)` panics (unchecked `@intCast`)
+### GAP-0907 — `MakeInterval(2147483648, …)` panics (unchecked `@intCast`)
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Types / interval · **Found:** 2026-07-10
 **Fix:** months/days narrowing is checked; out-of-range arguments raise
 `EvalError.IntegerOverflow` (SQLSTATE 22003). Regression:
@@ -175,7 +182,8 @@ unchecked narrowing cast.
 **Reproduction:** `RETURN MakeInterval(2147483648, 1, 1)`.
 **Test:** `advanced_types_boundary.yml` (documented, not exercised).
 
-## GAP-0908 — unwritable audit sink at startup crashes the server
+### GAP-0908 — unwritable audit sink at startup crashes the server
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Audit / startup · **Found:** 2026-07-10
 **Fix:** `AuditLogger.createHeap` (leak-safe create+init) + main.zig turns an
 unopenable sink into a logged fail-closed refusal
@@ -193,7 +201,8 @@ Expected: a graceful "cannot open audit log" refusal (fail-closed, clean exit).
 **Test:** `audit_sink_failclosed_policy.yml` (self-activating crash pin; verifies
 the audit chain stays clean after recovery).
 
-## GAP-0909 — missing `--data-dir` crashes the server at startup
+### GAP-0909 — missing `--data-dir` crashes the server at startup
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Startup · **Found:** 2026-07-10
 **Fix:** `graph_store.ensureDataDir` (mkdir -p) runs before any consumer;
 an uncreatable path is a clean logged refusal (`error.DataDirUnavailable`).
@@ -204,7 +213,8 @@ crashes instead of creating it or erroring cleanly.
 **Reproduction:** `geode serve --data-dir /path/that/does/not/exist`.
 **Test:** `audit_sink_failclosed_policy.yml` (documented alongside GAP-0908).
 
-## GAP-0910 — `labels(n), properties(n)` after crash+restart segfaults
+### GAP-0910 — `labels(n), properties(n)` after crash+restart segfaults
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / value lifetime · **Found:** 2026-07-10
 **Fix:** the `labels()` / `properties()` / `keys()` projections borrowed the
 node's own label/key slices, so any deep free of the result
@@ -221,7 +231,8 @@ reopen segfaults the server (map double-free / dangling pointer in result deinit
 **Test:** `wal_corrupt_record_recovery.yml` (documented; the spec deliberately
 avoids this query).
 
-## GAP-0911 — non-admin can `CREATE POLICY` (authorization bypass)
+### GAP-0911 — non-admin can `CREATE POLICY` (authorization bypass)
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Security / GPS · **Found:** 2026-07-10
 **Fix:** `requirePolicyDdlAdmin` gates all three policy-DDL dispatch arms
 (CREATE/DROP/ALTER POLICY) admin-only, the same RBAC bar as the mutating
@@ -246,7 +257,8 @@ correctly denied with exit 3.)
 **Test:** `gps_decide_negative.yml` (asserts the wrong-but-real ALLOW,
 self-activating).
 
-## GAP-0912 — same-variable path endpoints not unified at match time
+### GAP-0912 — same-variable path endpoints not unified at match time
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / pattern match · **Found:** 2026-07-10
 **Fix:** both variable-length execution paths (the row-building traversal and
 the aggregation branch in `match_operations.zig`) now constrain start == end
@@ -266,7 +278,8 @@ rows whose endpoints differ. Consequently the standard cycle-detection idiom
 **Test:** `graph_algorithm_edge_cases.yml` (committed non-aggregated evidence
 asserting the wrong endpoint rows).
 
-## GAP-0913 — aggregate over a variable-length pattern silently drops WHERE
+### GAP-0913 — aggregate over a variable-length pattern silently drops WHERE
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
 **Fix:** the aggregation-over-var-length branch in `match_operations.zig` now
 builds the same env as the non-aggregated path (left/right vars, rel edge
@@ -280,7 +293,8 @@ counts. The non-aggregated `RETURN p` form respects the filter correctly.
 `… count(p)` returns 2 while `… RETURN p` returns 0 rows.
 **Test:** `graph_algorithm_edge_cases.yml` (before/after/control triad).
 
-## GAP-0914 — GROUP BY on an unresolvable identifier collapses to one null group
+### GAP-0914 — GROUP BY on an unresolvable identifier collapses to one null group
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
 **Fix:** `validateGroupByResolvable` (execution.zig, called next to
 `validateGroupBy`) rejects identifier-shaped GROUP BY keys that resolve to no
@@ -295,7 +309,8 @@ erroring — a silent wrong result.
 **Test:** `groupby_return_alias_correctness.yml` (limitation-pin;
 `groupby-unknown-alias-limitation-pin`).
 
-## GAP-0915 — label index not rebuilt after an unclean crash
+### GAP-0915 — label index not rebuilt after an unclean crash
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Storage / recovery · **Found:** 2026-07-10
 **Fix:** two coupled causes. (1) The label DICTIONARY is checkpoint-only
 persisted; gap-0026 added a synchronous first-sight `labels.dict` persist for
@@ -318,7 +333,8 @@ Distinct from the graceful-path fix in commit `9a255a83`.
 (`label-index-after-crash-limitation-pin`; committed-prefix survival is verified
 via a label-less oracle).
 
-## GAP-0916 — `sum()` of a string column silently returns 0
+### GAP-0916 — `sum()` of a string column silently returns 0
+
 **Severity:** Critical · **Status:** FIXED (2026-07-10) · **Area:** Query / aggregation · **Found:** 2026-07-10
 **Fix:** every sum()/avg() path (single-aggregate fast path in
 match_operations — both resident and engine-direct branches — the grouped
@@ -339,9 +355,10 @@ type error.
 
 ---
 
-# High
+## High
 
-## GAP-0917 — statement after a mid-transaction error is not rejected
+### GAP-0917 — statement after a mid-transaction error is not rejected
+
 **Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Transactions · **Found:** 2026-07-10
 **Fix:** a failing statement inside an active transaction marks it `Failed`;
 every subsequent statement except ROLLBACK is rejected (never executed),
@@ -357,7 +374,8 @@ but a conformance/isolation gap.
 **Reproduction:** the multi-statement batch above → post-COMMIT `count` == 2.
 **Test:** `transaction_conflict_abort.yml` (asserts both rows landed).
 
-## GAP-0918 — wrong-dimension vector silently accepted into an HNSW index
+### GAP-0918 — wrong-dimension vector silently accepted into an HNSW index
+
 **Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Vector index · **Found:** 2026-07-10
 **Fix:** three parts. (1) A lightweight dimension-validation registry
 (index_manager `vector_dim_registry`, populated at vector/HNSW CREATE INDEX)
@@ -379,7 +397,8 @@ silently accepted (data-integrity risk). Also: an invalid distance metric
 00000.
 **Test:** `vector_index_errors.yml` (three limitation-pins).
 
-## GAP-0919 — denied DDL-escalation attempts emit no audit record
+### GAP-0919 — denied DDL-escalation attempts emit no audit record
+
 **Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Security / audit · **Found:** 2026-07-10
 **Fix:** both admin gates that returned before the audit path now emit an
 `access_denied` audit event (result=failure, severity=warning) before
@@ -396,7 +415,8 @@ audited; denials are not, leaving an authz-attack blind spot.
 no audit entry is written.
 **Test:** `rbac_privilege_escalation_denied.yml` (audit case dropped + documented).
 
-## GAP-0920 — mid-run audit write failure produces no diagnostic
+### GAP-0920 — mid-run audit write failure produces no diagnostic
+
 **Severity:** High · **Status:** FIXED (2026-07-10) · **Area:** Audit · **Found:** 2026-07-10
 **Fix:** the single write funnel (`appendEventLocked`) now catches a write
 failure, emits a loud `log.err` + `recordAuditDropped("write_error")` metric,
@@ -415,9 +435,10 @@ failure policy is only reachable at restart.
 
 ---
 
-# Medium (missing input validation — silent-accept, no data corruption)
+## Medium (missing input validation — silent-accept, no data corruption)
 
-## GAP-0921 — CAST performs no semantic value validation
+### GAP-0921 — CAST performs no semantic value validation
+
 **Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Query / CAST · **Found:** 2026-07-10
 **Fix:** the `cast` eval branch now returns typed errors instead of silent
 NULL: an unconvertible value → `error.InvalidCast` (22018), an unsupported
@@ -434,7 +455,8 @@ CAST rejects only at parse time (missing type name → 42000). Confirmed across
 int/decimal/boolean/timestamp/list/map targets.
 **Test:** `cast_invalid.yml`.
 
-## GAP-0922 — fulltext index on a numeric property silently accepted
+### GAP-0922 — fulltext index on a numeric property silently accepted
+
 **Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** FTS · **Found:** 2026-07-10
 **Fix:** `validateTextProperty` scans existing nodes at CREATE INDEX time
 (before the catalog row is written) and rejects a fulltext index whose
@@ -447,7 +469,8 @@ Regression: `zig build test-gap0922`
 an index that matches nothing, and issues no diagnostic.
 **Test:** `fulltext_search_negative.yml`.
 
-## GAP-0923 — malformed and duplicate ABAC policies silently accepted
+### GAP-0923 — malformed and duplicate ABAC policies silently accepted
+
 **Severity:** Medium · **Status:** FIXED (2026-07-10, part b) / documented (part a) · **Area:** Security / ABAC · **Found:** 2026-07-10
 **Fix (b):** `PolicyCatalog.addPolicy` now rejects a duplicate policy name with
 `error.PolicyAlreadyExists` (SQLSTATE 42710) before mutating the catalog, so
@@ -474,7 +497,8 @@ duplicate.
 **Test:** `abac_malformed_policy_rejection.yml` (two limitation-pins + a
 fail-closed verification with teeth).
 
-## GAP-0924 — spatial functions swallow bad geometry to NULL; no bowtie check
+### GAP-0924 — spatial functions swallow bad geometry to NULL; no bowtie check
+
 **Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Spatial · **Found:** 2026-07-10
 **Fix:** two parts. (1) The WKT parser now detects a self-intersecting
 ("bowtie") polygon ring (`ringSelfIntersects`, a non-adjacent-edge proper-
@@ -492,7 +516,8 @@ Self-intersecting "bowtie" polygons are accepted with no simple-polygon
 validation. (Wrong-arity `ST_Point` and inverted bboxes are handled correctly.)
 **Test:** `spatial_geometry_errors.yml`.
 
-## GAP-0925 — `decimal_add` has no precision ceiling (unlike `decimal_mul`)
+### GAP-0925 — `decimal_add` has no precision ceiling (unlike `decimal_mul`)
+
 **Severity:** Medium · **Status:** FIXED (2026-07-10) · **Area:** Types / decimal · **Found:** 2026-07-10
 **Fix:** a single 38-digit SQL DECIMAL precision ceiling (`|coeff| < 10^38`,
 `Decimal128.checkPrecision`) is now enforced on `add`/`sub`/`mul` results
@@ -506,9 +531,11 @@ DecimalOverflow — inconsistent enforcement.
 **Test:** `advanced_types_boundary.yml` (limitation-pin with the `decimal_mul`
 contrast).
 
-## GAP-0926 — silent-accept family: WHERE-unbound, MERGE-null-key, params, index-target, aggregation edges
+### GAP-0926 — silent-accept family: WHERE-unbound, MERGE-null-key, params, index-target, aggregation edges
+
 **Severity:** Medium · **Status:** PARTIAL — 2 safe sub-items fixed, 4 retained/documented (2026-07-10) · **Area:** Query / GQL semantics · **Found:** 2026-07-10
 **Fixed (unambiguously safe):**
+
 - **Out-of-range POSITIONAL parameter** (`$2` with one param) → `error.MissingParameter`
   (SQLSTATE 22023) instead of silent NULL (`.Param` eval in `eval.zig`; positional =
   all-digit name).
@@ -520,6 +547,7 @@ contrast).
 non-corrupting (the gap itself notes "no data corruption") and forcing rejection risks
 breaking legitimate queries / the existing suite — the lesson from GAP-0923(a), where
 over-strict validation broke 14 GPS tests:
+
 - **WHERE unbound variable** — a static "unknown variable" check would misfire on
   variables bound through paths the checker doesn't track; kept as filter-to-0-rows.
 - **MERGE null / unbound key** — **null key closed by SONNY-6433 (2026-11-12):**
@@ -533,8 +561,14 @@ over-strict validation broke 14 GPS tests:
   values); only the unambiguous positional-out-of-range case is rejected.
 - **CREATE INDEX on a nonexistent label/property** — index-first creation is a legitimate,
   supported workflow (see GAP-0922), so a nonexistent-target rejection is unsafe.
-- **Non-grouped column / HAVING unknown alias** — overlap GAP-0914's GROUP BY validation;
-  a broader HAVING-scope check is deferred to avoid the same over-rejection risk.
+- **Non-grouped column / HAVING unknown alias** — **both closed by SONNY-2675
+  (v0.8.23):** a HAVING name that is no column, binding or parameter is refused
+  with 42703 (`error.UnknownHavingReference`); a RETURN that mixes aggregates
+  with a non-aggregated, non-grouped expression is refused with 42803
+  (`error.GroupingError`), with or without a GROUP BY
+  (`zig build test-sonny2675-aggregate-semantics`,
+  `test-sonny2675-grouped-having`). The harness pins
+  `group_by_aggregation_negative.yml` must follow (see SONNY-2736).
 Regression: `zig build test-gap0926` (`tests/test_gap0926_silent_accept.zig`).
 Several ISO-39075 negatives are silently accepted (0 rows / NULL / 00000) rather
 than raising an error. Each is a self-activating limitation-pin:
@@ -550,13 +584,17 @@ than raising an error. Each is a self-activating limitation-pin:
   registers in `SHOW INDEXES`. Test: `index_ddl_errors.yml`.
 - **Aggregation edges** — non-grouped column → first-inserted-row value; nested
   aggregate `sum(avg())` → NULL; HAVING on an unknown alias → NULL filters all
-  rows. Test: `group_by_aggregation_negative.yml`.
+  rows. Test: `group_by_aggregation_negative.yml`. All three are refused now:
+  nested aggregate 42803 (GAP-0926), non-grouped column 42803 and HAVING on an
+  unknown alias 42703 (SONNY-2675); the harness pins still expect the old
+  answers (SONNY-2736).
 
 ---
 
-# Low (operability / config / UX)
+## Low (operability / config / UX)
 
-## GAP-0927 — `--idle-timeout` decoupled from the per-connection idle reap
+### GAP-0927 — `--idle-timeout` decoupled from the per-connection idle reap
+
 **Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Transport / connection pool · **Found:** 2026-07-10
 **Fix:** `config.idle_timeout_ms` is now applied to the per-connection reap
 deadline at startup via `BufferedProtoReader.setIdleReapDeadlineMs` (was a
@@ -569,7 +607,8 @@ the flag's schedule. Regression: `zig build test-gap0927`
 does not reclaim its connection slot on the flag's schedule.
 **Test:** `connection_pool_rejection.yml`.
 
-## GAP-0928 — over-cap connections have no explicit `POOL_EXHAUSTED` signal
+### GAP-0928 — over-cap connections have no explicit `POOL_EXHAUSTED` signal
+
 **Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Transport / connection pool · **Found:** 2026-07-10
 **Fix:** the accept loop now emits a rate-limited `POOL_EXHAUSTED` server-side
 diagnostic (log + connection/max counts) while parked at `--max-connections`
@@ -586,7 +625,8 @@ client's own `--timeout` firing. A clear `POOL_EXHAUSTED`-style rejection would
 be more diagnosable.
 **Test:** `connection_pool_rejection.yml`.
 
-## GAP-0929 — `GEODE_PORT` environment variable is inert
+### GAP-0929 — `GEODE_PORT` environment variable is inert
+
 **Severity:** Low · **Status:** FIXED (2026-07-10) · **Area:** Config · **Found:** 2026-07-10
 **Fix:** `GEODE_PORT` now sets the bind address (`0.0.0.0:<port>`) when
 `--listen` is absent (precedence: `--listen` flag > `GEODE_PORT` env > default

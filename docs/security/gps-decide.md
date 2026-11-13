@@ -290,7 +290,7 @@ that always returned `.ReadWrite` for non-superusers.
 not a library module. The file carries heavy binary-only dependencies:
 QUIC transport, gRPC server, LSP server, cert generator, metrics server,
 thread pool, and multiple named modules that are only wired for `geode_exe`
-(e.g. `index_selectivity`, `text_formatter`, `otel_metrics`, `txn`). There
+(e.g. `index_selectivity`, `otel_metrics`, `txn`). There
 is no named module wrapper for `src/server/main.zig` accessible to a
 standalone test executable.
 

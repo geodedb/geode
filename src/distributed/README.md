@@ -75,7 +75,7 @@ go through `cluster_auth.validateClusterToken`. Regression:
 +------------------+
 |   Query          |  enhanced_query_coordinator.zig, query_coordinator.zig,
 |   Coordination   |  query_planner.zig, txn_coordinator.zig,
-|                  |  twophase.zig, twophase_participant.zig
+|                  |  twophase.zig
 +------------------+
       |
       v
@@ -122,7 +122,7 @@ federation-aware query optimization.
 | `nonce_tracker.zig` | Replay prevention for cluster frames |
 | `principal_envelope.zig` | Serialized principal carried with cluster requests |
 | `distributed_explain.zig` | `DistributedExplainUnsupported` error and message (mapped in `proto_util.zig`) |
-| `txn_coordinator.zig`, `twophase.zig`, `twophase_participant.zig` | Two-phase commit coordinator and participant |
+| `txn_coordinator.zig`, `twophase.zig` | Two-phase commit coordinator, transport and undo application |
 | `query_planner.zig` | Partition-aware planning helpers; the QUIC handler creates a `DistributedQueryPlanner` per stream and stores it as an opaque pointer, but no executor consults it |
 | `value_convert.zig` | Value conversion between wire and engine types |
 
@@ -152,7 +152,6 @@ federation-aware query optimization.
 | `query_planner.zig` | Partition-aware distributed query planning |
 | `txn_coordinator.zig` | Distributed transaction coordination across shards |
 | `twophase.zig` | Two-phase commit coordinator (prepare/commit/abort) |
-| `twophase_participant.zig` | Two-phase commit participant (vote/ack handling) |
 
 ### Federation & Merge
 

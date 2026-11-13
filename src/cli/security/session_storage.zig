@@ -138,11 +138,24 @@ pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
     defer if (username_owned) |u| allocator.free(u);
     const username: []const u8 = username_owned orelse "unknown";
 
-    // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
-    const uid: u32 = if (builtin.os.tag == .windows) 0 else std.os.linux.getuid();
+    // Get user ID (0 on Windows since it doesn't have Unix-style UIDs).
+    // SONNY-6476: the Linux syscall only on Linux; macOS and the BSDs ask
+    // libc (`std.os.linux.getuid` there issued a Linux syscall number).
+    const uid: u32 = currentUid();
 
     // Combine: hostname:username:uid
     return std.fmt.allocPrint(allocator, "{s}:{s}:{d}", .{ hostname, username, uid });
+}
+
+/// SONNY-6476: the calling process's real user id, per platform: the Linux
+/// syscall on Linux, libc's `getuid` on the other POSIX systems (macOS, the
+/// BSDs), 0 on Windows (no Unix-style uid).
+fn currentUid() u32 {
+    return switch (builtin.os.tag) {
+        .windows => 0,
+        .linux => std.os.linux.getuid(),
+        else => @intCast(std.c.getuid()),
+    };
 }
 
 /// Credential storage manager
@@ -365,6 +378,17 @@ pub const SessionRegistry = struct {
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+// CANARY: REQ=REQ-SONNY-6476-FINGERPRINT-UID; FEATURE="CliSessionStorage"; ASPECT=PortableUid; STATUS=TESTED; TEST=src/cli/security/session_storage.zig; OWNER=cli; UPDATED=2026-11-13
+test "SONNY-6476: the system fingerprint ends with this process's real uid, read the platform's way" {
+    const fp = try getSystemFingerprint(std.testing.allocator);
+    defer std.testing.allocator.free(fp);
+    const colon = std.mem.lastIndexOfScalar(u8, fp, ':') orelse return error.NoUid;
+    const uid = try std.fmt.parseInt(u32, fp[colon + 1 ..], 10);
+    const want: u32 = if (builtin.os.tag == .windows) 0 else @intCast(std.c.getuid());
+    try std.testing.expectEqual(want, uid);
+    try std.testing.expectEqual(want, currentUid());
+}
 
 test "SessionToken.generate creates valid token" {
     const allocator = std.testing.allocator;

@@ -783,8 +783,10 @@ pub const functions = [_]FunctionInfo{
             .{ .name = "end", .type_name = "INTEGER" },
             .{ .name = "step", .type_name = "INTEGER", .optional = true, .default = "1" },
         },
-        .compliance = .iso_gql,
-        .doc = "Create a list of integers",
+        // SONNY-6466: ISO/IEC 39075:2024 has no range function; the end is
+        // exclusive (half-open), unlike openCypher's range().
+        .compliance = .geode_extension,
+        .doc = "Geode extension (ISO GQL has no range function): integers from start up to, not including, end, by step (default 1); openCypher's range() includes end",
         .example = "RETURN range(1, 10)",
     },
     // Type conversion functions

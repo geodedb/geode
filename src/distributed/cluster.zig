@@ -612,22 +612,6 @@ const ReplayGuard = struct {
     }
 };
 
-const TxnMetadata = struct {
-    client_id: []const u8 = "",
-    timestamp: i64 = 0,
-    msg_type: MessageType = .READ,
-
-    pub const _desc_table = .{
-        .client_id = fd(1, .{ .scalar = .string }),
-        .timestamp = fd(2, .{ .scalar = .int64 }),
-        .msg_type = fd(3, .{ .@"enum" = {} }),
-    };
-
-    pub fn deinit(self: *TxnMetadata, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
 // Distributed cluster coordinator
 pub const ClusterCoordinator = struct {
     allocator: Allocator,
@@ -1922,7 +1906,7 @@ pub const ClusterCoordinator = struct {
 
     /// Run the cluster RPC request/response cycle on `stream`.  The
     /// magic byte has already been consumed by the caller.  Reads the
-    /// request payload, dispatches via `handleClusterMessage`, then
+    /// request payload, dispatches via `handleClusterRpcLocal`, then
     /// writes a length-prefixed Response back on the same stream.
     fn handleClusterRpcOnStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
         const payload = try readClusterRpcBodyAfterMagic(self.allocator, stream);
@@ -1965,7 +1949,7 @@ pub const ClusterCoordinator = struct {
     }
 
     /// Inbound cluster RPC handler executed on the *target* node.
-    /// This must NOT re-enter `forwardToShard` / `handleShardQuery`
+    /// This must NOT re-enter `forwardToShard`
     /// — the originator has already routed the message to us.
     ///
     /// Today this only handles READ messages; writes / 2PC reuse
@@ -2172,11 +2156,6 @@ pub const ClusterCoordinator = struct {
         };
     }
 
-    fn handleClusterMessage(self: *ClusterCoordinator, msg: Message) !Response {
-        // Route based on message type
-        return self.handleShardQuery(msg);
-    }
-
     fn handleNodeFailure(self: *ClusterCoordinator, failed_node: u64) !void {
         log.warn("Node detected as failed", &.{
             Attr.uint("node_id", failed_node),
@@ -2353,9 +2332,9 @@ pub const ClusterCoordinator = struct {
                 .id = config.id,
                 .endpoint = try allocator.dupe(u8, config.address),
                 .port = config.port,
-                .alive = true,
-                .last_contact = compat_milliTimestamp(),
-                .rpc_client = null,
+                // SONNY-6463: 0 = never heard from (SHOW CLUSTER STATUS
+                // reports NULL until the first authenticated frame).
+                .last_contact = 0,
             };
         }
         return peers;
@@ -2663,164 +2642,6 @@ pub const ClusterCoordinator = struct {
     // rejects LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST with ERR
     // so originators see a clear failure instead of a lying no-op ack.
 
-    fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
-        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
-
-        // Determine if this is a read-only or write query
-        const is_write = try self.isWriteQuery(msg);
-
-        if (!is_write) {
-            // Simple read query - route to appropriate shard
-            const shard_id = try self.determineTargetShard(msg);
-            return self.forwardToShard(shard_id, msg);
-        }
-
-        // Distributed write using 2PC
-        const affected_shards = try self.determineAffectedShards(msg);
-
-        // Generate transaction ID
-        const xid = try self.generateTransactionId();
-
-        // Phase 1: Prepare
-        var prepare_votes = std.ArrayList(bool).init(self.allocator);
-        defer prepare_votes.deinit();
-
-        const write_set = try self.serializeWriteSet(msg);
-        defer self.allocator.free(write_set);
-        const metadata = try self.serializeMetadata(msg);
-        defer self.allocator.free(metadata);
-
-        for (affected_shards) |shard_id| {
-            const prepare_msg = raft_consensus.TxnPrepare{
-                .xid = xid,
-                .shard_id = shard_id,
-                .write_set = write_set,
-                .metadata = metadata,
-            };
-
-            // Send prepare through Raft consensus
-            const vote = try self.sendPrepareToShard(shard_id, prepare_msg);
-            try prepare_votes.append(vote);
-        }
-
-        // Check if all shards voted to commit
-        var can_commit = true;
-        for (prepare_votes.items) |vote| {
-            if (!vote) {
-                can_commit = false;
-                break;
-            }
-        }
-
-        // Phase 2: Decide
-        const decide_msg = raft_consensus.TxnDecide{
-            .xid = xid,
-            .commit = can_commit,
-        };
-
-        for (affected_shards) |shard_id| {
-            try self.sendDecideToShard(shard_id, decide_msg);
-        }
-
-        return Response{
-            .status = if (can_commit) .OK else .ABORTED,
-            .data = try std.fmt.allocPrint(self.allocator, "Transaction {} {s}", .{ xid, if (can_commit) "committed" else "aborted" }),
-        };
-    }
-
-    fn isWriteQuery(self: *ClusterCoordinator, msg: Message) !bool {
-        _ = self;
-        // Parse message to determine if it's a write operation
-        // For now, simple heuristic based on message type
-        return msg.msg_type == .WRITE or msg.msg_type == .DELETE or msg.msg_type == .UPDATE;
-    }
-
-    fn determineTargetShard(self: *ClusterCoordinator, msg: Message) !u64 {
-        // Hash-based sharding for reads
-        const key = msg.key orelse return error.MissingKey;
-        const hash = std.hash.Fnv1a_64.hash(key);
-        return hash % self.cluster_state.shards.items.len;
-    }
-
-    fn determineAffectedShards(self: *ClusterCoordinator, msg: Message) ![]u64 {
-        // For writes, determine all affected shards
-        var shards = std.ArrayList(u64).init(self.allocator);
-
-        // Simple case: single shard
-        const primary_shard = try self.determineTargetShard(msg);
-        try shards.append(primary_shard);
-
-        // Add replica shards if configured
-        if (self.replication_map.get(primary_shard)) |replicas| {
-            for (replicas) |replica| {
-                try shards.append(replica);
-            }
-        }
-
-        return shards.toOwnedSlice();
-    }
-
-    fn generateTransactionId(self: *ClusterCoordinator) !u64 {
-        // Generate unique transaction ID
-        const timestamp: u64 = @intCast(compat_milliTimestamp());
-        const node_part = self.node_id << 48;
-        const counter = self.incrementTxCounter();
-        return node_part | (timestamp << 16) | counter;
-    }
-
-    fn incrementTxCounter(self: *ClusterCoordinator) u16 {
-        _ = self;
-        // Thread-safe counter increment (simplified)
-        const counter = struct {
-            var value: std.atomic.Atomic(u16) = std.atomic.Atomic(u16).init(0);
-        };
-        return counter.value.fetchAdd(1, .Monotonic);
-    }
-
-    fn serializeWriteSet(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        const write_set = msg.data orelse return error.MissingWriteSet;
-        var reader: std.Io.Reader = .fixed(write_set);
-        var decoded = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {
-            log.err("Invalid 2PC write set payload", &.{Attr.string("error", @errorName(err))});
-            return error.InvalidWriteSet;
-        };
-        defer decoded.deinit(self.allocator);
-        return self.allocator.dupe(u8, write_set);
-    }
-
-    fn serializeMetadata(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        const metadata = TxnMetadata{
-            .client_id = msg.client_id orelse "",
-            .timestamp = compat_milliTimestamp(),
-            .msg_type = msg.msg_type,
-        };
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, metadata);
-        const body = aw.writer.buffer[0..aw.writer.end];
-        return self.allocator.dupe(u8, body);
-    }
-
-    fn sendPrepareToShard(self: *ClusterCoordinator, shard_id: u64, prepare: raft_consensus.TxnPrepare) !bool {
-        _ = shard_id;
-        // Send prepare message through Raft
-        const command = raft_consensus.Command{ .txn_prepare = prepare };
-        _ = try self.raft.proposeCommand(command);
-
-        // Wait for response (simplified - in production would be async)
-        if (self.raft.pending_responses.get(prepare.xid)) |response| {
-            return response.prepare_result orelse false;
-        }
-        return false;
-    }
-
-    fn sendDecideToShard(self: *ClusterCoordinator, shard_id: u64, decide: raft_consensus.TxnDecide) !void {
-        _ = shard_id;
-        // Send decide message through Raft
-        const command = raft_consensus.Command{ .txn_decide = decide };
-        _ = try self.raft.proposeCommand(command);
-    }
-
     // CANARY: REQ=REQ-DIST-CLUSTER-FORWARD-SHARD; FEATURE="DistributedCluster"; ASPECT=ForwardToShard; STATUS=TESTED; TEST=tests/test_cluster_forward_to_shard.zig; OWNER=distributed; UPDATED=2026-05-26
     //
     // Task A3e (2026-05-25 distributed cluster testing plan):
@@ -2874,10 +2695,7 @@ pub const ClusterCoordinator = struct {
         // the shard, executing through `executeLocalRead` is
         // equivalent to the over-the-wire path — but we save the
         // round-trip and avoid bouncing the message through the
-        // intra-cluster QUIC listener.  This deliberately bypasses
-        // `handleClusterMessage` / `handleShardQuery` because those
-        // would recompute the target shard and could loop back into
-        // `forwardToShard`.
+        // intra-cluster QUIC listener.
         const target_node = target orelse return self.executeLocalRead(msg);
 
         // Target node: primary first, then replicas in order.

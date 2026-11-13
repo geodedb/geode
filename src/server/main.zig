@@ -265,6 +265,22 @@ const default_quic_acceptor_worker_count = 64;
 const default_quic_connection_worker_count = 64;
 const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
 const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512;
+
+// CANARY: REQ=REQ-SONNY-6466-CONN-STALL-CANCEL; FEATURE="QUIC Abandoned Read Cancellation"; ASPECT=ConfigurableConnectionStallThreshold; STATUS=TESTED; TEST=tests/test_sonny6466_abandoned_read_cancel.zig; OWNER=transport; UPDATED=2026-11-13
+//
+// SONNY-6466: the per-connection stall watchdog's threshold
+// (GEODE_QUIC_STALL_CANCEL_MS). A client that vanishes without a
+// CONNECTION_CLOSE (a crash, a pulled cable) sends nothing more, and vendored
+// quic v0.1.49 neither sends PINGs nor enforces the idle timeout it
+// advertises, so the server cannot tell it from a quiet live client. What it
+// can see is a connection on which no stream has read a message for this
+// long: the watchdog then cancels that connection's in-flight reads (57014).
+// The same bound therefore caps a single read that runs this long on a
+// connection with no other stream reading — set it above the longest read
+// you run. Checked every 5 s, so a cancel lands up to 5 s after it.
+const default_conn_stall_cancel_ms: usize = 60_000;
+const min_conn_stall_cancel_ms: usize = 1_000;
+const max_conn_stall_cancel_ms: usize = 3_600_000;
 // ENG-3914 (RC-4): the Debug default used to be 1 ("deterministic local
 // traces"). ONE endpoint poll worker serialises datagram delivery for EVERY
 // connection, and the stall is not linear — measured on this repo's Debug
@@ -3328,6 +3344,10 @@ pub fn main() !void {
             // SONNY-2719: the listener's drained-datagram count, the
             // watchdog's progress signal.
             transport: *quic_transport.QuicTransport,
+            // SONNY-6466: per-connection stall threshold (ns) — how long every
+            // stream of one connection may go without reading a message before
+            // its in-flight reads are cancelled. GEODE_QUIC_STALL_CANCEL_MS.
+            conn_stall_threshold_ns: u64,
         };
         // Resolve the QUIC listener port for the wedge watchdog.
         const watchdog_quic_port: u16 = blk: {
@@ -3343,6 +3363,7 @@ pub fn main() !void {
             .allocator = gpa,
             .quic_port = watchdog_quic_port,
             .transport = &transport,
+            .conn_stall_threshold_ns = @as(u64, envUsize(gpa, "GEODE_QUIC_STALL_CANCEL_MS", default_conn_stall_cancel_ms, min_conn_stall_cancel_ms, max_conn_stall_cancel_ms)) * std.time.ns_per_ms,
         };
 
         // PERF-D / #816: park on `should_stop` via futexWaitTimeout instead
@@ -3479,12 +3500,15 @@ pub fn main() !void {
                     else
                         std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
                     const now_ns: u64 = @as(u64, @intCast(@max(ts.sec, 0))) * std.time.ns_per_s + @as(u64, @intCast(@max(ts.nsec, 0)));
-                    if (reg.connectionLevelStall(now_ns, stall_threshold_ns)) |snap| {
+                    if (reg.connectionLevelStall(now_ns, ctx.conn_stall_threshold_ns)) |snap| {
                         // GAP-ENT-0045: the whole connection is wedged (every
                         // stream idle past threshold — client likely gone).
                         // Abort ITS in-flight read executors only; healthy
-                        // connections are untouched.
-                        const conn_cancelled_n = reg.cancelConnection(snap.peer_addr);
+                        // connections are untouched. SONNY-6466: the
+                        // connection is the vendored connection's identity,
+                        // not the peer IP, which every client on one host
+                        // shares.
+                        const conn_cancelled_n = reg.cancelConnection(snap.conn_id);
                         std.log.warn(
                             "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — requested executor cancellation for {d} readers; connection will be reaped on its own timeout)",
                             .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms, conn_cancelled_n },

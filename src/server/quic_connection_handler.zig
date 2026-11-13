@@ -1916,6 +1916,12 @@ pub const BufferedProtoReader = struct {
     /// stall log line can identify WHICH client is wedged.  Empty
     /// string when unset (initial state).
     peer_addr: []const u8 = "",
+    /// SONNY-6466: identity of the QUIC connection this stream belongs to
+    /// (the vendored connection's address, captured at `init` so the
+    /// watchdog never dereferences the stream wrapper for it). The
+    /// per-connection stall watchdog groups and cancels readers by this,
+    /// not by `peer_addr` (an IP shared by every client on one host).
+    conn_id: usize = 0,
     /// GAP-ENT-0045: per-stream executor cancel flag. Set by the stall
     /// watchdog (via the registry's requestCancel) when this stream's
     /// handler is wedged; the executor polls it at row/batch boundaries
@@ -1944,6 +1950,7 @@ pub const BufferedProtoReader = struct {
             .transport = transport,
             .stream = stream,
             .buffer = std.ArrayList(u8).empty,
+            .conn_id = @intFromPtr(stream.connection),
         };
     }
 
@@ -1978,6 +1985,12 @@ pub const BufferedProtoReader = struct {
         return self.peer_addr;
     }
 
+    /// SONNY-6466 registry callback: the reader's connection identity.
+    fn registryGetConnId(ptr: *anyopaque) usize {
+        const self: *BufferedProtoReader = @ptrCast(@alignCast(ptr));
+        return self.conn_id;
+    }
+
     /// GAP-ENT-0045 registry callback: the stall watchdog requests abort of
     /// this reader's in-flight executor (set-once; polled by read_budget).
     fn registryRequestCancel(ptr: *anyopaque) void {
@@ -1995,6 +2008,7 @@ pub const BufferedProtoReader = struct {
             .getActivityNs = registryGetActivity,
             .getStreamId = registryGetStreamId,
             .getPeerAddr = registryGetPeerAddr,
+            .getConnId = registryGetConnId,
             .requestCancel = registryRequestCancel,
         };
     }
@@ -3673,7 +3687,20 @@ pub const StreamAcceptReactor = struct {
                             e.finished = true;
                             e.finished_ns = monoNsFromHandler();
                             e.teardown = e.ctx.claimConnOwnerTeardown();
-                            if (e.teardown == null) {
+                            // SONNY-6466: a DRAINED connection (the peer's
+                            // CONNECTION_CLOSE, or the library closed it) can
+                            // never receive another answer, so every read still
+                            // executing on it is abandoned — sibling streams'
+                            // too, not only the first stream's. The flag is
+                            // each stream's `shutdown_requested`, which the read
+                            // budget and the node scan poll as their cancel
+                            // source (`runStreamQueryLoopWithReader`), so the
+                            // reads stop at their next row instead of at the
+                            // per-connection stall watchdog. Before this only
+                            // the not-yet-handed-off case below set it, so a
+                            // read on a sibling stream of a connection whose
+                            // first stream had ended ran on after the close.
+                            if (e.teardown == null or e.ctx.conn.isDrained()) {
                                 // The first-stream owner has NOT handed the
                                 // connection over yet, so IT owns the teardown —
                                 // but it is parked on a connection whose peer has

@@ -579,9 +579,9 @@ const Message = raft_consensus.Message;
 
 // Minimal payload builders for each of the 6 Message variants. The classifier
 // reads only the union TAG, so payload field values are immaterial; we still
-// construct full, valid payloads (mirroring tests/test_quic_raft_smoke.zig's
-// empty-entries AppendEntries and the envelope round-trip tests) so the test is
-// robust to a future classifier that inspects fields.
+// construct full, valid payloads (an empty-entries AppendEntries, as the
+// envelope round-trip tests do) so the test is robust to a future classifier
+// that inspects fields.
 fn msgRequestVote(pre_vote: bool) Message {
     return .{ .request_vote = .{
         .term = 3,

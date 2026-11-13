@@ -569,7 +569,7 @@ test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
 }
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=ReadBudgetOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
-test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
+test "round 4b-1b over gRPC: LIMIT 1 over two 1,499-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -590,7 +590,8 @@ test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 
 // ---------------------------------------------------------------------------
 // Round 4b-1c: the join's memory and time over the wire (SONNY-3368, the
 // round 4b-1b re-review I-B / I-C). A WHERE that keeps none of the 2.25
-// million bindings of two 1,500-pair chains held about 700 MB (a node copy
+// million bindings of two 1,499-pair chains (`range(1, 1500)`; the end is
+// exclusive) held about 700 MB (a node copy
 // per binding, `getNodePtrForScan`), unseen by the read budget.
 
 /// A /proc status field (`VmRSS`, `VmHWM`) of process `pid` (0: this one),
@@ -698,7 +699,7 @@ const GrpcBoundJob = struct {
 };
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
-test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,500-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
+test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,499-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -785,24 +786,33 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
     }
     {
         // A join no binding of which completes (64 million steps, about an
-        // hour at 1,500 pairs): the client gives up after 1 s and closes its
-        // connection. The join polls the stream's cancel at every step, so
-        // it stops when the server marks the stream abandoned (its
-        // per-connection stall watchdog does at 60 s idle) instead of
-        // running to the end: within 100 s the server is idle.
+        // hour at 1,499 pairs): the client gives up after 1 s and closes its
+        // connection (CONNECTION_CLOSE: `deinit` sends one since SONNY-6466).
+        // The join polls the stream's cancel at every step, so it stops when
+        // the server marks the stream abandoned instead of running to the
+        // end: within 30 s the server is idle. (A client that vanishes
+        // without closing is tests/test_sonny6466_abandoned_read_cancel.zig.)
+        //
+        // SONNY-6466: the request is written and the client leaves 1 s later
+        // without reading. It used to wait for the reply with a 1 s timeout,
+        // but since SONNY-6301 the test client extends a reply wait while the
+        // server is alive, so it waited until the stall watchdog answered
+        // (60-65 s, more under load) and this check timed the watchdog.
         const name = "3368 abandoned join (QUIC)";
         var client = try util.QuicProtoClient.connect(allocator, addr);
         var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
         hello.deinit(allocator);
         const left = nowMillis();
-        if (client.executeAndCollectWithTimeout(allocator, "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP)-[:NOPE]->(z) RETURN a.i", util.emptyParams(), 1000, 1)) |r| {
-            var res = r;
-            res.deinit(allocator);
-        } else |_| {}
+        try client.writeMessage(.{ .execute = schema.ExecuteRequest{
+            .session_id = client.session_id,
+            .query = "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP)-[:NOPE]->(z) RETURN a.i",
+            .params = .empty,
+        } });
+        sleepMillis(1_000);
         client.deinit();
         var idle_after: ?i64 = null;
         var prev = procCpuTicks(server_pid);
-        while (nowMillis() - left < 100_000) {
+        while (nowMillis() - left < 30_000) {
             sleepMillis(1_000);
             const now_t = procCpuTicks(server_pid);
             // Clock ticks are 1/100 s: a join still running spends about
@@ -813,7 +823,7 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
             }
             prev = now_t;
         }
-        if (idle_after) |ms| std.debug.print("{s}: the server was idle {d} ms after the client left\n", .{ name, ms }) else try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server was still busy 100 s after the client left", .{name}));
+        if (idle_after) |ms| std.debug.print("{s}: the server was idle {d} ms after the client left\n", .{ name, ms }) else try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server was still busy 30 s after the client left", .{name}));
         var alive = try util.QuicProtoClient.connect(allocator, addr);
         defer alive.deinit();
         var hello2 = try alive.hello(allocator, util.defaultUsername(), util.defaultPassword());
