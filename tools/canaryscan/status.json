@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:56:47.544234717Z",
+  "generated_at": "2026-11-13T19:01:05.877197524Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85948,23 +85948,6 @@
       ]
     },
     {
-      "id": "REQ-SOURCE-PERF-012",
-      "features": [
-        {
-          "feature": "SourceFilePerformance",
-          "aspect": "TransactionDetectionTests",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl/repl_dispatch.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-SPATIAL-AREA-001",
       "features": [
         {
@@ -93012,7 +92995,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4905
+      "TESTED": 4904
     },
     "by_aspect": {
       "2PC": 3,
@@ -96799,7 +96782,6 @@
       "TransactionBodyProjection": 1,
       "TransactionCoord": 1,
       "TransactionCoordination": 1,
-      "TransactionDetectionTests": 1,
       "TransactionIsolation": 1,
       "TransactionLifecycle": 1,
       "TransactionSecurity": 1,

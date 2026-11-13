@@ -5476,7 +5476,6 @@ REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,TESTED,src/client/r
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,src/client/repl/repl_dispatch.zig,geodetestlab/specs/shell_source_batch.yml,,cli,2026-01-29
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,src/client/repl/repl_dispatch.zig,geodetestlab/specs/shell_source_batch.yml,,cli,2026-01-29
-REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,spatial,2026-01-10
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,spatial,2026-01-10
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,spatial,2026-01-10

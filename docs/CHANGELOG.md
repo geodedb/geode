@@ -2235,6 +2235,21 @@
 
 ### Fixed
 
+- **`geode shell` keeps the character typed after ESC; audit switches take
+  any-case booleans and refuse anything else (SONNY-6511 item 5).** The
+  line editor consumed ESC and the following byte as one key whenever that
+  byte was ASCII, but read the pair as Alt+<key> only for a letter, so ESC
+  followed in one read by a digit, punctuation or a second ESC lost the
+  character (`RETURN 'x<ESC>1y' AS v` returned `xy`). Only Alt+letter is
+  consumed as a pair now. `GEODE_AUDIT_ENABLED`, `_SYSLOG_ENABLED`,
+  `_FILE_ENABLED` and `_WINDOWS_EVENTLOG_ENABLED` were on only for exactly
+  `1` or `true`; `TRUE`, `yes` or a typo turned audit off silently. They take
+  `1`/`0`, `true`/`false`, `yes`/`no` in any case, and any other value
+  refuses the command like the other audit settings (SONNY-6494). The
+  REPL's `containsTransactionCommands`, which the ticket also named, had no
+  caller since `\source` stopped wrapping files in a transaction
+  (882bccfc8, 2026-01-30); it was removed with its tests and markers
+  (REQ-SOURCE-PERF-011, -012). `zig build test-sonny6511-repl-audit`.
 - **The inline tests of ten live files run again (SONNY-6511 item 1).**
   `zig build test-sonny6511-lib-inline` (in the aggregate) runs the inline
   tests of `security/multi_graph_security`, `client/quic_query_runner`,

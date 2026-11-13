@@ -175,9 +175,9 @@ REQ-AST-NODE-001,AST,NodeConstruction,TESTED,,,parser,2026-01-16,tests/test_gap_
 REQ-AUDIT-ACTOR-001,Audit Actor Canonical Key,ActorFieldPresent,TESTED,,,security,2026-05-21,tests/test_audit_actor_key.zig,1
 REQ-AUDIT-ACTOR-001,Audit Actor Canonical Key,ActorFieldPresent,TESTED,,,security,2026-05-21,tests/test_audit_actor_key.zig,17
 REQ-AUDIT-ACTOR-001,Audit Actor Canonical Key,NoLegacyAlias,TESTED,,,security,2026-05-21,tests/test_audit_actor_key.zig,49
-REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1187
-REQ-AUDIT-CLI-003,CLI Audit Events,EventLogging,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1340
-REQ-AUDIT-CLI-004,Windows Event Log Integration,EventLogging,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1437
+REQ-AUDIT-CLI-001,CLI Audit Configuration,Configuration,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1203
+REQ-AUDIT-CLI-003,CLI Audit Events,EventLogging,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1356
+REQ-AUDIT-CLI-004,Windows Event Log Integration,EventLogging,TESTED,,,audit,2025-09-30,src/cli/cli_dispatcher.zig,1453
 REQ-AUDIT-PROC-006,AuditProcedures,SignatureVerification,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig,219
 REQ-AUDIT-PROC-009,AuditProcedures,FileOutput,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig,408
 REQ-AUDIT-PROC-010,AuditProcedures,AuthCategories,TESTED,,,audit,2026-01-15,src/execution/audit_dispatch.zig,494
@@ -186,9 +186,9 @@ REQ-AUDIT-PROC-036,AuditProcedures,TestCleanup,TESTED,,,audit,2026-01-15,src/exe
 REQ-AUDIT-SECURITY-001,AuditSecurity,AuditLog,IMPL,,,audit,2026-11-12,tests/test_gap_0193_batch2_security.zig,191
 REQ-AUDIT-SECURITY-002,AuditSecurity,ComplianceLog,IMPL,,,audit,2026-11-12,tests/test_gap_0193_batch2_security.zig,198
 REQ-AUDIT-SYSLOG-001,SyslogAuditIntegration,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,73
-REQ-AUDIT-SYSLOG-002,SyslogSenderInit,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1303
-REQ-AUDIT-SYSLOG-003,SyslogEventSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1359
-REQ-AUDIT-SYSLOG-004,SyslogUdpSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1373
+REQ-AUDIT-SYSLOG-002,SyslogSenderInit,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1319
+REQ-AUDIT-SYSLOG-003,SyslogEventSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1375
+REQ-AUDIT-SYSLOG-004,SyslogUdpSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig,1389
 REQ-AUDIT-TENANT-001,AuditTenantId,PerThreadTenant,IMPL,,,security,2026-04-05,src/security/audit.zig,167
 REQ-AUDIT-TEST-001,AuditTests,UnitTests,IMPL,,,security,2026-11-12,tests/test_gap_0193_batch2_testing.zig,31
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,IMPL,,,audit,2026-11-12,tests/test_gap_0193_batch2_security.zig,184
@@ -4512,7 +4512,7 @@ REQ-SHELL-AUTH-001,ShellAuthRequired,HelloAuthCheck,TESTED,,,cli,2026-06-11,src/
 REQ-SHELL-AUTH-002,ShellAuthCredentials,OptionsFields,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,37
 REQ-SHELL-AUTH-003,ShellAuthHandshake,HelloWithCredentials,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,107
 REQ-SHELL-AUTH-004,ShellAuthOptions,CLIParsing,TESTED,,,cli,2026-06-11,src/cli/main.zig,3851
-REQ-SHELL-AUTH-005,ShellAuthTests,UnitTests,TESTED,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig,3991
+REQ-SHELL-AUTH-005,ShellAuthTests,UnitTests,TESTED,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig,3949
 REQ-SHELL-EMPTY-ENTER-001,ShellEmptyEnter,NewlineOnEmptyInput,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig,904
 REQ-SHELL-HISTORY-RESET-001,HistoryReset,MetaCommand,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig,974
 REQ-SHELL-HISTORY-RESET-002,HistoryReset,GqlExecution,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig,1027
@@ -4537,11 +4537,11 @@ REQ-SHELL-INTERRUPT-033,SourceInterrupt,DrainWithSpinner,TESTED,,,cli,2026-06-11
 REQ-SHELL-INTERRUPT-034,SourceInterrupt,QuicReadLineTimeout,TESTED,,,transport,2026-06-11,src/transport/quic.zig,2779
 REQ-SHELL-INTERRUPT-035,SourceInterrupt,DisconnectForRollback,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,784
 REQ-SHELL-INTERRUPT-036,SourceInterrupt,SignalBasedInterrupt,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,183
-REQ-SHELL-INTERRUPT-037,SourceInterrupt,KeepISIG,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,1661
+REQ-SHELL-INTERRUPT-037,SourceInterrupt,KeepISIG,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,1663
 REQ-SHELL-INTERRUPT-038,SourceInterrupt,QuicReadLineInterrupt,TESTED,,,transport,2026-06-11,src/transport/quic.zig,2780
 REQ-SHELL-INTERRUPT-039,SourceInterrupt,ThreadedRead,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,1358
 REQ-SHELL-INTERRUPT-046,SourceInterrupt,PromptSigintCheck,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,714
-REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintCheck,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,1466
+REQ-SHELL-INTERRUPT-047,SourceInterrupt,SearchSigintCheck,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,1468
 REQ-SHELL-INTERRUPT-048,SourceInterrupt,PollForInput,IMPL,,,cli,2026-01-30,src/client/repl/repl_loop.zig,747
 REQ-SHELL-PLAIN-001,ShellPlainMode,OptionsField,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,43
 REQ-SHELL-PLAIN-002,ShellPlainMode,StateField,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,423
@@ -4549,8 +4549,8 @@ REQ-SHELL-PLAIN-003,ShellPlainMode,PlainPrompt,TESTED,,,cli,2026-06-11,src/clien
 REQ-SHELL-PLAIN-007,ShellPlainMode,PlainModeRun,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,49
 REQ-SHELL-PLAIN-008,ShellPlainMode,PlainModeImpl,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,178
 REQ-SHELL-PLAIN-009,ShellPlainMode,InterruptCheckTTY,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,189
-REQ-SHELL-PLAIN-009,ShellPlainMode,PlainRawMode,IMPL,,,cli,2026-02-03,src/client/repl/repl_loop.zig,1678
-REQ-SHELL-PLAIN-011,ShellPlainMode,ColumnRowsDisplay,IMPL,,,cli,2026-02-03,src/client/repl/repl_dispatch.zig,3411
+REQ-SHELL-PLAIN-009,ShellPlainMode,PlainRawMode,IMPL,,,cli,2026-02-03,src/client/repl/repl_loop.zig,1680
+REQ-SHELL-PLAIN-011,ShellPlainMode,ColumnRowsDisplay,IMPL,,,cli,2026-02-03,src/client/repl/repl_dispatch.zig,3369
 REQ-SHELL-PLAIN-012,ShellPlainMode,MetaCommandDispatch,TESTED,,,cli,2026-06-11,src/client/repl/repl_loop.zig,354
 REQ-SHELL-PLAIN-EOF-001,ShellPlainMode,ExitAtEndOfInput,TESTED,,,cli,2026-11-13,src/client/repl/repl_loop.zig,268
 REQ-SHELL-RECONNECT-001,ShellAutoReconnect,ReconnectionConfig,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,689
@@ -4566,7 +4566,7 @@ REQ-SHELL-RECONNECT-010,ShellAutoReconnect,HandleConnectionError,TESTED,,,cli,20
 REQ-SHELL-RECONNECT-011,ShellAutoReconnect,ExecuteWithRetry,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,2547
 REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig,417
 REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig,129
-REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4394
+REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4203
 REQ-SHELL-SOURCE-ERROR-001,SourceFileErrorDetails,BatchErrorExtraction,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,3117
 REQ-SHELL-SOURCE-ERROR-003,SourceFileErrorDetails,ErrorExtraction,TESTED,,,cli,2026-11-12,src/client/repl/repl_dispatch.zig,3175
 REQ-SHELL-SPINNER-001,ShellProcessingIndicator,Module,TESTED,,,cli,2026-11-12,src/client/repl/spinner.zig,54
@@ -5785,11 +5785,9 @@ REQ-SOURCE-PERF-001,SourceFilePerformance,FileHashCache,TESTED,,,cli,2026-06-11,
 REQ-SOURCE-PERF-002,SourceFilePerformance,BatchExecution,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig,2721
 REQ-SOURCE-PERF-002,SourceFilePerformance,FileHashCacheCleanup,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,2692
 REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,TESTED,,,cli,2026-06-11,src/client/repl/repl_dispatch.zig,846
-REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4173
+REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4131
 REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,2843
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,3010
-REQ-SOURCE-PERF-011,SourceFilePerformance,TransactionDetection,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,3257
-REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig,4233
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,1914
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,2006
 REQ-SPATIAL-CENTROID-001,SpatialCentroid,GeometryMeasure,TESTED,,,spatial,2026-01-10,src/eval_extended.zig,1952

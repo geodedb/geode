@@ -1216,9 +1216,11 @@ fn getKeyEventLength(data: []const u8) usize {
                 return 3;
             }
             return 2;
-        } else if (data.len > 1 and data[1] < 0x80) {
-            // Alt+key sequences (SONNY-6494: never a UTF-8 lead byte, which
-            // starts the next character)
+        } else if (data.len > 1 and ((data[1] >= 'a' and data[1] <= 'z') or (data[1] >= 'A' and data[1] <= 'Z'))) {
+            // Alt+letter, the only ESC pairs parseKeyEvent reads as one key.
+            // SONNY-6511: any other byte (a digit, punctuation, a second ESC,
+            // a UTF-8 lead byte, SONNY-6494) starts the next key; consuming
+            // it here lost the character.
             return 2;
         }
         return 1; // Just ESC
