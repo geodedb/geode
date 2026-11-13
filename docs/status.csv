@@ -5823,8 +5823,8 @@ REQ-SONNY-6465-KMS-TLS,ExternalKmsClients,TlsOptionsHonoured,TESTED,,,security,2
 REQ-SONNY-6466-CONN-STALL-CANCEL,QUIC Abandoned Read Cancellation,ConfigurableConnectionStallThreshold,TESTED,,,transport,2026-11-13,src/server/main.zig,268
 REQ-SONNY-6466-FOR-ATOMICITY,ForStatement,StatementAtomicityOnElementFailure,TESTED,,,engine,2026-11-13,tests/test_sonny6466_for_statement_atomicity.zig,18
 REQ-SONNY-6466-RANGE-CONTRACT,range() function,ExclusiveEndGeodeExtension,TESTED,,,eval,2026-11-13,tests/test_for_write_body.zig,320
-REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE,QUIC Abandoned Read Cancellation,DrainedConnectionCancelsEveryStream,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,209
-REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL,QUIC Abandoned Read Cancellation,ConnectionKeyedStallWatchdog,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,136
+REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE,QUIC Abandoned Read Cancellation,DrainedConnectionCancelsEveryStream,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,298
+REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL,QUIC Abandoned Read Cancellation,ConnectionKeyedStallWatchdog,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,225
 REQ-SONNY-6467-CALL-IN-TXN-BODY,ProcedureCall,TransactionBodyProjection,TESTED,,,execution,2026-11-13,src/execution.zig,1207
 REQ-SONNY-6467-FILTER-AFTER-LET,FilterStatement,AfterInlineLet,TESTED,,,parser,2026-11-13,src/gql/parser.zig,2778
 REQ-SONNY-6467-QUERY-RESIDUALS,BooleanExpressions,Regression,TESTED,,,parser,2026-11-13,tests/test_sonny6467_query_residuals.zig,22

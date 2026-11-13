@@ -2226,6 +2226,18 @@
   `Ipv6EndpointUnsupported` instead of failing with a bare `InvalidAddress`.
   Regressions: `zig build test-sonny6487-host-port`,
   `test-sonny6487-endpoint-host-family`, `test-sonny6487-ipv6-serve`.
+- **Test infrastructure: the abandoned-read test measures idle per thread
+  (SONNY-6487 item 4).** `tests/test_sonny6466_abandoned_read_cancel.zig`'s
+  "vanish" case failed under parallel load although the server behaved: the
+  stall watchdog cancelled the vanished client's read at a stream idle of
+  12.8 s and the join stopped, but the test's "idle" was a one-second window
+  in which the whole server process spent under 30 ticks, and an idle
+  server's polling threads spend 32-38 ticks/s together when several
+  server-spawning steps run at once (about 9 on a quiet machine). Idle is
+  now a window in which no server thread spends 30 ticks and the thread
+  that ran the join is not runnable (the join runs on one thread at 80-110
+  ticks/s); the 10 s threshold and the 30 s / 20 s bounds are unchanged.
+  `zig build test-sonny6466-abandoned-read-cancel`.
 - **Server: removed the unused MVCC manager fields from the connection
   state (SONNY-6487 item 6).** `ServerState.mvcc_manager` and
   `current_mvcc_txn` (`src/server/server_state.zig`) were never set or read;
