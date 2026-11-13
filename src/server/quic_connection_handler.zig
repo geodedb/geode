@@ -3126,7 +3126,6 @@ fn deinitQuicServerState(gpa: std.mem.Allocator, state: *ServerState, context: [
         gpa.free(role);
         state.fle_user_role = null;
     }
-    state.txn_manager.deinit();
     for (state.inserted_values.items) |item| {
         state.allocator.free(item.value);
     }
@@ -3177,7 +3176,6 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     // Build a per-stream ServerState inheriting shared connection identity.
     var state = ServerState{ .allocator = gpa };
     state.exec_session = execution.SessionState.init(gpa);
-    state.txn_manager.init(gpa);
     state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
@@ -5889,7 +5887,6 @@ pub fn handleQuicConnection(
     };
     state.exec_session = execution.SessionState.init(gpa);
     state.telemetry_paging = env_config.telemetry_paging;
-    state.txn_manager.init(gpa);
     state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);

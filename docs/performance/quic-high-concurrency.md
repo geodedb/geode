@@ -80,9 +80,13 @@ p99.9=1037.43 ms.
 The accepted high-fanout profile is now reflected in Geode's release defaults
 instead of living only in the E2E harness environment:
 
-- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING` defaults to off. This avoids one idle
-  multiplexed acceptor loop per high-fanout single-stream connection. Operators
-  that need multi-stream compatibility can set it to `1`.
+- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING` defaults to on
+  (`quic_stream_multiplexing_enabled = true` in `src/server/server_init.zig`,
+  since 2026-07-06, commit `68618e604`): a server without it hangs clients that
+  open secondary streams (the Go client does). The high-fanout single-stream
+  profile can set it to `0` to avoid one idle multiplexed acceptor loop per
+  connection. (It defaulted to off from 2026-05-29 to 2026-07-06; corrected
+  here in SONNY-6484.)
 - `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS` defaults to on. First streams rotate
   through the bounded cooperative scheduler instead of pinning one persistent
   worker or detached owner per live client.
@@ -406,9 +410,9 @@ smoke proving the restart/recovery and graph-isolation gates work.
   and server default at `16`. The server accepts explicit sweeps up to `64` on the
   v0.1.21+ QUIC dependency line, but the measured 1024x8 mixed A/B did not
   improve throughput and increased poll overruns, so `64` is diagnostic-only.
-- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING`: defaults to `0` for the high-fanout
-  single-stream profile. Set `1` for clients that need additional peer-initiated
-  streams on the same authenticated connection.
+- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING`: defaults to `1` (clients may open
+  additional peer-initiated streams on the same authenticated connection). Set
+  `0` for the high-fanout single-stream profile.
 - `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS`: defaults to `1`. Set `0` only when
   triaging compatibility against the detached-owner or shared-stream-pool paths.
 - `GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS`: defaults to `512` in optimized

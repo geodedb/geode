@@ -286,18 +286,19 @@ pub const Manager = struct {
         otel_metrics.decTransactionActive(.snapshot);
     }
 
+    // A WriteWrite entry is (requester, holder): `acquireLock` records it
+    // when `requester` is refused an exclusive lock `holder` has. Only the
+    // refused requester is doomed while the holder is active; the holder
+    // owns the lock and commits normally (SONNY-6484: the check used to be
+    // symmetric, so a refused waiter that was still active aborted the lock
+    // holder's commit). The holder's commit removes the entry
+    // (`removeConflicts`), after which the requester may take the lock.
     fn hasWriteWriteConflicts(self: *Manager, txn_id: TxnId) !bool {
         var iter = self.conflict_matrix.conflicts.iterator();
         while (iter.next()) |entry| {
             const key = entry.key_ptr.*;
-            const conflict_type = entry.value_ptr.*;
-
-            if ((key[0] == txn_id or key[1] == txn_id) and conflict_type == .WriteWrite) {
-                // Check if the conflicting transaction is still active
-                const other_txn = if (key[0] == txn_id) key[1] else key[0];
-                if (self.active_txns.contains(other_txn)) {
-                    return true;
-                }
+            if (key[0] == txn_id and entry.value_ptr.* == .WriteWrite and self.active_txns.contains(key[1])) {
+                return true;
             }
         }
         return false;
@@ -317,8 +318,12 @@ pub const Manager = struct {
             }
         }
 
-        // Remove from wait-for graph
-        _ = self.wait_for_graph.remove(txn_id);
+        // Remove from wait-for graph (SONNY-6484: free the txn's own wait
+        // list; dropping only the map entry leaked it)
+        if (self.wait_for_graph.fetchRemove(txn_id)) |kv| {
+            var wait_list = kv.value;
+            wait_list.deinit(self.allocator);
+        }
         var wait_iter = self.wait_for_graph.iterator();
         while (wait_iter.next()) |entry| {
             var wait_list = entry.value_ptr;

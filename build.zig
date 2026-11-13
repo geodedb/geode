@@ -4673,24 +4673,19 @@ pub fn build(b: *std.Build) void {
     // 2PC coordinator tests — MOVED out of src/distributed/txn_coordinator.zig's
     // inline `test` blocks (2026-06-10) so they no longer ride into the
     // graph_store_unit_tests test root (which transitively imports
-    // txn_coordinator) and break the sharded `zig build test` to compile. The
-    // union-encoding bodies are comptime-gated behind a protobuf-union blocker
-    // flag in the file, so this step compiles + self-skips until the protobuf
-    // dependency supports a union as a repeated submessage. See
-    // docs/KNOWN_TEST_ISSUES.md.
+    // txn_coordinator). SONNY-6484: they build native G2PC write sets and run
+    // (they used to self-skip behind a protobuf-union flag for a wire format
+    // the coordinator no longer accepts). See docs/KNOWN_TEST_ISSUES.md.
     const txn2pc_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_txn_coordinator_2pc.zig"),
         .target = target,
         .optimize = optimize,
     });
     txn2pc_test_mod.addImport("geode", root_mod);
-    txn2pc_test_mod.addImport("protobuf", protobuf_mod);
-    txn2pc_test_mod.addImport("schema", schema_mod);
-    txn2pc_test_mod.addImport("distributed_schema", distributed_schema_mod);
     const txn2pc_tests = b.addTest(.{ .root_module = txn2pc_test_mod });
     const run_txn2pc_tests = b.addRunArtifact(txn2pc_tests);
     shardDep(test_step, &run_txn2pc_tests.step, 1, test_shard_loads, test_shard_index);
-    const txn2pc_step = b.step("test-txn-coordinator-2pc", "Run distributed 2PC coordinator tests (guarded by protobuf-union blocker; see KNOWN_TEST_ISSUES.md)");
+    const txn2pc_step = b.step("test-txn-coordinator-2pc", "Run distributed 2PC coordinator tests (TxnCoordinator prepare/decide on native G2PC write sets: commit, conflicting prepare votes abort, multi-node apply, delete)");
     txn2pc_step.dependOn(&run_txn2pc_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
@@ -6024,6 +6019,34 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6476-shell-long-line", "Run SONNY-6476 item 2 regression (the real geode shell --plain against a real server runs a 6,000-byte statement whole: no 4,095-byte truncation)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6484 item 2: the plain shell passes UTF-8 through.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_shell_utf8.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6484-shell-utf8", "Run SONNY-6484 item 2 regression (the real geode shell --plain against a real server round-trips 2-, 3- and 4-byte UTF-8 and combining marks through CREATE and RETURN, and refuses a line that is not valid UTF-8)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6484 (1): IPv6 literals in client addresses (--server, --dsn,
+    // the MCP endpoint DSN) are bracketed or refused, never misread.
+    {
+        const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
+        bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_ipv6_host_port.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("zig_quic_bridge", bridge_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6484-ipv6-host-port", "Run SONNY-6484 item 1 regression (client addresses and DSNs: [::1], [::1]:3141 and [fe80::1%eth0]:3141 parse to the bare address and port; a bare IPv6 literal and malformed brackets are refused, not misread as host ':' port 1)").dependOn(&run_tests.step);
     }
 
     // SONNY-6463 (5): source files outside src/distributed whose inline tests
@@ -10023,6 +10046,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6301_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6301_step = b.step("test-sonny6301-test-ports-and-timeouts", "Run SONNY-6301 regression (test ports come from the kernel, not a constant: distinct, usable UDP/TCP ports and two servers at once each answering on its own; shared QUIC and gRPC test clients wait for a live server past the old reply deadline and fail at once when it exited)");
     sonny6301_step.dependOn(&run_sonny6301_tests.step);
+
+    // SONNY-6484 (3): an explicit timeout of the shared QUIC test client is a
+    // hard deadline, also against a live (stopped) server.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_client_hard_deadline.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
     // the auto TLS key lives in the data directory (exclusive, no-follow,
@@ -15032,10 +15071,8 @@ pub fn build(b: *std.Build) void {
     // test root's own module only). Each gets a test root that copies the
     // import table the build already gives the file, so it compiles exactly
     // as it ships; the CLI files and the fuzz harness copy geode_exe's.
-    // Not yet here (their inline tests fail; SONNY-6463 follow-up): the MCP
-    // files (src/sonny6463_mcp_test_root.zig: 52 pass, 3 fail, 1 leak),
-    // src/storage/user_storage.zig (7 pass, 1 fail) and
-    // src/transactions/manager.zig (6 pass, 2 fail).
+    // The MCP files, src/storage/user_storage.zig and
+    // src/transactions/manager.zig joined in SONNY-6484 (below).
     {
         const sonny6463b_step = b.step("test-sonny6463-inline-wired", "Run SONNY-6463 item 5 (second batch): the inline tests of live files the build imports only as named modules or executable sources, each rooted with the import table the build gives it");
         const Root = struct { name: []const u8, path: ?[]const u8 = null, from: *std.Build.Module, exe: bool = false };
@@ -15080,6 +15117,27 @@ pub fn build(b: *std.Build) void {
             const run_tests = b.addRunArtifact(tests);
             shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
             sonny6463b_step.dependOn(&run_tests.step);
+        }
+        // SONNY-6484 (1): the files SONNY-6463 left out because their inline
+        // tests failed. The MCP files share a root at src/ that copies
+        // mcp_cli_mod's import table; user_storage.zig and manager.zig are
+        // their own modules' roots (other modules import them by name).
+        {
+            const sonny6484_step = b.step("test-sonny6484-inline", "Run SONNY-6484 item 1: the inline tests of src/mcp/{lsp,resources,server,tools,client}.zig, src/storage/user_storage.zig and src/transactions/manager.zig");
+            const mcp_root = b.createModule(.{ .root_source_file = b.path("src/sonny6463_mcp_test_root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+            var it = mcp_cli_mod.import_table.iterator();
+            while (it.next()) |imp| mcp_root.addImport(imp.key_ptr.*, imp.value_ptr.*);
+            for ([_]struct { name: []const u8, mod: *std.Build.Module }{
+                .{ .name = "mcp", .mod = mcp_root },
+                .{ .name = "user-storage", .mod = user_storage_mod },
+                .{ .name = "txn-manager", .mod = txn_mod },
+            }) |entry| {
+                const tests = b.addTest(.{ .name = b.fmt("sonny6484-{s}", .{entry.name}), .root_module = entry.mod });
+                const run_tests = b.addRunArtifact(tests);
+                shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+                sonny6484_step.dependOn(&run_tests.step);
+                sonny6463b_step.dependOn(&run_tests.step);
+            }
         }
     }
 

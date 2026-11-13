@@ -47,16 +47,69 @@ fn initClientWithInsecureSetting(
     return try zig_client.GeodeClient.initFromConfig(allocator, cfg);
 }
 
+/// Split a client address (`--server`, the host part of `--dsn`) into host
+/// and port. Grammar (docs/DSN.md, "Host Specification"):
+///   host | host:port | :port (127.0.0.1) | [ipv6] | [ipv6]:port
+/// where `ipv6` may carry a zone, `[fe80::1%eth0]`. The brackets are
+/// stripped from the returned host. SONNY-6484: an unbracketed host with
+/// more than one colon (a bare IPv6 literal such as `::1`) is refused with
+/// `error.InvalidAddress`; splitting it on the last colon read `::1` as
+/// host `:` port 1.
 pub fn parseHostPort(addr: []const u8, default_port: u16) !HostPort {
-    const colon_idx = std.mem.lastIndexOf(u8, addr, ":") orelse {
+    if (addr.len > 0 and addr[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, addr, ']') orelse return error.InvalidAddress;
+        const host = addr[1..close];
+        if (!isIpv6Literal(host)) return error.InvalidAddress;
+        const rest = addr[close + 1 ..];
+        if (rest.len == 0) return .{ .host = host, .port = default_port };
+        if (rest[0] != ':') return error.InvalidAddress;
+        return .{ .host = host, .port = try std.fmt.parseInt(u16, rest[1..], 10) };
+    }
+    const colon_idx = std.mem.indexOfScalar(u8, addr, ':') orelse {
         return .{ .host = addr, .port = default_port };
     };
+    if (std.mem.indexOfScalarPos(u8, addr, colon_idx + 1, ':') != null) return error.InvalidAddress;
     const host = addr[0..colon_idx];
     const port = try std.fmt.parseInt(u16, addr[colon_idx + 1 ..], 10);
     return .{
         .host = if (host.len == 0) "127.0.0.1" else host,
         .port = port,
     };
+}
+
+/// An IPv6 address, optionally with a `%zone` suffix (no brackets).
+fn isIpv6Literal(text: []const u8) bool {
+    return switch (std.Io.net.Ip6Address.Unresolved.parse(text)) {
+        .success => true,
+        else => false,
+    };
+}
+
+/// SONNY-6484: refuse a DSN whose host is an unbracketed IPv6 literal
+/// (`::1`, `quic://2001:db8::1/g`) or has malformed brackets, before it
+/// reaches geode-client-zig's `parseDSN`, which splits an unbracketed host
+/// on its last colon (`::1` became host `:` port 1). The host part is
+/// located the way `parseDSN` locates it: after `scheme://` and, with a
+/// scheme, after the first `@`; up to the first `?`, then the first `/`
+/// outside brackets. A bracketed host must be an IPv6 literal (zone
+/// allowed) followed by nothing or `:port`.
+pub fn checkDsnHost(dsn: []const u8) error{InvalidAddress}!void {
+    var rest = dsn;
+    if (std.mem.indexOf(u8, rest, "://")) |scheme_end| {
+        rest = rest[scheme_end + 3 ..];
+        if (std.mem.indexOfScalar(u8, rest, '@')) |at| rest = rest[at + 1 ..];
+    }
+    if (std.mem.indexOfScalar(u8, rest, '?')) |q| rest = rest[0..q];
+    if (rest.len > 0 and rest[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return error.InvalidAddress;
+        if (!isIpv6Literal(rest[1..close])) return error.InvalidAddress;
+        const after = rest[close + 1 ..];
+        const port_end = std.mem.indexOfScalar(u8, after, '/') orelse after.len;
+        if (port_end != 0 and after[0] != ':') return error.InvalidAddress;
+        return;
+    }
+    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| rest = rest[0..slash];
+    if (std.mem.count(u8, rest, ":") > 1) return error.InvalidAddress;
 }
 
 /// How `initClient` treats the server's certificate (SONNY-6448).

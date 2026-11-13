@@ -862,7 +862,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
         defer allocator.free(v);
         break :blk true;
     } else |_| false;
-    state.txn_manager.init(allocator);
     state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
@@ -921,7 +920,6 @@ fn deinitServerState(state: *server_state.ServerState) void {
         cb.secureZero(@constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
         alloc.free(p);
     }
-    state.txn_manager.deinit();
     for (state.inserted_values.items) |item| {
         alloc.free(item.value);
     }

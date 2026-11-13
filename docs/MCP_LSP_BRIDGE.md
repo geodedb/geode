@@ -46,15 +46,19 @@ typed function in `src/mcp/lsp.zig`.
 ### `pub fn getCompletions(allocator, query, line, column) ![]const u8`
 
 - Returns a JSON-encoded `CompletionResponse` (`{completions[]}`).
-- Pre-condition matches `validateQuery`.
+- Pre-condition matches `validateQuery`, except that an empty `query` is
+  the start of a statement (an editor's empty buffer): it returns the
+  clause keywords (SONNY-6484).
 - The returned `CompletionItemJson.insertText` is owned by the caller
   via the surrounding response buffer.
 
 ### `pub fn getHover(allocator, query, line, column) ![]const u8`
 
-- Returns a JSON-encoded `HoverResponse` (`{contents}` — `null` when
-  the word at `(line, column)` has no metadata entry).
-- Pre-condition matches `validateQuery`.
+- Returns a JSON-encoded `HoverResponse`, `{"contents": ...}`. The field
+  is always present: `{"contents":null}` when the word at
+  `(line, column)` has no metadata entry (SONNY-6484; it used to be `{}`).
+- Pre-condition matches `validateQuery`, except that an empty `query`
+  returns `{"contents":null}`.
 
 ### `pub fn getDiagnostics(allocator, query) ![]const u8`
 
@@ -64,15 +68,16 @@ typed function in `src/mcp/lsp.zig`.
 
 ## Input chokepoint (LSP-SEC-007 / GAP-0819)
 
-All four entry points run their `query` argument through
+All four entry points run a non-empty `query` argument through
 `validateAndSanitizeGqlInput` (in `src/mcp/input_guards.zig`) before
-any lexer/parser work. This is the single source of truth for input
+any lexer/parser work (`getCompletions` and `getHover` answer an empty
+one without it; `validateQuery` and `getDiagnostics` refuse it). This is the single source of truth for input
 acceptance:
 
 | Reject reason | Error |
 |---|---|
 | `query.len > MAX_GQL_TEXT (1 MiB)` | `InputError.QueryTooLarge` |
-| `query.len == 0` | `InputError.QueryEmpty` |
+| `query.len == 0` (`validateQuery`, `getDiagnostics` only) | `InputError.QueryEmpty` |
 | Invalid UTF-8 | `InputError.InvalidUtf8` |
 | Embedded NUL byte | `InputError.EmbeddedNul` |
 | Nested comments > 64 deep | `InputError.NestedCommentTooDeep` |

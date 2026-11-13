@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:38:00.248379949Z",
+  "generated_at": "2026-11-13T14:46:02.621821236Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -35885,20 +35885,6 @@
           "aspect": "2PC",
           "status": "TESTED",
           "files": [
-            "tests/test_txn_coordinator_2pc.zig"
-          ],
-          "tests": [
-            "TestCANARY_2PC_Coordinator"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "Distributed Transaction Coordinator",
-          "aspect": "2PC",
-          "status": "TESTED",
-          "files": [
             "src/distributed/txn_coordinator.zig"
           ],
           "tests": [
@@ -35907,6 +35893,20 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-06-11"
+        },
+        {
+          "feature": "Distributed Transaction Coordinator",
+          "aspect": "2PC",
+          "status": "TESTED",
+          "files": [
+            "tests/test_txn_coordinator_2pc.zig"
+          ],
+          "tests": [
+            "TestCANARY_2PC_Coordinator"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -35937,7 +35937,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-06-10"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -86724,6 +86724,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6484-SHELL-UTF8",
+      "features": [
+        {
+          "feature": "ShellPlainMode",
+          "aspect": "Utf8PassThrough",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_loop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6484_shell_utf8.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94379,7 +94398,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4923
+      "TESTED": 4924
     },
     "by_aspect": {
       "2PC": 3,
@@ -98415,6 +98434,7 @@
       "UsingCaptureExcludesTerminator": 1,
       "UtcSlsDeclaration": 1,
       "Utf16ToUtf8": 1,
+      "Utf8PassThrough": 1,
       "Utf8ToUtf16": 1,
       "Utilities": 1,
       "VARIANCE": 1,

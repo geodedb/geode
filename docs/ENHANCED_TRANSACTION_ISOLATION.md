@@ -35,8 +35,16 @@ together with the two uncompiled tests that exercised them
   range tracking, write-skew detection, `mvcc_adv/`) is compiled only by its
   tests: `zig build test-canary-txn-phantom-anomaly`,
   `test-canary-txn-phantom-range`, `test-canary-txn-write-skew`,
-  `test-canary-mvcc-adv-integration`, plus a fuzz target (`mvcc_adv/` alone is
-  also compiled by `test-canary-mvcc-advanced`).
+  `test-canary-mvcc-adv-integration`, `test-sonny6484-inline` (its inline
+  tests), plus a fuzz target (`mvcc_adv/` alone is also compiled by
+  `test-canary-mvcc-advanced`). Until SONNY-6484 every QUIC and gRPC
+  connection state (`ServerState.txn_manager`, `active_txn`) carried a
+  `Manager` that was initialised and freed but never called; the fields
+  were removed. SONNY-6484 also fixed two defects its inline tests found:
+  `commit` aborted a lock holder whose refused waiter was still active
+  (the write-write check was symmetric; only the refused requester is
+  doomed now), and a transaction's wait-for list leaked at commit and
+  rollback.
 - `src/server/txn/mvcc.zig` and `src/server/txn/phantom_read_prevention.zig`
   are named only by an export in `src/lib.zig` and by two fields in
   `src/server/server_state.zig` (`mvcc_manager`, `current_mvcc_txn`) that

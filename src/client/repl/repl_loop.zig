@@ -300,10 +300,20 @@ pub const ReplLoop = struct {
                     break;
                 } else if (byte[0] == 127 or byte[0] == 8) { // Backspace
                     if (line_buf.items.len > 0) {
+                        // SONNY-6484: erase one character, i.e. a whole
+                        // UTF-8 sequence (its continuation bytes and lead).
+                        while (line_buf.items.len > 1 and line_buf.items[line_buf.items.len - 1] & 0xC0 == 0x80) {
+                            _ = line_buf.pop();
+                        }
                         _ = line_buf.pop();
                         try stdout_file.writeStreamingAll(replIo(), "\x08 \x08"); // Erase character
                     }
-                } else if (byte[0] >= 32 and byte[0] < 127) {
+                } else if ((byte[0] >= 32 and byte[0] != 127) or byte[0] == '\t') {
+                    // SONNY-6484: printable ASCII, a tab, and every byte of
+                    // a multi-byte UTF-8 sequence (>= 0x80). Only bytes
+                    // 32..126 were kept, so non-ASCII text (and tabs) in a
+                    // statement was dropped without a word; the whole line
+                    // is checked for valid UTF-8 below, before it runs.
                     if (too_long) continue; // read the rest of the line, keep none
                     if (line_buf.items.len >= max_plain_line_bytes) {
                         too_long = true;
@@ -325,6 +335,15 @@ pub const ReplLoop = struct {
             }
 
             if (line_buf.items.len == 0) {
+                if (state.quit_requested) break;
+                continue;
+            }
+
+            // CANARY: REQ=REQ-SONNY-6484-SHELL-UTF8; FEATURE="ShellPlainMode"; ASPECT=Utf8PassThrough; STATUS=TESTED; TEST=tests/test_sonny6484_shell_utf8.zig; OWNER=cli; UPDATED=2026-11-13
+            // SONNY-6484: a line that is not valid UTF-8 is refused whole,
+            // never sent with bytes removed or replaced.
+            if (!std.unicode.utf8ValidateSlice(line_buf.items)) {
+                try stdout_file.writeStreamingAll(replIo(), "Error: the line is not valid UTF-8; it was not run\n");
                 if (state.quit_requested) break;
                 continue;
             }

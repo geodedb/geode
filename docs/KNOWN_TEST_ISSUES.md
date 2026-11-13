@@ -61,7 +61,8 @@ host at commit `0eefbb9a` (same env as the sweep):
 Four named steps were also **added** since the `faac1f3e` sweep, so the
 denominator is now **179**: `test-raft-apply` (27/27 PASS),
 `test-raft-hardstate-durability` (2/2 PASS), `test-txn-coordinator-2pc`
-(0/4 — all 4 protobuf-union-gated self-skips; step PASSES), and
+(0/4 then — all 4 protobuf-union-gated self-skips; 4/4 run and pass since
+SONNY-6484, on the native G2PC write set), and
 `test-cluster-replicable-mutations` (TIMEOUT at 300 s — an *intentionally
 red* TDD reproduction of the 2026-06-09 cluster write-replication gaps; 3-node
 subprocess family, see row below).
@@ -163,6 +164,12 @@ the `std.Io.Dir`/`File` API; stale managed-`ArrayList` calls; the protobuf
    compiled only by its tests (`zig build test-gap0889`), and
    `src/transactions/two_phase_commit.zig`, named here before, was never
    compiled and was removed (SONNY-6298).
+
+   **SONNY-6484:** the four tests no longer skip. Since GAP-0870 the
+   coordinator decodes only the native G2PC write set
+   (`txn_coordinator.serializeWriteSet`) and votes abort on a protobuf one,
+   and no code path produces a protobuf `TwoPhaseMessage`; the tests now
+   build G2PC write sets and run (4/4).
 
 With those two fixes, all four `zig build test` shards
 (`-Dtest-shard-total=4 -Dtest-shard-index=0..3`) COMPILE and pass under the

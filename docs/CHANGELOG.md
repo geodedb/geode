@@ -2189,6 +2189,87 @@
 
 ### Fixed
 
+- **Test infrastructure: an explicit QUIC test-client timeout is a hard
+  deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
+  client connected to a loopback address to its server's liveness
+  (SONNY-6301) and then treated every reply deadline as soft: while the
+  server was alive the wait went on up to 120 s. So
+  `executeAndCollectWithTimeout(.., 8)`, `helloWithTimeout(.., 1000)` and
+  `readPacket(.., 5000)` never gave up on a live server, and the tests that
+  rely on a short deadline to turn a hang into a fast failure (the
+  sequential-upsert desync and high-concurrency e2e lanes) were measuring
+  120 s. Those calls now fail with `Timeout` at their deadline (a server that
+  exits still fails at once with `ServerExited`), and
+  `executeAndCollectWithTimeout` bounds the whole exchange rather than each
+  reply page. Waiting while the server is alive is a separately named
+  choice: `ReplyWait.while_server_alive_ms` (`readPacketWait`, `helloWait`,
+  `executeAndCollectWait`), used by the calls that take no timeout
+  (`hello`, `executeAndCollect`, `ping`, `begin`, `commit`, ...).
+  `tests/test_txn_coordinator_2pc.zig` ran 0 of 4 tests (all skipped behind
+  a protobuf-union flag for a write-set format the coordinator stopped
+  accepting in GAP-0870); they now build native G2PC write sets and run
+  (4/4). Regression: `zig build test-sonny6484-client-hard-deadline`.
+- **Docs: QUIC stream multiplexing defaults to on (SONNY-6484 item 4).**
+  `docs/performance/quic-high-concurrency.md` said
+  `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING` defaults to off; it has defaulted
+  to on since 2026-07-06 (`src/server/server_init.zig`,
+  `quic_stream_multiplexing_enabled = true`). Corrected there and in
+  `docs/audit/quic-high-concurrency-2026-05-29.md`.
+
+- **`geode shell --plain` no longer drops non-ASCII text (SONNY-6484 item
+  2).** The plain-mode line reader kept only bytes 32-126, so every byte of
+  a multi-byte UTF-8 character, and a tab, vanished without a word:
+  `CREATE (:P {s: 'café'})` stored `'caf'`. Bytes pass through now;
+  Backspace erases a whole character; a line that is not valid UTF-8 is
+  refused (`Error: the line is not valid UTF-8; it was not run`) instead of
+  being sent. Not fixed: the interactive (TTY) editor still drops typed
+  non-ASCII keys (`keymap_emacs.zig`/`keymap_vi.zig` insert only 0x20-0x7e;
+  pasted text keeps it). Regression: `zig build test-sonny6484-shell-utf8`
+  (the real shell and server, 2-, 3- and 4-byte sequences and combining
+  marks through CREATE and RETURN, read back over QUIC).
+
+- **MCP language tools: three defects and two leaks found by running the
+  inline tests of `src/mcp`, `src/storage/user_storage.zig` and
+  `src/transactions/manager.zig` (SONNY-6484 item 1).** No step ran those
+  tests; `zig build test-sonny6484-inline` (also part of
+  `test-sonny6463-inline-wired` and the aggregate) now does, 73 tests.
+  - `validate`/`diagnostics` leaked every recommendation message
+    (`src/gql/recommendations.zig`: `RecommendationEngine.deinit` freed the
+    list, not the `allocPrint`ed messages), and `hover` leaked the
+    "Example:" text of every function, type and procedure it described;
+    both grew a long-running `geode mcp` server (and `geode lsp`, which uses
+    the same engine) per call. The engine now owns and frees every message.
+  - `complete` on an empty document returned a validation-shaped rejection
+    ("Query is empty") instead of completions; it now offers the clause
+    keywords. `hover` on an empty document returns null contents. Every
+    other input-chokepoint check still applies; `validate`/`diagnostics`
+    still refuse an empty query.
+  - `hover` for a word with no documentation answered `{}`: the JSON
+    library drops null optionals by default. It answers
+    `{"contents":null}`, as docs/MCP_LSP_BRIDGE.md states. Wire change for
+    MCP clients that compared against `{}`.
+  - The MCP endpoint DSN, `--server` and `--dsn` read an unbracketed IPv6
+    literal wrongly: `::1` became host `:` port 1 (geode-client-zig's
+    `parseDSN` and geode's `parseHostPort` split on the last colon), and
+    `parseHostPort` kept the brackets of `[::1]:3141` in the host. Brackets
+    are now stripped, a zone is accepted (`[fe80::1%eth0]:3141`), and a bare
+    IPv6 literal or malformed brackets are refused with `InvalidAddress`
+    (docs/DSN.md states the grammar). Behaviour change: `--server ::1` and
+    an MCP endpoint `::1` are errors; write `[::1]`. Regression:
+    `zig build test-sonny6484-ipv6-host-port`.
+  - The `__geode_security` user-record HMAC was already deterministic; the
+    inline test compared two records created in different milliseconds
+    (`created_at`/`updated_at` are covered) and was rewritten.
+    `persistUserWithHmac` and chain verification now share one function,
+    `user_storage.userRecordHmac`, over the stored record, so the writer
+    and the verifier cannot drift.
+  - `transactions.Manager.commit` aborted a lock holder whose refused
+    waiter was still active (the write-write check was symmetric); only the
+    refused requester is doomed now. A transaction's wait-for list leaked at
+    commit/rollback. The Manager is not used by any server path (see
+    docs/ENHANCED_TRANSACTION_ISOLATION.md); the unused per-connection
+    `ServerState.txn_manager`/`active_txn` were removed.
+
 - **QUIC: a read a client abandons stops promptly (SONNY-6466).** A client
   that closed its connection (CONNECTION_CLOSE) while its read ran on a
   sibling stream, after the connection's first stream had ended, kept a

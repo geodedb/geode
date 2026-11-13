@@ -2395,10 +2395,10 @@ REQ-GQL-202,UserStorage,PersistentStorage,TESTED,src/storage/user_storage.zig,Te
 REQ-GQL-203,VectorKNNIntegration,IndexIntegration,TESTED,tests/test_vector_knn_integration.zig,TestCANARY_REQ_GQL_203_VectorKNNIntegration,,index,2025-10-04
 REQ-GQL-204,FullTextBM25Integration,IndexIntegration,TESTED,tests/test_fulltext_bm25_integration.zig,TestCANARY_REQ_GQL_204_FullTextBM25Integration,,index,2025-10-04
 REQ-GQL-2PC-002,2PC,Coordinator,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Coordinator,,distributed,2026-06-10
 REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,src/distributed/txn_coordinator.zig,tests/test_gap0870_raft_command_variants.zig,,distributed,2026-06-11
+REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Coordinator,,distributed,2026-11-13
 REQ-GQL-2PC-003,2PC,Idempotence,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-06-10
+REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-11-13
 REQ-GQL-2PC-004,2PC,RaftIntegration,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-002,2PC,WriteSetParser,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
@@ -5521,6 +5521,7 @@ REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR,SchemaCatalog,SingletonOnProcessAllocat
 REQ-SONNY-6476-FINGERPRINT-UID,CliSessionStorage,PortableUid,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6476_shell_long_line.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,tests/test_sonny6476_shell_long_line.zig,,,cli,2026-11-13
+REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

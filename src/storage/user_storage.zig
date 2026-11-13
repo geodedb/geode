@@ -66,6 +66,57 @@ fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.Ke
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 
+/// The `__geode_security` HMAC of a user record: HMAC-SHA256 under
+/// `hmac_key` over every persisted field, sorted by key name. A pure
+/// function of (key, record) -- equal input gives an equal HMAC, which the
+/// chain verification (`AuthGraphManager.verifyChain`) depends on. Used by
+/// both `persistUserWithHmac` (writer) and the verifier.
+pub fn userRecordHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.UserRecord) [32]u8 {
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
+    var created_buf: [20]u8 = undefined;
+    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
+    var updated_buf: [20]u8 = undefined;
+    const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
+    var pwd_changed_buf: [20]u8 = undefined;
+    const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
+    var lockout_buf: [20]u8 = undefined;
+    const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
+    var last_login_buf: [20]u8 = undefined;
+    const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
+    var failed_buf: [10]u8 = undefined;
+    const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
+    var auth_version_buf: [20]u8 = undefined;
+    const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
+
+    const mfa_secret = record.getMFASecret() orelse "";
+    const attributes_json = record.getAttributesJson() orelse "";
+
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "attributes_json", .value = attributes_json },
+        .{ .key = "auth_version", .value = auth_version_str },
+        .{ .key = "created_at", .value = created_str },
+        .{ .key = "email", .value = record.getEmail() },
+        .{ .key = "failed_login_attempts", .value = failed_str },
+        .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
+        .{ .key = "id", .value = id_str },
+        .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
+        .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
+        .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
+        .{ .key = "last_login", .value = last_login_str },
+        .{ .key = "lockout_until", .value = lockout_str },
+        .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
+        .{ .key = "mfa_secret", .value = mfa_secret },
+        .{ .key = "password_changed_at", .value = pwd_changed_str },
+        .{ .key = "password_hash", .value = record.getPasswordHash() },
+        .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
+        .{ .key = "salt", .value = std.mem.sliceTo(&record.salt, 0) },
+        .{ .key = "updated_at", .value = updated_str },
+        .{ .key = "username", .value = record.getUsername() },
+    };
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
 pub const UserStorageBackend = struct {
     allocator: Allocator,
     store: *graph_store.GraphStore,
@@ -1400,54 +1451,11 @@ pub const UserStorageBackend = struct {
         // Persist the user record first (creates/updates node in graph)
         try self.persistUser(user_id, username, email, password_hash, salt);
 
-        // Compute HMAC over all user properties (sorted by key name)
-        var id_buf: [20]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{user_id}) catch "0";
-
+        // SONNY-6484: the HMAC is computed from the STORED record, by the
+        // function chain verification (auth_graph_manager.verifyUserRecords)
+        // uses, so the writer and the verifier cannot disagree.
         const record = self.getUser(user_id) orelse return error.UserNotFound;
-
-        var created_buf: [20]u8 = undefined;
-        const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
-        var updated_buf: [20]u8 = undefined;
-        const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
-        var pwd_changed_buf: [20]u8 = undefined;
-        const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
-        var lockout_buf: [20]u8 = undefined;
-        const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
-        var last_login_buf: [20]u8 = undefined;
-        const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
-        var failed_buf: [10]u8 = undefined;
-        const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
-        var auth_version_buf: [20]u8 = undefined;
-        const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
-
-        const mfa_secret = record.getMFASecret() orelse "";
-        const attributes_json = record.getAttributesJson() orelse "";
-
-        const props = [_]auth_hmac.KeyValue{
-            .{ .key = "attributes_json", .value = attributes_json },
-            .{ .key = "auth_version", .value = auth_version_str },
-            .{ .key = "created_at", .value = created_str },
-            .{ .key = "email", .value = email },
-            .{ .key = "failed_login_attempts", .value = failed_str },
-            .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
-            .{ .key = "id", .value = id_str },
-            .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
-            .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
-            .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
-            .{ .key = "last_login", .value = last_login_str },
-            .{ .key = "lockout_until", .value = lockout_str },
-            .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
-            .{ .key = "mfa_secret", .value = mfa_secret },
-            .{ .key = "password_changed_at", .value = pwd_changed_str },
-            .{ .key = "password_hash", .value = password_hash },
-            .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
-            .{ .key = "salt", .value = salt },
-            .{ .key = "updated_at", .value = updated_str },
-            .{ .key = "username", .value = username },
-        };
-
-        const hmac_bytes = computeRecordHmacChecked(hmac_key, &props);
+        const hmac_bytes = userRecordHmac(hmac_key, &record);
         const hmac_hex = auth_hmac.hmacToHex(&hmac_bytes);
 
         // Store the HMAC hex string as a node property
@@ -2185,6 +2193,12 @@ test "persistUserWithHmac stores hmac property on graph node" {
 }
 
 test "persistUserWithHmac produces deterministic HMAC" {
+    // SONNY-6484: the HMAC covers created_at/updated_at (millisecond clock),
+    // so two separately created records are different input; this test used
+    // to compare two such records and passed only when both persists landed
+    // in the same millisecond. Determinism is: equal (key, record) gives an
+    // equal HMAC, and the stored HMAC is the one chain verification
+    // recomputes from the stored record.
     var store1 = try graph_store.GraphStore.init(testing.allocator);
     defer store1.deinit();
     var backend1 = try UserStorageBackend.init(testing.allocator, &store1);
@@ -2200,13 +2214,28 @@ test "persistUserWithHmac produces deterministic HMAC" {
     try backend1.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
     try backend2.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
 
-    const node_id1 = backend1.user_nodes.get(1).?;
-    const node_id2 = backend2.user_nodes.get(1).?;
+    const record1 = backend1.getUser(1).?;
+    const record2 = backend2.getUser(1).?;
+    const hmac1 = store1.getNodeProperty(backend1.user_nodes.get(1).?, "hmac").?.String;
+    const hmac2 = store2.getNodeProperty(backend2.user_nodes.get(1).?, "hmac").?.String;
 
-    const hmac1 = store1.getNodeProperty(node_id1, "hmac").?.String;
-    const hmac2 = store2.getNodeProperty(node_id2, "hmac").?.String;
+    // The stored HMAC is the verifier's recomputation over the stored record.
+    try testing.expectEqualStrings(&auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record1)), hmac1);
+    try testing.expectEqualStrings(&auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record2)), hmac2);
 
-    try testing.expect(std.mem.eql(u8, hmac1, hmac2));
+    // Equal input, equal HMAC: record2 with record1's timestamps is record1.
+    var record2_same_time = record2;
+    record2_same_time.created_at = record1.created_at;
+    record2_same_time.updated_at = record1.updated_at;
+    try testing.expectEqual(userRecordHmac(&hmac_key, &record1), userRecordHmac(&hmac_key, &record2_same_time));
+    try testing.expectEqualStrings(hmac1, &auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record2_same_time)));
+
+    // Any covered field or the key changes it.
+    var tampered = record1;
+    tampered.is_superuser = !tampered.is_superuser;
+    try testing.expect(!std.mem.eql(u8, &userRecordHmac(&hmac_key, &record1), &userRecordHmac(&hmac_key, &tampered)));
+    const other_key = [_]u8{0x43} ** 32;
+    try testing.expect(!std.mem.eql(u8, &userRecordHmac(&hmac_key, &record1), &userRecordHmac(&other_key, &record1)));
 }
 
 test "loadChainRoot returns null when no chain root exists" {
