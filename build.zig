@@ -9215,6 +9215,17 @@ pub fn build(b: *std.Build) void {
         .root_module = proto_reap_mod,
         .filters = &.{"proto_reader_idle_connection_reap_deadline_regression"},
     });
+    // SONNY-6494 (2): the handler's other inline tests (shared connection
+    // state, idle read errors, the global stream throttle, the detached
+    // first-stream owner gate), which no filter of the steps above named.
+    const sonny6494_handler_tests = b.addTest(.{
+        .name = "sonny6494-handler-inline",
+        .root_module = proto_reap_mod,
+        .filters = &.{ "SharedConnState", "isIdleStreamReadError", "setMaxGlobalStreamThreads", "global stream throttle", "detached first-stream owner gate" },
+    });
+    const run_sonny6494_handler_tests = b.addRunArtifact(sonny6494_handler_tests);
+    b.step("test-sonny6494-handler-inline", "Run SONNY-6494 item 2: src/server/quic_connection_handler.zig's inline tests no other step's filter named (SharedConnState stream slots and graph sync, isIdleStreamReadError, the global stream throttle, the detached first-stream owner gate)").dependOn(&run_sonny6494_handler_tests.step);
+    shardDep(test_step, &run_sonny6494_handler_tests.step, 8, test_shard_loads, test_shard_index);
     const run_proto_reap_tests = b.addRunArtifact(proto_reap_tests);
     const proto_reap_step = b.step("test-proto-reader-idle-reap", "Run idle-connection reap-cap regression (8.3h vs 300s reap deadline)");
     proto_reap_step.dependOn(&run_proto_reap_tests.step);
