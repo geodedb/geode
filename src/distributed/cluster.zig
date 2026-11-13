@@ -2332,7 +2332,9 @@ pub const ClusterCoordinator = struct {
                 .id = config.id,
                 .endpoint = try allocator.dupe(u8, config.address),
                 .port = config.port,
-                .last_contact = compat_milliTimestamp(),
+                // SONNY-6463: 0 = never heard from (SHOW CLUSTER STATUS
+                // reports NULL until the first authenticated frame).
+                .last_contact = 0,
             };
         }
         return peers;

@@ -390,7 +390,8 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
 // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ExecuteHandler; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
 //
 // SHOW CLUSTER STATUS handler.  Returns one row per cluster member with
-// columns (node_id, role, term, leader_id, endpoint, last_contact_ms).
+// columns (node_id, role, term, leader_id, endpoint, last_contact_ms;
+// last_contact_ms is NULL for a peer never heard from, SONNY-6463).
 //
 // In standalone mode (no ClusterCoordinator wired via
 // `cluster.setGlobalClusterCoordinator` during boot), returns exactly one
@@ -519,11 +520,12 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
 
         // last_contact_ms = now - last_contact (raft.peers tracks this
         // separately from cluster_state). SONNY-6459: last_contact is the
-        // last authenticated raft frame from the peer (start time until the
-        // first one), stored atomically by the cluster's inbound handlers.
+        // last authenticated raft frame from the peer, stored atomically by
+        // the cluster's inbound handlers. SONNY-6463: 0 means the peer was
+        // never heard from, reported as NULL (it used to start at the
+        // node's start time, so "never" read as "heard at startup").
         const last_contact = @atomicLoad(i64, &peer.last_contact, .monotonic);
-        const delta_ms: i64 = if (last_contact == 0) 0 else now_ms - last_contact;
-        row[5] = Value{ .Int = @max(@as(i64, 0), delta_ms) };
+        row[5] = if (last_contact == 0) Value{ .Null = {} } else Value{ .Int = @max(@as(i64, 0), now_ms - last_contact) };
         rows[i + 1] = row;
     }
 

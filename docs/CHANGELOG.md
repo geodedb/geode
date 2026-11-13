@@ -2162,6 +2162,13 @@
   "curated dataset" was never seeded, so it compared two empty answers. It
   now seeds its dataset into a fresh temporary directory and asserts the
   rows.
+- **Operator-visible: SHOW CLUSTER STATUS `last_contact_ms` is NULL for a
+  peer never heard from (SONNY-6463 item 4).** A peer's `last_contact`
+  started at the node's start time, so "never heard from" and "heard from
+  at startup" read the same (the column grew from start until the first
+  authenticated raft frame). It now starts unset and the column is NULL
+  until that frame arrives; this node's own row stays 0. Regression: `zig
+  build test-show-cluster-status`.
 - **Dead distributed code removed (SONNY-6463 items 1-3).**
   `twophase.TwoPCCoordinator` (with `CoordinatorConfig` and the
   `twophase_participant.zig` participant only it used) had no user, and its
