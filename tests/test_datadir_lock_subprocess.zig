@@ -423,6 +423,66 @@ test "SIGKILLed server leaves no stale data dir lock (ENG-3921)" {
 }
 
 // ---------------------------------------------------------------------
+// 2b. SONNY-6447: a server that dies by abort (a Zig panic ends in
+//     abort(): SIGABRT, the death of the netns churn node) leaves no stale
+//     lock either, and while it is alive, frozen, it still holds it.
+// ---------------------------------------------------------------------
+// CANARY: REQ=REQ-SONNY-6447-DATADIR-LOCK-ABORT; FEATURE="DataDirLock"; ASPECT=AbortedHolderReleases; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-11-12
+test "SIGABRTed server leaves no stale data dir lock, and a frozen live one still holds it (SONNY-6447)" {
+    const gpa = testing.allocator;
+    var fx = (try setUp(gpa, "abort-lock")) orelse return error.SkipZigTest;
+    defer fx.deinit();
+
+    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
+        .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
+    });
+    defer a.deinit();
+    if (!a.waitForMarker(ready_marker, ready_deadline_ms)) {
+        a.dump("server A");
+        return error.IncumbentStartupTimeout;
+    }
+
+    // Frozen but alive (SIGSTOP): the lock is still held, so a second
+    // server is refused. Exclusion is not weakened for a holder that does
+    // not respond.
+    const pid_a = a.child.id orelse return error.NoPid;
+    try posix.kill(pid_a, .STOP);
+    {
+        var frozen = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
+            .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
+            .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
+        });
+        defer frozen.deinit();
+        const code = frozen.waitExit(refusal_deadline_ms);
+        if (code == null or code.? == 0 or !frozen.saw(locked_marker)) {
+            frozen.dump("server against a frozen live holder");
+            posix.kill(pid_a, .CONT) catch {};
+            return error.FrozenHolderNotRespected;
+        }
+    }
+
+    // Die by abort, as a panicking server does, while still stopped (no
+    // shutdown path can run), then let the signal land.
+    try posix.kill(pid_a, .ABRT);
+    try posix.kill(pid_a, .CONT);
+    if (a.waitExit(30_000) == null) {
+        a.dump("server A after SIGABRT");
+        return error.AbortedServerDidNotExit;
+    }
+
+    var b = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
+        .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
+        .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
+    });
+    defer b.deinit();
+    if (!b.waitForMarker(ready_marker, ready_deadline_ms)) {
+        b.dump("server B (blocked by a stale lock after SIGABRT)");
+        return error.StaleLockBlockedRestart;
+    }
+    try testing.expect(!b.saw(locked_marker));
+}
+
+// ---------------------------------------------------------------------
 // 3. Offline CLI writer against a live data dir.
 // ---------------------------------------------------------------------
 test "geode auth reseal against a live data dir is refused (ENG-3921)" {

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:20:31.865995166Z",
+  "generated_at": "2026-11-13T02:20:57.233885408Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84505,6 +84505,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-DATADIR-LOCK-ABORT",
+      "features": [
+        {
+          "feature": "DataDirLock",
+          "aspect": "AbortedHolderReleases",
+          "status": "TESTED",
+          "files": [
+            "tests/test_datadir_lock_subprocess.zig"
+          ],
+          "tests": [
+            "tests/test_datadir_lock_subprocess.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-FIXTURE-SECRETS",
       "features": [
         {
@@ -92256,7 +92275,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4801
+      "TESTED": 4802
     },
     "by_aspect": {
       "2PC": 3,
@@ -92285,6 +92304,7 @@
       "ATAN": 1,
       "ATAN2": 1,
       "Abort": 1,
+      "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
