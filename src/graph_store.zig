@@ -5124,6 +5124,8 @@ pub const GraphStore = struct {
                 drop_lock = adapter.acquireGraphWriteLockCancelable(graph_name, std.math.maxInt(u64)) catch |err| switch (err) {
                     error.GraphNotFound => null,
                     error.Deadline => unreachable, // no deadline
+                    // SONNY-6433: no room to record the lock (nothing taken).
+                    error.OutOfMemory => return error.OutOfMemory,
                 };
             }
         }

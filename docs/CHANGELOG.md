@@ -1632,6 +1632,28 @@
 
 ### Fixed
 
+- **The ordered-index read paths hold the graph locks they need (SONNY-6433
+  items 6, 7, 10).** (6) The planner gates `isOrderedIndexRegistered`,
+  `isOrderedIndexEligible` and `isOrderedIndexFresh` read each shard's
+  ordered-index registry, eligibility and freshness with no lock while
+  `createOrderedIndex` (CREATE INDEX, the ORDER BY auto-build's background
+  worker) changes them under the graph lock SHARED and the shard's lock
+  EXCLUSIVE, and the full checkpoint under the graph lock EXCLUSIVE. They
+  now pin the graph and read under `mg.rwlock` SHARED (unless the thread
+  already holds the graph lock) and each `shard_locks[i]` SHARED, in the
+  order `createOrderedIndex` takes them. (7) `orderedScan` resolved its
+  graph with no pin and lets its locks go between batches, so a DROP GRAPH
+  between two batches freed the graph the next batch read (a segmentation
+  fault in the regression test). The scan now pins the graph for its whole
+  run and fails with `GraphNotFound` when a batch finds it dropped (the
+  planner then serves the heap path), the discipline of the graph-lock API
+  (SONNY-3028). (10) The per-thread table of held graph locks had 16 slots,
+  and past them every graph counted as held, so an ordered scan of a graph
+  the thread had not locked read it with no graph lock. The table now grows
+  (the room is reserved before a lock is taken, so recording it cannot
+  fail; an acquisition that cannot get the room fails with out of memory
+  before locking), and a graph the thread does not hold is never reported
+  as held. Regression: `zig build test-sonny6433-ordered-index-locking`.
 - **A member read of a string property (`n.p`) no longer leaks a copy per
   row (SONNY-6433 item 5).** SONNY-6327 routed every string read through the
   FLE read policy and made the member access (`memberOfValue`) return a copy

@@ -2783,7 +2783,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // under it, and a refusal leaves the catalog as it was.
                 try refuseDropInTransaction(context);
                 store.dropGraph(graph_name) catch |err| switch (err) {
-                    error.ObjectInUse, error.CannotDropDefaultGraph => return err,
+                    // SONNY-6433: OutOfMemory: no room to record the graph
+                    // lock, nothing dropped.
+                    error.ObjectInUse, error.CannotDropDefaultGraph, error.OutOfMemory => return err,
                     else => {},
                 };
                 cat.removeGraph(graph_name) catch |err| {
@@ -2892,8 +2894,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try refuseDropInTransaction(context);
             store.dropGraph(graph_name) catch |err| switch (err) {
                 // SONNY-3132: the default graph's refusal was logged, and the
-                // statement answered ok.
-                error.ObjectInUse, error.CannotDropDefaultGraph => return err,
+                // statement answered ok. SONNY-6433: OutOfMemory: no room to
+                // record the graph lock, nothing dropped.
+                error.ObjectInUse, error.CannotDropDefaultGraph, error.OutOfMemory => return err,
                 else => log.warn("dropGraphStore failed", &.{
                     Attr.string("graph_name", graph_name),
                     Attr.string("error", @errorName(err)),

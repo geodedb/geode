@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:57:22.775845229Z",
+  "generated_at": "2026-11-13T01:16:21.028513535Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84487,6 +84487,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-12"
+        },
+        {
+          "feature": "OrderedIndex",
+          "aspect": "LockedPlannerGates",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92176,7 +92190,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4792
+      "TESTED": 4793
     },
     "by_aspect": {
       "2PC": 3,
@@ -94168,6 +94182,7 @@
       "LocalTime": 1,
       "LocalityAware": 1,
       "LockUnavailableDiagnostic": 1,
+      "LockedPlannerGates": 1,
       "LockedResidentWalk": 1,
       "LockedSnapshots": 1,
       "Log10": 1,

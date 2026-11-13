@@ -3393,13 +3393,30 @@ const OrderedShardState = struct {
 /// them), so a reader that takes `mg.rwlock` SHARED itself (`orderedScan`)
 /// skips it when its own thread already holds the lock. `std.Io.RwLock` is not
 /// reentrant: SHARED under this thread's EXCLUSIVE never returns, and a
-/// second SHARED behind a waiting writer can wedge. A lock beyond the table
-/// is counted in `t_untracked_graph_locks`, and while one is held every graph
-/// counts as held (the reader then takes no `rwlock`, as before this fix,
-/// instead of risking a self-deadlock).
+/// second SHARED behind a waiting writer can wedge.
+///
+/// CANARY: REQ=REQ-SONNY-6433-ORDERED-INDEX-LOCKING; FEATURE="OrderedIndex"; ASPECT=GraphLockTrackingGrows; STATUS=TESTED; TEST=tests/test_sonny6433_ordered_index_locking.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6433: the table grows past its 16 inline slots
+/// (`t_held_graph_locks_overflow`), so every lock is tracked by graph. It
+/// used to count a 17th lock without its graph, and while one was held every
+/// graph counted as held: an ordered scan of a graph this thread did not lock
+/// then read it with no `rwlock`. The room for the next entry is reserved
+/// BEFORE the lock is taken (`reserveGraphLockSlot`), so recording it cannot
+/// fail; an acquisition that cannot get the room fails (out of memory) with
+/// no lock taken. The overflow list is freed when it empties.
 const max_tracked_graph_locks = 16;
 threadlocal var t_held_graph_locks: [max_tracked_graph_locks]?*const ManagedGraph = @splat(null);
-threadlocal var t_untracked_graph_locks: u32 = 0;
+threadlocal var t_held_graph_locks_overflow: std.ArrayListUnmanaged(*const ManagedGraph) = .empty;
+const graph_lock_overflow_allocator = std.heap.smp_allocator;
+
+/// SONNY-6433: room to record one more graph lock on this thread. Call it
+/// before taking the lock.
+fn reserveGraphLockSlot() error{OutOfMemory}!void {
+    for (t_held_graph_locks) |slot| {
+        if (slot == null) return;
+    }
+    try t_held_graph_locks_overflow.ensureUnusedCapacity(graph_lock_overflow_allocator, 1);
+}
 
 fn noteGraphLockTaken(mg: *const ManagedGraph) void {
     for (&t_held_graph_locks) |*slot| {
@@ -3408,7 +3425,9 @@ fn noteGraphLockTaken(mg: *const ManagedGraph) void {
             return;
         }
     }
-    t_untracked_graph_locks += 1;
+    // Room reserved by `reserveGraphLockSlot` before the lock was taken.
+    t_held_graph_locks_overflow.append(graph_lock_overflow_allocator, mg) catch
+        @panic("SONNY-6433: no room to record a graph lock that was reserved before it was taken");
 }
 
 fn noteGraphLockReleased(mg: *const ManagedGraph) void {
@@ -3418,14 +3437,23 @@ fn noteGraphLockReleased(mg: *const ManagedGraph) void {
             return;
         }
     }
-    if (t_untracked_graph_locks > 0) t_untracked_graph_locks -= 1;
+    for (t_held_graph_locks_overflow.items, 0..) |held, i| {
+        if (held == mg) {
+            _ = t_held_graph_locks_overflow.swapRemove(i);
+            break;
+        }
+    }
+    if (t_held_graph_locks_overflow.items.len == 0 and t_held_graph_locks_overflow.capacity != 0)
+        t_held_graph_locks_overflow.clearAndFree(graph_lock_overflow_allocator);
 }
 
 /// SONNY-6375: does this thread hold `mg.rwlock` (SHARED or EXCLUSIVE) through
 /// the graph-lock API? See `t_held_graph_locks`.
 pub fn threadHoldsGraphLock(mg: *const ManagedGraph) bool {
-    if (t_untracked_graph_locks > 0) return true;
     for (t_held_graph_locks) |held| {
+        if (held == mg) return true;
+    }
+    for (t_held_graph_locks_overflow.items) |held| {
         if (held == mg) return true;
     }
     return false;
@@ -3513,6 +3541,9 @@ fn orderedScanBatch(
         mg.rwlock.lockSharedUncancelable(io);
     }
     defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+    // SONNY-6433: dropped between two batches (the scan's pin keeps it
+    // allocated; its engine is closed), as `lockedUnlessDropped` answers.
+    if (mg.isDropped()) return error.GraphNotFound;
     mg.shard_locks[i].lockSharedUncancelable(io);
     defer mg.shard_locks[i].unlockShared(io);
 
@@ -7125,9 +7156,14 @@ pub const StorageAdapter = struct {
     ) ![]u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const ctx = (try self.resolveLabelScanContext(graph_name, label)) orelse
+        // SONNY-6433: pinned (SONNY-3028) for the whole scan: its locks are
+        // let go between batches, and a DROP GRAPH in that gap freed the
+        // graph the next batch read. A batch that finds it dropped fails the
+        // scan with GraphNotFound (`orderedScanBatch`).
+        const ctx = (try self.pinLabelScanContext(graph_name, label)) orelse
             return try allocator.alloc(u64, 0);
         const mg = ctx.mg;
+        defer self.unpinGraph(mg);
         const label_id = ctx.label_id;
 
         const eng_dir: OrderedDir = switch (dir) {
@@ -7212,12 +7248,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
-            return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
-        }
-        return true;
+        return self.orderedIndexGate(graph_name, label, key, .registered);
     }
 
     /// H3-P3: report whether `ORDER BY (label,key) LIMIT` can be SAFELY served
@@ -7234,13 +7265,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
-            return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
-            if (!shard.isOrderedIndexEligible(ctx.label_id, key)) return false;
-        }
-        return true;
+        return self.orderedIndexGate(graph_name, label, key, .eligible);
     }
 
     /// H3-P4: report whether the ordered index is FRESH — i.e. a registered
@@ -7260,11 +7285,50 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        _ = key;
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
+        return self.orderedIndexGate(graph_name, label, key, .fresh);
+    }
+
+    const OrderedIndexGate = enum { registered, eligible, fresh };
+
+    // CANARY: REQ=REQ-SONNY-6433-ORDERED-INDEX-LOCKING; FEATURE="OrderedIndex"; ASPECT=LockedPlannerGates; STATUS=TESTED; TEST=tests/test_sonny6433_ordered_index_locking.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6433: the three planner gates, ALL shards ANDed. They read each
+    /// shard's ordered-index registry, eligibility and freshness, which
+    /// `createOrderedIndex` (CREATE INDEX, the ORDER BY auto-build's
+    /// background worker) changes under `mg.rwlock` SHARED + `shard_locks[i]`
+    /// EXCLUSIVE and the full checkpoint under `mg.rwlock` EXCLUSIVE; they
+    /// read it with no lock. Now the graph is pinned, `mg.rwlock` is held
+    /// SHARED (unless this thread already holds the graph lock: it is not
+    /// reentrant) and each shard is read under `shard_locks[i]` SHARED, the
+    /// order `createOrderedIndex` takes them (tier 1: rwlock, then shard).
+    /// A dropped graph answers false.
+    fn orderedIndexGate(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        comptime gate: OrderedIndexGate,
+    ) bool {
+        const ctx = (self.pinLabelScanContext(graph_name, label) catch return false) orelse
             return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.orderedIndexFresh()) return false;
+        const mg = ctx.mg;
+        defer self.unpinGraph(mg);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const holds_graph_lock = threadHoldsGraphLock(mg);
+        if (!holds_graph_lock) {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+        }
+        defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+        if (mg.isDropped()) return false;
+        for (mg.engine.shards, 0..) |shard, i| {
+            mg.shard_locks[i].lockSharedUncancelable(io);
+            defer mg.shard_locks[i].unlockShared(io);
+            const ok = switch (gate) {
+                .registered => shard.hasOrderedIndex(ctx.label_id, key),
+                .eligible => shard.hasOrderedIndex(ctx.label_id, key) and shard.isOrderedIndexEligible(ctx.label_id, key),
+                .fresh => shard.orderedIndexFresh(),
+            };
+            if (!ok) return false;
         }
         return true;
     }
@@ -10884,6 +10948,22 @@ pub const StorageAdapter = struct {
         return self.registry.findByName(name);
     }
 
+    /// SONNY-6433: `resolveLabelScanContext` with the graph pinned
+    /// (SONNY-3028), so it stays allocated while the caller reads it between
+    /// lock holds. The caller unpins it (`unpinGraph`); null pins nothing.
+    fn pinLabelScanContext(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanContext {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const mg = try self.requireExistingGraphLocked(graph_name);
+        const label_id = mg.label_dict.getId(label) orelse return null;
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return .{
+            .mg = mg,
+            .label_id = label_id,
+        };
+    }
+
     fn resolveLabelScanContext(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanContext {
         // Brief mutex hold: look up ManagedGraph and label ID, then release.
         // The ManagedGraph is stable while the caller holds the per-graph
@@ -11213,6 +11293,7 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
     ) !ReadLockAcquisition {
+        try reserveGraphLockSlot(); // SONNY-6433
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         const _t_start = monoNanosNow();
         // EDGE-PHASE 40001 FIX #2 (2026-06-22): yield to a pending EXCLUSIVE
@@ -11271,6 +11352,7 @@ pub const StorageAdapter = struct {
     /// Acquire an exclusive (write) lock on the named graph.
     /// Caller MUST call releaseGraphWriteLock when done.
     pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        try reserveGraphLockSlot(); // SONNY-6433
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
@@ -11434,6 +11516,7 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         deadline_mono_ns: u64,
     ) !*ManagedGraph {
+        try reserveGraphLockSlot(); // SONNY-6433
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
