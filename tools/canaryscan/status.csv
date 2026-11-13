@@ -5578,6 +5578,7 @@ REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,DurationIsoWriter,TESTED,src/typ
 REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,LocalDatetimeAndDurationFraction,TESTED,tests/test_sonny6489_temporal_rendering.zig,tests/test_sonny6489_temporal_rendering.zig,,datetime,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,src/execution/match_operations.zig,tests/test_sonny6489_topk_order.zig,,execution,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,tests/test_sonny6489_topk_order.zig,,,execution,2026-11-13
+REQ-SONNY-6496-QUERY-LEAKS,ExecutionResultOwnership,ComputedTemporaries,TESTED,tests/test_sonny6496_query_leaks.zig,tests/test_sonny6496_query_leaks.zig,,execution,2026-11-13
 REQ-SONNY-6496-WITH-SCOPE,LinearComposition,ProjectionScope,TESTED,tests/test_sonny6496_with_scope.zig,tests/test_sonny6496_with_scope.zig,,engine,2026-11-13
 REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,ChainParts,TESTED,src/execution/query_execution.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,execution,2026-11-13
 REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,PlannedReadRows,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,execution,2026-11-13

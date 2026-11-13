@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:50:47.191436993Z",
+  "generated_at": "2026-11-13T19:58:10.387474738Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87537,6 +87537,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6496-QUERY-LEAKS",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ComputedTemporaries",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_query_leaks.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_query_leaks.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6496-WITH-SCOPE",
       "features": [
         {
@@ -95324,7 +95343,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4979
+      "TESTED": 4980
     },
     "by_aspect": {
       "2PC": 3,
@@ -95940,6 +95959,7 @@
       "Computation": 1,
       "ComputationalOperation": 2,
       "ComputeAggregation": 1,
+      "ComputedTemporaries": 1,
       "ConcurrencyPerf": 1,
       "ConcurrencySafety": 1,
       "ConcurrencyStressVariance": 2,
