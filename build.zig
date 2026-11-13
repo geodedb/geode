@@ -12423,6 +12423,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6489_units_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6489-duration-unit-groups", "Run SONNY-6489 item 6 regression (duration +/- duration of a year-to-month and a day-to-second operand is 22G14; a duration result out of range is 22015, a datetime result 22008; a mixed duration is still added part by part)").dependOn(&run_sonny6489_units_tests.step);
 
+    // SONNY-6489 (3): stored-list string elements compare by NFC.
+    const sonny6489_nfc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_list_string_nfc.zig"), .target = target, .optimize = optimize });
+    sonny6489_nfc_mod.addImport("geode", root_mod);
+    sonny6489_nfc_mod.addImport("logging", logging_mod);
+    const sonny6489_nfc_tests = b.addTest(.{ .root_module = sonny6489_nfc_mod });
+    const run_sonny6489_nfc_tests = b.addRunArtifact(sonny6489_nfc_tests);
+    shardDep(test_step, &run_sonny6489_nfc_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-list-string-nfc", "Run SONNY-6489 item 3 regression (value_types.eqExtValues compares STRING, TEXT, CHAR and VARCHAR elements of stored values by their NFC form: a stored list holding a precomposed character equals one holding the decomposed form)").dependOn(&run_sonny6489_nfc_tests.step);
+
     // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
     // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.
     const sonny3055_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3055_nfc_string_identity.zig"), .target = target, .optimize = optimize });

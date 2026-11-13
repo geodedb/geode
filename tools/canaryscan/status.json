@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:59:19.945847525Z",
+  "generated_at": "2026-11-13T17:00:25.126473544Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86943,6 +86943,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-LIST-STRING-NFC",
+      "features": [
+        {
+          "feature": "UnicodeEval",
+          "aspect": "StoredListElementsNfc",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_list_string_nfc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_list_string_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6489-LISTEN-ERROR-FREE",
       "features": [
         {
@@ -94670,7 +94689,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4938
+      "TESTED": 4939
     },
     "by_aspect": {
       "2PC": 3,
@@ -98383,6 +98402,7 @@
       "StoreUndoCapture": 1,
       "StoreUpgradedHash": 1,
       "StoreWriteFence": 1,
+      "StoredListElementsNfc": 1,
       "StreamAliasParity": 1,
       "StreamCloseBeforeTeardown": 1,
       "StreamExecution": 1,
