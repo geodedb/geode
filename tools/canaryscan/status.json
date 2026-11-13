@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:01:02.870392928Z",
+  "generated_at": "2026-11-13T10:05:06.941057456Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70109,6 +70109,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2465-GRPC-STREAM-NODE-SCAN",
+      "features": [
+        {
+          "feature": "GrpcStreaming",
+          "aspect": "NodeScanPushedPages",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2465_grpc_stream_node_scan.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2472-DUPLICATE-PROJECTION",
       "features": [
         {
@@ -93256,7 +93275,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4858
+      "TESTED": 4859
     },
     "by_aspect": {
       "2PC": 3,
@@ -95595,6 +95614,7 @@
       "NodeProperties": 1,
       "NodePropertyKeys": 1,
       "NodePropertyWrite": 1,
+      "NodeScanPushedPages": 1,
       "NodeStorage": 1,
       "NodeTenantTag": 1,
       "NodeWithLabelsAndName": 1,

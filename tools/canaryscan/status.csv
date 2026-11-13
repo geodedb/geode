@@ -4499,6 +4499,7 @@ REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,ReadMapPartialFailure,T
 REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny2463_materialize_oom.zig,tests/test_sonny2463_materialize_oom.zig,,engine,2026-09-25
 REQ-SONNY-2464-STRING-VALUE-LEAKS,EngineDirectNodeOwnership,DeepNodeDestroy,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2464_string_value_leaks.zig,,engine,2026-09-25
 REQ-SONNY-2464-STRING-VALUE-LEAKS,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny2464_string_value_leaks.zig,tests/test_sonny2464_string_value_leaks.zig,,engine,2026-09-25
+REQ-SONNY-2465-GRPC-STREAM-NODE-SCAN,GrpcStreaming,NodeScanPushedPages,TESTED,src/transport/grpc_server.zig,tests/test_sonny2465_grpc_stream_node_scan.zig,,transport,2026-11-13
 REQ-SONNY-2472-DUPLICATE-PROJECTION,EngineDirectProjectionOwnership,CellOwnsItsString,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2472_duplicate_projection.zig,,engine,2026-09-25
 REQ-SONNY-2472-DUPLICATE-PROJECTION,EngineDirectProjectionOwnership,Regression,TESTED,tests/test_sonny2472_duplicate_projection.zig,tests/test_sonny2472_duplicate_projection.zig,,engine,2026-09-25
 REQ-SONNY-2473-SKIP-WITHOUT-LIMIT,EngineDirectRowWindow,Regression,TESTED,tests/test_sonny2473_skip_without_limit.zig,tests/test_sonny2473_skip_without_limit.zig,,engine,2026-09-25

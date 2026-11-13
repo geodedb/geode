@@ -2035,6 +2035,18 @@
 
 ### Fixed
 
+- **gRPC streaming Execute pages node-scan fast-path reads (SONNY-2465).**
+  The streamed `/Execute` drain (`pushResultPages`) paged only an executor
+  result; a statement served by the node-scan fast path holds a scan stream
+  instead, so the client would get the schema frame and then zero rows. The
+  drain now pages the scan stream as `Pull` does (a resource limit ends the
+  stream with its SQLSTATE and fails the transaction; the final page
+  releases the stream). Latent over the wire today: on `geode serve` the gRPC
+  fast-path gate never opens for an authenticated session; this removes the
+  hazard before that gate is aligned with QUIC's policy-aware one. The
+  uncalled `buildStreamDataPage` was removed. Regression
+  `zig build test-sonny2465-grpc-stream-node-scan`.
+
 - **`--listen-grpc` binds the address it is given (SONNY-1336).** The
   address in `geode serve --listen-grpc <addr:port>` reached only a log line:
   the listener was created from the port alone and grpc-zig bound
