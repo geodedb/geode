@@ -3207,6 +3207,13 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
     if (t_session_commit_failure == null) t_session_commit_failure = err;
 }
 
+/// SONNY-3121 test instrumentation: called by the self-locking bulk MERGE
+/// helpers the QUIC handler calls directly when group commit is off
+/// (`bulkMergeEdgeWithIdsShardLockedForTenant`,
+/// `bulkMergeNodeWithReservedIdMultiPropForTenant`) right after they have
+/// their graph, before they lock it. A test drops the graph there.
+pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
 /// SONNY-3031 fault injection for tests: the next N commits of a session
 /// engine transaction fail (`error.InjectedSessionCommitFailure`) before
 /// they reach the engine, as a failed WAL append or fsync would.
@@ -4836,6 +4843,7 @@ pub const StorageAdapter = struct {
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -5384,6 +5392,7 @@ pub const StorageAdapter = struct {
         }
 
         const mg = try self.getOrCreateGraph(graph_name);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
         // ENG-3914 (RC-2): see the single-property path — the delegated insert
         // now runs inside this function's SHARED hold, so the deferred
         // exact-index build must happen before that hold is taken.

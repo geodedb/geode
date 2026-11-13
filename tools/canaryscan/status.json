@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:44:30.719723222Z",
+  "generated_at": "2026-11-13T10:45:53.560721057Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76355,6 +76355,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3121-DIRECT-BULK-PIN",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3122-NO-RECREATE-ON-WRITE",
       "features": [
         {
@@ -93416,7 +93435,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4869
+      "TESTED": 4870
     },
     "by_aspect": {
       "2PC": 3,
@@ -96537,7 +96556,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 301,
+      "Regression": 302,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

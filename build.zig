@@ -9643,6 +9643,17 @@ pub fn build(b: *std.Build) void {
     const sonny2810_step = b.step("test-sonny2810-snapshot-float", "Run SONNY-2810 regression (node and edge Float properties - 1e40, the f64 extremes, subnormals, 3.0, -0.0, NaN, infinities - survive createSnapshotData + installSnapshotData exactly, as Floats)");
     sonny2810_step.dependOn(&run_sonny2810_tests.step);
 
+    // SONNY-3121: the self-locking bulk MERGE helpers the QUIC handler calls
+    // directly with group commit off hold a pin on their graph, and fail
+    // with GraphNotFound when it is dropped under them.
+    const sonny3121_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3121_direct_bulk_pin.zig"), .target = target, .optimize = optimize });
+    sonny3121_test_mod.addImport("geode", root_mod);
+    const sonny3121_tests = b.addTest(.{ .root_module = sonny3121_test_mod });
+    const run_sonny3121_tests = b.addRunArtifact(sonny3121_tests);
+    shardDep(test_step, &run_sonny3121_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3121_step = b.step("test-sonny3121-direct-bulk-pin", "Run SONNY-3121 regression (the direct bulk MERGE helpers - relationship and multi-property node - hold a pin on their graph; a DROP GRAPH between their lookup and their locks makes them fail with GraphNotFound, and the graph is freed when they let go)");
+    sonny3121_step.dependOn(&run_sonny3121_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);
