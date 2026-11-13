@@ -11330,6 +11330,15 @@ pub fn build(b: *std.Build) void {
     const sonny3133_step = b.step("test-sonny3133-parser-nesting", "Run SONNY-3133 regression (no nesting of PROFILE/EXPLAIN, a START TRANSACTION body, a parenthesized statement, VALUES, WITH, CALL { }, FOR, NOT, unary minus/plus, shortestPath or an expression overflows a 16 MiB stack: clean parse error; ordinary nesting parses; gRPC X11 bomb gets 42000; run in Debug and ReleaseSafe)");
     sonny3133_step.dependOn(&run_sonny3133_tests.step);
 
+    // SONNY-738 (item 0b): one level of query nesting costs the parser's stack no more than its budget. See tests/test_sonny738_parser_frame_budget.zig.
+    const sonny738_frame_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_parser_frame_budget.zig"), .target = target, .optimize = optimize });
+    sonny738_frame_test_mod.addImport("geode", root_mod);
+    const sonny738_frame_tests = b.addTest(.{ .root_module = sonny738_frame_test_mod });
+    const run_sonny738_frame_tests = b.addRunArtifact(sonny738_frame_tests);
+    shardDep(test_step, &run_sonny738_frame_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny738_frame_step = b.step("test-sonny738-parser-frame-budget", "Run SONNY-738 regression (the stack one level of WITH, CALL { }, IN (subquery) and FOR nesting costs the parser, and the deepest allowed nesting's whole parse, stay within budget, so the deepest nesting fits an 8 MiB gRPC connection thread)");
+    sonny738_frame_step.dependOn(&run_sonny738_frame_tests.step);
+
     // SONNY-3134: DROP GRAPH and CREATE OR REPLACE GRAPH of a graph any
     // session's open transaction changed are refused (55006). gRPC in process
     // and QUIC against a spawned server.
@@ -11378,6 +11387,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny1335_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny1335_step = b.step("test-sonny1335-profile-access-path", "Run SONNY-1335 regression (PROFILE names an index only when the executor seeked a real catalog btree/hash index, and that name is listed by SHOW INDEXES; an unindexed property, an index on another label or property, a fulltext index, a dropped index, an AND the executor scans, and a tenant-bound version-1 profile all report a scan, never \"heuristic_index\"; gRPC in process)");
     sonny1335_step.dependOn(&run_sonny1335_tests.step);
+
+    // SONNY-6276: EXPLAIN describes the access path the executor takes, the one PROFILE reports. See tests/test_sonny6276_explain_access_path.zig.
+    const sonny6276_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6276_explain_access_path.zig"), .target = target, .optimize = optimize });
+    sonny6276_test_mod.link_libc = true;
+    sonny6276_test_mod.addImport("geode", root_mod);
+    sonny6276_test_mod.addImport("schema", schema_mod);
+    sonny6276_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6276_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6276_test_mod.addImport("logging", logging_mod);
+    const sonny6276_tests = b.addTest(.{ .root_module = sonny6276_test_mod });
+    const run_sonny6276_tests = b.addRunArtifact(sonny6276_tests);
+    shardDep(test_step, &run_sonny6276_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6276_step = b.step("test-sonny6276-explain-access-path", "Run SONNY-6276 regression (EXPLAIN says IndexSeek exactly where PROFILE reports the executor seeked a catalog btree/hash index: not for a fulltext index, an index on another label or property, an equality under an AND, a dropped index, or the tenant-bound legacy executor; no U:HeuristicIndexSelection flag for a plain equality; gRPC in process)");
+    sonny6276_step.dependOn(&run_sonny6276_tests.step);
 
     // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
     // (max_expr_links) is refused with 42000; up to it, the query analysis,
@@ -12795,6 +12818,50 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6282_q_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6282_q_step = b.step("test-sonny6282-int-string-equality", "Run SONNY-6282 regression (WHERE n.id = 1 and n.id = '1' each match only their own type, as the inline property map does; ISO/IEC 39075 19.3: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6282_q_step.dependOn(&run_sonny6282_q_tests.step);
+
+    // SONNY-738 (sweep item 0): a value pair is equal at every equality site or at none. See tests/test_sonny738_equality_consistency.zig.
+    const sonny738_eq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_equality_consistency.zig"), .target = target, .optimize = optimize });
+    sonny738_eq_test_mod.addImport("geode", root_mod);
+    sonny738_eq_test_mod.addImport("logging", logging_mod);
+    sonny738_eq_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny738_eq_tests = b.addTest(.{ .root_module = sonny738_eq_test_mod });
+    const run_sonny738_eq_tests = b.addRunArtifact(sonny738_eq_tests);
+    shardDep(test_step, &run_sonny738_eq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny738_eq_step = b.step("test-sonny738-equality-consistency", "Run SONNY-738 regression (each value pair is equal, unequal or unknown alike at =, <>, IN, simple CASE, list/record equality, DISTINCT, WHERE over a stored property, the inline property map / index seek and MERGE; ISO/IEC 39075 19.3, 22.12: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny738_eq_step.dependOn(&run_sonny738_eq_tests.step);
+
+    // SONNY-3248: the allowlist minors (a read CALL { } or procedure CALL in an IN subquery, WHERE truthiness, SET/WITH ... DELETE, UNIQUE). See tests/test_sonny3248_allowlist_minors.zig.
+    const sonny3248_m_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3248_allowlist_minors.zig"), .target = target, .optimize = optimize });
+    sonny3248_m_test_mod.addImport("geode", root_mod);
+    sonny3248_m_test_mod.addImport("logging", logging_mod);
+    sonny3248_m_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3248_m_tests = b.addTest(.{ .root_module = sonny3248_m_test_mod });
+    const run_sonny3248_m_tests = b.addRunArtifact(sonny3248_m_tests);
+    shardDep(test_step, &run_sonny3248_m_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3248_m_step = b.step("test-sonny3248-allowlist-minors", "Run SONNY-3248 regression (a read-only CALL { } or procedure CALL inside an IN subquery is a read, a write inside one is still refused with nothing written; a WHERE keeps a row only when True; SET ... DETACH DELETE and WITH ... ORDER BY ... SKIP ... DELETE run; UNIQUE holds on CREATE, SET and MERGE ... SET: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny3248_m_step.dependOn(&run_sonny3248_m_tests.step);
+
+    // SONNY-6343: ISO NEXT (linear composition) and the inline CALL { } forms. See tests/test_sonny6343_next_and_call.zig.
+    const sonny6343_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6343_next_and_call.zig"), .target = target, .optimize = optimize });
+    sonny6343_test_mod.addImport("geode", root_mod);
+    sonny6343_test_mod.addImport("logging", logging_mod);
+    sonny6343_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6343_tests = b.addTest(.{ .root_module = sonny6343_test_mod });
+    const run_sonny6343_tests = b.addRunArtifact(sonny6343_tests);
+    shardDep(test_step, &run_sonny6343_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6343_step = b.step("test-sonny6343-next-and-call", "Run SONNY-6343 regression (ISO NEXT: the result table of the statement before it continues as the next statement's working table, with ORDER BY, LIMIT, aggregates, DISTINCT and a YIELD clause; NEXT with no result table or after a UNION, and every inline CALL { } form other than a statement-level CALL { } followed by WITH, WHERE or RETURN, is refused with 0A000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6343_step.dependOn(&run_sonny6343_tests.step);
+
+    // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
+    const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });
+    sonny3111_test_mod.addImport("geode", root_mod);
+    sonny3111_test_mod.addImport("logging", logging_mod);
+    sonny3111_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3111_tests = b.addTest(.{ .root_module = sonny3111_test_mod });
+    const run_sonny3111_tests = b.addRunArtifact(sonny3111_tests);
+    shardDep(test_step, &run_sonny3111_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3111_step = b.step("test-sonny3111-write-shape-matrix", "Run SONNY-3111 triage (every write shape the ticket lists is refused with 0A000 before anything is written, or accepted and written right; none is accepted and written wrongly: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny3111_step.dependOn(&run_sonny3111_tests.step);
 
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });

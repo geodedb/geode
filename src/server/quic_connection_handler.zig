@@ -2499,66 +2499,6 @@ fn replaceOwnedOptionalString(allocator: std.mem.Allocator, slot: *?[]const u8, 
     }
 }
 
-/// Extract variable name and property name from a property access expression.
-/// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
-fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
-    if (expr == .PropertyAccess) {
-        const pa = expr.PropertyAccess;
-        return .{ .variable = pa.object, .property = pa.property };
-    }
-    if (expr == .Member) {
-        const m = expr.Member;
-        if (m.target.* == .Ident) {
-            return .{ .variable = m.target.Ident.orig, .property = m.field };
-        }
-    }
-    return null;
-}
-
-/// Check if a WHERE clause contains an equality predicate on a property
-/// that matches a catalog index for the given label and variable name.
-fn whereHasIndexedEq(root: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
-    // SONNY-3189: down an AND chain with a loop, not one recursion (and one
-    // copy of the expression) per AND: EXPLAIN reaches this before
-    // authorization.
-    var at: *const gql_ast.Expr = &root;
-    while (at.* == .Binary and at.Binary.op == .And) {
-        if (whereHasIndexedEq(at.Binary.right.*, var_name, label, cat)) return true;
-        at = at.Binary.left;
-    }
-    const where_expr = at.*;
-    switch (where_expr) {
-        .Binary => |bin| {
-            if (bin.op == .And) {
-                if (whereHasIndexedEq(bin.left.*, var_name, label, cat)) return true;
-                if (whereHasIndexedEq(bin.right.*, var_name, label, cat)) return true;
-                return false;
-            } else if (bin.op == .Eq) {
-                const prop_name = blk: {
-                    if (extractVarProperty(bin.left.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    if (extractVarProperty(bin.right.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    break :blk @as(?[]const u8, null);
-                };
-                if (prop_name) |pn| {
-                    var idx_iter = cat.indexes.valueIterator();
-                    while (idx_iter.next()) |info| {
-                        if (std.mem.eql(u8, info.table_name, label) and
-                            info.columns.len > 0 and
-                            std.mem.eql(u8, info.columns[0], pn)) return true;
-                    }
-                }
-                return false;
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
 fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
     var idx: usize = program.statements.len;
     while (idx > 0) : (idx -= 1) {
@@ -7600,10 +7540,9 @@ fn handleClientMessage(
             // SONNY-2805: `analyzeRequest` keeps a program with transaction
             // control off the fast paths that run only its last query.
             const analysis = query_traits.analyzeRequest(&parse_result.program);
-            var traits = analysis.traits;
+            const traits = analysis.traits;
             const ordered = traits.ordered;
             const distinct = traits.distinct;
-            const heur_index = traits.has_where_eq or traits.has_filter_eq;
             // SONNY-2749: the graph the program starts on is the executor
             // session's (`exec_session.graph`); `state.current_graph` is a copy
             // synced only after a request that succeeds. Copied, because a USE
@@ -7657,51 +7596,14 @@ fn handleClientMessage(
 
             const catalog = try execution.ensureCatalogInstance(gpa);
 
-            // Detect index-seek for EXPLAIN: check if query's node pattern
-            // matches a catalog index (label + property equality)
-            if (analysis.kind == .explain) {
-                if (analysis.target) |target| {
-                    if (target.* == .Query) {
-                        const q = target.Query;
-                        if (q.match.chains.len > 0) {
-                            const head_opt = q.match.chains[0].head;
-                            if (head_opt) |head| {
-                                if (head.labels.len > 0) {
-                                    const label = head.labels[0];
-                                    // Check inline properties
-                                    if (head.props) |props| {
-                                        if (props.len > 0) {
-                                            const prop_name = props[0].key;
-                                            catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                                            defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-                                            var idx_iter = catalog.indexes.valueIterator();
-                                            while (idx_iter.next()) |info| {
-                                                if (std.mem.eql(u8, info.table_name, label) and
-                                                    info.columns.len > 0 and
-                                                    std.mem.eql(u8, info.columns[0], prop_name))
-                                                {
-                                                    traits.has_index_seek = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // Check WHERE clause for equality on indexed property
-                                    if (!traits.has_index_seek) {
-                                        if (q.where_clause) |where_expr| {
-                                            if (head.name) |vn| {
-                                                catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                                                defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-                                                traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // SONNY-6276: a legacy EXPLAIN (no plan; the version-1 payload)
+            // claims no index seek. It said IndexSeek for any catalog index on
+            // an inline property or an equality anywhere in the WHERE (a
+            // fulltext index, an AND), while the legacy executor behind it never
+            // reports one (SONNY-1335). A planned EXPLAIN asks the executor's
+            // own seek decision (planned_read_runtime.nodeCanUseIndex), and the
+            // response flag U:HeuristicIndexSelection, set for every WHERE or
+            // FILTER equality, is no longer sent.
             // Issue #452/#460: Consult shared optimizer for plan hints
             // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=HintExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
             var plan_handle: ?query_plan_cache.SharedPlanHandle = null;
@@ -7858,9 +7760,6 @@ fn handleClientMessage(
             }
             if (traits.has_union) {
                 try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
-            }
-            if (heur_index) {
-                try appendFlagIfMissing(gpa, &flags, server_flags.F_HEUR_INDEX);
             }
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");

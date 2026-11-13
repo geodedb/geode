@@ -749,9 +749,12 @@ fn checkInIsEquality(s: *Session, f: *Failures) !void {
     try expectRows(s, f, "RETURN NULL IN $l AS x", &.{l15}, &.{"null"});
     try expectRows(s, f, "RETURN NULL IN $l AS x", &.{empty}, &.{"false"});
     try expectRows(s, f, "RETURN 2 NOT IN $l AS x", &.{empty}, &.{"true"});
-    // An item `=` cannot compare with the value raises what `=` raises.
-    try expectFail(s, f, "RETURN 'a' = 1.5 AS x", &.{}, error.TypeMismatch);
-    try expectFail(s, f, "RETURN 'a' IN [1.5] AS x", &.{}, error.TypeMismatch);
+    // An item of a type not comparable with the value answers what `=`
+    // answers: False (SONNY-738: ISO/IEC 39075:2024 19.3 GR 1, NOTE 307; it
+    // was a type mismatch). An ordering between them is still refused.
+    try expectRows(s, f, "RETURN 'a' = 1.5 AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN 'a' IN [1.5] AS x", &.{}, &.{"false"});
+    try expectFail(s, f, "RETURN 'a' < 1.5 AS x", &.{}, error.TypeMismatch);
     // `=` compares exact numbers at any scale and across INT, SMALLINT,
     // BIGINT and DECIMAL (a scale-40 decimal was 0A000, a SMALLINT against an
     // INT a type mismatch).

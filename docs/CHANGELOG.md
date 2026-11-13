@@ -2755,6 +2755,92 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **ISO `NEXT` runs; unsupported inline `CALL` forms are refused with
+  0A000 (SONNY-6343).** `NEXT` (ISO/IEC 39075:2024 9.2, Feature GQ20) was
+  a keyword only: every `... RETURN ... NEXT ...` was a syntax error. The
+  result table of the statement before `NEXT` now continues as the working
+  table of the one after it, with its `DISTINCT`, aggregates, `ORDER BY`,
+  `OFFSET` and `LIMIT`, and an optional `YIELD` (16.14) selecting and
+  renaming columns: `MATCH (n) RETURN n.k AS k NEXT MATCH (m) WHERE m.k =
+  k + 1 RETURN m`. It runs as Geode's WITH chain (the parser reads `RETURN
+  ... NEXT [YIELD]` as `WITH ... [WITH]`, keeping every source position),
+  so it has the WITH chain's validator, refusals and executors. A `NEXT`
+  after a statement with no `RETURN` at its level, or after `UNION`,
+  `INTERSECT`, `EXCEPT` or `OTHERWISE`, is refused with 0A000. Inline
+  procedure calls: `CALL { } RETURN ...` and `CALL { } WITH ...` run as
+  before; `CALL { }` followed by `MATCH`, a second `CALL` or a write,
+  `MATCH ... CALL { }`, `CALL (x) { }` and `OPTIONAL CALL` were syntax
+  errors (42000) and are now refused with 0A000 naming the form. Also: a
+  `WITH ... WITH` chain (and so `NEXT ... NEXT`, `NEXT YIELD`) leaked two
+  allocations per row on the bound-variables path; freed. Regression:
+  `zig build test-sonny6343-next-and-call` (new). The stale OPTIONAL MATCH
+  claims in `docs/kb/gql/` carry a status note.
+- **A read-only `CALL { }` or procedure CALL inside an IN subquery reads
+  (SONNY-3248, M1).** The write-shape validator's write walk counted any
+  `CALL { }`, `FOR` or procedure call inside an expression or a CTE body as
+  a write, so `MATCH (n) WHERE n.k IN (CALL { RETURN 2 AS x } RETURN x)
+  RETURN n` and `... IN (MATCH (m) CALL db.labels() YIELD label RETURN
+  m.k)` were refused with 0A000. A procedure there is classified as at the
+  top of a statement, and a `CALL { }` or `FOR` body is walked like any
+  part: a write inside one is still refused before anything is written.
+  Regression: `zig build test-sonny3248-allowlist-minors` (new; also pins
+  M6 WHERE truthiness, M7 `SET ... DETACH DELETE` and `WITH ... ORDER BY
+  ... SKIP ... DELETE`, and UNIQUE on CREATE, SET and MERGE ... SET, which
+  already held).
+- **EXPLAIN describes the access path the executor takes (SONNY-6276).**
+  SONNY-1335 made PROFILE name an index only when the executor seeked
+  through a catalog btree or hash index; EXPLAIN kept guessing. A planned
+  EXPLAIN said `IndexSeek` for an index of any type on the property (a
+  fulltext index too) and for an indexed equality under an `AND`, where
+  the executor seeks only on a WHERE that is one equality; the legacy
+  EXPLAIN (a tenant-bound or RLS session over QUIC or gRPC, and the
+  executor's own text plan) said `IndexSeek` whenever a catalog index
+  matched, while the legacy executor scans. The planned EXPLAIN now asks
+  the executor's own start decision (the seek `collectStartSlots` makes,
+  and a catalog btree or hash index on that label and key, as PROFILE
+  reports it); the legacy EXPLAIN says scan. The response flag
+  `U:HeuristicIndexSelection`, sent with every query that had a WHERE or
+  FILTER equality whether or not an index existed, is no longer sent.
+  Regression: `zig build test-sonny6276-explain-access-path` (new).
+- **The deepest nesting the parser allows fits a gRPC connection thread
+  again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
+  WITH n FOR ...`), within the documented limit of 10, were refused with
+  42000 "nesting too deep for the parser's stack" on the 8 MiB gRPC
+  connection threads of a Debug build: one level of query nesting cost the
+  parser 0.33 MiB of stack (0.46 MiB for a FOR body). Every error exit of
+  `parseQuery`, `parseForStatement` and `parseStatement` held a copy of the
+  whole result (an `ast.Query` is 1.5 KiB, an `ast.Statement` 3 KiB) on the
+  frame; they now parse into the caller's value and return nothing. A level
+  costs 0.12 MiB (0.18 MiB for a FOR body), and the per-request
+  `parseStatement` frame went from 562 to 331 KiB. Regression: `zig build
+  test-sonny738-parser-frame-budget` (new, pins the cost per level) and
+  `zig build test-sonny-write-allowlist-r4-transport`.
+- **Breaking: one equality everywhere (SONNY-738).** After SONNY-6282 a
+  pair of values could still be equal at one equality site and not at
+  another. Now, as ISO/IEC 39075:2024 19.3 GR 1 and 22.12 define it, in
+  every session:
+  - values of types that are not comparable with each other (a number and a
+    Boolean, a string and a Boolean, a date and a string, a number and a
+    list, a node and a relationship, ...) are never equal: `=` is false and
+    `<>` true, as for an integer and a string. `RETURN 1 = true` raised a
+    type mismatch, which `WHERE` turned into an error on one path and a
+    dropped row on another (so `WHERE n.k <> true` also dropped a node whose
+    `k` is `1`). `<`, `<=`, `>` and `>=` between them stay refused;
+  - lists compare element by element and records field by field, each pair
+    as `=` compares it: `[1] = [1.0]` and `{v: 1} = {v: 1.0}` are true
+    (were false); `[1, NULL] = [1, NULL]` is unknown (was true); a stored
+    list property now equals a list value with a decimal in it in `WHERE`
+    (`WHERE n.k = [1.0, 2]` missed a stored `[1, 2]`);
+  - a simple `CASE x WHEN y` takes a WHEN only when `x = y` is true (20.7):
+    `CASE 1 WHEN 1.0` takes it (took the ELSE), `CASE NULL WHEN NULL` does
+    not (took it);
+  - a TEXT, VARCHAR or CHAR value equals a string with the same characters
+    (raised a type mismatch);
+  - a recursive CTE's `UNION` drops `1.0` as a duplicate of `1`, and a
+    decimal as a duplicate of itself (it ran to the iteration cap).
+  `IN` follows `=`, so `1 IN [true]` is false (raised) and `42 IN ['42']`
+  false. Regression: `zig build test-sonny738-equality-consistency` (new),
+  and `zig build test-recursive-cte`.
 - **Persisted sessions: a relationship walked from its target keeps its
   properties (SONNY-6266).** `MATCH (a)<-[{w: 2}]-(b)` answered 0, and an
   undirected hop with a relationship property map or a WHERE on the

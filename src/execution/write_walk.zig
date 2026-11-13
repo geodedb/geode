@@ -205,7 +205,7 @@ const Walker = struct {
             },
             .Call => |*c| switch (c.*) {
                 .Procedure => |*proc| {
-                    if (counts and w.procedureWrites(proc.procedure, w.nested)) w.found.write = true;
+                    if (counts and w.procedureWrites(proc.procedure)) w.found.write = true;
                     w.visit(ast.CallProcedure, proc, true);
                 },
                 // The statement it holds is a part of its own.
@@ -288,15 +288,18 @@ const Walker = struct {
                     w.visit(field.type, v, true);
                 },
                 .call => if (v.*) |*cc| {
-                    if (counts and w.procedureWrites(cc.procedure, w.nested)) w.found.write = true;
+                    if (counts and w.procedureWrites(cc.procedure)) w.found.write = true;
                     w.visit(ast.CallClause, cc, true);
                 },
                 .part => w.visit(field.type, v, counts),
                 .part_call_subquery, .part_for => if (v.* != null) {
                     // SONNY-1330: under `.any`, a CALL { } or a FOR is not
-                    // provably free of side effects; nor inside an expression
-                    // or a CTE body (M1).
-                    if (counts and (w.opts.calls == .any or w.nested)) w.found.write = true;
+                    // provably free of side effects. SONNY-3248 (M1): inside
+                    // an expression or a CTE body it counted as a write too,
+                    // so a read (`n.k IN (CALL { RETURN 2 AS x } RETURN x)`)
+                    // was refused with 0A000; its body is walked below like
+                    // any part, and a write in it counts.
+                    if (counts and w.opts.calls == .any) w.found.write = true;
                     w.visit(field.type, v, counts);
                 },
                 // A CTE body is not a part the allowlist checks: any write in
@@ -323,8 +326,10 @@ const Walker = struct {
         }
     }
 
-    fn procedureWrites(w: *Walker, procedure: ast.Expr, nested: bool) bool {
-        if (nested) return true;
+    fn procedureWrites(w: *Walker, procedure: ast.Expr) bool {
+        // SONNY-3248 (M1): a procedure inside an expression or a CTE body is
+        // classified as at the top: a read-only one is a read. It counted as
+        // a write, so a read was refused with 0A000.
         return switch (w.opts.calls) {
             .any => true,
             .classify => procedure_access.classifyCallProcedure(.{ .procedure = procedure }) == .mutating,

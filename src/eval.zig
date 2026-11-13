@@ -1029,6 +1029,26 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 return Value{ .Null = {} };
             }
 
+            // CANARY: REQ=REQ-SONNY-738-EQUALITY-CONSISTENCY; FEATURE="ComparisonPredicate"; ASPECT=ListsRecordsUniversal; STATUS=TESTED; TEST=tests/test_sonny738_equality_consistency.zig; OWNER=eval; UPDATED=2026-11-13
+            // SONNY-738: lists element by element and records field by field
+            // (ISO/IEC 39075:2024 19.3 GR 1)b)ii)-iii)), each pair by this
+            // `=`: `[1] = [1.0]` is True, `[NULL] = [NULL]` Unknown. They
+            // compared representations (eqVals), and a stored list (an
+            // extended list) against a list value was a type mismatch.
+            if (op == .Eq or op == .Ne) {
+                if (try listEquality(alloc, l, r) orelse try recordEquality(alloc, l, r)) |eq| {
+                    break :blk5 if (op == .Eq or eq == .Null) eq else .{ .Bool = !eq.Bool };
+                }
+                // Character strings of different representations (a TEXT, a
+                // VARCHAR, a string) compare by their characters, as
+                // DISTINCT and GROUP BY key them.
+                if (charString(l)) |ls| {
+                    if (charString(r)) |rs| {
+                        if (std.meta.activeTag(l) != std.meta.activeTag(r)) break :blk5 try evalBinary(alloc, op, .{ .Str = ls }, .{ .Str = rs });
+                    }
+                }
+            }
+
             // Generic equality for same types (UUID=UUID, Date=Date, etc.)
             if ((op == .Eq or op == .Ne) and std.meta.activeTag(l) == std.meta.activeTag(r)) {
                 const isEqual = eqVals(l, r);
@@ -1044,6 +1064,17 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // Node/Edge Eq/Ne are handled by the same-tag `eqVals` branch above,
             // which now compares by ID (value_types.eqVals). Ordering operators
             // on graph elements are not defined, so they land here.
+            //
+            // SONNY-738: two values that are not essentially comparable (a
+            // number and a Boolean, a date and a string, a number and a
+            // list, ...) are never equal: `=` False, `<>` True, as SONNY-6282
+            // made them for an integer and a string (ISO/IEC 39075:2024 19.3
+            // GR 1)a)i), Feature GA04, NOTE 307). `=` raised a type mismatch,
+            // which WHERE turned into an error on one path and a dropped row
+            // on another, so `WHERE n.k <> true` dropped an integer too, and
+            // the inline property map and MERGE found them unequal. `<` and
+            // the other orderings stay refused.
+            if (op == .Eq or op == .Ne) break :blk5 .{ .Bool = op == .Ne };
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
@@ -1948,23 +1979,19 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Case => |c| {
             // ISO 3VL semantics
             if (c.operand) |op_ptr| {
+                // SONNY-738: ISO/IEC 39075:2024 20.7 SR: a simple CASE is the
+                // searched CASE `WHEN CO = WO`, so a WHEN is taken only when
+                // `=` is True. It compared representations (`CASE 1 WHEN 1.0`
+                // took the ELSE, while `1 = 1.0` is True) and took
+                // `CASE NULL WHEN NULL`, where `=` is Unknown.
                 const opv = try evalExpr(allocator, op_ptr.*, env);
-                var saw_null_match = false;
                 for (c.whens) |w| {
                     const whenv = try evalExpr(allocator, w.when.*, env);
-                    if (isNull(opv) or isNull(whenv)) {
-                        // NULL = x yields NULL; track if any potential match is unknown
-                        if (isNull(opv) and isNull(whenv)) {
-                            // NULL = NULL treated as true in our eqVals; but in searched context, this is a match
-                            return evalExpr(allocator, w.then_expr.*, env);
-                        }
-                        saw_null_match = true;
-                        continue;
-                    }
-                    if (eqVals(opv, whenv)) return evalExpr(allocator, w.then_expr.*, env);
+                    const hit = try evalBinary(allocator, .Eq, opv, whenv);
+                    if (hit == .Bool and hit.Bool) return evalExpr(allocator, w.then_expr.*, env);
                 }
                 if (c.else_expr) |ep| return evalExpr(allocator, ep.*, env);
-                return if (saw_null_match) Value{ .Null = {} } else Value{ .Null = {} };
+                return Value{ .Null = {} };
             } else {
                 for (c.whens) |w| {
                     const cond = try evalExpr(allocator, w.when.*, env);
@@ -5212,6 +5239,83 @@ fn parseDurationString(str: []const u8) !i64 {
 /// expression one that was never NULL: `1.50 IN [1.5]` and `1 IN [1.0]` were
 /// false while `=` called them equal, and `2 IN $list` with `$list = [1,
 /// NULL]` was false, not NULL.
+/// A list value's elements: a list literal or parameter (`Value.List`) or a
+/// stored list, which reads back as an extended list.
+const ListView = union(enum) {
+    values: []const Value,
+    ext: []const @import("eval_extended.zig").ExtValue,
+
+    fn of(v: Value) ?ListView {
+        return switch (v) {
+            .List => |items| .{ .values = items },
+            .ExtValue => |e| if (e == .List) .{ .ext = e.List } else null,
+            else => null,
+        };
+    }
+
+    fn len(self: ListView) usize {
+        return switch (self) {
+            inline else => |items| items.len,
+        };
+    }
+
+    fn at(self: ListView, i: usize) Value {
+        return switch (self) {
+            .values => |items| items[i],
+            .ext => |items| property_codec.extValueToValue(items[i]),
+        };
+    }
+};
+
+/// SONNY-738: `l = r` for two lists (ISO/IEC 39075:2024 19.3 GR 1)b)ii)):
+/// False when the lengths differ or some element pair is not equal, True
+/// when every pair is equal, otherwise Unknown. Null when either is not a
+/// list.
+fn listEquality(alloc: std.mem.Allocator, l: Value, r: Value) EvalError!?Value {
+    const a = ListView.of(l) orelse return null;
+    const b = ListView.of(r) orelse return null;
+    if (a.len() != b.len()) return .{ .Bool = false };
+    var unknown = false;
+    for (0..a.len()) |i| {
+        switch (try evalBinary(alloc, .Eq, a.at(i), b.at(i))) {
+            .Bool => |eq| if (!eq) return .{ .Bool = false },
+            else => unknown = true,
+        }
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = true };
+}
+
+/// SONNY-738: `l = r` for two records (19.3 GR 1)b)iii)): field by field,
+/// as for lists. Records with different field names are not essentially
+/// comparable: False (GR 1)a)i)). Null when either is not a record.
+fn recordEquality(alloc: std.mem.Allocator, l: Value, r: Value) EvalError!?Value {
+    if (l != .Map or r != .Map) return null;
+    if (l.Map.count() != r.Map.count()) return .{ .Bool = false };
+    var it = l.Map.iterator();
+    while (it.next()) |entry| {
+        if (!r.Map.contains(entry.key_ptr.*)) return .{ .Bool = false };
+    }
+    var unknown = false;
+    it = l.Map.iterator();
+    while (it.next()) |entry| {
+        switch (try evalBinary(alloc, .Eq, entry.value_ptr.*, r.Map.get(entry.key_ptr.*).?)) {
+            .Bool => |eq| if (!eq) return .{ .Bool = false },
+            else => unknown = true,
+        }
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = true };
+}
+
+/// The characters of a character string of any representation, else null.
+fn charString(v: Value) ?[]const u8 {
+    return switch (v) {
+        .Str, .Text => |s| s,
+        .Varchar => |c| c.data,
+        .Char => |c| c.data,
+        else => null,
+    };
+}
+
 fn inStep(allocator: std.mem.Allocator, value: Value, item: Value, unknown: *bool) EvalError!bool {
     switch (try evalBinary(allocator, .Eq, value, item)) {
         .Bool => |b| return b,
@@ -5354,14 +5458,15 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const nin2 = ast.Expr{ .NotIn = .{ .value = &lit8, .set = arr3[0..] } };
     const v4 = try evalExpr(allocator, nin2, env);
     try std.testing.expect(v4 == .Null);
-    // Mixed-type equality edge: leading zeros in string
+    // An integer never equals a string, whatever its text (ISO/IEC
+    // 39075:2024 19.3 GR 1, NOTE 307; SONNY-6282, SONNY-738): 7 = "7" and
+    // 7 = "007" are both False.
     var str7 = ast.Expr{ .String = "7" };
     const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &str7 } };
     const v5 = try evalExpr(allocator, eq, env);
-    try std.testing.expect(v5 == .Bool and v5.Bool);
+    try std.testing.expect(v5 == .Bool and !v5.Bool);
     const eq2 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
     const v6 = try evalExpr(allocator, eq2, env);
-    // 7 vs "007" should be false by decimal string compare
     try std.testing.expect(v6 == .Bool and !v6.Bool);
     // NOT IN with empty list -> always true
     var empty: [0]*ast.Expr = .{};
@@ -5376,7 +5481,7 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     try std.testing.expect(v8 == .Null);
 }
 
-test "eval: mixed-type IN across bools and big ints stringified" {
+test "eval: mixed-type IN across bools and big ints: only an equal number matches" {
     const allocator = std.testing.allocator;
     const env = Env{ .allocator = allocator, .names = &.{"a"}, .values = &.{Value{ .Int = 9007199254740991 }} }; // 2^53-1
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
@@ -5386,8 +5491,16 @@ test "eval: mixed-type IN across bools and big ints stringified" {
     var items: [3]*ast.Expr = .{ &s_big, &t_true, &b_true };
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = items[0..] } };
     const v = try evalExpr(allocator, inx, env);
-    // Should match the big-int via decimal string, ignore bool mismatches
-    try std.testing.expect(v == .Bool and v.Bool == true);
+    // SONNY-738: an integer equals neither a string with its digits nor a
+    // Boolean (ISO/IEC 39075:2024 19.3 GR 1, NOTE 307), and no element is
+    // Unknown: False, not an error.
+    try std.testing.expect(v == .Bool and v.Bool == false);
+    // The integer itself, as an element, matches.
+    var i_big = ast.Expr{ .Int = 9007199254740991 };
+    var items2: [3]*ast.Expr = .{ &s_big, &b_true, &i_big };
+    const inx2 = ast.Expr{ .In = .{ .value = &a_ident, .set = items2[0..] } };
+    const v2 = try evalExpr(allocator, inx2, env);
+    try std.testing.expect(v2 == .Bool and v2.Bool == true);
 }
 
 test "eval: CASE searched produces expected values" {
@@ -5456,19 +5569,26 @@ test "eval: implicit int<->string in predicates and IN list" {
     const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &four } };
     const v1 = try evalExpr(allocator, sw, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
-    // a = "42" -> true (implicit Eq int<->string)
+    // a = "42" -> false: no implicit integer/string equality (ISO/IEC
+    // 39075:2024 19.3 GR 1, NOTE 307; SONNY-6282)
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_lit = ast.Expr{ .String = "42" };
     const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_lit } };
     const v2 = try evalExpr(allocator, eq, env);
-    try std.testing.expect(v2 == .Bool and v2.Bool == true);
-    // a IN ["41", "42", 43] -> true
+    try std.testing.expect(v2 == .Bool and v2.Bool == false);
+    // a IN ["41", "42", 43] -> false: IN is `=` element by element
     var lit41 = ast.Expr{ .String = "41" };
     var lit43 = ast.Expr{ .Int = 43 };
     var arr: [3]*ast.Expr = .{ &lit41, &s_lit, &lit43 };
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
     const v3 = try evalExpr(allocator, inx, env);
-    try std.testing.expect(v3 == .Bool and v3.Bool == true);
+    try std.testing.expect(v3 == .Bool and v3.Bool == false);
+    // a IN ["42", 42] -> true: the integer element matches
+    var lit42 = ast.Expr{ .Int = 42 };
+    var arr2: [2]*ast.Expr = .{ &s_lit, &lit42 };
+    const inx2 = ast.Expr{ .In = .{ .value = &a_ident, .set = arr2[0..] } };
+    const v4 = try evalExpr(allocator, inx2, env);
+    try std.testing.expect(v4 == .Bool and v4.Bool == true);
 }
 
 test "eval: parameters substitution and STARTS WITH via $param" {
@@ -5493,7 +5613,8 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = items[0..] } };
     const v1 = try evalExpr(allocator, inx, env);
     try std.testing.expect(v1 == .Bool and v1.Bool);
-    // Equality mixed-type: a = s (7 vs "007") -> false; but a = "7" literal -> true
+    // Equality mixed-type: a = s (7 vs "007") -> false, and a = "7" -> false
+    // too: an integer never equals a string (ISO/IEC 39075:2024 19.3 GR 1)
     var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     const eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
     const v2 = try evalExpr(allocator, eq1, env);
@@ -5501,7 +5622,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     var s7 = ast.Expr{ .String = "7" };
     const eq2 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s7 } };
     const v3 = try evalExpr(allocator, eq2, env);
-    try std.testing.expect(v3 == .Bool and v3.Bool);
+    try std.testing.expect(v3 == .Bool and !v3.Bool);
     // Equality using int parameter vs string field: $list1 (7) = s ("007") -> false
     var p_int = ast.Expr{ .Param = "list1" };
     const eq3 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &p_int, .right = &s_ident } };
@@ -5544,12 +5665,14 @@ test "eval: CASE permutations with multiple WHENs and ELSE variants" {
     const cs3b = ast.Expr{ .Case = .{ .operand = &op2, .whens = whs3b[0..], .else_expr = &C } };
     const o3b = try evalExpr(allocator, cs3b, env);
     try std.testing.expect(o3b == .Str and std.mem.eql(u8, o3b.Str, "C"));
-    // Simple CASE: operand NULL, WHEN NULL then -> THEN; ELSE present should be ignored
+    // Simple CASE: operand NULL takes no WHEN, not even WHEN NULL: the
+    // simple CASE is `WHEN NULL = NULL`, Unknown (ISO/IEC 39075:2024 20.7
+    // SR; SONNY-738) -> ELSE
     var opn = ast.Expr{ .Null = {} };
     var whs4: [2]ast.CaseWhen = .{ .{ .when = &n, .then_expr = &A }, .{ .when = &t, .then_expr = &B } };
     const cs4 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs4[0..], .else_expr = &C } };
     const o4 = try evalExpr(allocator, cs4, env);
-    try std.testing.expect(o4 == .Str and std.mem.eql(u8, o4.Str, "A"));
+    try std.testing.expect(o4 == .Str and std.mem.eql(u8, o4.Str, "C"));
 }
 
 test "eval: CASE 3VL searched and simple with NULLs" {
@@ -5562,14 +5685,16 @@ test "eval: CASE 3VL searched and simple with NULLs" {
     const c1 = ast.Expr{ .Case = .{ .operand = null, .whens = whs1[0..], .else_expr = &then1 } };
     const o1 = try evalExpr(allocator, c1, env);
     try std.testing.expect(o1 == .Str and std.mem.eql(u8, o1.Str, "x"));
-    // Simple CASE: operand NULL, WHEN NULL -> match returns THEN
+    // Simple CASE: operand NULL, WHEN NULL: `NULL = NULL` is Unknown, so no
+    // WHEN is taken and the implicit ELSE NULL applies (ISO/IEC 39075:2024
+    // 20.7 SR; SONNY-738)
     var opn = ast.Expr{ .Null = {} };
     var wnull = ast.Expr{ .Null = {} };
     var t2 = ast.Expr{ .String = "n" };
     var whs2: [1]ast.CaseWhen = .{.{ .when = &wnull, .then_expr = &t2 }};
     const c2 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs2[0..], .else_expr = null } };
     const o2 = try evalExpr(allocator, c2, env);
-    try std.testing.expect(o2 == .Str and std.mem.eql(u8, o2.Str, "n"));
+    try std.testing.expect(o2 == .Null);
 }
 
 test "eval: icontains case-insensitive string matching" {

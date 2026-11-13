@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:10:56.870844283Z",
+  "generated_at": "2026-11-13T17:12:09.787520461Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -5674,40 +5674,6 @@
       ]
     },
     {
-      "id": "REQ-AUTO-INDEX-EXPLAIN-001",
-      "features": [
-        {
-          "feature": "AutoIdIndex",
-          "aspect": "ExplainWhereClause",
-          "status": "IMPL",
-          "files": [
-            "src/execution/statement_handlers.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-02-07"
-        }
-      ]
-    },
-    {
-      "id": "REQ-AUTO-INDEX-EXPLAIN-002",
-      "features": [
-        {
-          "feature": "AutoIdIndex",
-          "aspect": "WhereClauseIndexCheck",
-          "status": "IMPL",
-          "files": [
-            "src/execution/statement_handlers.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-02-07"
-        }
-      ]
-    },
-    {
       "id": "REQ-AUTO-INDEX-EXPLAIN-003",
       "features": [
         {
@@ -5730,14 +5696,16 @@
         {
           "feature": "AutoIdIndex",
           "aspect": "PlanIndexSeek",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/planned_read_runtime.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
           "benches": [],
           "owner": "planner",
-          "updated": "2026-04-02"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -76566,6 +76534,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3111-WRITE-SHAPE-MATRIX",
+      "features": [
+        {
+          "feature": "WriteShapeAllowlist",
+          "aspect": "Triage",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3111_write_shape_matrix.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3111_write_shape_matrix.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3121-DIRECT-BULK-PIN",
       "features": [
         {
@@ -78461,6 +78448,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-28"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3248-ALLOWLIST-MINORS",
+      "features": [
+        {
+          "feature": "WriteShapeValidator",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3248_allowlist_minors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3248_allowlist_minors.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -80523,6 +80529,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6276-EXPLAIN-ACCESS-PATH",
+      "features": [
+        {
+          "feature": "EXPLAIN",
+          "aspect": "PlanMatchesExecutorSeek",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EXPLAIN",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME",
       "features": [
         {
@@ -82523,6 +82562,39 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6343-NEXT-AND-CALL",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "NextAsWithChain",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "LinearComposition",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -87053,6 +87125,72 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-738-EQUALITY-CONSISTENCY",
+      "features": [
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "EverySite",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ComparisonPredicate",
+          "aspect": "ListsRecordsUniversal",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_equality_consistency.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-738-PARSER-FRAME-BUDGET",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "FrameBudget",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "GQLParser",
+          "aspect": "FrameProbe",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-11-13"
         }
       ]
@@ -94679,8 +94817,8 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 329,
-      "TESTED": 4939
+      "IMPL": 326,
+      "TESTED": 4950
     },
     "by_aspect": {
       "2PC": 3,
@@ -95894,6 +96032,7 @@
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
       "EveryPathExpands": 1,
+      "EverySite": 1,
       "EvictedNode": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,
@@ -95973,7 +96112,6 @@
       "ExplainProfileTarget": 1,
       "ExplainProtocolBasic": 1,
       "ExplainProtocolCalibrated": 1,
-      "ExplainWhereClause": 1,
       "ExplicitAllow": 1,
       "ExplicitCertLoadAsIs": 1,
       "ExplicitCertNotDiscarded": 1,
@@ -96104,6 +96242,8 @@
       "FormatValue": 1,
       "ForwardToShard": 1,
       "Foundation": 1,
+      "FrameBudget": 1,
+      "FrameProbe": 1,
       "Framework": 3,
       "FrameworkTesting": 1,
       "FreeExtendedReadCopy": 1,
@@ -96697,6 +96837,7 @@
       "ListUnwind": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
+      "ListsRecordsUniversal": 1,
       "LiteralParsing": 2,
       "LiteralTrue": 1,
       "Literals": 1,
@@ -96968,6 +97109,7 @@
       "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
+      "NextAsWithChain": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
       "NextSliceStructureGuard": 1,
@@ -97416,6 +97558,7 @@
       "PlanIndexSeek": 1,
       "PlanJoinReorderDiversity": 1,
       "PlanJoinReorderVarianceEnvelope": 1,
+      "PlanMatchesExecutorSeek": 1,
       "PlanMissSingleFlight": 1,
       "PlanSelectionIntegration": 1,
       "PlanSelectionPipelineAdoption": 1,
@@ -97837,7 +97980,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 323,
+      "Regression": 326,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -98574,6 +98717,7 @@
       "Traversal": 2,
       "TraversalBuffers": 1,
       "TrendAppend": 1,
+      "Triage": 1,
       "TriangleCount": 1,
       "Trie": 1,
       "TrigFunctions": 1,
@@ -98791,7 +98935,6 @@
       "WebhookSink": 1,
       "WellFormed": 1,
       "WhereClause": 4,
-      "WhereClauseIndexCheck": 1,
       "WhereEnvLifetime": 1,
       "WhereErrorsFailTheQuery": 1,
       "WhereEvaluation": 2,

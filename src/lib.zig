@@ -772,6 +772,10 @@ pub fn parseErrorCode(err: anyerror) []const u8 {
         // SONNY-6433: an undirected edge pattern (Feature GH02) is a feature
         // Geode does not support, not a syntax error.
         error.UndirectedEdgeNotSupported => "0A000",
+        // SONNY-6343: a query shape the parser refuses as unsupported (a
+        // NEXT with no result table to continue from, an inline CALL form);
+        // the parser's message names it.
+        error.UnsupportedQueryShape => "0A000",
         else => "42000",
     };
 }
