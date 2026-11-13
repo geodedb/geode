@@ -5860,6 +5860,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-cli-no-ca-default", "Run SONNY-6453 item 4 regression (geode query / shell / REPL refuse an implicit unverified connection - no --ca-cert, no client certificate, no insecure flag - under production posture, like geode auth; GEODE_ALLOW_INSECURE_TLS=1 or a --ca-cert connects, and a Debug build outside GEODE_ENV=production keeps the warning-only developer default; real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6453 (5): compose files set no pids_limit; kms.zig has no dead
+    // helper; the kms.zig inline tests and the secure-zero test have steps.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_hygiene.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6453_hygiene_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests and the GAP-0499 secure-zero test have named steps)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
     // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
     // QUIC against an in-process server with openssl-made CAs.

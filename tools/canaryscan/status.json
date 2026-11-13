@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:42:31.846904621Z",
+  "generated_at": "2026-11-13T07:43:18.473084528Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85809,6 +85809,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6453-HYGIENE",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "ComposePidsAndTestSteps",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_hygiene.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93443,7 +93462,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4870
+      "TESTED": 4871
     },
     "by_aspect": {
       "2PC": 3,
@@ -94034,6 +94053,7 @@
       "ComplexQueries": 1,
       "Compliance": 2,
       "ComplianceLog": 1,
+      "ComposePidsAndTestSteps": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
       "CompositeEndpointTenantScope": 1,
