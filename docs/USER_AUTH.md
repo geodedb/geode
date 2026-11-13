@@ -659,11 +659,13 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
   library, which until its fix is pinned does not present the certificate
   (the connection times out against an mTLS-required server). geode's
   internal QUIC client (`QuicClient.connectEx`) presents it.
-- **Identity mapping is not active.** The server's certificate-to-user
-  mapping (`src/security/mtls_provider.zig`) starts empty and nothing on
-  the server loads mappings (`geode mtls map ...` writes a local file the
-  server does not read), so a client certificate never selects the user:
-  the user is always the one that authenticates in HELLO.
+- **Identity mapping is not supported (SONNY-6458).** The server's
+  certificate-to-user mapping (`src/security/mtls_provider.zig`) starts
+  empty and nothing loads mappings, so a client certificate never selects
+  the user: the user is always the one that authenticates in HELLO. `geode
+  mtls map create|list|delete`, `config` and `status` are refused as
+  unsupported (non-zero exit); they used to write a local
+  `geode_mtls_state.db` the server never read (SONNY-6457).
 
 ### Not Supported (Tracking Issues Open)
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:47:12.608508291Z",
+  "generated_at": "2026-11-13T09:01:57.870912612Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -20838,17 +20838,17 @@
       "features": [
         {
           "feature": "mTLS CLI",
-          "aspect": "CertificateMapping",
+          "aspect": "MappingRefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/mtls_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gap_0258_mtls_cli.yml"
+            "tests/test_sonny6457_mtls_cli_unsupported.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-09"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93660,7 +93660,6 @@
       "CertGenExplicitDir": 1,
       "CertValidation": 1,
       "CertVerification": 1,
-      "CertificateMapping": 1,
       "ChaCha20Parameters": 1,
       "Chain": 1,
       "ChainDispatch": 1,
@@ -95285,6 +95284,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MappingRefusedAsUnsupported": 1,
       "MasterKeyCheckValue": 1,
       "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,

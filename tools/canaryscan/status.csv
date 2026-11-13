@@ -1287,7 +1287,7 @@ REQ-GAP-0237,MVCCAdvancedUnitTests,ConflictRepair,TESTED,src/transactions/mvcc_a
 REQ-GAP-0237,MVCCAdvancedUnitTests,EarlyDetect,TESTED,src/transactions/mvcc_adv/early_detect.zig,test_early_detector,,txn,2026-01-25
 REQ-GAP-0237,MVCCAdvancedUnitTests,PartialRollback,TESTED,src/transactions/mvcc_adv/partial_rollback.zig,test_partial_rollback,,txn,2026-01-25
 REQ-GAP-0240,TypePromotionUnitTests,ScaleConversion,TESTED,src/eval/type_promotion.zig,test_scaleTo,,eval,2026-01-25
-REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,CertificateMapping,TESTED,src/cli/mtls_cli.zig,geodetestlab/specs/gap_0258_mtls_cli.yml,,cli,2026-02-09
+REQ-GAP-0258-MTLS-CLI-001,mTLS CLI,MappingRefusedAsUnsupported,TESTED,src/cli/mtls_cli.zig,tests/test_sonny6457_mtls_cli_unsupported.zig,,cli,2026-11-13
 REQ-GAP-0284-ALTER-USER-GRPC,PasswordResetEnforcement,GrpcAlterUserParse,IMPL,src/transport/grpc_server.zig,,,security,2026-04-01
 REQ-GAP-0284-ALTER-USER-GRPC-WIRE,PasswordResetEnforcement,GrpcExecuteIntercept,IMPL,src/transport/grpc_server.zig,,,security,2026-04-01
 REQ-GAP-0284-FEDERATION-GRPC-AUTH,FederationAuth,GrpcServerValidation,IMPL,src/transport/grpc_server.zig,,,security,2026-06-10

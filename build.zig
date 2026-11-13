@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6457-mtls-cli-unsupported", .reason = "intentionally red TDD reproduction (SONNY-6457 item 5, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
@@ -5872,8 +5871,6 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-6457 (5): every geode mtls subcommand is refused as unsupported
     // (certificate-to-user mapping is SONNY-6458) and writes no state file.
-    // Intentionally red (docs/KNOWN_TEST_ISSUES.md) until the fix commit
-    // registers it in shardDep; compiled by test-compile.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_mtls_cli_unsupported.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -5881,7 +5878,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6457-mtls-cli-unsupported", "Run SONNY-6457 item 5 regression (geode mtls map create/list/delete, config and status are refused as unsupported, SONNY-6458, exit non-zero, name GEODE_MTLS_REQUIRED and write no geode_mtls_state.db; mtls --help says so)").dependOn(&run_tests.step);
     }
 

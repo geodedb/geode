@@ -57,6 +57,16 @@
   mTLS-required server still times out (`zig build
   test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
   build test-sonny6457-connectex-client-cert`.
+- **BREAKING (CLI): `geode mtls` subcommands are refused as unsupported
+  (SONNY-6457 item 5).** `geode mtls map create|list|delete`, `config` and
+  `status` kept certificate-to-user mappings in `geode_mtls_state.db` in
+  the CLI state directory and reported success, but the server never read
+  that file and its certificate-to-user store is never populated, so a
+  mapping changed nothing. Each now exits 1 with a message naming
+  SONNY-6458 (the mapping story) and how mTLS is actually enabled
+  (`GEODE_MTLS_REQUIRED=1` + `GEODE_MTLS_CLIENT_CA`); `geode mtls --help`
+  says the same. An existing `geode_mtls_state.db` is left alone and
+  ignored. Regression: `zig build test-sonny6457-mtls-cli-unsupported`.
 - **BREAKING (operator): `geode query`, `geode shell` and the REPL refuse
   an implicit unverified connection under production posture, like
   `geode auth` (SONNY-6453 item 4).** With no `--ca-cert`, no client
