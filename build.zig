@@ -12081,6 +12081,21 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-6467 item 5: the decimal-overflow grouping tests, compiled by no
+    // step before, and a named step for the GAP-0531 meta procedures (in the
+    // aggregate already).
+    const decimal_overflow_aggs_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_decimal_overflow_aggregates.zig"), .target = target, .optimize = optimize }) });
+    decimal_overflow_aggs_tests.root_module.addImport("geode", root_mod);
+    const run_decimal_overflow_aggs_tests = b.addRunArtifact(decimal_overflow_aggs_tests);
+    shardDep(test_step, &run_decimal_overflow_aggs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-decimal-overflow-aggregates", "Run the decimal SUM/AVG overflow regression of exec.groupAndAggregate (an overflowing group is NULL; leak-checked)").dependOn(&run_decimal_overflow_aggs_tests.step);
+    const groupby_decimal_overflow_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_groupby_decimal_overflow.zig"), .target = target, .optimize = optimize }) });
+    groupby_decimal_overflow_tests.root_module.addImport("geode", root_mod);
+    const run_groupby_decimal_overflow_tests = b.addRunArtifact(groupby_decimal_overflow_tests);
+    shardDep(test_step, &run_groupby_decimal_overflow_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-groupby-decimal-overflow", "Run the GROUP BY decimal SUM/AVG overflow regression of exec.groupAndAggregate (an overflowing group is NULL; leak-checked)").dependOn(&run_groupby_decimal_overflow_tests.step);
+    b.step("test-meta-procedures", "Run the GAP-0531 db.* / dbms.* introspection procedure regressions").dependOn(&run_meta_proc_tests.step);
+
     // SONNY-6467: NOT (...) and CALL in a transaction body. See tests/test_sonny6467_query_residuals.zig.
     const sonny6467_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6467_query_residuals.zig"), .target = target, .optimize = optimize });
     sonny6467_q_test_mod.addImport("geode", root_mod);

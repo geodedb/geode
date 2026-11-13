@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:45:43.959448305Z",
+  "generated_at": "2026-11-13T12:46:04.067875468Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28275,7 +28275,7 @@
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-21"
+          "updated": "2026-11-13"
         },
         {
           "feature": "GROUP BY/Aggregation",
