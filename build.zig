@@ -12589,6 +12589,17 @@ pub fn build(b: *std.Build) void {
     const sonny3248_m_step = b.step("test-sonny3248-allowlist-minors", "Run SONNY-3248 regression (a read-only CALL { } or procedure CALL inside an IN subquery is a read, a write inside one is still refused with nothing written; a WHERE keeps a row only when True; SET ... DETACH DELETE and WITH ... ORDER BY ... SKIP ... DELETE run; UNIQUE holds on CREATE, SET and MERGE ... SET: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny3248_m_step.dependOn(&run_sonny3248_m_tests.step);
 
+    // SONNY-6343: ISO NEXT (linear composition) and the inline CALL { } forms. See tests/test_sonny6343_next_and_call.zig.
+    const sonny6343_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6343_next_and_call.zig"), .target = target, .optimize = optimize });
+    sonny6343_test_mod.addImport("geode", root_mod);
+    sonny6343_test_mod.addImport("logging", logging_mod);
+    sonny6343_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6343_tests = b.addTest(.{ .root_module = sonny6343_test_mod });
+    const run_sonny6343_tests = b.addRunArtifact(sonny6343_tests);
+    shardDep(test_step, &run_sonny6343_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6343_step = b.step("test-sonny6343-next-and-call", "Run SONNY-6343 regression (ISO NEXT: the result table of the statement before it continues as the next statement's working table, with ORDER BY, LIMIT, aggregates, DISTINCT and a YIELD clause; NEXT with no result table or after a UNION, and every inline CALL { } form other than a statement-level CALL { } followed by WITH, WHERE or RETURN, is refused with 0A000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6343_step.dependOn(&run_sonny6343_tests.step);
+
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });
     sonny6266_q_test_mod.addImport("geode", root_mod);

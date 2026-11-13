@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:56:44.619753105Z",
+  "generated_at": "2026-11-13T15:57:58.429682395Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82410,6 +82410,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6343-NEXT-AND-CALL",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6343_next_and_call.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6344-TENANT-LISTINGS",
       "features": [
         {
@@ -94465,7 +94484,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4931
+      "TESTED": 4932
     },
     "by_aspect": {
       "2PC": 3,
@@ -97616,7 +97635,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 321,
+      "Regression": 322,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
