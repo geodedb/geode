@@ -403,7 +403,8 @@ assert_raft_state_persisted() {
 #    liveness/heartbeat-driven re-resolve can recover the peer. That is the
 #    contract under test.
 reschedule_node() {
-  local id=$1 oldpfx="${IPLAST[$id]:-1}" newpfx oldip o
+  local id=$1 newpfx oldip o
+  local oldpfx="${IPLAST[$id]:-1}"   # a separate `local`: in one, $id is still the caller's
   newpfx=2; [ "$oldpfx" = "2" ] && newpfx=1
   oldip="$SUBNET.$oldpfx$id"
   # SONNY-6451: reap the old process before its data dir is wiped and a new
