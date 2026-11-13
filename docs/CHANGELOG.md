@@ -2018,6 +2018,19 @@
 
 ### Fixed
 
+- **An unlabeled scan over zeroed node pages fails instead of answering with
+  the nodes missing (SONNY-2409).** graph_storage reads an all-zero page as
+  a never-written one, so its node records read as empty: with every
+  `nodes.store` page zeroed, `MATCH (n) RETURN n.name` answered OK with 0
+  of 300 rows on a cold reopen, whether the derived indexes were loaded or
+  rebuilt (labeled reads already failed closed, REQ-GQL-028). The engine
+  node scan behind unlabeled reads (`StorageAdapter.scanAllNodes`) now
+  compares the live records it finds on each shard with the shard
+  manifest's live-node count and fails with `DataCorruption` (58000) when
+  records are missing; `GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1` turns the
+  check off for salvage, as for hydration. A page whose header alone is
+  zeroed already fails every read on graph_storage 0.4.12. Regression: `zig
+  build test-sonny2409-zeroed-page-header`.
 - **DATA LOSS: a REMOVE, DELETE or relationship-property REMOVE inside a
   transaction no longer comes back after a crash (SONNY-2978).** A
   transaction's changes join its session's engine transaction, which

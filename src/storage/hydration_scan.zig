@@ -182,7 +182,7 @@ pub const ShardAccum = struct {
 /// GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1 lets an operator hydrate a store
 /// whose manifest counts are known to be wrong (e.g. to salvage what is left
 /// of a damaged graph). Read per shard scan, a cold path.
-fn liveCountCheckDisabled() bool {
+pub fn liveCountCheckDisabled() bool {
     const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK") orelse return false;
     const raw = std.mem.span(raw_z);
     return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");

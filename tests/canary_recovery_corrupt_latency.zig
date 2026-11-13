@@ -24,12 +24,14 @@
 //     error.DataCorruption. The graph is quarantined, and every read or write
 //     of a quarantined graph fails closed (GraphQuarantineError) instead of
 //     answering OK from its partial indexes.
-// NOT guaranteed (engine-level gaps, root fix tracked as SONNY-2409: the pager
-// must not treat a zeroed page below the written high-water mark as fresh):
-//   * zeroed pages read by an UNLABELED engine-direct scan before anything
-//     hydrates the graph: partial rows, status OK;
-//   * a page whose 32-byte HEADER alone is zeroed: CRC verification is
-//     skipped, so damage in the rest of that page can go undetected.
+//   * an UNLABELED engine-direct scan (`StorageAdapter.scanAllNodes`) checks
+//     the live records it finds against the shard manifests' counts and fails
+//     with error.DataCorruption (SONNY-2409);
+//   * a page whose 32-byte HEADER alone is zeroed fails its read
+//     (graph_storage 0.4.12 verifies the CRC of a zeroed header's body).
+// Still an engine-level gap (graph_storage): the pager reads an all-zero page
+// below the written high-water mark as fresh; geode detects the loss only by
+// counting (see tests/test_sonny2409_zeroed_page_header.zig).
 //
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency; OWNER=storage; UPDATED=2026-09-23
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-09-23
@@ -327,8 +329,8 @@ test "TestCANARY_REQ_GQL_028_QuarantinedGraphFailsClosed" {
 // with error.DataCorruption, which quarantines the graph and fails the read.
 test "TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild" {
     const allocator = std.testing.allocator;
-    // The label scan only: an UNLABELED scan of zeroed pages still reads the
-    // engine without hydrating and returns partial rows (SONNY-2409).
+    // The label scan; the UNLABELED scan of zeroed pages, which reads the
+    // engine without hydrating, is covered by test-sonny2409-zeroed-page-header.
     const queries = [_][]const u8{ READ_ALL_NAMES, "MATCH (n:Person) RETURN count(n) AS c" };
     for (queries) |q| {
         var tmp = std.testing.tmpDir(.{});

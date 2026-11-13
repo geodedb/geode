@@ -8686,11 +8686,27 @@ pub const StorageAdapter = struct {
 
         // Fan out across all shards — each shard owns a disjoint node_id range.
         var ctx = Ctx{ .entries = .empty, .alloc = allocator };
+        errdefer ctx.entries.deinit(allocator);
         for (mg.engine.shards) |shard| {
+            const found_before = ctx.entries.items.len;
+            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
             try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
+            if (ctx.had_error) return error.OutOfMemory;
+            // CANARY: REQ=REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=UnlabeledScanLiveCount; STATUS=TESTED; TEST=tests/test_sonny2409_zeroed_page_header.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-2409: graph_storage's pager reads a zeroed page (torn
+            // write, zeroed sectors) as a fresh one, so its node records look
+            // empty and `scanNodes` skips them: an unlabeled scan answered OK
+            // with those nodes missing. Fewer live records than the shard
+            // manifest counts means lost node data: fail closed, as the
+            // hydration scan does (REQ-GQL-028, same kill switch). The
+            // smaller of the counts read before and after the scan is used.
+            const live = @min(live_before, @atomicLoad(u64, &shard.manifest.node_count, .monotonic));
+            const found = ctx.entries.items.len - found_before;
+            if (found < live and !hydration_scan.liveCountCheckDisabled()) {
+                log.warn("scanAllNodes: graph {s} shard found {d} live node record(s) but its manifest counts {d}: node pages lost or zeroed", .{ graph_name, found, live });
+                return error.DataCorruption;
+            }
         }
-
-        if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
     }

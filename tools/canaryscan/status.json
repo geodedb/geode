@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:16:07.557234304Z",
+  "generated_at": "2026-11-13T10:29:05.876529692Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69849,6 +69849,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "UnlabeledScanLiveCount",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2409_zeroed_page_header.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93350,7 +93364,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4865
+      "TESTED": 4866
     },
     "by_aspect": {
       "2PC": 3,
@@ -97301,6 +97315,7 @@
       "UnknownMeansEncrypted": 1,
       "UnknownOptionRefused": 1,
       "UnknownPropertyDiagnostic": 1,
+      "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,
