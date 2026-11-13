@@ -139,11 +139,11 @@
   read or parsed. Cluster peer dials (`cluster_auth.dialClusterPeer`)
   still present no certificate: peer listeners do not request one and
   peers authenticate with `GEODE_CLUSTER_TOKEN`. `geode query` / `shell`
-  / `backup` / `mcp` dial through geode-client-zig, which has the same
-  defect; until the fixed library is pinned, `--client-cert` against an
-  mTLS-required server still times out (`zig build
-  test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
-  build test-sonny6457-connectex-client-cert`.
+  / `backup` / `mcp` dial through geode-client-zig, which had the same
+  defect; v0.3.15 presents the certificate as a client, so `geode query
+  --client-cert --client-key` is accepted by an mTLS-required server.
+  Regressions: `zig build test-sonny6457-connectex-client-cert` and `zig
+  build test-sonny6457-cli-client-cert` (the real `geode query` binary).
 - **The Vault Transit and AWS KMS clients compile again (SONNY-6457 item
   4).** `src/security/external_kms_client.zig` built `std.http.Client`
   without the `io` field Zig 0.16 requires and used the removed

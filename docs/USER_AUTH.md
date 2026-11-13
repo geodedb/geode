@@ -654,11 +654,10 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
   the bundle, so such a client is rejected even when its leaf is signed by
   a CA in the bundle; present a pinned self-signed CA certificate from the
   bundle instead. Clients that send the full chain are not affected.
-- **Known limit (SONNY-6457):** `geode query` / `geode shell` / `geode
-  backup` `--client-cert --client-key` dial through the geode-client-zig
-  library, which until its fix is pinned does not present the certificate
-  (the connection times out against an mTLS-required server). geode's
-  internal QUIC client (`QuicClient.connectEx`) presents it.
+- `geode query` / `geode shell` / `geode backup` present the certificate
+  given with `--client-cert --client-key` (geode-client-zig v0.3.15,
+  SONNY-6457), as does geode's internal QUIC client
+  (`QuicClient.connectEx`).
 - **Identity mapping is not supported (SONNY-6458).** The server's
   certificate-to-user mapping (`src/security/mtls_provider.zig`) starts
   empty and nothing loads mappings, so a client certificate never selects

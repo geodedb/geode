@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
     .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
@@ -5892,9 +5891,7 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-6457 (2): the real `geode query --client-cert --client-key`
     // binary presents its certificate to an mTLS-required geode. The CLI
-    // dials through geode-client-zig, so this stays intentionally red
-    // (docs/KNOWN_TEST_ISSUES.md) until the client library fix is pinned;
-    // compiled by test-compile.
+    // dials through geode-client-zig (fixed in v0.3.15).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_cli_client_cert.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -5905,8 +5902,8 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
-        b.step("test-sonny6457-cli-client-cert", "Run SONNY-6457 item 2 reproduction, intentionally red until the geode-client-zig fix is pinned (the real geode query binary with --ca-cert and --client-cert/--client-key in GEODE_MTLS_CLIENT_CA is accepted by an mTLS-required geode; a certificate not in the bundle or none is rejected)").dependOn(&run_tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6457-cli-client-cert", "Run SONNY-6457 item 2 regression (the real geode query binary with --ca-cert and --client-cert/--client-key in GEODE_MTLS_CLIENT_CA is accepted by an mTLS-required geode; a certificate not in the bundle or none is rejected)").dependOn(&run_tests.step);
     }
 
     // SONNY-6457 (5): every geode mtls subcommand is refused as unsupported
