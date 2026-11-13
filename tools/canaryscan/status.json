@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:07:56.047746044Z",
+  "generated_at": "2026-11-13T11:12:31.64191746Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69886,6 +69886,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2440-BLOCKING-WORKER-FALLBACK",
+      "features": [
+        {
+          "feature": "ThreadPool",
+          "aspect": "DefaultLaneFallbackLatency",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2440_blocking_worker_fallback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_blocking_worker_fallback.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2440-DEFAULT-LANE-WAKE",
+      "features": [
+        {
+          "feature": "ThreadPool",
+          "aspect": "ParkedWorkerWake",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2441-KMS-REMOTE-PATH",
       "features": [
         {
@@ -93762,7 +93800,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4888
+      "TESTED": 4890
     },
     "by_aspect": {
       "2PC": 3,
@@ -94650,6 +94688,7 @@
       "DefaultDeny": 1,
       "DefaultFastPathClusterBypass": 1,
       "DefaultGraphProcedures": 1,
+      "DefaultLaneFallbackLatency": 1,
       "DefaultSimpleCreateFastPath": 1,
       "DefenseInDepth": 1,
       "DeferCleanup": 2,
@@ -96268,6 +96307,7 @@
       "ParameterHandling": 1,
       "Parentheses": 1,
       "ParityTesting": 1,
+      "ParkedWorkerWake": 1,
       "ParseAttrPredicate": 1,
       "ParseCaptureUsing": 1,
       "ParseErrors": 1,

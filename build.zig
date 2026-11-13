@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "flaky: the SONNY-3368 QUIC abandoned-join check (server idle within 100 s of the client leaving) failed 3 of 7 runs on a loaded host; the seed timeout is fixed (SONNY-738); KNOWN_TEST_ISSUES" },
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -5502,6 +5503,24 @@ pub fn build(b: *std.Build) void {
     const thread_pool_lane_test_step = b.step("test-thread-pool-lane-parallelism", "Run thread-pool admission-lane parallelism regression (issue #751)");
     thread_pool_lane_test_step.dependOn(&run_thread_pool_lane_tests.step);
     shardDep(test_step, &run_thread_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-2440: a default-lane task submitted to an idle pool starts at
+    // once (geode's pools wake a parked worker on every submit).
+    const sonny2440_wake_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_default_lane_wake.zig"), .target = target, .optimize = optimize }) });
+    sonny2440_wake_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_sonny2440_wake_tests = b.addRunArtifact(sonny2440_wake_tests);
+    shardDep(test_step, &run_sonny2440_wake_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2440-default-lane-wake", "Run SONNY-2440 regression (every default-lane task submitted to an idle geode pool starts without waiting out a parked worker's 500 ms idle park: thread_pool's submit wakes only every wake_coalesce_batch-th time)").dependOn(&run_sonny2440_wake_tests.step);
+
+    // SONNY-2440: intentionally RED reproduction (docs/KNOWN_TEST_ISSUES.md):
+    // the defect is in the thread_pool dependency (a default-lane submit never
+    // wakes the parked blocking worker). Kept out of `shardDep` until a
+    // thread_pool release with the fix is pinned; compiled by `test-compile`.
+    const sonny2440_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_blocking_worker_fallback.zig"), .target = target, .optimize = optimize }) });
+    sonny2440_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_sonny2440_tests = b.addRunArtifact(sonny2440_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2440_tests.step);
+    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 red reproduction (with every default-lane worker busy, a default-lane task waits up to idle_park_after_ns, 500 ms, for the parked blocking worker: thread_pool's scanAndWake never wakes it)").dependOn(&run_sonny2440_tests.step);
 
     // Task #31: QUIC stream multiplex hang — per-connection stream pool
     // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
