@@ -9,7 +9,7 @@
 //        CAST of a character string to a datetime type applies);
 //   - a duration string that does not parse (`duration('P1Q')`)
 //     -> 22G0H invalid duration format (20.29 GR 1c);
-//   - DECIMAL division by zero (`decimal_div(1, 0)`) -> 22012;
+//   - DECIMAL division by zero (`decimal_div` of two DECIMALs) -> 22012;
 //   - a string longer than its CHAR(n) (`char('abcdef', 3)`) -> 22001
 //     string data, right truncation (20.8 GR, CAST to a fixed-length string).
 //
@@ -38,7 +38,7 @@ const cases = [_]Case{
     .{ .query = "RETURN time('nope') AS x", .code = "22007" },
     .{ .query = "RETURN localdatetime('nope') AS x", .code = "22007" },
     .{ .query = "RETURN duration('P1Q') AS x", .code = "22G0H" },
-    .{ .query = "RETURN decimal_div(1, 0) AS x", .code = "22012" },
+    .{ .query = "RETURN decimal_div(CAST(1 AS DECIMAL), CAST(0 AS DECIMAL)) AS x", .code = "22012" },
     .{ .query = "RETURN char('abcdef', 3) AS x", .code = "22001" },
 };
 

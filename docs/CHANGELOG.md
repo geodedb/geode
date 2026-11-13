@@ -2235,6 +2235,18 @@
 
 ### Fixed
 
+- **Data exceptions answer their GQLSTATUS, not 58000 (SONNY-6489 item 1).**
+  `proto_util.mapError` had no arm for these, so QUIC and gRPC clients were
+  told the server broke (58000) when a value was bad. **Behaviour change**
+  (ISO/IEC 39075:2024 23.1, Table 8): a date, time or datetime string that
+  does not parse (`datetime('x')`, `date()`, `time()`, `localdatetime()`,
+  ...) is 22007 invalid date, time, or datetime format; a duration string
+  that does not parse (`duration('P1Q')`, `interval()`, including a
+  component that overflows) is 22G0H invalid duration format (20.29 GR 1c;
+  its own error, `DurationParse`, where it was `TimeParse`); DECIMAL division
+  by zero (`decimal_div`) is 22012; `char(s, n)` of a longer string is 22001
+  string data, right truncation. Regression: `zig build
+  test-sonny6489-data-exception-codes` (QUIC and gRPC).
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

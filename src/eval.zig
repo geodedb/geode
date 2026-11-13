@@ -50,6 +50,7 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.InvalidArgs,
         EvalError.MissingParameter,
         EvalError.TimeParse,
+        EvalError.DurationParse,
         // ENG-3922(b): an over-cap vector literal is a genuine invalid argument
         // — `size(vectorf32([ …65536… ]))` must report the limit, not NULL.
         EvalError.VectorTooLarge,
@@ -1767,6 +1768,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // (datetime('garbage'), duration('garbage')) is a data
                     // exception, not a silent NULL.
                     return EvalError.TimeParse;
+                } else if (std.mem.eql(u8, err_name, "DurationParse")) {
+                    return EvalError.DurationParse;
                 } else if (std.mem.eql(u8, err_name, "InvalidArgs")) {
                     // Wrong arity on a resolved basic function is a caller
                     // error (22023), not a silent NULL.
@@ -4560,10 +4563,11 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // GQL queries can construct an interval value with the same name the
         // GQL specs use in comparisons / overlap predicates.
         const datetime_module = @import("types/datetime.zig");
-        // A malformed duration literal on a resolved function is a TimeParse
-        // data exception — `return null` here used to fall through to 42883
+        // A malformed duration literal on a resolved function is a data
+        // exception — `return null` here used to fall through to 42883
         // ("Unknown function"), disagreeing with the interval() error path.
-        const interval = datetime_module.Interval.fromStr(str) catch return EvalError.TimeParse;
+        // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
+        const interval = datetime_module.Interval.fromStr(str) catch return EvalError.DurationParse;
         return Value{ .Interval = interval };
     }
 

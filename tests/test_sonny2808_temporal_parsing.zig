@@ -44,6 +44,11 @@ fn bad(s: *Session, f: *Failures, q: []const u8) !void {
     return expectFail(s, f, q, &.{}, error.TimeParse);
 }
 
+/// SONNY-6489: a duration string has its own data exception (22G0H).
+fn badDuration(s: *Session, f: *Failures, q: []const u8) !void {
+    return expectFail(s, f, q, &.{}, error.DurationParse);
+}
+
 fn checkParsing(s: *Session, f: *Failures) !void {
     // A time with an offset is a zoned time, and keeps it.
     try v(s, f, "RETURN time('10:00:00+01:00') AS x", "10:00:00+01:00");
@@ -90,10 +95,10 @@ fn checkParsing(s: *Session, f: *Failures) !void {
     try v(s, f, "RETURN duration('PT1.5S') > duration('PT1S') AS x", "true");
     try v(s, f, "RETURN duration('PT1.5S') = duration('PT1S') + duration('PT0.5S') AS x", "true");
     try v(s, f, "RETURN duration('P1DT2H') AS x", "P1DT2H");
-    try bad(s, f, "RETURN duration('P1Dxyz') AS x");
-    try bad(s, f, "RETURN duration('PT1.S') AS x");
-    try bad(s, f, "RETURN duration('PT1.5H') AS x");
-    try bad(s, f, "RETURN duration('1D') AS x");
+    try badDuration(s, f, "RETURN duration('P1Dxyz') AS x");
+    try badDuration(s, f, "RETURN duration('PT1.S') AS x");
+    try badDuration(s, f, "RETURN duration('PT1.5H') AS x");
+    try badDuration(s, f, "RETURN duration('1D') AS x");
 }
 
 test "SONNY-2808: time, datetime and their siblings parse exactly an ISO 8601 string, offset included" {

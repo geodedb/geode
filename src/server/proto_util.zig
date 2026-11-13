@@ -390,6 +390,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DecimalOverflow => .{ .code = "22003", .message = "Numeric value out of range for DECIMAL" },
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
+        // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
+        // Table 8, class 22); each answered 58000 (system error).
+        error.TimeParse => .{ .code = "22007", .message = "invalid date, time, or datetime format: the string is not an ISO 8601 date, time or datetime" },
+        error.DurationParse => .{ .code = "22G0H", .message = "invalid duration format: the string is not an ISO 8601 duration (P[n]Y[n]M[n]DT[n]H[n]M[n]S)" },
+        error.DecimalDivZero => .{ .code = "22012", .message = "Division by zero" },
+        error.CharLengthExceeded => .{ .code = "22001", .message = "String data right truncation: the string is longer than the fixed length" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         // GAP-0926: out-of-range positional parameter.
         // SONNY-3247: a parameter the request does not supply, named or

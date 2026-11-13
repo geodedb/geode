@@ -1822,7 +1822,8 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = textLike(arg) orelse return Value{ .Null = {} };
-        return Value{ .Interval = datetime.Interval.fromStr(text) catch return EvalError.TimeParse };
+        // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
+        return Value{ .Interval = datetime.Interval.fromStr(text) catch return EvalError.DurationParse };
     }
 
     if (std.mem.eql(u8, function_name, "makeinterval")) {

@@ -59,6 +59,10 @@ pub const EvalError = error{
     RangeTooLarge, // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; range() function safety limit
     FloatNaN,
     TimeParse,
+    // SONNY-6489: a duration string that is not an ISO 8601 duration
+    // (ISO/IEC 39075 20.29 GR 1c: invalid duration format, 22G0H). Kept apart
+    // from TimeParse (a date, time or datetime string, 22007).
+    DurationParse,
     DecimalOverflow,
     DecimalDivZero,
     // GAP-0921: CAST semantic validation — an unconvertible value (invalid
