@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:16:21.028513535Z",
+  "generated_at": "2026-11-13T01:16:44.961840435Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84505,6 +84505,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-UNDIRECTED-EDGE-MESSAGE",
+      "features": [
+        {
+          "feature": "Parser",
+          "aspect": "UndirectedEdgeRefusal",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_undirected_edge_message.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_undirected_edge_message.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92190,7 +92209,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4793
+      "TESTED": 4794
     },
     "by_aspect": {
       "2PC": 3,
@@ -96037,6 +96056,7 @@
       "UnauthenticatedDenied": 2,
       "UnboundedWithoutLimit": 1,
       "UncorrelatedHopCountsPaths": 1,
+      "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
       "UndoApplication": 1,
       "UndoCheckpoint": 1,

@@ -5410,6 +5410,7 @@ REQ-SONNY-6433-MERGE-KEYS,MergeStatement,NullAndListKeys,TESTED,tests/test_sonny
 REQ-SONNY-6433-MERGE-KEYS,MergeStatement,NullKeyRefused,TESTED,src/execution/crud_operations.zig,tests/test_sonny6433_merge_keys.zig,,engine,2026-11-12
 REQ-SONNY-6433-ORDERED-INDEX-LOCKING,OrderedIndex,GatesPinsAndLockTracking,TESTED,tests/test_sonny6433_ordered_index_locking.zig,tests/test_sonny6433_ordered_index_locking.zig,,storage,2026-11-12
 REQ-SONNY-6433-ORDERED-INDEX-LOCKING,OrderedIndex,LockedPlannerGates,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6433_ordered_index_locking.zig,,storage,2026-11-12
+REQ-SONNY-6433-UNDIRECTED-EDGE-MESSAGE,Parser,UndirectedEdgeRefusal,TESTED,tests/test_sonny6433_undirected_edge_message.zig,tests/test_sonny6433_undirected_edge_message.zig,,parser,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

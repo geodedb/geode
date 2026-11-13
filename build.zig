@@ -10906,6 +10906,19 @@ pub fn build(b: *std.Build) void {
     const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
     sonny3245_step.dependOn(&run_sonny3245_tests.step);
 
+    const sonny6433_undirected_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_undirected_edge_message.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_undirected_mod.addImport("geode", root_mod);
+    const sonny6433_undirected_tests = b.addTest(.{ .root_module = sonny6433_undirected_mod });
+    const run_sonny6433_undirected_tests = b.addRunArtifact(sonny6433_undirected_tests);
+    shardDep(test_step, &run_sonny6433_undirected_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_undirected_step = b.step("test-sonny6433-undirected-edge-message", "Run SONNY-6433 regression (an undirected edge pattern, ISO/IEC 39075 Feature GH02, is refused with 0A000 and a message naming it)");
+    sonny6433_undirected_step.dependOn(&run_sonny6433_undirected_tests.step);
+
     const sonny6433_locks_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_sonny6433_ordered_index_locking.zig"),
         .target = target,
