@@ -45,7 +45,7 @@ test "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope" {
     const q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = .{ .keys = &.{g} }, .having = null, .ret = .{ .items = items[0..], .distinct = false }, .order_by = null, .limit = null, .offset = null };
     const names = &.{ "a", "g" };
 
-    // Build large dataset to exceed memory limit of HashAggregator quickly.
+    // Build a large dataset: many groups for runGroupedQuery to aggregate.
     var data = std.ArrayList([]const exec.BindingValue).init(allocator);
     defer data.deinit();
     var gi: usize = 0;

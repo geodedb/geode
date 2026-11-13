@@ -219,7 +219,16 @@ subjectAltName=DNS:geode-1.geode.test,DNS:geode-2.geode.test,DNS:geode-3.geode.t
 extendedKeyUsage=serverAuth,clientAuth
 EOF
 openssl x509 -req -in "$WORK/leaf.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" -CAcreateserial -days 2 -extfile "$WORK/leaf.ext" -out "$WORK/leaf.crt" 2>/dev/null
-RUNUSER="${SUDO_USER:-$(id -un)}"
+# SONNY-6447: the user the nodes run as. SUDO_USER names the invoking user
+# only when this script itself runs as root under sudo; otherwise it is
+# whatever an outer session left in the environment (an ansible become, a
+# parent sudo shell) and can name a user that cannot even reach $WORK (every
+# node then fails with "Permission denied" and no node starts).
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && id -u "$SUDO_USER" >/dev/null 2>&1; then
+  RUNUSER="$SUDO_USER"
+else
+  RUNUSER="$(id -un)"
+fi
 chown -R "$RUNUSER" "$WORK" 2>/dev/null || true
 chmod -R a+rX "$WORK"
 
@@ -336,7 +345,11 @@ assert_count_steady() {
 # the k8s termination ordering so M4 actually exercises durable FileStorage
 # reload rather than a same-host two-writers race the product rightly forbids.
 kill_and_reap() {
-  local id=$1 t pat="geode serve .*--data-dir $WORK/data$id "
+  # SONNY-6447: "[g]eode", so the pattern does not match the command line of
+  # `sudo pkill` itself. It did, and pkill SIGKILLed its own sudo, whose pty
+  # hang-up can end pkill before it reaches a geode with a higher pid (pids
+  # wrap at pid_max).
+  local id=$1 t pat="[g]eode serve .*--data-dir $WORK/data$id "
   # SIGTERM first (graceful flush attempt), then give it a few seconds.
   [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
   for t in $(seq 1 5); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
@@ -344,6 +357,12 @@ kill_and_reap() {
   # so the kernel reaps it and releases the flock. Then WAIT until truly gone.
   $SUDO pkill -9 -f "$pat" 2>/dev/null
   for t in $(seq 1 15); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
+  # SONNY-6447: a survivor still holds {data_dir}/.geode.lock, and the
+  # replacement would (correctly) refuse to start with DataDirLocked; name it
+  # here instead of leaving that refusal as the only symptom.
+  if pgrep -f "$pat" >/dev/null 2>&1; then
+    fail "node$id: a prior process on $WORK/data$id survived SIGKILL for 15s: $(pgrep -af "$pat" | tr '\n' ' ')"
+  fi
   PID[$id]=""
 }
 

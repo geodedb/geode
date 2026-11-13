@@ -411,12 +411,6 @@ REQ-BUG731-MATCH-SCOPING,WithClauseRelationshipVars,EnvLayout,TESTED,src/executi
 REQ-BUILD-001,BuildTarget,BuildConfiguration,TESTED,tests/test_gap_0193_final_batch.zig,,,build,2026-01-15
 REQ-BUILD-001,BuildTarget,BuildSystem,TESTED,tests/test_gap_0193_batch3_comprehensive.zig,,,build,2026-01-16
 REQ-BUILD-DEPS-001,DepsFallback,UbuntuVersionFallback,IMPL,scripts/install-deps.sh,,,build,2026-02-10
-REQ-BUILD-SYSTEM-MODULE-DEPS-001,Build System Module Dependencies,ModuleStructure,TESTED,tests/test_build_system_module_dependencies.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_001_ModuleStructure,,build,2025-10-05
-REQ-BUILD-SYSTEM-MODULE-DEPS-002,Build System Module Dependencies,CircularDependencyPrevention,TESTED,tests/test_build_system_module_dependencies.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_002_CircularDependencyPrevention,,build,2025-10-05
-REQ-BUILD-SYSTEM-MODULE-DEPS-003,Build System Module Dependencies,SharedTypeAccessibility,TESTED,tests/test_build_system_module_dependencies.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility,,build,2025-10-05
-REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-001,Build System Module Dependencies Integration,EndToEndWorkflow,TESTED,tests/test_build_system_module_dependencies_integration.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow,,build,2025-10-05
-REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-002,Build System Module Dependencies Integration,MaterializedViewsIntegration,TESTED,tests/test_build_system_module_dependencies_integration.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_002_MaterializedViewsIntegration,,build,2025-10-05
-REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003,Build System Module Dependencies Integration,GraphStoreIntegration,TESTED,tests/test_build_system_module_dependencies_integration.zig,TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegration,,build,2025-10-05
 REQ-BUILD-TARGET-001,BuildTarget,TargetBuild,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,build,2026-01-16
 REQ-BUILTIN-001,BuiltinFunctions,StringFunctions,TESTED,tests/test_gap_0193_final_batch.zig,,,engine,2026-01-15
 REQ-BUILTIN-002,BuiltinFunctions,MathFunctions,TESTED,tests/test_gap_0193_final_batch.zig,,,engine,2026-01-15

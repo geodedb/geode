@@ -1709,6 +1709,25 @@
 
 ### Fixed
 
+- **The netns cluster scripts run their nodes as the invoking user and say
+  when a node they killed survives (SONNY-6447 items 2 and 9).**
+  `tests/cluster/netns_cluster_replication_test.sh` and
+  `netns_cluster_membership_churn_test.sh` ran every node as
+  `${SUDO_USER:-$(id -un)}`; a `SUDO_USER` left in the environment by an
+  outer session (an ansible become) named a user that cannot reach the work
+  directory, and no node started ("Permission denied"). `SUDO_USER` is now
+  used only when the script itself runs as root under sudo. The churn
+  script's `kill_and_reap` matched `sudo pkill -9 -f` against its own
+  command line (it SIGKILLed its own sudo, whose pty hang-up can end pkill
+  before it reaches a geode with a higher pid once pids wrap) and went on
+  silently when a process survived; the pattern no longer matches itself,
+  and a survivor fails the phase by name instead of surfacing only as the
+  replacement's (correct) `DataDirLocked`. The data-dir lock itself needed
+  no change: it is a kernel `flock` on an `O_CLOEXEC` descriptor and no
+  geode process spawns children, so the lock ends with the process however
+  it dies; `zig build test-datadir-lock-subprocess` now also covers a
+  SIGABRTed holder (a panic ends in abort) and a frozen, live one (still
+  refused).
 - **Lean indexing registers and indexes every MERGE key, the 65th included
   (SONNY-6447 item 3).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1` the
   registered-key set was a fixed table of 64 keys of at most 128 bytes, and
@@ -2900,6 +2919,17 @@
 
 ### Removed
 
+- **Dead code: three test files no build step compiles, and an unused
+  import (SONNY-6447 item 9).** `tests/test_build_system_module_dependencies.zig`,
+  its sibling `tests/test_build_system_module_dependencies_integration.zig`
+  and `tests/index_optimizer_regression_test.zig` were referenced by no
+  step and could not compile (Zig 0.15 `ArrayList(...).init`, an `@import`
+  outside the module path, `try` on the `void` `removeNodeProperty`); what
+  they touched is covered by compiled tests. Their CANARY markers
+  (REQ-BUILD-SYSTEM-MODULE-DEPS-001..003 and -INTEGRATION-001..003)
+  described only these files. `src/server/main.zig` no longer imports the
+  unused `geode.exec`, and `tests/benchmark_hashagg_spill_variance.zig` no
+  longer names the removed `HashAggregator`.
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant
