@@ -1632,6 +1632,27 @@
 
 ### Fixed
 
+- **BREAKING (query): a MERGE with a null key is refused (22004); a
+  list-valued MERGE key matches by value; `FOR u IN [...] CREATE ... RETURN
+  u` returns `u` (SONNY-6433 item 2, the SONNY-3245 remainder).** A null
+  property value is absent (SONNY-3245, CREATE and SET) and `k = null` is
+  never true (ISO/IEC 39075:2024 19.3), so `MERGE (n:L {k: null})` can match
+  nothing; it created a node without `k` on every run. A MERGE whose node or
+  relationship pattern gives a property the null value (a literal, a
+  parameter, an expression such as `1 + null` or an unbound `m.v`) is now
+  refused with 22004 (null value not allowed) and writes nothing, in a later
+  MERGE clause too, and over QUIC's bulk MERGE fast paths, which answered
+  58000 and still applied the other statements of a `/*+BATCH*/` run. Use a
+  key with a value, or CREATE. A stored list reads back as an extended list
+  and never compared equal to a list literal or parameter, so `MERGE (n:L
+  {k: [1, 2]})` made a duplicate on every run (and `MATCH (n {k: [1, 2]})`
+  found nothing); lists now compare element by element
+  (`value_equality.valuesEqual`). `FOR u IN [1, 2] CREATE (...) RETURN u`
+  evaluated its RETURN with none of the statement's parameters, where the
+  FOR binds `u`, and returned nulls (`executeReturnClauseWithNodes` now takes
+  them; MATCH ... CREATE ... RETURN too). `docs/ENTERPRISE_GAPS.md` (GAP-0926)
+  is updated. Regression: `zig build test-sonny6433-merge-keys`,
+  `test-sonny6433-merge-null-key-quic`.
 - **`keys()` and `properties()` no longer list a property that `REMOVE` or
   `SET ... = null` took away (SONNY-6433 item 1).** Removing a node
   property writes a null tombstone into its stored property chain

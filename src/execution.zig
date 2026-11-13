@@ -4866,7 +4866,7 @@ pub fn executeQueryWithBindings(allocator: std.mem.Allocator, q: ast.Query, bind
     defer relationships.deinit();
 
     // Use executeReturnClauseWithNodes which creates an environment from the bindings
-    return executeReturnClauseWithNodes(allocator, ret, bindings.*, relationships);
+    return executeReturnClauseWithNodes(allocator, ret, bindings.*, relationships, &.{}, &.{});
 }
 
 // GAP-0525: Benchmark test fixtures for performance validation

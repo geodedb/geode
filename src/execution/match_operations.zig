@@ -4242,7 +4242,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     // created entities.
     if (q.ret.items.len > 0) {
         try crud_operations.resolveCreatedEdges(store, &all_created_edge_ids, &all_created_relationships);
-        return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
+        return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships, param_names_arg, param_values_arg);
     }
 
     // Default: return summary row showing how many entities were created.

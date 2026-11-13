@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:58:26.187951243Z",
+  "generated_at": "2026-11-13T00:26:05.746889651Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84350,9 +84350,11 @@
           "aspect": "BulkNullKeyRefused",
           "status": "TESTED",
           "files": [
+            "src/server/quic_connection_handler.zig",
             "tests/test_sonny6433_merge_null_key_quic.zig"
           ],
           "tests": [
+            "tests/test_sonny6433_merge_keys.zig",
             "tests/test_sonny6433_merge_null_key_quic.zig"
           ],
           "benches": [],
@@ -84361,10 +84363,38 @@
         },
         {
           "feature": "MergeStatement",
+          "aspect": "ListKeyByValue",
+          "status": "TESTED",
+          "files": [
+            "src/execution/value_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
           "aspect": "NullAndListKeys",
           "status": "TESTED",
           "files": [
             "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
+          "aspect": "NullKeyRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
           ],
           "tests": [
             "tests/test_sonny6433_merge_keys.zig"
@@ -92061,7 +92091,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4785
+      "TESTED": 4787
     },
     "by_aspect": {
       "2PC": 3,
@@ -94019,6 +94049,7 @@
       "ListGraphGrants": 1,
       "ListHead": 1,
       "ListIn": 1,
+      "ListKeyByValue": 1,
       "ListLiteralCoercion": 2,
       "ListPropertySize": 1,
       "ListRoles": 1,
@@ -94403,6 +94434,7 @@
       "NullFields": 1,
       "NullHandling": 3,
       "NullIf": 1,
+      "NullKeyRefused": 1,
       "NullOnNoRows": 1,
       "NullPropagation": 1,
       "NullRemovesProperty": 1,
