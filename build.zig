@@ -5948,6 +5948,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6466-abandoned-read-cancel", "Run SONNY-6466 regression (a real geode serve, a comma join that runs for minutes: a client that vanishes without CONNECTION_CLOSE has its read cancelled at GEODE_QUIC_STALL_CANCEL_MS (10 s here; idle within 30 s) although another connection from its address stays open and keeps answering; a client that closes while its read runs on a sibling stream, after the first stream ended, leaves the server idle within 20 s)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6466 item 2: a FOR statement with a write body is atomic.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6466_for_statement_atomicity.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6466-for-statement-atomicity", "Run SONNY-6466 item 2 regression (a real geode serve over QUIC: a FOR whose CREATE or MATCH ... SET body fails at its third element leaves nothing of the earlier elements, also after a restart; ISO/IEC 39075:2024 4.9.3, 14.8)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6463 (5): source files outside src/distributed whose inline tests
     // no step ran. Each file is its own test root (its inline tests only).
     {
