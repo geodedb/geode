@@ -5898,6 +5898,23 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny3060-shell-plain-eof", "Run SONNY-3060 regression (the real geode shell --plain against a real server exits 0 when its piped stdin reaches EOF: empty input, newline-terminated statements, and a last line without a newline, which still runs)").dependOn(&run_tests.step);
     }
 
+    // SONNY-1336: `geode serve --listen-grpc <addr:port>` binds <addr> (read
+    // back from the kernel socket table), and refuses an address grpc-zig
+    // cannot bind instead of silently listening on loopback.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1336_grpc_bind_address.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny1336-grpc-bind-address", "Run SONNY-1336 regression (the real geode serve listens for gRPC on the --listen-grpc address per /proc/net/tcp and answers HELLO there: 127.0.0.2, 0.0.0.0, a port alone takes the QUIC listener's address or 0.0.0.0; the banner names the bound address; IPv6, a host name or a bad port is refused with exit 2)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
     // insecure-TLS rule (refused under production posture, warned otherwise).
     {
