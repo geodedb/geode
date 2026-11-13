@@ -1713,9 +1713,9 @@ pub fn build(b: *std.Build) void {
     // Legacy wire binary removed; run-wire step removed
 
     // --- Benchmarks ---
-    // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
-    const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
-    const run_tde_bench = b.addRunArtifact(tde_bench_exe);
+    // SONNY-6435: the TDE overhead "benchmark" here (benchmark_tde_overhead
+    // .zig) hashed a buffer and called it encryption; it is gone. The real
+    // measurement, test-sonny6435-tde-overhead, joins `bench` below.
     // CI-safe bench aggregate. The two M0.3b quarantined members are
     // now restored:
     //   - benchmark_merge_throughput : fixed by dropping redundant
@@ -1724,7 +1724,6 @@ pub fn build(b: *std.Build) void {
     //     and adding a worker slot for the reserved blocking lane (this
     //     commit).
     const bench_step = b.step("bench", "Run the full CI-safe benchmark suite");
-    bench_step.dependOn(&run_tde_bench.step);
 
     // GAP-0900 Layer-3 (Fix 3) A/B harness: in-memory node-mirror RSS / bytes-per-node.
     // Run via `zig build bench-gap0900-node-mirror -- <node_count>`.
@@ -4947,6 +4946,21 @@ pub fn build(b: *std.Build) void {
     // reported by default and enforced only under GEODE_PERF_GATES=enforce
     // (SONNY-2439; see tests/perf_gate.zig).
     const perf_gate_mod = b.createModule(.{ .root_source_file = b.path("tests/perf_gate.zig"), .target = target, .optimize = optimize, .link_libc = true });
+
+    // SONNY-6435 (2): the TDE overhead measurement. The storage engine (and
+    // the measurement) is built ReleaseFast whatever -Doptimize says, so it
+    // times production crypto, not Debug crypto.
+    {
+        const gs_fast = b.dependency("graph_storage", .{ .target = target, .optimize = .ReleaseFast }).module("graph_storage");
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_overhead.zig"), .target = target, .optimize = .ReleaseFast, .link_libc = true });
+        mod.addImport("graph_storage", gs_fast);
+        mod.addImport("perf_gate", perf_gate_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        bench_step.dependOn(&run_tests.step);
+        b.step("test-sonny6435-tde-overhead", "Run SONNY-6435 item 2 measurement (TDE overhead of the storage engine: the same insert+read workload with page and WAL encryption off vs on, interleaved perf_gate batches, median overhead, deferred and sync_each_commit WAL sync; asserts the encrypted arm writes no plaintext)").dependOn(&run_tests.step);
+    }
 
     // Attach physiological redo canary tests after test_step defined
     const redo_canary_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_physiological_redo.zig"), .target = target, .optimize = optimize }) });

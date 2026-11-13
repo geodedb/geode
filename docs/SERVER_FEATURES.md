@@ -811,11 +811,11 @@ procedures (gated by `GEODE_ENABLE_TDE`), not the page encryption.
 backups alike. There is no hierarchy of derived data, WAL and backup keys in
 the server (`src/security/tde_hierarchy.zig` is compiled only by a test).
 
-**Performance Overhead**:
+**Performance Overhead** (measured, `zig build test-sonny6435-tde-overhead`,
+[TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead)):
 
-- Page encryption: <1% CPU overhead
-- WAL encryption: <1% latency overhead
-- AES-NI acceleration: 10x faster on supported CPUs
+- With the default per-commit WAL fsync: +0.7% (fsync-bound on the measuring host)
+- On the commit path without fsync (`GEODE_WAL_SYNC=deferred`): about +20%
 
 ### 7.2 Key Management System (KMS)
 

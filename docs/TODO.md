@@ -471,7 +471,7 @@ Skipped: 46 (setup requirements not met)
 - ✅ **Real-time Analytics**: Streaming analytics with pattern detection
 - ✅ **Enhanced RLS**: Advanced row-level security with policy optimization
 - ✅ **Audit Logging**: Tamper-evident logging with Ed25519 signatures
-- ✅ **TDE**: Transparent data encryption with <1% overhead
+- ✅ **TDE**: Transparent data encryption (measured overhead +0.7% with per-commit fsync, about +20% on the commit path without fsync; SONNY-6435)
 
 ---
 

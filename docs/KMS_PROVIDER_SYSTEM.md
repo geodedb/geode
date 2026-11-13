@@ -143,7 +143,7 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Audit Logging**: All KMS operations logged for compliance
 - **Zero Plaintext**: Master keys never stored in plaintext on disk
 - **Multiple Providers**: Easy migration between KMS systems
-- **Performance**: <5% TDE overhead on OLTP workloads as a target, not yet measured by a geode test or benchmark ([BENCHMARK_REPORT.md](../BENCHMARK_REPORT.md))
+- **Performance**: TDE overhead measured by `zig build test-sonny6435-tde-overhead`: +0.7% with the default per-commit fsync, about +20% on the commit path without fsync ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 
 ## Test Coverage & Verification
 
@@ -211,7 +211,7 @@ export GEODE_VAULT_KEY_PATH="geode"
 
 - **Key Operations**: <10ms for wrap/unwrap operations
 - **Vault Integration**: <50ms for key retrieval including network latency
-- **TDE Overhead**: <5% TDE overhead on OLTP workloads (a target; no geode test measures it)
+- **TDE Overhead**: +0.7% with the default per-commit fsync, about +20% on the commit path without fsync (`zig build test-sonny6435-tde-overhead`)
 - **Memory Efficiency**: Minimal key caching with automatic cleanup
 - **Scalability**: Supports thousands of concurrent encrypt/decrypt operations
 

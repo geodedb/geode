@@ -1702,6 +1702,29 @@
 
 ### Fixed
 
+- **TDE overhead is measured, not simulated, and no doc claims "<1%" or
+  "<5%" (SONNY-6435 item 2).** `benchmarks/benchmark_tde_overhead.zig` (the
+  `zig build bench` member) hashed a buffer with Wyhash and reported
+  `overhead_pct=0.00 (simulated)`, `benchmarks/benchmark_tde_oltp_overhead
+  .zig` was built by no step and simulated TDE too, and
+  `src/security/test_tde_enforcement.zig` asserted `5 <= 5` under "TDE
+  documentation claims <1% overhead"; all three are gone. `zig build
+  test-sonny6435-tde-overhead` (also in `bench`) runs the storage engine
+  geode opens every graph with, ReleaseFast, on the same insert-and-read
+  workload with page and WAL encryption off and on, interleaved perf_gate
+  batches, and asserts the encrypted arm writes no plaintext. Measured
+  2026-11-12: +0.7% with the default per-commit fsync (four runs -1.3% to
+  +0.7%, fsync-bound on that host), +19.5% to +21.0% (three runs) on the
+  commit path without fsync. README, BENCHMARK_REPORT, FEATURES_OVERVIEW, TODO,
+  SERVER_FEATURES, KMS_PROVIDER_SYSTEM, DESIGN_TDE_KMS, SECURITY_PROGRESS
+  and the perf audit context now give those figures
+  (`docs/TDE_FILE_LEVEL_ENCRYPTION.md` "Measured overhead"). Reads that miss
+  the buffer pool are not measured: with a pool smaller than the store the
+  encrypting graph_storage 0.4.10 engine loses committed nodes
+  (`test-sonny6435-tde-small-pool-node-loss`, intentionally red).
+  Regressions: `zig build test-sonny6435-tde-claims-truth`,
+  `test-canary-tde-published-overhead-sync` (now requires the measurement
+  to be cited).
 - **The compose files and the deployment docs give geode only settings it
   reads (SONNY-6435 item 5).** The compose files passed geode `LOG_LEVEL`,
   `RUST_BACKTRACE`, `VAULT_ADDR` / `VAULT_TOKEN`, `REDIS_URL`, `FIPS_MODE`,

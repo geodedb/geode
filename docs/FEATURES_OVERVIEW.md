@@ -74,7 +74,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Data Protection**
 
-- **TDE**: Transparent data encryption with <1% overhead
+- **TDE**: Transparent data encryption (AES-256-GCM pages and WAL); measured overhead +0.7% with the default per-commit fsync, about +20% on the commit path without fsync ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 - **KMS Integration**: KMS provider clients, including HashiCorp Vault; the TDE master key is not KMS-backed (see [KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging**: Comprehensive compliance tracking
 - **Data Classification**: 5-level security classification

@@ -418,19 +418,11 @@ test "TestTDE_Verification_AADMismatch" {
 }
 
 // ============================================================================
-// PERFORMANCE OVERHEAD THRESHOLD TESTS
-// CANARY: REQ=REQ-TDE-ENFORCE-014; FEATURE="TDEEnforcement"; ASPECT=PerformanceThreshold; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
+// PERFORMANCE OVERHEAD
+// CANARY: REQ=REQ-TDE-ENFORCE-014; FEATURE="TDEEnforcement"; ASPECT=PerformanceThreshold; STATUS=BENCHED; BENCH=tests/test_sonny6435_tde_overhead.zig; OWNER=security; UPDATED=2026-11-12
+// SONNY-6435: "TestTDE_Performance_OverheadThreshold" asserted `5 <= 5`
+// under a comment claiming <1% overhead and named benchmark files that do
+// not exist. The overhead is measured by `zig build
+// test-sonny6435-tde-overhead` (the real storage engine, encryption off vs
+// on, interleaved).
 // ============================================================================
-
-// Test: TDE overhead must be under 5%
-test "TestTDE_Performance_OverheadThreshold" {
-    // TDE documentation claims <1% overhead
-    // Maximum acceptable overhead is 5%
-
-    const max_overhead_percent = 5;
-    try testing.expect(max_overhead_percent <= 5);
-
-    // Actual performance is validated in:
-    // - tests/benchmark_tde_overhead.zig
-    // - tests/benchmark_tde_overhead_smoke.zig
-}

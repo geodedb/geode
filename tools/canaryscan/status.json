@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:00:00.812277772Z",
+  "generated_at": "2026-11-13T00:27:34.873019718Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44181,20 +44181,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "TDE performance benchmark",
-          "aspect": "PERFORMANCE",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_tde_overhead.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead"
-          ],
-          "owner": "security",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -44421,20 +44407,6 @@
       "features": [
         {
           "feature": "TDEOlptOverheadValidation",
-          "aspect": "PERFORMANCE",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_tde_oltp_overhead.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001"
-          ],
-          "owner": "perf",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "TDEOlptOverheadValidation",
           "aspect": "PublishedSync",
           "status": "TESTED",
           "files": [
@@ -44445,7 +44417,21 @@
           ],
           "benches": [],
           "owner": "perf",
-          "updated": "2026-09-23"
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "TDEOlptOverheadValidation",
+          "aspect": "RealStoreMeasurement",
+          "status": "BENCHED",
+          "files": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
+          "owner": "perf",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86821,14 +86807,16 @@
         {
           "feature": "TDEEnforcement",
           "aspect": "PerformanceThreshold",
-          "status": "TESTED",
+          "status": "BENCHED",
           "files": [
             "src/security/test_tde_enforcement.zig"
           ],
           "tests": [],
-          "benches": [],
+          "benches": [
+            "tests/test_sonny6435_tde_overhead.zig"
+          ],
           "owner": "security",
-          "updated": "2026-01-28"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92184,7 +92172,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4794
+      "TESTED": 4793
     },
     "by_aspect": {
       "2PC": 3,
@@ -94626,7 +94614,7 @@
       "Ownership": 1,
       "PARAM_REUSE": 1,
       "PARSER": 1,
-      "PERFORMANCE": 4,
+      "PERFORMANCE": 2,
       "PROCEDURE_REGISTRY": 1,
       "PTXKernel": 2,
       "PageFreesReturnedNode": 1,
@@ -95230,6 +95218,7 @@
       "RealPlanGeneration": 1,
       "RealServer": 1,
       "RealStatistics": 1,
+      "RealStoreMeasurement": 1,
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
       "Rebalance": 1,

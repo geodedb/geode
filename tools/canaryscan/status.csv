@@ -2898,7 +2898,6 @@ REQ-GQL-TAIL-001,ListFunctions,TailElements,TESTED,src/eval/call_handlers.zig,,,
 REQ-GQL-TDE-001,TDE Key Management,KeyManagement,TESTED,src/security/tde_key_manager.zig,tde_tests,,security,2025-11-12
 REQ-GQL-TDE-001,TDE Nonce Generation,NonceGeneration,TESTED,src/security/tde_nonce_gen.zig,tde_tests,,security,2025-11-12
 REQ-GQL-TDE-001,TDE baseline,SECURITY,TESTED,src/security/tde.zig,tests/e2e_security_tde_mfa.zig,,security,2026-11-12
-REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,BENCHED,benchmarks/benchmark_tde_overhead.zig,,BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead,security,2025-09-26
 REQ-GQL-TDE-002,Snapshot encryption,TEST,TESTED,tests/unit_graphstore_encryption_round_trip.zig,,,security,2026-02-04
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ClientVerifiesPinnedFreshAttestation,TESTED,tests/test_sonny6435_kms_attestation.zig,tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation,,security,2025-09-26
@@ -2914,8 +2913,8 @@ REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,test
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2026-11-12
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26
 REQ-GQL-TDE-KEYID-001,SecureKeyIdDerivation,Security,EXEMPT,src/security/tde_key_manager.zig,,,security,2026-01-10
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,benchmarks/benchmark_tde_oltp_overhead.zig,,BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001,perf,2025-09-26
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-09-23
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-11-12
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,RealStoreMeasurement,BENCHED,tests/test_sonny6435_tde_overhead.zig,,tests/test_sonny6435_tde_overhead.zig,perf,2026-11-12
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,TESTED,tests/benchmark_tde_overhead_smoke.zig,BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke,,security,2026-01-16
 REQ-GQL-TDE-SSS-001,ShamirSecretSharing,KeyEscrow,EXEMPT,src/security/tde.zig,,,security,2026-01-10
 REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,TESTED,src/eval.zig,geodetestlab/specs/gql_type_system_comprehensive.yml,,eval,2025-12-24
@@ -5535,7 +5534,7 @@ REQ-TDE-ENFORCE-010,TDEEnforcement,BypassDetection,TESTED,src/security/test_tde_
 REQ-TDE-ENFORCE-011,TDEEnforcement,NonceUniqueness,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
-REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
+REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,BENCHED,src/security/test_tde_enforcement.zig,,tests/test_sonny6435_tde_overhead.zig,security,2026-11-12
 REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,build.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,src/schema/fle_catalog.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,src/index/hnsw_persist.zig,,,security,2026-04-01
