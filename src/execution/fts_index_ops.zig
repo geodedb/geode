@@ -964,7 +964,35 @@ fn indexNodeDocument(
 /// apply tests that exercise FTS.
 pub fn registerFtsApplyHook() void {
     cluster_replication.setFtsApplyHook(&ftsApplyMaintenanceHook);
+    cluster_replication.setFtsApplyTextHooks(.{ .removed = &ftsApplyRemovedTextHook, .flush = &ftsApplyFlushHook });
     raft_snapshot_manager.setFtsSnapshotRebuildHook(&ftsSnapshotRebuildHook);
+}
+
+// CANARY: REQ=REQ-SONNY-6433-FOLLOWER-FTS-REBUILD; FEATURE="FullText"; ASPECT=ApplyRemovedTextRebuild; STATUS=TESTED; TEST=tests/test_sonny6433_follower_fts_rebuild.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6433: an applied entry took the text in `key` away from a node
+/// (see `cluster_replication.FtsApplyTextHooks`): queue the covering indexes
+/// for a rebuild, as the executor's SET and REMOVE do.
+fn ftsApplyRemovedTextHook(
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    node_id: u64,
+    key: []const u8,
+) void {
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+    const node = store.getNodePtr(node_id) orelse return;
+    queueRebuildForRemovedText(graph_name, node.labels, key);
+}
+
+/// SONNY-6433: the end of an applied entry: rebuild what it queued
+/// (`flushQueuedRebuilds`), on the apply thread, as the executor does at a
+/// statement's end. Needs the catalog (the indexes' definitions); without
+/// one there is no index to rebuild.
+fn ftsApplyFlushHook(store: *graph_store.GraphStore) void {
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+    const catalog = @import("../execution.zig").getCatalogInstanceIfPresent() orelse return;
+    flushQueuedRebuilds(catalog);
 }
 
 /// Apply-path wrapper: resolve the node's labels from the store and run the

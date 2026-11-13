@@ -303,10 +303,12 @@ signal that recovery via `CALL geode.fts.rebuild` is needed.
   followers via a callback seam, and snapshot install rebuilds FTS indexes from
   the installed graph data (seam-level — production `reportSnapshot` wiring is
   pending). Test: `tests/test_fts_apply_symmetry.zig`.
-- **Stale postings on `SET` (follower apply):** the raft apply hook appends
-  the re-indexed document and does not queue the statement-end rebuild
-  (SONNY-6421 covers the executor path), so a follower can keep a stale
-  posting for the old term until the index is rebuilt.
+- **`SET` / `REMOVE` on a follower:** applying a replicated SET that
+  replaces indexed text, a REMOVE of it, or a MERGE's ON MATCH SET queues
+  the covering indexes for a rebuild at the end of the applied entry, as
+  the leader's statement does (SONNY-6421 executor, SONNY-6433 apply), so a
+  follower stops answering for the old words. The rebuild runs on the apply
+  thread, a follower's only writer.
 - **`CREATE INDEX` / `DROP INDEX` are refused in cluster mode** (fail-closed
   DDL — no Raft replication slice for index DDL yet): follower →
   `ClusterNotLeader`, leader → `ClusterWriteNotReplicable`. Standalone mode is

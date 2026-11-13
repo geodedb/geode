@@ -137,19 +137,21 @@ test "SONNY-3245: a null property value is absent" {
     try fx.expectRuns(ga, s, "CREATE (n:P3245 {k: 1, p: null})");
     try expectInt(ga, s, "MATCH (n:P3245) RETURN size(keys(n)) AS c", 1);
     // `SET n.p = null` removes p through the same chokepoint
-    // (`property_mutation.setNodePropertyFromValue` -> `removeNodeProperty`).
-    // keys() cannot observe it here: on this branch a read after any removal,
-    // `REMOVE n.p` included, still lists the removed key (a separate read
-    // defect); the value reads null either way.
+    // (`property_mutation.setNodePropertyFromValue` -> `removeNodeProperty`);
+    // keys() no longer lists it (SONNY-6433: the read path copied the
+    // removal's null tombstone into the property map).
     try fx.expectRuns(ga, s, "MATCH (n:P3245) SET n.k = null");
     try expectInt(ga, s, "MATCH (n:P3245) WHERE n.k IS NULL RETURN count(n) AS c", 1);
+    try expectInt(ga, s, "MATCH (n:P3245) RETURN size(keys(n)) AS c", 0);
     try fx.expectRuns(ga, s, "MATCH (n:P3245) SET n.q = null");
     try expectInt(ga, s, "MATCH (n:P3245) WHERE n.q IS NULL RETURN count(n) AS c", 1);
+    try expectInt(ga, s, "MATCH (n:P3245) RETURN size(keys(n)) AS c", 0);
 
     try fx.expectRuns(ga, s, "CREATE (:E3245)-[:ER3245 {w: 1, z: null}]->(:E3245)");
     try expectInt(ga, s, "MATCH ()-[r:ER3245]->() RETURN size(keys(r)) AS c", 1);
     try fx.expectRuns(ga, s, "MATCH ()-[r:ER3245]->() SET r.w = null");
     try expectInt(ga, s, "MATCH ()-[r:ER3245]->() WHERE r.w IS NULL RETURN count(r) AS c", 1);
+    try expectInt(ga, s, "MATCH ()-[r:ER3245]->() RETURN size(keys(r)) AS c", 0);
 }
 
 test "SONNY-3245: a chained MERGE returns its row" {

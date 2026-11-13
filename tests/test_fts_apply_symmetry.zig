@@ -33,9 +33,11 @@
 //! results" bug; see src/execution/property_mutation.zig:326 and
 //! docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md).
 //! SYMMETRY therefore means the follower must match the executor's ACTUAL
-//! semantics — new term searchable AND the documented stale-posting residual
-//! present on BOTH sides — not semantics neither side can have with the
-//! pinned engine. The amended test pins exactly that.
+//! semantics. Since SONNY-6421 (executor) and SONNY-6433 (apply) both drop
+//! the old term without delete-then-reindex: replacing indexed text queues
+//! the covering index for a rebuild from the store at the end of the
+//! statement / applied entry. The test pins the new term searchable and the
+//! old one gone on the apply path.
 //!
 //! Harness mirrors tests/test_fts_e2e.zig (real store + real parser + real
 //! executor + real fts-storage engine — no mocks). Unique tokens ("zraven",
@@ -184,7 +186,7 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
     try testing.expectEqual(score_before_replay, try h.searchTopScore("doc_idx", "zraven"));
 }
 
-test "raft GUPD update apply maintains the fulltext index (new term indexed, executor-parity residual)" {
+test "raft GUPD update apply maintains the fulltext index (new term indexed, old term dropped like the executor)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
     const a = testing.allocator;
@@ -215,16 +217,12 @@ test "raft GUPD update apply maintains the fulltext index (new term indexed, exe
     // SYMMETRY CONTRACT (red before Task 13): the NEW term must be searchable,
     // exactly as it would be after an executor SET (which fires op `.upsert`).
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zosprey"));
-    // EXECUTOR-PARITY RESIDUAL (amended — see file header): the OLD term stays
-    // searchable on BOTH the executor and apply paths. The executor SET
-    // chokepoint deliberately does NOT delete-then-reindex (fts-storage
-    // tombstones are permanent per doc_id — delete+reindex would hide the node
-    // entirely; docs/bugs/2026-06-07-fts-search-returns-zero-results-at-
-    // runtime.md), so a follower dropping the stale posting while the leader
-    // keeps it would itself be divergence. When the engine gains
-    // un-tombstone-on-reindex, flip this expectation to 0 TOGETHER with the
-    // executor path.
-    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
+    // EXECUTOR PARITY: the OLD term is no longer found. The executor SET
+    // chokepoint queues the covering index for a statement-end rebuild when
+    // it replaces indexed text (SONNY-6421), and the apply path now does the
+    // same at the end of the applied entry (SONNY-6433); neither deletes and
+    // re-indexes the node (fts-storage tombstones are permanent per doc_id).
+    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zraven"));
 }
 
 // NOTE (concurrency precondition): the rebuild path exercised here

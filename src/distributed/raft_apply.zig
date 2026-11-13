@@ -681,6 +681,9 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 error.ObjectInUse => {
                     log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
                 },
+                // SONNY-6433: no room to record the graph lock; nothing was
+                // dropped, and the apply fails.
+                error.OutOfMemory => return err,
             };
             log.info("raft apply: dropped graph via schema_change", &.{
                 Attr.string("graph", sc.graph),

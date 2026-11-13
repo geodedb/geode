@@ -522,8 +522,13 @@ breaking legitimate queries / the existing suite — the lesson from GAP-0923(a)
 over-strict validation broke 14 GPS tests:
 - **WHERE unbound variable** — a static "unknown variable" check would misfire on
   variables bound through paths the checker doesn't track; kept as filter-to-0-rows.
-- **MERGE null / unbound key** — `MERGE (n {k: null})` dedups correctly (no duplicates);
-  a null-key rejection is a semantic policy change out of scope here.
+- **MERGE null / unbound key** — **null key closed by SONNY-6433 (2026-11-12):**
+  `MERGE (n {k: null})` (a null literal, parameter or expression, an unbound
+  `m.v` included) is refused with 22004 (null value not allowed) and writes
+  nothing, in the executor and the QUIC bulk MERGE fast paths: a null
+  property is absent and `k = null` is never true, so the pattern matches
+  nothing (`zig build test-sonny6433-merge-keys`,
+  `test-sonny6433-merge-null-key-quic`).
 - **Missing NAMED parameter** — kept NULL (optional-parameter queries legitimately omit
   values); only the unambiguous positional-out-of-range case is rejected.
 - **CREATE INDEX on a nonexistent label/property** — index-first creation is a legitimate,
@@ -536,8 +541,8 @@ than raising an error. Each is a self-activating limitation-pin:
 - **WHERE unbound variable** (`WHERE m.i = 1`, `m` undefined) → filters to 0 rows
   instead of "unknown variable m". Test: `where_clause_negative.yml`.
 - **MERGE unbound-var / null key** (`MERGE (n {k: m.v})` / `MERGE (n {k: null})`)
-  → silently creates a `k=null` node (dedups correctly, so no duplicates).
-  Test: `merge_conflict_negative.yml`.
+  → silently created a node without `k`; refused with 22004 since SONNY-6433
+  (the harness pin `merge_conflict_negative.yml` must follow).
 - **Parameter binding** — out-of-range positional (`$2` with one param) and
   missing named params → NULL; extra params silently ignored. (Type-mismatch IS
   correctly rejected, 58000.) Test: `parameter_binding_negative.yml`.

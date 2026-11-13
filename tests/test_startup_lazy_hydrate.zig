@@ -35,7 +35,54 @@ const PropertyValue = graph_store.PropertyValue;
 const GRAPH = "g1";
 const LABEL = "Person";
 
+/// SONNY-6433: a test's scratch directory. Its data directory is on tmpfs
+/// (/dev/shm) when the host has one, as the write harness keeps its stores
+/// (SONNY-6333): every write here commits with an fsync, and on a loaded
+/// host's shared disk the seeding tests sat in the journal's fsync wait (the
+/// suite ran past 25 minutes; its TSan companion never finished). The
+/// storage code paths are the same; fsync on tmpfs returns at once.
+/// `cleanup` removes both the tmpfs directory and the `.zig-cache/tmp` one.
+const ScratchDir = struct {
+    inner: std.testing.TmpDir,
+    sub_path: @FieldType(std.testing.TmpDir, "sub_path"),
+
+    fn cleanup(self: *ScratchDir) void {
+        if (shmPath(&self.sub_path)) |path| {
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), path.slice()) catch {};
+        }
+        self.inner.cleanup();
+    }
+};
+
+fn scratchDir() ScratchDir {
+    const inner = testing.tmpDir(.{});
+    return .{ .inner = inner, .sub_path = inner.sub_path };
+}
+
+const ShmPath = struct {
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+    fn slice(self: *const ShmPath) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+/// The tmpfs data directory of scratch directory `sub_path`, or null when
+/// the host has no /dev/shm.
+fn shmPath(sub_path: []const u8) ?ShmPath {
+    if (comptime @import("builtin").os.tag != .linux) return null;
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), "/dev/shm", .{}) catch return null;
+    var p = ShmPath{};
+    const written = std.fmt.bufPrint(&p.buf, "/dev/shm/geode-lazy-hydrate-{d}-{s}", .{ std.os.linux.getpid(), sub_path }) catch return null;
+    p.len = written.len;
+    return p;
+}
+
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    if (shmPath(sub_path)) |path| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path.slice()) catch return error.ShmDirCreateFailed;
+        return allocator.dupe(u8, path.slice());
+    }
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
@@ -115,7 +162,7 @@ test "PHASE 1b: open-no-scan + lazy hydrate correctness (valid snapshot)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -201,7 +248,7 @@ test "PHASE 1b: concurrent first-queries hydrate a cold graph exactly once" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -278,7 +325,7 @@ test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-
     while (iter < 5) : (iter += 1) {
         graph_store.deinitGlobalStore();
 
-        var tmp = testing.tmpDir(.{});
+        var tmp = scratchDir();
         defer tmp.cleanup();
         const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
         defer allocator.free(data_dir);
@@ -372,7 +419,7 @@ test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -431,7 +478,7 @@ test "PHASE 1b shutdown: clean shutdown writes IdMap snapshot; reopen loads it (
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -491,7 +538,7 @@ test "PHASE 1b shutdown: read-only session persists snapshot on clean shutdown" 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -551,7 +598,7 @@ test "PHASE 1b: crash (stale snapshot) -> reopen rebuilds from scan, correct" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -603,7 +650,7 @@ test "PHASE 1b: startup milestone -- ~30k clean restart reaches ready with no lo
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -718,7 +765,7 @@ test "H3 no-snapshot: by-id setEdgeProperty as FIRST access hydrates + edge upda
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -775,7 +822,7 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -834,7 +881,7 @@ test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrat
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -885,7 +932,7 @@ test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -957,7 +1004,7 @@ test "GAP regression: count(r) (countEdgesForGraph) as FIRST access after no-sna
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1024,7 +1071,7 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1108,7 +1155,7 @@ test "GAP regression: serializeSnapshot as FIRST access after no-snapshot open y
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1171,7 +1218,7 @@ test "GAP regression: getAllNodesForTenant/getAllEdgesForTenant as FIRST access 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1268,7 +1315,7 @@ test "CRITICAL regression: full checkpoint on a deferred graph does not persist 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1366,7 +1413,7 @@ test "GAP regression: getEdgeCount/allEdgeIds/getNodeCount as FIRST access after
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1453,7 +1500,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1569,7 +1616,7 @@ test "P3: crash before checkpoint — stale loop2 snapshots rejected, scan fallb
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1643,7 +1690,7 @@ test "GAP-0065 FIX D: light-checkpoint + flushForCleanShutdown + clean deinit �
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1730,7 +1777,7 @@ test "GAP-0065 FIX D: durability comes from flushForCleanShutdown — force-exit
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1782,7 +1829,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1908,7 +1955,7 @@ test "GAP-0065 FIX C: from-dump ingest (no index query) + clean shutdown → FIR
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2027,7 +2074,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2144,7 +2191,7 @@ test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snaps
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2209,7 +2256,7 @@ test "P3: partial snapshot set — only the uncovered product is scan-rebuilt, n
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2277,7 +2324,7 @@ test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2337,7 +2384,7 @@ test "P3 C1: failed (quarantined) hydration never persists partial loop2 snapsho
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2425,7 +2472,7 @@ test "P3 C2: graph-scoped scan never mutates the node cache; retained node point
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2589,7 +2636,7 @@ test "C3 e2e: MATCH...SET n.p on a cold node after warm reopen persists durably 
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2620,7 +2667,7 @@ test "C3 e2e: MATCH...REMOVE n.prop on a cold node after warm reopen removes dur
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2649,7 +2696,7 @@ test "C3 e2e: SET n = {map} on a cold node after warm reopen replaces durably (R
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2679,7 +2726,7 @@ test "C3 e2e: MERGE ... ON MATCH SET on a cold node after warm reopen persists d
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2753,7 +2800,7 @@ test "T3a: hydrate (scan) -> crash with NO checkpoint -> reopen hydrates from sn
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2831,7 +2878,7 @@ test "T3b: failed (quarantined) hydration persists NOTHING at the completion cal
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2886,7 +2933,7 @@ test "T3c: injected persist failure — hydrating query still succeeds; next reo
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2966,7 +3013,7 @@ test "engine-direct single-label count serves the in-memory refcount, never the 
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3076,7 +3123,7 @@ test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (n
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3199,7 +3246,7 @@ test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-build
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3313,7 +3360,7 @@ test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_m
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3433,7 +3480,7 @@ test "GAP-ENT-0048f: hydration builds+persists the exact index (race-free, no sh
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3552,7 +3599,7 @@ test "GAP-ENT-0048g: prop_exact.idx survives a LIGHT checkpoint and reopen RELOA
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3636,7 +3683,7 @@ test "GAP-0064 FIX A: absent-index reopen routes the exact build through the bac
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3711,7 +3758,7 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3852,7 +3899,7 @@ test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint s
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);

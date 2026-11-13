@@ -152,6 +152,56 @@ fn evaluatePatternPropsIn(arena_allocator: std.mem.Allocator, props: ?[]ast.Prop
     return owned;
 }
 
+// CANARY: REQ=REQ-SONNY-6433-MERGE-KEYS; FEATURE="MergeStatement"; ASPECT=NullKeyRefused; STATUS=TESTED; TEST=tests/test_sonny6433_merge_keys.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6433: a MERGE pattern's property map evaluated as its key, refused
+/// (`error.NullMergeKey`, 22004) when a value is null. A null property value
+/// is absent (SONNY-3245, CREATE and SET), and `k = null` is never true
+/// (ISO/IEC 39075:2024 19.3 <comparison predicate>: unknown), so no node or
+/// relationship can match the pattern; MERGE (a Geode extension) created one
+/// without the key on every run instead.
+fn evaluateMergeKeyIn(arena_allocator: std.mem.Allocator, props: ?[]ast.Property, pattern_env: Env) !?[]EvaluatedPatternProp {
+    const evaluated = try evaluatePatternPropsIn(arena_allocator, props, pattern_env) orelse return null;
+    try refuseNullMergeKey(evaluated);
+    return evaluated;
+}
+
+fn refuseNullMergeKey(props: []const EvaluatedPatternProp) error{NullMergeKey}!void {
+    for (props) |prop| {
+        if (prop.value == .Null) return error.NullMergeKey;
+    }
+}
+
+/// SONNY-6433: before a MERGE writes anything, refuse it when a property of
+/// its pattern that names no variable (a literal, a parameter, `1 + null`)
+/// is null. A property that names a variable (`a.k + 1`, where an earlier
+/// chain binds `a`; an unbound variable reads null) is checked when its
+/// chain runs (`evaluateMergeKeyIn`), and the statement's undo takes back
+/// what the earlier chains wrote.
+fn refuseNullMergeKeysUpfront(allocator: std.mem.Allocator, pattern: ast.GraphPattern, env: Env) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| try refuseConstantNullKeys(a, head.props, env);
+        for (chain.hops) |hop| {
+            try refuseConstantNullKeys(a, hop.left.props, env);
+            try refuseConstantNullKeys(a, hop.rel.props, env);
+            try refuseConstantNullKeys(a, hop.right.props, env);
+        }
+    }
+}
+
+fn refuseConstantNullKeys(a: std.mem.Allocator, props: ?[]ast.Property, env: Env) !void {
+    for (props orelse return) |prop| {
+        if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
+        const value = eval.evalExpr(a, prop.value.*, env) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => continue,
+        };
+        if (value == .Null) return error.NullMergeKey;
+    }
+}
+
 fn nodeHasAllLabels(node: *const graph_store.Node, labels: []const []const u8) bool {
     for (labels) |required_label| {
         var found_label = false;
@@ -1948,7 +1998,7 @@ pub fn executeCreateQuery(
         }
 
         // No WITH clause - use created nodes and relationships directly for RETURN
-        var ret_result = try executeReturnClauseWithNodes(allocator, q.ret, created_nodes, created_relationships);
+        var ret_result = try executeReturnClauseWithNodes(allocator, q.ret, created_nodes, created_relationships, param_names, param_values);
 
         // Clone created_nodes for variable_bindings before they get freed
         const bindings_ptr = try allocator.create(std.StringHashMap(u64));
@@ -1962,11 +2012,17 @@ pub fn executeCreateQuery(
     }
 }
 
+/// SONNY-6433: `param_names` / `param_values` are the statement's parameters,
+/// a FOR's loop variable among them (`statement_handlers.executeForBody` binds
+/// it as one): `FOR u IN [1, 2] CREATE (:T {v: u}) RETURN u` evaluated u in an
+/// environment with no parameters, and returned null.
 pub fn executeReturnClauseWithNodes(
     allocator: std.mem.Allocator,
     ret: ast.ReturnClause,
     nodes: std.StringHashMap(u64),
     relationships: std.StringHashMap(Value),
+    param_names: []const []const u8,
+    param_values: []const Value,
 ) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const items = ret.items;
@@ -2001,6 +2057,8 @@ pub fn executeReturnClauseWithNodes(
         .allocator = allocator,
         .names = names.items,
         .values = values.items,
+        .param_names = param_names,
+        .param_values = param_values,
     };
 
     for (items, 0..) |item, i| {
@@ -3273,6 +3331,7 @@ fn clusterReplicateMerge(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternProps(prop_arena.allocator(), node_pattern.props, context);
+    if (evaluated_props) |props| try refuseNullMergeKey(props); // SONNY-6433
 
     // SONNY-2686: including the session's row visibility, so the leader never
     // proposes an ON MATCH SET for a node the session may not see.
@@ -3439,7 +3498,7 @@ fn mergeNodeChain(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const pa = prop_arena.allocator();
-    const evaluated_props = try evaluatePatternPropsIn(pa, node_pattern.props, scope.env(pa));
+    const evaluated_props = try evaluateMergeKeyIn(pa, node_pattern.props, scope.env(pa));
 
     // SONNY-2686: a node the session may not see is never bound, so none of
     // the ON MATCH clauses can reach it; a pattern that only such a node
@@ -3686,7 +3745,7 @@ fn resolveMergeEndpoint(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     // SONNY-3240: in the scope of the chains before this one.
-    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
+    const evaluated_props = try evaluateMergeKeyIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
 
     if (try visibility.bindNode(findMergeMatch(
         read_store,
@@ -3745,10 +3804,11 @@ fn mergeRelationshipHop(
     // `scope`, for both.
     // In an arena, as every `evaluatePatternProps` caller: the statement's
     // allocator is no arena when MATCH ... MERGE runs this per matched row
-    // (SONNY-3025), and the stored property is a copy.
+    // (SONNY-3025), and the stored property is a copy. SONNY-6433: a null
+    // key is refused (`evaluateMergeKeyIn`).
     var rel_prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer rel_prop_arena.deinit();
-    const rel_props = try evaluatePatternPropsIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator()));
+    const rel_props = try evaluateMergeKeyIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator()));
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
@@ -3904,6 +3964,8 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         try write_precheck.checkPatternWritableWithSet(allocator, m.pattern, precheck_env, &.{m.on_create});
         try write_precheck.checkSetClausesWritable(allocator, m.on_create, precheck_env, null, &.{});
         try write_precheck.checkSetClausesWritable(allocator, m.on_match, precheck_env, null, &.{});
+        // SONNY-6433: a null key, before anything is written.
+        try refuseNullMergeKeysUpfront(allocator, m.pattern, precheck_env);
     }
 
     // SONNY-2686: every node MERGE matches must be one the session may see; a

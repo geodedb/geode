@@ -1844,6 +1844,127 @@
 
 ### Fixed
 
+- **`test-startup-lazy-hydrate` finishes in under a minute instead of
+  running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
+  writes (one fsync per commit), checkpoints, crashes or closes, and reopens
+  a persisted store under `.zig-cache/tmp`; on a loaded host's shared disk
+  each took 15 to 170 seconds and the run reached test 41 of 47 at the
+  25-minute cap (the 3,000-node GAP-ENT-0048 seeding tests alone took
+  minutes each), so its last tests, and those of its `-tsan` companion,
+  never ran. Each test's data directory now lives on tmpfs (`/dev/shm`) when
+  the host has one, as the write harness's do (SONNY-6333), and is removed
+  with the test's scratch directory; the storage code paths and the
+  assertions are unchanged. 47/47 in 38 s (was 40/47 at 1,500 s). The TSan
+  companion now runs to completion (see `docs/KNOWN_TEST_ISSUES.md`).
+- **An undirected edge pattern is refused with 0A000 and a message that
+  says so (SONNY-6433 item 8).** ISO/IEC 39075:2024 16.5 / 16.7 spell an
+  undirected edge `~[ ]~` (and `~`, `<~[ ]~`, `~[ ]~>`, `<~`, `~>`), Feature
+  GH02, which Geode does not support: it stores directed edges only. The
+  lexer has no `~` token, so `CREATE (a:W)~[:T]~(b:W)` was refused with
+  42000 "a statement ends at ';' or at the end of the request; this clause
+  cannot follow the one before it". CREATE, INSERT and MATCH now answer
+  0A000 (feature not supported) with "undirected edges are not supported
+  ..." and the directed alternatives. `=~` and `!~` are unchanged.
+  Regression: `zig build test-sonny6433-undirected-edge-message`.
+- **The ordered-index read paths hold the graph locks they need (SONNY-6433
+  items 6, 7, 10).** (6) The planner gates `isOrderedIndexRegistered`,
+  `isOrderedIndexEligible` and `isOrderedIndexFresh` read each shard's
+  ordered-index registry, eligibility and freshness with no lock while
+  `createOrderedIndex` (CREATE INDEX, the ORDER BY auto-build's background
+  worker) changes them under the graph lock SHARED and the shard's lock
+  EXCLUSIVE, and the full checkpoint under the graph lock EXCLUSIVE. They
+  now pin the graph and read under `mg.rwlock` SHARED (unless the thread
+  already holds the graph lock) and each `shard_locks[i]` SHARED, in the
+  order `createOrderedIndex` takes them. (7) `orderedScan` resolved its
+  graph with no pin and lets its locks go between batches, so a DROP GRAPH
+  between two batches freed the graph the next batch read (a segmentation
+  fault in the regression test). The scan now pins the graph for its whole
+  run and fails with `GraphNotFound` when a batch finds it dropped (the
+  planner then serves the heap path), the discipline of the graph-lock API
+  (SONNY-3028). (10) The per-thread table of held graph locks had 16 slots,
+  and past them every graph counted as held, so an ordered scan of a graph
+  the thread had not locked read it with no graph lock. The table now grows
+  (the room is reserved before a lock is taken, so recording it cannot
+  fail; an acquisition that cannot get the room fails with out of memory
+  before locking), and a graph the thread does not hold is never reported
+  as held. Regression: `zig build test-sonny6433-ordered-index-locking`.
+- **A member read of a string property (`n.p`) no longer leaks a copy per
+  row (SONNY-6433 item 5).** SONNY-6327 routed every string read through the
+  FLE read policy and made the member access (`memberOfValue`) return a copy
+  of the stored bytes even when nothing was decrypted. A member value is
+  borrowed by contract (`value_utilities.evaluatesFresh`): the final
+  projection duplicates it (GAP-0535) and an ORDER BY compares it without
+  freeing it, so the copy leaked on every row a projection or sort
+  evaluated without a per-query arena (12 allocations in
+  `test-sonny2653-planned-read-ext-read-leak`'s `RETURN a.s, r`). A member
+  read now returns the stored bytes when the policy passes them unchanged,
+  as before SONNY-6327; a decrypted or redacted string is still a fresh
+  copy. Regression: `zig build test-sonny2653-planned-read-ext-read-leak`.
+- **A cluster follower drops replaced or removed text from its fulltext
+  indexes, as the leader does (SONNY-6433 item 3).** The fts engine cannot
+  take words out of a document, so the executor queues every covering index
+  for a rebuild when a SET replaces indexed text or a REMOVE drops it and
+  rebuilds it at the statement's end (SONNY-6368, SONNY-6421). A follower
+  applies the committed GUPD / GMRG entry with the store mutators and the
+  FTS apply hook's upsert only: it appended the new text and kept answering
+  `geode.fts.search` for the old words. The apply functions now report text
+  a node lost (`cluster_replication.FtsApplyTextHooks`, registered by
+  `fts_index_ops.registerFtsApplyHook`) and end each applied entry with the
+  same flush, on the apply thread (a follower's only writer).
+  `docs/FULLTEXT_SEARCH.md` is updated, and `tests/test_fts_apply_symmetry.zig`
+  now expects the old term gone on the apply path. Regression: `zig build
+  test-sonny6433-follower-fts-rebuild`.
+- **BREAKING (query): a MERGE with a null key is refused (22004); a
+  list-valued MERGE key matches by value; `FOR u IN [...] CREATE ... RETURN
+  u` returns `u` (SONNY-6433 item 2, the SONNY-3245 remainder).** A null
+  property value is absent (SONNY-3245, CREATE and SET) and `k = null` is
+  never true (ISO/IEC 39075:2024 19.3), so `MERGE (n:L {k: null})` can match
+  nothing; it created a node without `k` on every run. A MERGE whose node or
+  relationship pattern gives a property the null value (a literal, a
+  parameter, an expression such as `1 + null` or an unbound `m.v`) is now
+  refused with 22004 (null value not allowed) and writes nothing, in a later
+  MERGE clause too, and over QUIC's bulk MERGE fast paths, which answered
+  58000 and still applied the other statements of a `/*+BATCH*/` run. Use a
+  key with a value, or CREATE. A stored list reads back as an extended list
+  and never compared equal to a list literal or parameter, so `MERGE (n:L
+  {k: [1, 2]})` made a duplicate on every run (and `MATCH (n {k: [1, 2]})`
+  found nothing); lists now compare element by element
+  (`value_equality.valuesEqual`). `FOR u IN [1, 2] CREATE (...) RETURN u`
+  evaluated its RETURN with none of the statement's parameters, where the
+  FOR binds `u`, and returned nulls (`executeReturnClauseWithNodes` now takes
+  them; MATCH ... CREATE ... RETURN too). `docs/ENTERPRISE_GAPS.md` (GAP-0926)
+  is updated. Regression: `zig build test-sonny6433-merge-keys`,
+  `test-sonny6433-merge-null-key-quic`.
+- **`keys()` and `properties()` no longer list a property that `REMOVE` or
+  `SET ... = null` took away (SONNY-6433 item 1).** Removing a node
+  property writes a null tombstone into its stored property chain
+  (`StorageAdapter.removeNodeProperty`), and `getAllNodeProperties` /
+  `getAllEdgeProperties`, which every read that
+  rebuilds a node or relationship from storage goes through (a bounded
+  cache's hydrate, the planned read, the node-scan stream), copied the
+  tombstone into the property map: `n.p` read null while `keys(n)` and
+  `properties(n)` still listed `p`. A tombstone now takes the property out
+  of the map (ISO/IEC 39075:2024 13.4: the property is removed from the
+  element's property set). Regression: `zig build
+  test-sonny6433-keys-after-remove`; `test-sonny3245-create-merge-forms`
+  now asserts `keys()` after `SET n.p = null` too.
+- **`zig build test-graph-store` and `zig build test-compile` compile again
+  (SONNY-6433 item 4).** SONNY-6422 made the storage adapter check the
+  audit signing keys (`AuditLogger.loadEnvSigningKey`), which reaches
+  `src/security/audit.zig` and its `@import("rls")`. Three modules compile
+  the adapter as their own source and had no `rls` import: the
+  `graph_store` module (`test_graph_algorithms.zig`,
+  `test_point_read_view_zero_copy.zig`,
+  `test_point_read_view_mutation_invalidation.zig`) and the `graph_store.zig`
+  and `eval.zig` inline-test roots (`test-graph-store`, `test-gap0866`), so
+  those five artifacts, and with them `zig build test-compile` and the
+  aggregate `zig build test`, failed to compile. They now import it.
+  `tests/test_process_args.zig` still asserted that `serve --no-auth`
+  disables authentication in a Debug build, through the `enable_auth` field
+  SONNY-6329 removed; it now asserts the flag is refused
+  (`NoAuthUnsupported`) in every build mode. All 829 `test-compile`
+  artifacts and the artifacts of the named steps outside the aggregate
+  compile.
 - **TDE overhead is measured, not simulated, and no doc claims "<1%" or
   "<5%" (SONNY-6435 item 2).** `benchmarks/benchmark_tde_overhead.zig` (the
   `zig build bench` member) hashed a buffer with Wyhash and reported

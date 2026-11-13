@@ -758,12 +758,16 @@ pub const ParseOutcome = union(enum) {
 /// parser limit is class 54 (program limit exceeded): too many write clauses
 /// in a part (SONNY-3190), too many statements in a request, or more parser
 /// memory than the request may take are 54000; queries nested too deep are
-/// 54001 (statement too complex). Every other refusal is a syntax error,
-/// 42000. The limits' own messages name them (`Parser.max_*`).
+/// 54001 (statement too complex). An undirected edge pattern is 0A000
+/// (feature not supported, SONNY-6433). Every other refusal is a syntax
+/// error, 42000. The limits' own messages name them (`Parser.max_*`).
 pub fn parseErrorCode(err: anyerror) []const u8 {
     return switch (err) {
         error.TooManyWriteClauses, error.TooManyStatements, error.ParseMemoryLimit => "54000",
         error.QueryNestingTooDeep => "54001",
+        // SONNY-6433: an undirected edge pattern (Feature GH02) is a feature
+        // Geode does not support, not a syntax error.
+        error.UndirectedEdgeNotSupported => "0A000",
         else => "42000",
     };
 }

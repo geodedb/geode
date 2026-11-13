@@ -1252,6 +1252,17 @@ fn adoptBulkVectorDims(
 /// index inside the write critical section to catch the narrow window
 /// where another writer inserted the same key between our Phase 1 miss
 /// and Phase 2 acquire.
+// CANARY: REQ=REQ-SONNY-6433-MERGE-KEYS; FEATURE="MergeStatement"; ASPECT=BulkNullKeyRefused; STATUS=TESTED; TEST=tests/test_sonny6433_merge_keys.zig; OWNER=transport; UPDATED=2026-11-12
+/// SONNY-6433: the bulk MERGE fast paths refuse a null key as the executor
+/// does (`crud_operations.evaluateMergeKeyIn`, 22004): a null property is
+/// absent, so the pattern matches nothing and the merge would create a node
+/// without the key on every run.
+fn refuseNullBulkMergeKey(merge_kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV) error{NullMergeKey}!void {
+    for (merge_kvs) |kv| {
+        if (kv.value == .Null) return error.NullMergeKey;
+    }
+}
+
 fn executeBulkSimpleMerge(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -1313,6 +1324,11 @@ fn executeBulkSimpleMerge(
 
     // ENG-3922(a): the dimension guard, before any store mutation. See
     // `checkBulkVectorDims` for why a VectorF32 can get here at all.
+    refuseNullBulkMergeKey(merge_kvs) catch |err| { // SONNY-6433
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return;
+    };
     checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
         const info = proto_util.mapError(err);
         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
@@ -1660,6 +1676,11 @@ fn executeBatchSimpleMerge(
 
         // ENG-3922(a): guard every statement BEFORE a single op is submitted,
         // so a refusal leaves the whole batch unapplied.
+        refuseNullBulkMergeKey(merge_kvs) catch |err| { // SONNY-6433
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return true;
+        };
         checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});

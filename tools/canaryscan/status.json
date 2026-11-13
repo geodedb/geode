@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:24:59.761792649Z",
+  "generated_at": "2026-11-13T03:21:33.963967008Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85094,6 +85094,221 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-FOLLOWER-FTS-REBUILD",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyQueuesRemovedText",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "FollowerRemovedTextRebuild",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "ApplyRemovedTextRebuild",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6433-KEYS-AFTER-REMOVE",
+      "features": [
+        {
+          "feature": "PropertyStorage",
+          "aspect": "RemovedPropertyAbsent",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "PropertyStorage",
+          "aspect": "TombstoneNotAProperty",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6433-MEMBER-READ-BORROWED",
+      "features": [
+        {
+          "feature": "ExpressionEvaluator",
+          "aspect": "MemberReadOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2653_planned_read_ext_read_leak.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6433-MERGE-KEYS",
+      "features": [
+        {
+          "feature": "MergeStatement",
+          "aspect": "BulkNullKeyRefused",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig",
+            "tests/test_sonny6433_merge_null_key_quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig",
+            "tests/test_sonny6433_merge_null_key_quic.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
+          "aspect": "ListKeyByValue",
+          "status": "TESTED",
+          "files": [
+            "src/execution/value_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
+          "aspect": "NullAndListKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
+          "aspect": "NullKeyRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6433-ORDERED-INDEX-LOCKING",
+      "features": [
+        {
+          "feature": "OrderedIndex",
+          "aspect": "GatesPinsAndLockTracking",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "OrderedIndex",
+          "aspect": "LockedPlannerGates",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_ordered_index_locking.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6433-UNDIRECTED-EDGE-MESSAGE",
+      "features": [
+        {
+          "feature": "Parser",
+          "aspect": "UndirectedEdgeRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig",
+            "tests/test_sonny6433_undirected_edge_message.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_undirected_edge_message.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6435-MASTER-KEY-CHECK",
       "features": [
         {
@@ -93107,7 +93322,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4849
+      "TESTED": 4862
     },
     "by_aspect": {
       "2PC": 3,
@@ -93255,6 +93470,8 @@
       "ApplyMergeIntegration": 1,
       "ApplyNodeCreate": 1,
       "ApplyOverRows": 1,
+      "ApplyQueuesRemovedText": 1,
+      "ApplyRemovedTextRebuild": 1,
       "ApplySetGroups": 1,
       "ApplySnapshotPointer": 1,
       "ApplyStatementBatch": 1,
@@ -93453,6 +93670,7 @@
       "BulkMergeTenantScope": 1,
       "BulkNodeAccess": 1,
       "BulkNodeSlots": 1,
+      "BulkNullKeyRefused": 1,
       "BypassDetection": 1,
       "ByteBoundedEviction": 1,
       "ByteaHex": 1,
@@ -94499,6 +94717,7 @@
       "FloatTypes": 1,
       "FlowControl": 2,
       "FlushStorage": 1,
+      "FollowerRemovedTextRebuild": 1,
       "ForceReset": 1,
       "ForeachIsolation": 1,
       "ForkJoin": 1,
@@ -94565,6 +94784,7 @@
       "GateStorageProcs": 1,
       "GateTenantOps": 1,
       "GateTsIngest": 1,
+      "GatesPinsAndLockTracking": 1,
       "GeneratedPasswordsComply": 1,
       "Generator": 1,
       "GeoJSON": 1,
@@ -95076,6 +95296,7 @@
       "ListGraphGrants": 1,
       "ListHead": 1,
       "ListIn": 1,
+      "ListKeyByValue": 1,
       "ListKeys": 1,
       "ListLiteralCoercion": 2,
       "ListPropertySize": 1,
@@ -95106,6 +95327,7 @@
       "LocalTime": 1,
       "LocalityAware": 1,
       "LockUnavailableDiagnostic": 1,
+      "LockedPlannerGates": 1,
       "LockedResidentWalk": 1,
       "LockedSnapshots": 1,
       "Log10": 1,
@@ -95212,6 +95434,7 @@
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
       "MemberOfValue": 1,
+      "MemberReadOwnership": 1,
       "MemberResolution": 1,
       "MemoryEfficiency": 2,
       "MemoryEstimation": 1,
@@ -95462,6 +95685,7 @@
       "NoteInboundAppendEntriesAdvance": 1,
       "NotedFailure": 1,
       "Null": 1,
+      "NullAndListKeys": 1,
       "NullCheck": 3,
       "NullComparison": 2,
       "NullConcat": 1,
@@ -95469,6 +95693,7 @@
       "NullFields": 1,
       "NullHandling": 3,
       "NullIf": 1,
+      "NullKeyRefused": 1,
       "NullOnNoRows": 1,
       "NullPropagation": 1,
       "NullRemovesProperty": 1,
@@ -96251,6 +96476,7 @@
       "RemoveRole": 1,
       "RemoveUser": 1,
       "RemovedLabelRebuildQueue": 1,
+      "RemovedPropertyAbsent": 1,
       "RemovedTextRebuildQueue": 1,
       "RenameAndToggleTogether": 1,
       "RenameSurvivesRestartNoStale": 1,
@@ -96914,6 +97140,7 @@
       "ToUpper": 1,
       "TokenValidation": 2,
       "Tokenize": 1,
+      "TombstoneNotAProperty": 1,
       "ToolDispatch": 1,
       "Tooling": 2,
       "ToolsThreading": 1,
@@ -96985,6 +97212,7 @@
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundedWithoutLimit": 1,
+      "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
       "UndoApplication": 1,
       "UndoCheckpoint": 1,

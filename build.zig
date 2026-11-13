@@ -5972,6 +5972,15 @@ pub fn build(b: *std.Build) void {
     // GAP-0510 Task D1: Make rls (expression engine) available to the server binary so
     // main.zig can initialize the global expression RLS engine at startup.
     geode_exe.root_module.addImport("rls", rls_mod);
+    // SONNY-6433: the storage adapter now reaches security/audit.zig, which
+    // imports `rls` (SONNY-6422: `initAuditForGraph` checks the audit
+    // signing keys through `AuditLogger.loadEnvSigningKey`), so every module
+    // that compiles the adapter as its own source needs it: the graph_store
+    // module, the graph_store.zig and eval.zig inline-test roots. rls_mod is
+    // declared after them, so the imports are wired here.
+    graph_store_mod.addImport("rls", rls_mod);
+    graph_store_unit_tests.root_module.addImport("rls", rls_mod);
+    eval_handler_mod.addImport("rls", rls_mod);
 
     // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
     // the dead QueryRewriter, SONNY-3038).
@@ -11135,6 +11144,87 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3245_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
     sonny3245_step.dependOn(&run_sonny3245_tests.step);
+
+    const sonny6433_undirected_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_undirected_edge_message.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_undirected_mod.addImport("geode", root_mod);
+    const sonny6433_undirected_tests = b.addTest(.{ .root_module = sonny6433_undirected_mod });
+    const run_sonny6433_undirected_tests = b.addRunArtifact(sonny6433_undirected_tests);
+    shardDep(test_step, &run_sonny6433_undirected_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_undirected_step = b.step("test-sonny6433-undirected-edge-message", "Run SONNY-6433 regression (an undirected edge pattern, ISO/IEC 39075 Feature GH02, is refused with 0A000 and a message naming it)");
+    sonny6433_undirected_step.dependOn(&run_sonny6433_undirected_tests.step);
+
+    const sonny6433_locks_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_ordered_index_locking.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_locks_mod.addImport("geode", root_mod);
+    sonny6433_locks_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6433_locks_tests = b.addTest(.{ .root_module = sonny6433_locks_mod });
+    const run_sonny6433_locks_tests = b.addRunArtifact(sonny6433_locks_tests);
+    shardDep(test_step, &run_sonny6433_locks_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_locks_step = b.step("test-sonny6433-ordered-index-locking", "Run SONNY-6433 regression (ordered-index planner gates read under the graph and shard locks; orderedScan pins its graph against DROP GRAPH; the per-thread graph-lock table tracks past 16 graphs)");
+    sonny6433_locks_step.dependOn(&run_sonny6433_locks_tests.step);
+
+    const sonny6433_fts_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_follower_fts_rebuild.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_fts_mod.addImport("geode", root_mod);
+    const sonny6433_fts_tests = b.addTest(.{ .root_module = sonny6433_fts_mod });
+    const run_sonny6433_fts_tests = b.addRunArtifact(sonny6433_fts_tests);
+    shardDep(test_step, &run_sonny6433_fts_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_fts_step = b.step("test-sonny6433-follower-fts-rebuild", "Run SONNY-6433 regression (a follower applying a replicated SET, REMOVE, label removal or MERGE ON MATCH SET drops the old text from its fulltext indexes, as the leader does)");
+    sonny6433_fts_step.dependOn(&run_sonny6433_fts_tests.step);
+
+    const sonny6433_merge_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_merge_keys.zig"), .target = target, .optimize = optimize });
+    sonny6433_merge_test_mod.link_libc = true;
+    sonny6433_merge_test_mod.addImport("geode", root_mod);
+    sonny6433_merge_test_mod.addImport("schema", schema_mod);
+    sonny6433_merge_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6433_merge_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6433_merge_test_mod.addImport("logging", logging_mod);
+    sonny6433_merge_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6433_merge_tests = b.addTest(.{ .root_module = sonny6433_merge_test_mod });
+    const run_sonny6433_merge_tests = b.addRunArtifact(sonny6433_merge_tests);
+    shardDep(test_step, &run_sonny6433_merge_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_merge_step = b.step("test-sonny6433-merge-keys", "Run SONNY-6433 regression (MERGE on a null key refused with 22004 and writing nothing; a list-valued MERGE key matches by value; FOR ... CREATE ... RETURN returns the loop variable; gRPC in process)");
+    sonny6433_merge_step.dependOn(&run_sonny6433_merge_tests.step);
+
+    const sonny6433_mq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_merge_null_key_quic.zig"), .target = target, .optimize = optimize });
+    sonny6433_mq_test_mod.link_libc = true;
+    sonny6433_mq_test_mod.addImport("geode", root_mod);
+    sonny6433_mq_test_mod.addImport("schema", schema_mod);
+    sonny6433_mq_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6433_mq_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6433_mq_tests = b.addTest(.{ .root_module = sonny6433_mq_test_mod });
+    const run_sonny6433_mq_tests = b.addRunArtifact(sonny6433_mq_tests);
+    spawnsBuiltGeode(sonny6433_mq_tests);
+    shardDep(test_step, &run_sonny6433_mq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_mq_step = b.step("test-sonny6433-merge-null-key-quic", "Run SONNY-6433 regression (the QUIC bulk MERGE fast paths, single and /*+BATCH*/, refuse a null MERGE key with 22004 and write nothing; spawns the built geode)");
+    sonny6433_mq_step.dependOn(&run_sonny6433_mq_tests.step);
+
+    const sonny6433_keys_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_keys_after_remove.zig"), .target = target, .optimize = optimize });
+    sonny6433_keys_test_mod.link_libc = true;
+    sonny6433_keys_test_mod.addImport("geode", root_mod);
+    sonny6433_keys_test_mod.addImport("schema", schema_mod);
+    sonny6433_keys_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6433_keys_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6433_keys_test_mod.addImport("logging", logging_mod);
+    sonny6433_keys_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6433_keys_tests = b.addTest(.{ .root_module = sonny6433_keys_test_mod });
+    const run_sonny6433_keys_tests = b.addRunArtifact(sonny6433_keys_tests);
+    shardDep(test_step, &run_sonny6433_keys_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_keys_step = b.step("test-sonny6433-keys-after-remove", "Run SONNY-6433 regression (keys() and properties() omit a property REMOVE or SET to null took away, nodes and relationships, bounded and unbounded caches; gRPC in process)");
+    sonny6433_keys_step.dependOn(&run_sonny6433_keys_tests.step);
 
     const sonny6421_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6421_index_maintenance.zig"), .target = target, .optimize = optimize });
     sonny6421_test_mod.link_libc = true;
