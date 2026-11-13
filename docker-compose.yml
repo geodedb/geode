@@ -198,9 +198,6 @@ services:
       # geode reads no S3_* variable: backups are local files written by
       # `geode backup create` (SONNY-6290); copy them to object storage yourself
       # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
-      # QUIC Performance: GSO is enabled by default on Linux 4.18+
-      # Uncomment to disable GSO (not recommended):
-      # - QUIC_GO_DISABLE_GSO=true
     # QUIC Performance Optimizations - UDP buffer sizes for high-throughput transfers
     # These sysctls require --privileged or appropriate capabilities
     sysctls:
@@ -247,13 +244,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      vault:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # SONNY-6442: geode does not wait for Vault, MinIO or Redis: it uses none
+    # of them (no KMS provider reads Vault, backups are local files, there is
+    # no Redis cache). They stay in this stack for the other services.
 
   # Geode CLI - Debug/Admin Container
   geode-cli:

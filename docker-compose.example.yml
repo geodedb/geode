@@ -27,7 +27,10 @@ services:
         hard: 4096
     pids_limit: 4096
     healthcheck:
-      test: ["CMD", "/usr/local/bin/geode query", "--host", "127.0.0.1", "--port", "3141", "RETURN 1"]
+      # SONNY-6442: the image's shared probe (GET /health on
+      # GEODE_METRICS_PORT). The exec-form program used to be the one string
+      # "/usr/local/bin/geode query", which does not exist.
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 10s
       timeout: 5s
       retries: 5

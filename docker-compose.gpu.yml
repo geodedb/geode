@@ -84,13 +84,8 @@ services:
       start_period: 40s
     networks:
       - geode-network
-    depends_on:
-      vault:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # SONNY-6442: geode does not wait for Vault, MinIO or Redis: it uses none
+    # of them.
 
   # Prometheus with GPU metrics
   nvidia-exporter:

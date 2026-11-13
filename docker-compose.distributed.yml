@@ -37,7 +37,7 @@ services:
     restart: unless-stopped
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -79,7 +79,7 @@ services:
       - geode-leader
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -121,7 +121,7 @@ services:
       - geode-leader
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3

@@ -4,6 +4,21 @@
 
 ### Security
 
+- **Operator-visible: compose health checks run, and geode no longer waits
+  for Vault, MinIO or Redis (SONNY-6442 item 7).**
+  `docker-compose.example.yml` and the three nodes of
+  `docker-compose.distributed.yml` health-checked with
+  `["CMD", "geode query", ...]`; exec form runs the first element as the
+  program, so the check ran a program named `geode query` and never passed.
+  They now run the image's `/usr/local/bin/health-check.sh` (GET `/health`
+  on `GEODE_METRICS_PORT`). The `QUIC_GO_DISABLE_GSO` comment (a quic-go
+  variable geode does not read) is gone from `docker-compose.yml`. The
+  geode services of `docker-compose.yml`, `docker-compose.dev.yml` and
+  `docker-compose.gpu.yml` no longer `depends_on` Vault, MinIO and Redis,
+  which geode never uses; the dev stack no longer runs them (nor needs
+  `VAULT_TOKEN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` or `REDIS_PASSWORD`). The
+  full `docker-compose.yml` stack keeps them for its other services.
+  Regression: `zig build test-sonny6430-deploy-docs-truth`.
 - **BREAKING (procedure): `CALL tde.measure_overhead()` is refused as
   unsupported (SQLSTATE 0A000) (SONNY-6442 item 6).** It timed 1000
   alloc+memcpy+free of 1 KiB as the "baseline" against 1000 AEAD
