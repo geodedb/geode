@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:29:24.579797823Z",
+  "generated_at": "2026-11-13T16:43:55.615266759Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86942,6 +86942,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-TEMPORAL-RENDERING",
+      "features": [
+        {
+          "feature": "TemporalTypes",
+          "aspect": "LocalDatetimeAndDurationFraction",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_temporal_rendering.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6489-TOPK-EXACT-ORDER",
       "features": [
         {
@@ -94617,7 +94636,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4935
+      "TESTED": 4936
     },
     "by_aspect": {
       "2PC": 3,
@@ -96646,6 +96665,7 @@
       "LoadOptimizedVarianceEnvelope": 1,
       "LoaderFilter": 1,
       "LocalClustering": 1,
+      "LocalDatetimeAndDurationFraction": 1,
       "LocalRestore": 1,
       "LocalRestoreWritesAndVerifies": 1,
       "LocalTime": 1,

@@ -12403,6 +12403,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6489_topk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6489-topk-order", "Run SONNY-6489 item 2 regression (ORDER BY ... LIMIT k, served by the top-K heap, returns the first k rows of the full ORDER BY for every k: numbers by exact value, a DECIMAL stays a DECIMAL, strings by NFC)").dependOn(&run_sonny6489_topk_tests.step);
 
+    // SONNY-6489 (4): localdatetime() is a local datetime; durations render
+    // their fraction of a second (stringify and the wire writer).
+    const sonny6489_temporal_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_temporal_rendering.zig"), .target = target, .optimize = optimize });
+    sonny6489_temporal_mod.addImport("geode", root_mod);
+    sonny6489_temporal_mod.addImport("logging", logging_mod);
+    const sonny6489_temporal_tests = b.addTest(.{ .root_module = sonny6489_temporal_mod });
+    const run_sonny6489_temporal_tests = b.addRunArtifact(sonny6489_temporal_tests);
+    shardDep(test_step, &run_sonny6489_temporal_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-temporal-rendering", "Run SONNY-6489 item 4 regression (localdatetime() is a local datetime, rendered without Z; a duration renders its fraction of a second and its sign in stringify, CAST and the wire writer, and reads back as the same duration)").dependOn(&run_sonny6489_temporal_tests.step);
+
     // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
     // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.
     const sonny3055_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3055_nfc_string_identity.zig"), .target = target, .optimize = optimize });
