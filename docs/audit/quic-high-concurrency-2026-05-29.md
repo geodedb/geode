@@ -47,7 +47,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 37. The final 2048x8 sustained retune kept group-commit coalescing at 500 us and narrowed shard-parallel mutation admission to 80. This restored zero-timeout 1024x8 and 2048x8 gates after cap 128 began producing rare first-response timeouts on the final dependency line. Wider coalescing waits, immediate high-fanout post-write polling, 640 cooperative workers, and cap 96/192 variants were all rejected before promotion.
 38. `REQ-QUIC-HC-178` moves shard-parallel mutation packet execution and group-commit waits out of cooperative scheduler workers into a bounded offload pool after mutation admission succeeds. The stream owner remains marked running for ordering, the offload task releases the mutation permit and completes or finishes the cooperative context, and shutdown waits for outstanding offload tasks before reclaiming contexts. The best accepted 2048x8/1000 us sustained gate improved to 1895.40 QPS with zero first-response timeouts, and the final pre-push rerun of that gate also completed cleanly at 948.72 QPS; 2048x8/250 us and 4096x8 remain failing ceilings.
 39. `REQ-QUIC-HC-179` adds a default-neutral group-commit active-write-shard diagnostic knob. The coordinator can reserve new node IDs from only the first `GEODE_GROUP_COMMIT_ACTIVE_SHARDS` write shards, and the E2E harness exposes this through `GEODE_HC_GROUP_COMMIT_ACTIVE_SHARDS`. The default remains all 16 shards. A default-path 2048x8/1000 us rerun completed cleanly at 5037.52 QPS, while 8-shard and 4-shard narrowing were rejected and not promoted.
-40. The accepted performance profile is now promoted to Geode server defaults: stream multiplexing defaults off, cooperative first-stream scheduling defaults on, optimized builds default to 512 cooperative first-stream workers, detached HELLO admission defaults to 4096 threads, and the stream queue defaults to 8192 entries. Existing env vars still restore compatibility mode (`GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1`, `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`) or run diagnostic sweeps.
+40. The accepted performance profile is now promoted to Geode server defaults: stream multiplexing defaults off (changed back to on on 2026-07-06, commit `68618e604`), cooperative first-stream scheduling defaults on, optimized builds default to 512 cooperative first-stream workers, detached HELLO admission defaults to 4096 threads, and the stream queue defaults to 8192 entries. Existing env vars still restore compatibility mode (`GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1`, `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`) or run diagnostic sweeps.
 41. Two follow-up implementation hypotheses were tested and rejected before this stop point. A batch-shared graph-lock path for consecutive multi-property `MERGE` kept 2048x8 completion clean but regressed the 4096x8 ceiling to `22598/32768` with `10170` first-response timeouts, so it was reverted. Raising the cooperative mutation offload pool from 64 to 80 workers failed the 2048x8 readiness gate with `ServerStartupTimeout`, matching the earlier 128-worker rejection, so the internal cap remains 64.
 
 ## Changed Files
@@ -65,7 +65,7 @@ The prior 2026-05-28 closeout left 4096 synchronized single-operation execution 
 - `src/server/main.zig`
   - Promotes the measured high-fanout queue and admission defaults: 8192 stream queue entries, 512 optimized cooperative first-stream workers, and 4096 optimized detached connection-admission threads.
 - `src/server/server_init.zig`
-  - Defaults QUIC serving to the single-stream/cooperative profile used by the accepted gates. Multiplexing remains available via `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1`; cooperative scheduling can be disabled with `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`.
+  - Defaults QUIC serving to the single-stream/cooperative profile used by the accepted gates. Multiplexing remains available via `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1` (the default again since 2026-07-06, commit `68618e604`); cooperative scheduling can be disabled with `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=0`.
 - `src/storage/graph_storage_adapter.zig`
   - Adds exact-property posting-length probing and copies only the smallest available candidate posting for multi-property `MERGE`.
   - Raises multi-property `MERGE` tuple-lock striping to 16k heap-allocated mutexes per graph.
@@ -634,15 +634,16 @@ of hanging in the pre-push hook.
 ## Operational Guidance
 
 - Keep `GEODE_QUIC_POLL_WORKERS=16` for this dependency line.
-- The optimized server default is now the accepted high-fanout profile:
+- The optimized server default is now the accepted high-fanout profile
+  (except multiplexing: since 2026-07-06, commit `68618e604`, it defaults to
+  on; the profile sets it to `0` explicitly, SONNY-6484):
   `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0`,
   `GEODE_QUIC_COOPERATIVE_FIRST_STREAMS=1`,
   `GEODE_QUIC_COOPERATIVE_FIRST_STREAM_WORKERS=512`,
   `GEODE_QUIC_CONNECTION_ADMISSION_THREADS=4096`, and
   `GEODE_QUIC_STREAM_QUEUE_CAPACITY=8192`.
-- Set `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1` only for multi-stream
-  compatibility workloads that need additional peer-initiated streams on an
-  authenticated connection.
+- `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=1` is the default now (multi-stream
+  clients need it); the high-fanout profile sets `0`.
 - Keep `GEODE_QUIC_MUTATION_ADMISSION_CAP` unset in normal operation. General writer-lock mutations use the fixed serial cap of 4; the default shard-parallel multi-property `MERGE` cap is 80.
 - Keep `GEODE_GROUP_COMMIT_COALESCE_US` unset in normal operation. The default is 500 us; 100 us timed out at 2048x8 and 2000 us regressed tail completion.
 - Keep `GEODE_GROUP_COMMIT_PHASE_METRICS` unset in normal operation. Set `GEODE_HC_METRICS_SCRAPE=1` when a ceiling probe needs coordinator phase attribution.

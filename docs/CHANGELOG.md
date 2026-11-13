@@ -2209,6 +2209,13 @@
   a protobuf-union flag for a write-set format the coordinator stopped
   accepting in GAP-0870); they now build native G2PC write sets and run
   (4/4). Regression: `zig build test-sonny6484-client-hard-deadline`.
+- **Docs: QUIC stream multiplexing defaults to on (SONNY-6484 item 4).**
+  `docs/performance/quic-high-concurrency.md` said
+  `GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING` defaults to off; it has defaulted
+  to on since 2026-07-06 (`src/server/server_init.zig`,
+  `quic_stream_multiplexing_enabled = true`). Corrected there and in
+  `docs/audit/quic-high-concurrency-2026-05-29.md`.
+
 - **`geode shell --plain` no longer drops non-ASCII text (SONNY-6484 item
   2).** The plain-mode line reader kept only bytes 32-126, so every byte of
   a multi-byte UTF-8 character, and a tab, vanished without a word:
