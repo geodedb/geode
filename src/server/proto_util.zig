@@ -446,6 +446,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3244: the parser's limits (gql/parser.zig `max_*`).
         error.TooManyStatements => .{ .code = "54000", .message = "A request may carry at most 1024 statements" },
         error.ParseMemoryLimit => .{ .code = "54000", .message = "Parsing the request needs more than 64 MiB" },
+        // SONNY-6433: ISO/IEC 39075 Feature GH02 (the parser's own message is the same).
+        error.UndirectedEdgeNotSupported => .{ .code = "0A000", .message = "undirected edges are not supported: Geode stores directed edges only, so an undirected edge pattern (~[ ]~, ~, <~[ ]~, ~[ ]~>; ISO/IEC 39075 Feature GH02) can be neither matched nor inserted. Use -[ ]-> or <-[ ]- (or -[ ]- to match either direction)" },
         error.QueryNestingTooDeep => .{ .code = "54001", .message = "Queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },

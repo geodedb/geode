@@ -1632,6 +1632,16 @@
 
 ### Fixed
 
+- **An undirected edge pattern is refused with 0A000 and a message that
+  says so (SONNY-6433 item 8).** ISO/IEC 39075:2024 16.5 / 16.7 spell an
+  undirected edge `~[ ]~` (and `~`, `<~[ ]~`, `~[ ]~>`, `<~`, `~>`), Feature
+  GH02, which Geode does not support: it stores directed edges only. The
+  lexer has no `~` token, so `CREATE (a:W)~[:T]~(b:W)` was refused with
+  42000 "a statement ends at ';' or at the end of the request; this clause
+  cannot follow the one before it". CREATE, INSERT and MATCH now answer
+  0A000 (feature not supported) with "undirected edges are not supported
+  ..." and the directed alternatives. `=~` and `!~` are unchanged.
+  Regression: `zig build test-sonny6433-undirected-edge-message`.
 - **The ordered-index read paths hold the graph locks they need (SONNY-6433
   items 6, 7, 10).** (6) The planner gates `isOrderedIndexRegistered`,
   `isOrderedIndexEligible` and `isOrderedIndexFresh` read each shard's

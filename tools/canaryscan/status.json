@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:16:44.961840435Z",
+  "generated_at": "2026-11-13T01:22:30.94459639Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84512,6 +84512,7 @@
           "aspect": "UndirectedEdgeRefusal",
           "status": "TESTED",
           "files": [
+            "src/gql/parser.zig",
             "tests/test_sonny6433_undirected_edge_message.zig"
           ],
           "tests": [

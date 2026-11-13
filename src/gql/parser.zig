@@ -434,7 +434,7 @@ pub const Parser = struct {
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep, UndirectedEdgeNotSupported };
 
     // CANARY: REQ=REQ-SONNY-3190-CLAUSE-CAP; FEATURE="WriteClauseCap"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
     /// SONNY-3190: the most SET, REMOVE, CREATE and MERGE clauses one query
@@ -542,6 +542,30 @@ pub const Parser = struct {
     /// True if the current token is an identifier whose text equals `kw` (case-insensitive).
     fn softKw(self: *Parser, kw: []const u8) bool {
         return self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, kw);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6433-UNDIRECTED-EDGE-MESSAGE; FEATURE="Parser"; ASPECT=UndirectedEdgeRefusal; STATUS=TESTED; TEST=tests/test_sonny6433_undirected_edge_message.zig; OWNER=parser; UPDATED=2026-11-12
+    /// SONNY-6433: is the parser at an undirected edge pattern, `~[ ]~`, `~`,
+    /// `<~[ ]~`, `<~`, `~[ ]~>` or `~>` (ISO/IEC 39075:2024 16.7 <edge
+    /// pattern>, Feature GH02)? The lexer has no `~` token (`=~` and `!~`
+    /// are its own), so a lone `~` is an invalid token and `<~` a `<`
+    /// followed by one.
+    fn atUndirectedEdge(self: *Parser) bool {
+        if (self.cur.kind == .invalid) return self.cur.lexeme.len > 0 and self.cur.lexeme[0] == '~';
+        if (self.cur.kind != .lt or self.cur.lexeme.len == 0) return false;
+        const src_start = @intFromPtr(self.lx.src.ptr);
+        const at = @intFromPtr(self.cur.lexeme.ptr);
+        if (at < src_start) return false;
+        const next = at - src_start + 1;
+        return next < self.lx.src.len and self.lx.src[next] == '~';
+    }
+
+    /// SONNY-6433: refuse an undirected edge pattern with a message that
+    /// says so (0A000, `lib.parseErrorCode`); it was a generic parse error
+    /// at the `~`.
+    fn undirectedEdge(self: *Parser) ParserError {
+        self.last_error = "undirected edges are not supported: Geode stores directed edges only, so an undirected edge pattern (~[ ]~, ~, <~[ ]~, ~[ ]~>; ISO/IEC 39075 Feature GH02) can be neither matched nor inserted. Use -[ ]-> or <-[ ]- (or -[ ]- to match either direction)";
+        return error.UndirectedEdgeNotSupported;
     }
 
     fn unexpected(self: *Parser, what: []const u8) ParserError {
@@ -3152,6 +3176,7 @@ pub const Parser = struct {
                     }
                     dir = .right;
                 } else {
+                    if (self.atUndirectedEdge()) return self.undirectedEdge(); // SONNY-6433
                     break;
                 }
                 // Parse the relationship pattern first, then determine final direction from trailing connector
@@ -3168,6 +3193,8 @@ pub const Parser = struct {
                 } else if (self.cur.kind == .minus) {
                     // Trailing - means undirected (already the default)
                     self.advance();
+                } else if (self.atUndirectedEdge()) {
+                    return self.undirectedEdge(); // SONNY-6433: `-[ ]~`
                 }
                 const right = try self.parseNodePattern();
                 try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
