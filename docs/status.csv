@@ -4093,8 +4093,8 @@ REQ-PERF-TEST-002,PerfTest,MemoryUsage,IMPL,,,performance,2026-11-12,tests/test_
 REQ-PERF-TEST-003,PerfTest,IndexPerf,IMPL,,,performance,2026-11-12,tests/test_gap_0193_batch2_testing.zig,367
 REQ-PERF-TEST-BUILD-001,PerformanceTests,BuildIntegration,TESTED,,,build,2026-06-11,build.zig,5177
 REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig,4
-REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig,199
-REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig,369
+REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig,189
+REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig,358
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,TESTED,,,build,2026-06-11,build.zig,1193
 REQ-PERF-TRAVERSAL-COMPOSITE-SEED,TraversalCompositeSeed,Regression,TESTED,,,performance,2026-06-26,tests/test_traversal_composite_seed.zig,17
 REQ-PERF-TRAVERSAL-REVERSE-SEED,TraversalReverseSeed,Regression,TESTED,,,performance,2026-06-26,tests/test_traversal_reverse_seed.zig,19
@@ -4774,8 +4774,7 @@ REQ-SONNY-2410-SECURITY-MANAGER-LOCKING,SecurityManagerThreadSafety,Regression,T
 REQ-SONNY-2412-KMS-LATENCY-FLAT,RemoteKMSPrototype,Regression,IMPL,,,security,2026-11-13,tests/test_sonny2412_kms_latency_flat.zig,25
 REQ-SONNY-2439-PERF-METHODOLOGY,Perf Gates,MonotonicClockNoTestLocalBenchmarks,TESTED,,,performance,2026-11-12,tests/test_sonny2439_perf_methodology.zig,31
 REQ-SONNY-2440-BLOCKING-WORKER-FALLBACK,ThreadPool,DefaultLaneFallbackLatency,TESTED,,,transport,2026-11-13,tests/test_sonny2440_blocking_worker_fallback.zig,20
-REQ-SONNY-2440-DEFAULT-LANE-WAKE,ThreadPool,ParkedWorkerWake,TESTED,,,transport,2026-11-13,tests/test_sonny2440_default_lane_wake.zig,20
-REQ-SONNY-2440-DEFAULT-LANE-WAKE,ThreadPool,WakeEverySubmit,TESTED,,,transport,2026-11-13,src/transport/thread_pool.zig,161
+REQ-SONNY-2440-DEFAULT-LANE-WAKE,ThreadPool,ParkedWorkerWake,TESTED,,,transport,2026-11-13,tests/test_sonny2440_default_lane_wake.zig,22
 REQ-SONNY-2441-KMS-REMOTE-PATH,KMSProviderSystem,NoDeadRemotePath,TESTED,,,security,2026-11-12,tests/test_sonny2441_kms_provider_paths.zig,24
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,PageFreesReturnedNode,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,335
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2463_bare_node_leak.zig,21
