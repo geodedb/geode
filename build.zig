@@ -5802,6 +5802,24 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6448-tls-fail-closed", "Run SONNY-6448 item 1 regression (QuicClient.connectEx refuses a missing, unreadable or certificate-less CA bundle instead of connecting without a trust anchor; the CLI QUIC client verifies against a supplied --ca-cert instead of ignoring it; a CA that did not sign the server fails the handshake and the right one completes it, over real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6453 (1): GEODE_MTLS_REQUIRED verifies client certificates
+    // against GEODE_MTLS_CLIENT_CA only, and refuses to start without one;
+    // spawns the built geode and dials it over real QUIC.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_mtls_client_ca.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("vendor_quic", quic_ext_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-mtls-client-ca", "Run SONNY-6453 item 1 regression (GEODE_MTLS_REQUIRED accepts a client certificate that chains to GEODE_MTLS_CLIENT_CA and rejects one from another CA, a self-signed or expired one, none, and one sent without CertificateVerify; refuses to start with no usable client CA or with a gRPC listener; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
