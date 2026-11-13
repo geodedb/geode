@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:02:05.313394257Z",
+  "generated_at": "2026-11-13T04:03:30.283340734Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85678,6 +85678,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6451-CLUSTER-SIGTERM",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ShutdownStopsRaftBeforeFlush",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_cluster_sigterm.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_cluster_sigterm.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6451-HEALTH-FAILED-PEER",
       "features": [
         {
@@ -93365,7 +93384,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4865
+      "TESTED": 4866
     },
     "by_aspect": {
       "2PC": 3,
@@ -96883,6 +96902,7 @@
       "ShowTypeGrantsFor": 1,
       "Shutdown": 3,
       "ShutdownSnapshotWrite": 1,
+      "ShutdownStopsRaftBeforeFlush": 1,
       "SignalBasedInterrupt": 1,
       "SignalHandler": 1,
       "SignalInstall": 1,
