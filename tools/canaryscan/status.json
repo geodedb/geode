@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:45:16.732952547Z",
+  "generated_at": "2026-11-13T10:58:15.595102732Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -71783,6 +71783,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2719-STARVED-ACCEPTOR-SURVIVES",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH",
       "features": [
         {
@@ -93705,7 +93724,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4885
+      "TESTED": 4886
     },
     "by_aspect": {
       "2PC": 3,
@@ -96835,7 +96854,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 305,
+      "Regression": 306,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

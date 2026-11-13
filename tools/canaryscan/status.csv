@@ -4604,6 +4604,7 @@ REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,LabelEntries,TESTED,s
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,PermissiveRestrictive,TESTED,src/security/rls_core.zig,tests/test_sonny2710_policy_combination.zig,,security,2026-09-26
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,Regression,TESTED,tests/test_sonny2710_policy_combination.zig,tests/test_sonny2710_policy_combination.zig,,security,2026-09-26
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,SeededVerdict,TESTED,src/security/rls_core.zig,tests/test_sonny2710_policy_combination.zig,,security,2026-09-26
+REQ-SONNY-2719-STARVED-ACCEPTOR-SURVIVES,QUIC High-Concurrency Connection Admission,Regression,TESTED,tests/test_sonny2719_starved_acceptor_survives.zig,tests/test_sonny2719_starved_acceptor_survives.zig,,transport,2026-11-13
 REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH,MergeRowVisibility,NodeMergeFastPathGate,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny2724_quic_fast_path_gate.zig,,security,2026-11-11
 REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH,MergeRowVisibility,SessionGate,TESTED,src/execution/bulk_ingest.zig,tests/test_sonny2724_quic_fast_path_gate.zig,,security,2026-11-11
 REQ-SONNY-2724-QUIC-FAST-PATH-GATE,MergeRowVisibility,QuicFastPathGateBehaviour,TESTED,tests/test_sonny2724_quic_fast_path_gate.zig,tests/test_sonny2724_quic_fast_path_gate.zig,,security,2026-09-26

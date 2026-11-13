@@ -7839,6 +7839,20 @@ pub fn build(b: *std.Build) void {
     new1_bola_step.dependOn(&run_new1_bola_tests.step);
     shardDep(test_step, &run_new1_bola_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SONNY-2719: a CPU-starved server whose listener stays backlogged while
+    // it drains it must not be killed by the acceptor wedge watchdog.
+    const sonny2719_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2719_starved_acceptor_survives.zig"), .target = target, .optimize = optimize });
+    sonny2719_test_mod.addImport("geode", root_mod);
+    sonny2719_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2719_test_mod.addImport("schema", schema_mod);
+    sonny2719_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny2719_test_mod.link_libc = true;
+    const sonny2719_tests = b.addTest(.{ .root_module = sonny2719_test_mod });
+    const run_sonny2719_tests = b.addRunArtifact(sonny2719_tests);
+    spawnsBuiltGeode(sonny2719_tests);
+    shardDep(test_step, &run_sonny2719_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2719-starved-acceptor-survives", "Run SONNY-2719 regression (a real geode serve throttled to 5% of a CPU, its listener backlogged by datagrams it is draining, is slowed and not killed by the acceptor wedge watchdog, and answers a query afterwards)").dependOn(&run_sonny2719_tests.step);
+
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
     // sends .cdc_ctrl and .cdc_diag, and asserts both are rejected.
