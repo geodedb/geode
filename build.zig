@@ -12382,6 +12382,15 @@ pub fn build(b: *std.Build) void {
     const sonny2807_step = b.step("test-sonny2807-exact-numeric-equality", "Run SONNY-2807 regression (one numeric equality rule: = and the order operators compare a DOUBLE and an exact number by exact value, agreeing with WHERE, IN, joins, GROUP BY, DISTINCT, ORDER BY, inline maps, MERGE and the WHERE seek)");
     sonny2807_step.dependOn(&run_sonny2807_tests.step);
 
+    // SONNY-6489 (2): the top-K heap orders as the full ORDER BY does.
+    const sonny6489_topk_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_topk_order.zig"), .target = target, .optimize = optimize });
+    sonny6489_topk_mod.addImport("geode", root_mod);
+    sonny6489_topk_mod.addImport("logging", logging_mod);
+    const sonny6489_topk_tests = b.addTest(.{ .root_module = sonny6489_topk_mod });
+    const run_sonny6489_topk_tests = b.addRunArtifact(sonny6489_topk_tests);
+    shardDep(test_step, &run_sonny6489_topk_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6489-topk-order", "Run SONNY-6489 item 2 regression (ORDER BY ... LIMIT k, served by the top-K heap, returns the first k rows of the full ORDER BY for every k: numbers by exact value, a DECIMAL stays a DECIMAL, strings by NFC)").dependOn(&run_sonny6489_topk_tests.step);
+
     // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
     // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.
     const sonny3055_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3055_nfc_string_identity.zig"), .target = target, .optimize = optimize });

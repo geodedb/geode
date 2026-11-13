@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:26:22.434241111Z",
+  "generated_at": "2026-11-13T16:26:44.467336252Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86923,6 +86923,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6489-TOPK-EXACT-ORDER",
+      "features": [
+        {
+          "feature": "ValueOrdering",
+          "aspect": "TopKHeapSharesFullSortOrder",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6489_topk_order.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6489_topk_order.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94578,7 +94597,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4933
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -98441,6 +98460,7 @@
       "ToolDispatch": 1,
       "Tooling": 2,
       "ToolsThreading": 1,
+      "TopKHeapSharesFullSortOrder": 1,
       "TopLevelAgg": 1,
       "TopologicalSortKahn": 1,
       "Topology": 1,
