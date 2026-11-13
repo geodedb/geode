@@ -12204,6 +12204,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2669_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2669_step = b.step("test-sonny2669-planned-ext-property-leak", "Run SONNY-2669 regression (extended property reads, WHERE, inline maps, ORDER BY and a HAVING's hidden collect free their evaluated copies: planned read and legacy executor, leak-checked)");
     sonny2669_step.dependOn(&run_sonny2669_tests.step);
+    const sonny2671_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2671_scan_page_append_oom.zig"), .target = target, .optimize = optimize });
+    sonny2671_test_mod.addImport("geode", root_mod);
+    sonny2671_test_mod.addImport("logging", logging_mod);
+    sonny2671_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2671_tests = b.addTest(.{ .root_module = sonny2671_test_mod });
+    const run_sonny2671_tests = b.addRunArtifact(sonny2671_tests);
+    shardDep(test_step, &run_sonny2671_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2671_step = b.step("test-sonny2671-scan-page-append-oom", "Run SONNY-2671 regression (the engine-direct node scan frees the row it built when the page's append fails past 256 rows, and a small page frees everything at every allocation failure)");
+    sonny2671_step.dependOn(&run_sonny2671_tests.step);
 
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,
