@@ -532,7 +532,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-grpc-shutdown-drain", .reason = "subprocess e2e (SIGTERM with an in-flight gRPC query); promotion owes a green run" },
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
-    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "flaky: the SONNY-3368 QUIC abandoned-join check (server idle within 100 s of the client leaving) failed 3 of 7 runs on a loaded host; the seed timeout is fixed (SONNY-738); KNOWN_TEST_ISSUES" },
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
@@ -12525,6 +12524,8 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         spawnsBuiltGeode(tests);
+        // SONNY-6466: back in the aggregate (7 of 7 runs alone).
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4-transport", "Run the Task W round 4a regression over gRPC (in process) and QUIC (a spawned server): the round-3 review's PROFILE repros are refused (0A000) with nothing written; MERGE actions and later chains read the statement's variables (go/oidc ClaimJTI replay, TOTP); a SET swap swaps; an unsupplied parameter is refused (42P02) on every path, the QUIC MERGE fast path too; the parser's limits answer 54000 and 54001");
         step.dependOn(&run_tests.step);
     }
@@ -14821,10 +14822,16 @@ pub fn build(b: *std.Build) void {
             "sonny1835_sibling_stream_unbound_refuse_predicate",
             "sonny1837_sibling_idle_reap_override_predicate",
             "sonny1841_request_cancel_by_stream_id",
+            // SONNY-6466: the registry's own cases (connection grouping, the
+            // per-connection and process-wide cancels), which no step ran.
+            "Registry ",
+            "GAP-0895",
+            "GAP-ENT-0045",
+            "SONNY-6466",
         },
     });
     const run_sonny_quic_stream_tests = b.addRunArtifact(sonny_quic_stream_tests);
-    const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id)");
+    const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id) and the proto-reader registry's cases (per-connection stall grouping by connection identity, SONNY-6466; the per-connection and process-wide cancels)");
     sonny_quic_stream_step.dependOn(&run_sonny_quic_stream_tests.step);
     shardDep(test_step, &run_sonny_quic_stream_tests.step, 1, test_shard_loads, test_shard_index);
 

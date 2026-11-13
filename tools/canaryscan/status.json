@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:49:22.364500486Z",
+  "generated_at": "2026-11-13T12:36:22.480157889Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86270,6 +86270,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6466-CONN-STALL-CANCEL",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "ConfigurableConnectionStallThreshold",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE",
       "features": [
         {
@@ -93975,7 +93994,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4900
+      "TESTED": 4901
     },
     "by_aspect": {
       "2PC": 3,
@@ -94597,6 +94616,7 @@
       "ConfigManagement": 2,
       "ConfigResolution": 1,
       "ConfigTesting": 1,
+      "ConfigurableConnectionStallThreshold": 1,
       "ConfigurableCoordinatorCoalescing": 1,
       "ConfigurableHelloReadTimeout": 1,
       "ConfigurableInitialCwnd": 1,

@@ -2111,6 +2111,28 @@
 
 ### Fixed
 
+- **QUIC: a read a client abandons stops promptly (SONNY-6466).** A client
+  that closed its connection (CONNECTION_CLOSE) while its read ran on a
+  sibling stream, after the connection's first stream had ended, kept a
+  server core busy until the per-connection stall watchdog (60 s): the
+  accept reactor set the connection's cancel flag only while the first
+  stream still owned the connection. Every read on a drained connection is
+  now cancelled at its next row. A client that vanishes without
+  CONNECTION_CLOSE is bounded by that watchdog, which grouped streams by the
+  peer's IP: any other open connection from the same address (every client
+  behind one NAT, every loopback client) hid the abandoned read — the
+  regression stayed busy past 75 s — and could have its own reads cancelled
+  with it. It now groups by connection, and its threshold is configurable:
+  **`GEODE_QUIC_STALL_CANCEL_MS`** (default 60000, 1000-3600000; checked
+  every 5 s). It also caps a single read that runs that long on a connection
+  with no other stream reading, so set it above your longest read. The
+  vendored quic v0.1.49 sends no PINGs and does not enforce the idle timeout
+  it advertises, so a silent live client and a vanished one cannot be told
+  apart sooner. Test clients (`QuicProtoClient.deinit`) now send
+  CONNECTION_CLOSE (SONNY-6475 item 2; `abandon()` vanishes instead), and
+  `test-sonny-write-allowlist-r4-transport` (SONNY-3368's abandoned join)
+  runs in the aggregate again. Regression: `zig build
+  test-sonny6466-abandoned-read-cancel`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE
