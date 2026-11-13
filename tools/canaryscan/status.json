@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T22:31:16.095472741Z",
+  "generated_at": "2026-11-13T22:55:57.854832727Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -21642,7 +21642,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-07-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "CrashRecovery",
@@ -85426,6 +85426,20 @@
       "features": [
         {
           "feature": "CrashRecovery",
+          "aspect": "OrderedIndexLabelViaEngine",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "CrashRecovery",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93033,7 +93047,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4906
+      "TESTED": 4907
     },
     "by_aspect": {
       "2PC": 3,
@@ -95467,6 +95481,7 @@
       "OrderByParsing": 1,
       "OrderKeyExprOverrideEnv": 1,
       "OrderedEmission": 1,
+      "OrderedIndexLabelViaEngine": 1,
       "OrderedTokenize": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,

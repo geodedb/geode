@@ -1337,7 +1337,7 @@ REQ-GAP-0912-VARLEN-ENDPOINT-UNIFY,VariableLengthPaths,Regression,TESTED,tests/t
 REQ-GAP-0913-VARLEN-AGG-WHERE,VariableLengthPathAggregation,WhereFilterHonored,TESTED,src/execution/match_operations.zig,tests/test_gap0912_0913_varlen_semantics.zig,,execution,2026-07-10
 REQ-GAP-0914-GROUPBY-UNKNOWN-KEY,Aggregation,GroupKeyResolution,TESTED,src/execution.zig,tests/test_gap0914_0916_aggregation_semantics.zig,,execution,2026-07-10
 REQ-GAP-0914-GROUPBY-UNKNOWN-KEY,Aggregation,Regression,TESTED,tests/test_gap0914_0916_aggregation_semantics.zig,tests/test_gap0914_0916_aggregation_semantics.zig:1,,execution,2026-07-10
-REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,LabelDictFirstSightPersist,TESTED,src/storage/graph_storage_adapter.zig,tests/test_gap0910_0915_crash_recovery.zig,,storage,2026-07-10
+REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,LabelDictFirstSightPersist,TESTED,src/storage/graph_storage_adapter.zig,tests/test_gap0910_0915_crash_recovery.zig,,storage,2026-11-13
 REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,LabelScanHydrationGuard,TESTED,src/storage/graph_storage_adapter.zig,tests/test_gap0910_0915_crash_recovery.zig,,storage,2026-07-10
 REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,Regression,TESTED,tests/test_gap0910_0915_crash_recovery.zig,tests/test_gap0910_0915_crash_recovery.zig:1,,storage,2026-07-10
 REQ-GAP-0917-TXN-POST-ERROR-REJECT,TransactionManagement,FailedTransactionSemantics,TESTED,src/execution.zig,tests/test_gap0917_txn_post_error.zig,,engine,2026-07-10
@@ -5445,6 +5445,7 @@ REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,LocalDatetimeAndDurationFraction
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,src/execution/match_operations.zig,tests/test_sonny6489_topk_order.zig,,execution,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,tests/test_sonny6489_topk_order.zig,,,execution,2026-11-13
 REQ-SONNY-6491-LABEL-NAME-CRASH,CrashRecovery,Regression,TESTED,tests/test_sonny6491_label_name_crash.zig,tests/test_sonny6491_label_name_crash.zig,,storage,2026-11-13
+REQ-SONNY-6491-ORDERBY-LABEL-INTERN,CrashRecovery,OrderedIndexLabelViaEngine,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6491_orderby_label_intern.zig,,storage,2026-11-13
 REQ-SONNY-6491-ORDERBY-LABEL-INTERN,CrashRecovery,Regression,TESTED,tests/test_sonny6491_orderby_label_intern.zig,tests/test_sonny6491_orderby_label_intern.zig,,storage,2026-11-13
 REQ-SONNY-6494-AUDIT-FAILCLOSED,CLI Audit Configuration,FailClosed,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6494_audit_failclosed.zig,,audit,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

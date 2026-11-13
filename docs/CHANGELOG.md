@@ -142,27 +142,45 @@
   unchanged. docs/TDE_FILE_LEVEL_ENCRYPTION.md, README, KMS_PROVIDER_SYSTEM,
   DESIGN_TDE_KMS and SERVER_FEATURES carry the new figures.
   **Upgrade notes:** no store format change and no downgrade restriction
-  from 0.4.13. The first record of each new label name now costs 16
-  directory fsyncs and 16 more file fsyncs (one per shard, on top of geode's
-  own first-sight write, GAP-0915); writes that reuse existing names are
-  unchanged. Measured against a real server, 0.4.13 and 0.4.14 binaries in
-  5 interleaved rounds, medians, on a heavily loaded dev host (load average
-  about 99, so absolute fsync times are inflated): a CREATE or MERGE that
-  introduces one new label 320 -> 450 ms and 319 -> 468 ms; one CREATE that
-  introduces 30 new labels 5.9 -> 13.7 s; a `/*+BATCH*/` bulk-MERGE that
-  introduces 10 new labels 2.5 -> 4.9 s; CREATE and MERGE on existing labels
-  unchanged (about 15-22 ms in both). Ingest that introduces many distinct
-  labels pays this once per name. **Known issue (open):** a label whose
-  name is first seen by `MATCH (n:L) RETURN n.k ORDER BY n.k LIMIT m`
-  (before any node carries it) is named by the ordered-index auto-build
-  directly in shard 0's dictionary, bypassing the engine
-  (`StorageAdapter.createOrderedIndex`). 0.4.13 wrote that name at the
-  next checkpoint or clean shutdown; 0.4.14 never does, so unless a later
-  new name rewrites the dictionary, `db.labels()` no longer lists `L`
-  after a restart, clean or not, and after a crash `MATCH (n:L)` finds
-  nothing. Regression: `zig build test-sonny6491-label-name-crash` (every
+  from 0.4.13. The first record of each new label name costs 16 file fsyncs
+  and 16 directory fsyncs (one of each per shard, serially, inside the
+  engine); geode no longer rewrites the 16 dictionaries itself (it did on
+  first sight of a name since GAP-0915: 16 file fsyncs, which 0.4.14 made
+  redundant). Writes that reuse existing names are unchanged. Measured
+  against a real server, 0.4.13 and 0.4.14 binaries as shipped, 5
+  interleaved rounds, medians, dev host at load average about 5: a CREATE
+  or MERGE that introduces one new label 325 -> 620 ms and 321 -> 618 ms
+  (1.9x: 32 fsyncs against 16, about 20 ms each on this disk); one CREATE
+  that introduces 30 new labels 8.9 -> 17.5 s; a `/*+BATCH*/` bulk-MERGE
+  that introduces 10 new labels 3.1 -> 6.2 s; CREATE and MERGE on existing
+  labels unchanged (19-23 ms in both). Without the removal it was about 3x
+  (48 fsyncs). Ingest that introduces many distinct labels pays this once
+  per name. Regression: `zig build test-sonny6491-label-name-crash` (every
   label-creating write shape, SIGKILL, restart, counted by label and listed
   by `db.labels()`).
+- **An ORDER BY on a label no node has yet no longer loses that label or
+  splits the shards' label ids (SONNY-6491).** `MATCH (n:L) RETURN n.k
+  ORDER BY n.k LIMIT m` starts a one-time background build of the
+  value-ordered index; for a label no node carried, the build named `L` in
+  shard 0's label dictionary only, not through the engine. With
+  graph-storage 0.4.14, which writes `labels.dict` only when the engine
+  assigns a name, a following `CREATE (:L)` lost `L` after a crash
+  (`MATCH (n:L)` found nothing) and `db.labels()` stopped listing it after
+  any restart; and since shards 1..15 never learned `L`, every later new
+  name got an id one lower on those shards than on shard 0. Queries read
+  names through shard 0's dictionary, so no wrong rows came back, but the
+  other shards' dictionaries on disk named the wrong labels for those ids.
+  The ORDER BY now declines to start a build for a label no node has (a
+  read names no labels; the first ORDER BY after the label's first node
+  builds the index), `createOrderedIndex` names an unknown label through
+  the engine on every shard, durably, and the shard 0 dictionary view
+  refuses to assign names (`error.LabelDictionaryViewIsReadOnly`).
+  **Existing stores:** dictionaries already split this way stay split (the
+  engine does not reconcile them); geode reads only shard 0's, which is
+  consistent with the records. Regression: `zig build
+  test-sonny6491-orderby-label-intern` (SIGKILL and clean restart, the 16
+  shard dictionaries on disk compared name by name, `createOrderedIndex`
+  on an unseen label, and the ORDER BY trigger naming nothing).
 - **graph-storage v0.4.13 (SONNY-6461).** Adds `repairAdjTailEntries`,
   hardware CRC32C page checksums (an 8 KiB page about 15.6 us -> 0.75 us,
   on every buffer-pool miss and flush), an offline `free.store` reader and
