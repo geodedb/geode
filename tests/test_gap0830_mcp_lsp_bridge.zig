@@ -12,7 +12,8 @@
 //   - the GAP-0819 input chokepoint rejects oversize/empty/NUL input
 //     uniformly (no crash, structured rejection);
 //   - hover resolves known keywords and yields a null-contents response
-//     for unknown words;
+//     (`{"contents":null}`) for unknown words;
+//   - complete on an empty document offers the clause keywords (SONNY-6484);
 //   - the contract entry points are pure (no global mutation) — verified
 //     implicitly by the std.testing.allocator leak checker.
 
@@ -80,19 +81,24 @@ test "GAP-0830: hover resolves a known keyword" {
 test "GAP-0830: hover returns empty contents for an unknown word" {
     const allocator = std.testing.allocator;
     // An identifier with no language-metadata entry => a HoverResponse whose
-    // `contents` is null. The JSON encoder omits null optional fields, so the
-    // wire form is the empty object `{}` — i.e. no hover documentation. (A
-    // pure-whitespace query would be rejected by the GAP-0819 chokepoint, so
-    // we use a real query whose word at the cursor is simply unknown.)
+    // `contents` is null (docs/MCP_LSP_BRIDGE.md). SONNY-6484: the field is
+    // emitted as `null`; the JSON library's default dropped it (`{}`).
     const resp = try lsp.getHover(allocator, "RETURN xyz123", 1, 9);
     defer allocator.free(resp);
 
-    try std.testing.expect(resp.len > 0);
-    // No documentation contents were produced for the unknown word.
-    try std.testing.expectEqualStrings("{}", resp);
+    try std.testing.expectEqualStrings("{\"contents\":null}", resp);
 }
 
-test "GAP-0830: input chokepoint rejects empty input on every entry point" {
+test "SONNY-6484: complete on an empty document offers the clause keywords" {
+    const allocator = std.testing.allocator;
+    const resp = try lsp.getCompletions(allocator, "", 1, 1);
+    defer allocator.free(resp);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "\"completions\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "\"label\":\"MATCH\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "isValid") == null);
+}
+
+test "GAP-0830: input chokepoint rejects empty input on validate and diagnostics" {
     const allocator = std.testing.allocator;
 
     // GAP-0819 / LSP-SEC-007: empty query is rejected structurally and

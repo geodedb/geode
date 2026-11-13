@@ -221,7 +221,10 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
 /// Get completions at a cursor position
 pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
     // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
-    _ = validateAndSanitizeGqlInput(query) catch |err| {
+    // SONNY-6484: an empty document is the start of a statement (an editor
+    // asks for completions in an empty buffer), not a rejected query; every
+    // other chokepoint check still applies.
+    if (query.len != 0) _ = validateAndSanitizeGqlInput(query) catch |err| {
         return formatRejectionResponse(allocator, err);
     };
 
@@ -275,7 +278,8 @@ pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32
 /// Get hover information for a position
 pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
     // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
-    _ = validateAndSanitizeGqlInput(query) catch |err| {
+    // SONNY-6484: an empty document has no word to describe (null contents).
+    if (query.len != 0) _ = validateAndSanitizeGqlInput(query) catch |err| {
         return formatRejectionResponse(allocator, err);
     };
 
@@ -318,13 +322,15 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
             params_len += param.type_name.len;
         }
 
+        const example = try formatExample(allocator, func.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**({s}) → {s}\n\n{s}\n\nCompliance: {s}{s}", .{
             func.name,
             params_buf[0..params_len],
             func.return_type,
             func.doc,
             @tagName(func.compliance),
-            if (func.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -333,11 +339,13 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a type
     if (language_metadata.findType(word.?)) |typ| {
+        const example = try formatExample(allocator, typ.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}** (GQL Type)\n\n{s}\n\nCompliance: {s}{s}", .{
             typ.name,
             typ.doc,
             @tagName(typ.compliance),
-            if (typ.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -359,11 +367,13 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
             cols_len += col.name.len;
         }
 
+        const example = try formatExample(allocator, proc.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**\n\nYIELD: {s}\n\n{s}{s}", .{
             proc.name,
             cols_buf[0..cols_len],
             proc.doc,
-            if (proc.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -371,6 +381,13 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
     }
 
     return formatHoverResponse(allocator, null);
+}
+
+/// SONNY-6484: the hover "Example:" suffix, owned by the caller (it used to
+/// be allocated inline in the format arguments and never freed).
+fn formatExample(allocator: std.mem.Allocator, example: ?[]const u8) ![]const u8 {
+    const ex = example orelse return allocator.dupe(u8, "");
+    return std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex});
 }
 
 /// Get all diagnostics for a document (alias for validateQuery)
@@ -612,7 +629,10 @@ fn formatHoverResponse(allocator: std.mem.Allocator, hover: ?HoverInfo) ![]const
         .contents = if (hover) |h| h.contents else null,
     };
 
-    return try json_lib.encode(allocator, response, .{});
+    // SONNY-6484: `contents` is always present; null when there is no hover
+    // documentation (the JSON library omits null optionals by default, which
+    // turned "no hover" into `{}`).
+    return try json_lib.encode(allocator, response, .{ .emit_null_optional_fields = true });
 }
 
 // =============================================================================
@@ -694,6 +714,32 @@ test "getHover for unknown word" {
     defer allocator.free(result);
 
     try std.testing.expect(std.mem.indexOf(u8, result, "\"contents\":null") != null);
+}
+
+test "getHover documents functions, types and procedures with examples without leaking" {
+    // SONNY-6484: the "Example:" suffix was allocated and never freed, so
+    // every hover on a function, type or procedure with an example leaked
+    // in a long-running `geode mcp` server (std.testing.allocator checks).
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "RETURN rand()", "RETURN CAST(1 AS INTEGER)" }, [_]u32{ 9, 20 }, [_][]const u8{ "rand", "INTEGER" }) |query, column, name| {
+        const result = try getHover(allocator, query, 1, column);
+        defer allocator.free(result);
+        try std.testing.expect(std.mem.indexOf(u8, result, name) != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "Example:") != null);
+    }
+    const proc = language_metadata.procedures[0];
+    const query = try std.fmt.allocPrint(allocator, "CALL {s}()", .{proc.name});
+    defer allocator.free(query);
+    const result = try getHover(allocator, query, 1, 7);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "YIELD:") != null);
+}
+
+test "getHover on an empty document returns null contents" {
+    const allocator = std.testing.allocator;
+    const result = try getHover(allocator, "", 1, 1);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("{\"contents\":null}", result);
 }
 
 test "getDiagnostics is alias for validateQuery" {

@@ -242,7 +242,6 @@ const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 // Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
 // The actual type is query_ast_cache.SharedAstCache but we use *anyopaque here
-const txn_mgr = @import("txn");
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 // GAP-0165: Wire ABAC enforcement into server execution paths
 const geode_auth = @import("geode_auth");
@@ -315,8 +314,6 @@ pub const ServerState = struct {
     storage_checksum_error: bool = false,
     // Original GQL text of the current request.
     query_text: ?[]const u8 = null,
-    txn_manager: txn_mgr.Manager = undefined,
-    active_txn: ?txn_mgr.Txn = null,
     // MVCC-aware heap of inserted values. commit_ts null => uncommitted.
     inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
     global_commit_ts: u64 = 0, // monotonically increasing commit timestamp

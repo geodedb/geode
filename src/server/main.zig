@@ -131,7 +131,6 @@ const impl_flagger = geode.impl_flagger;
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = geode.eval_ext;
-const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
 const quic_transport = @import("transport/quic");
 const grpc_transport = @import("../transport/grpc_server.zig");

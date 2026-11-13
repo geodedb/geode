@@ -2382,51 +2382,10 @@ fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
 
 // -- HMAC Computation Helpers (module-level) --
 
+/// SONNY-6484: one definition, shared with the writer
+/// (`UserStorageBackend.persistUserWithHmac`).
 fn computeUserHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.UserRecord) [32]u8 {
-    var id_buf: [20]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
-    var created_buf: [20]u8 = undefined;
-    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
-    var updated_buf: [20]u8 = undefined;
-    const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
-    var pwd_changed_buf: [20]u8 = undefined;
-    const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
-    var lockout_buf: [20]u8 = undefined;
-    const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
-    var last_login_buf: [20]u8 = undefined;
-    const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
-    var failed_buf: [10]u8 = undefined;
-    const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
-    var auth_version_buf: [20]u8 = undefined;
-    const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
-
-    const mfa_secret = record.getMFASecret() orelse "";
-    const attributes_json = record.getAttributesJson() orelse "";
-
-    const props = [_]auth_hmac.KeyValue{
-        .{ .key = "attributes_json", .value = attributes_json },
-        .{ .key = "auth_version", .value = auth_version_str },
-        .{ .key = "created_at", .value = created_str },
-        .{ .key = "email", .value = record.getEmail() },
-        .{ .key = "failed_login_attempts", .value = failed_str },
-        .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
-        .{ .key = "id", .value = id_str },
-        .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
-        .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
-        .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
-        .{ .key = "last_login", .value = last_login_str },
-        .{ .key = "lockout_until", .value = lockout_str },
-        .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
-        .{ .key = "mfa_secret", .value = mfa_secret },
-        .{ .key = "password_changed_at", .value = pwd_changed_str },
-        .{ .key = "password_hash", .value = record.getPasswordHash() },
-        .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
-        .{ .key = "salt", .value = if (sliceUntilZero(&record.salt)) |s| s else "" },
-        .{ .key = "updated_at", .value = updated_str },
-        .{ .key = "username", .value = record.getUsername() },
-    };
-
-    return computeRecordHmacChecked(hmac_key, &props);
+    return user_storage.userRecordHmac(hmac_key, record);
 }
 
 fn computeRoleHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.RoleRecord) [32]u8 {
@@ -2611,15 +2570,6 @@ fn computeFleRoleGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.
         .{ .key = "user_id", .value = uid_str },
     };
     return computeRecordHmacChecked(hmac_key, &props);
-}
-
-fn sliceUntilZero(bytes: []const u8) ?[]const u8 {
-    var len: usize = 0;
-    while (len < bytes.len) : (len += 1) {
-        if (bytes[len] == 0) break;
-    }
-    if (len == 0) return null;
-    return bytes[0..len];
 }
 
 // -- Tests --

@@ -58,3 +58,33 @@ test "SONNY-6484: parseHostPort refuses a bare IPv6 literal and malformed bracke
         } else |_| {}
     }
 }
+
+test "SONNY-6484: checkDsnHost refuses a DSN whose host is a bare IPv6 literal" {
+    for ([_][]const u8{
+        "localhost",
+        "localhost:3141",
+        "quic://localhost:3141/g?page_size=5",
+        "quic://user:pa:ss@localhost:3141",
+        "[::1]",
+        "[::1]:3141",
+        "quic://[::1]:3141/social?insecure=true",
+        "grpc://admin:secret@[2001:db8::1]:50051",
+        "quic://[fe80::1%eth0]:3141",
+        "localhost:3141?hello_name=a:b:c",
+    }) |dsn| {
+        bridge.checkDsnHost(dsn) catch |err| {
+            std.debug.print("refused {s}: {s}\n", .{ dsn, @errorName(err) });
+            return err;
+        };
+    }
+    for ([_][]const u8{
+        "::1",
+        "::1:3141",
+        "quic://::1:3141",
+        "quic://user:pw@2001:db8::1/graph",
+        "grpc://[::1",
+        "quic://[::1]x",
+    }) |dsn| {
+        try std.testing.expectError(error.InvalidAddress, bridge.checkDsnHost(dsn));
+    }
+}

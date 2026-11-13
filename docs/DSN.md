@@ -55,6 +55,33 @@ grpc://[2001:db8::1]:50051
 quic://[fe80::1%eth0]:3141
 ```
 
+The host grammar the geode binary accepts (the MCP endpoint DSN, the CLI
+`--dsn` and `--server`; SONNY-6484):
+
+| Form | Host | Port |
+|------|------|------|
+| `name` / `192.0.2.1` | as written | the scheme's default |
+| `name:port` / `192.0.2.1:port` | as written | `port` |
+| `:port` (CLI `--server` only) | `127.0.0.1` | `port` |
+| `[ipv6]` | `ipv6` (brackets removed) | the scheme's default |
+| `[ipv6]:port` | `ipv6` | `port` |
+| `[ipv6%zone]:port` | `ipv6%zone` (the zone is written raw, not as RFC 6874 `%25`) | `port` |
+
+Refused with `InvalidAddress`, never reinterpreted:
+
+- an unbracketed IPv6 literal (`::1`, `2001:db8::1`, `::1:3141`): its last
+  colon cannot be told apart from a port separator (`::1` used to become
+  host `:` port 1);
+- an unterminated bracket (`[::1`), anything but `:port` after the
+  bracket (`[::1]3141`), or brackets around anything but an IPv6 address
+  (`[127.0.0.1]`, `[]`);
+- a port that is empty, not a number, or above 65535 (`--server` and
+  `--dsn`; the MCP endpoint DSN goes through geode-client-zig's lenient
+  `parseDSN`, which still falls back to the default port for such a port).
+
+Accepting an IPv6 address does not make it reachable: the CLI's QUIC client
+resolves host names to IPv4 only (`src/client/quic_endpoint_host.zig`).
+
 ### Hostnames
 
 ```

@@ -2189,6 +2189,48 @@
 
 ### Fixed
 
+- **MCP language tools: three defects and two leaks found by running the
+  inline tests of `src/mcp`, `src/storage/user_storage.zig` and
+  `src/transactions/manager.zig` (SONNY-6484 item 1).** No step ran those
+  tests; `zig build test-sonny6484-inline` (also part of
+  `test-sonny6463-inline-wired` and the aggregate) now does, 73 tests.
+  - `validate`/`diagnostics` leaked every recommendation message
+    (`src/gql/recommendations.zig`: `RecommendationEngine.deinit` freed the
+    list, not the `allocPrint`ed messages), and `hover` leaked the
+    "Example:" text of every function, type and procedure it described;
+    both grew a long-running `geode mcp` server (and `geode lsp`, which uses
+    the same engine) per call. The engine now owns and frees every message.
+  - `complete` on an empty document returned a validation-shaped rejection
+    ("Query is empty") instead of completions; it now offers the clause
+    keywords. `hover` on an empty document returns null contents. Every
+    other input-chokepoint check still applies; `validate`/`diagnostics`
+    still refuse an empty query.
+  - `hover` for a word with no documentation answered `{}`: the JSON
+    library drops null optionals by default. It answers
+    `{"contents":null}`, as docs/MCP_LSP_BRIDGE.md states. Wire change for
+    MCP clients that compared against `{}`.
+  - The MCP endpoint DSN, `--server` and `--dsn` read an unbracketed IPv6
+    literal wrongly: `::1` became host `:` port 1 (geode-client-zig's
+    `parseDSN` and geode's `parseHostPort` split on the last colon), and
+    `parseHostPort` kept the brackets of `[::1]:3141` in the host. Brackets
+    are now stripped, a zone is accepted (`[fe80::1%eth0]:3141`), and a bare
+    IPv6 literal or malformed brackets are refused with `InvalidAddress`
+    (docs/DSN.md states the grammar). Behaviour change: `--server ::1` and
+    an MCP endpoint `::1` are errors; write `[::1]`. Regression:
+    `zig build test-sonny6484-ipv6-host-port`.
+  - The `__geode_security` user-record HMAC was already deterministic; the
+    inline test compared two records created in different milliseconds
+    (`created_at`/`updated_at` are covered) and was rewritten.
+    `persistUserWithHmac` and chain verification now share one function,
+    `user_storage.userRecordHmac`, over the stored record, so the writer
+    and the verifier cannot drift.
+  - `transactions.Manager.commit` aborted a lock holder whose refused
+    waiter was still active (the write-write check was symmetric); only the
+    refused requester is doomed now. A transaction's wait-for list leaked at
+    commit/rollback. The Manager is not used by any server path (see
+    docs/ENHANCED_TRANSACTION_ISOLATION.md); the unused per-connection
+    `ServerState.txn_manager`/`active_txn` were removed.
+
 - **QUIC: a read a client abandons stops promptly (SONNY-6466).** A client
   that closed its connection (CONNECTION_CLOSE) while its read ran on a
   sibling stream, after the connection's first stream had ended, kept a

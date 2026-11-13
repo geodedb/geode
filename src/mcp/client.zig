@@ -37,6 +37,10 @@ pub const GeodeClient = struct {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
+        // SONNY-6484: an IPv6 host must be bracketed (docs/DSN.md);
+        // geode-client-zig's parseDSN reads a bare `::1` as host `:` port 1.
+        try geode.zig_quic_bridge.checkDsnHost(endpoint);
+
         const endpoint_storage = try allocator.dupe(u8, endpoint);
         errdefer allocator.free(endpoint_storage);
 
@@ -386,12 +390,23 @@ test "GeodeClient endpoint parsing" {
 }
 
 test "GeodeClient endpoint parsing with IPv6" {
+    // SONNY-6484: docs/DSN.md requires brackets around an IPv6 host. A bare
+    // `::1` is refused (it used to become host `:` port 1, silently).
     const allocator = std.testing.allocator;
 
-    const client = try GeodeClient.init(allocator, "::1");
+    const client = try GeodeClient.init(allocator, "[::1]");
     defer client.deinit();
     try std.testing.expectEqualStrings("::1", client.endpoint);
     try std.testing.expectEqual(@as(u16, 3141), client.port);
+
+    const with_port = try GeodeClient.init(allocator, "quic://[2001:db8::1]:8443/g");
+    defer with_port.deinit();
+    try std.testing.expectEqualStrings("2001:db8::1", with_port.endpoint);
+    try std.testing.expectEqual(@as(u16, 8443), with_port.port);
+
+    for ([_][]const u8{ "::1", "::1:3141", "quic://2001:db8::1" }) |bare| {
+        try std.testing.expectError(error.InvalidAddress, GeodeClient.init(allocator, bare));
+    }
 }
 
 test "GeodeClient isConnected initially false" {

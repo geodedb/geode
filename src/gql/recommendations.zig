@@ -38,8 +38,19 @@ pub const RecommendationEngine = struct {
         };
     }
 
+    /// Frees every recommendation's `message` (the engine owns them all)
+    /// and the result list. Slices returned by `analyze` are invalid after.
     pub fn deinit(self: *RecommendationEngine) void {
+        for (self.results.items) |rec| self.allocator.free(rec.message);
         self.results.deinit(self.allocator);
+    }
+
+    /// SONNY-6484: `rec.message` is heap-allocated with `self.allocator`;
+    /// the engine takes ownership (freed by `deinit`, or here if the
+    /// append fails).
+    fn appendOwned(self: *RecommendationEngine, rec: Recommendation) !void {
+        errdefer self.allocator.free(rec.message);
+        try self.results.append(self.allocator, rec);
     }
 
     /// Analyze a parsed program and return recommendations.
@@ -88,7 +99,7 @@ pub const RecommendationEngine = struct {
                     const pa = key.expr.PropertyAccess;
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "Consider creating a btree index for ORDER BY: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
@@ -109,12 +120,12 @@ pub const RecommendationEngine = struct {
             for (chain.hops) |hop| {
                 if (hop.rel.min_len != null or hop.rel.max_len != null) {
                     if (chain.path_mode == .walk and !chain.is_shortest) {
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-path-mode",
-                            .message = "Variable-length path detected. Consider using a path mode (TRAIL, ACYCLIC, SIMPLE) or shortestPath() for deterministic traversal.",
+                            .message = try self.allocator.dupe(u8, "Variable-length path detected. Consider using a path mode (TRAIL, ACYCLIC, SIMPLE) or shortestPath() for deterministic traversal."),
                         });
                     }
                 }
@@ -148,7 +159,7 @@ pub const RecommendationEngine = struct {
                 switch (level) {
                     .high => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Property '{s}' may contain sensitive data. Consider using @encrypted annotation for field-level encryption.", .{prop.key});
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
@@ -158,7 +169,7 @@ pub const RecommendationEngine = struct {
                     },
                     .medium => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Property '{s}' may contain personal data. Consider using @searchable annotation for encrypted but searchable storage.", .{prop.key});
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
@@ -176,7 +187,7 @@ pub const RecommendationEngine = struct {
                     if (node.labels.len > 0) node.labels[0] else "Label",
                     prop.key,
                 });
-                try self.results.append(self.allocator, .{
+                try self.appendOwned(.{
                     .line = 0,
                     .column = 0,
                     .severity = .hint,
@@ -206,7 +217,7 @@ pub const RecommendationEngine = struct {
                 switch (level) {
                     .high => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Field '{s}' in graph type '{s}' may contain sensitive data. Consider adding @encrypted annotation.", .{ field.name, cgt.name });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
@@ -216,7 +227,7 @@ pub const RecommendationEngine = struct {
                     },
                     .medium => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Field '{s}' in graph type '{s}' may contain personal data. Consider adding @searchable annotation.", .{ field.name, cgt.name });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
@@ -238,7 +249,7 @@ pub const RecommendationEngine = struct {
                         const pa = bin.left.PropertyAccess;
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
@@ -249,7 +260,7 @@ pub const RecommendationEngine = struct {
                         const pa = bin.right.PropertyAccess;
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
@@ -267,7 +278,7 @@ pub const RecommendationEngine = struct {
                     const pa = c.value.PropertyAccess;
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "CONTAINS on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
@@ -281,7 +292,7 @@ pub const RecommendationEngine = struct {
                     const pa = sw.value.PropertyAccess;
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "STARTS WITH on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
@@ -301,7 +312,7 @@ pub const RecommendationEngine = struct {
                     if (is_null.target.* == .PropertyAccess) {
                         const pa = is_null.target.PropertyAccess;
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider using coalesce({s}.{s}, default_value) as an alternative to IS NULL checks.", .{ pa.object, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
@@ -328,12 +339,12 @@ pub const RecommendationEngine = struct {
                     const name = call.callee.Ident.orig;
                     if (std.ascii.eqlIgnoreCase(name, "count") and call.args.len == 1) {
                         if (call.args[0].* == .Ident and !std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
-                            try self.results.append(self.allocator, .{
+                            try self.appendOwned(.{
                                 .line = 0,
                                 .column = 0,
                                 .severity = .hint,
                                 .code = "geode/suggest-degree",
-                                .message = "count() on a relationship variable may be replaceable with indegree()/outdegree() or algo.degree.stream for better performance.",
+                                .message = try self.allocator.dupe(u8, "count() on a relationship variable may be replaceable with indegree()/outdegree() or algo.degree.stream for better performance."),
                             });
                         }
                     }
