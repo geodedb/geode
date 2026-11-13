@@ -1731,6 +1731,17 @@
   miss as authoritative. Regression: `zig build test-sonny6429-sole-holder-tenant-wire`
   (in process, and over QUIC with group commit on and off and with lean
   indexing).
+- **The Python test runners' default user password and the Zig client
+  example's password meet the password policy (SONNY-6447 item 8).**
+  `scripts/test/extended_test_runner.py`, `test_runner_core.py` and
+  `parallel_test_runner.py` defaulted `${secret:user_password}` to
+  `UserPass123!` / `password123`, which CREATE USER refuses, and
+  `clients/zig/example_minimal.zig` set the one-word
+  `GeodeTestPassword123!`; they are now `Geode Test User Passphrase` and
+  `Geode Example Client Passphrase`. `zig build
+  test-sonny6436-fixture-secrets` now also scans `clients/` (including a
+  Zig source's `password = "..."` field) and the runners' `user_password`
+  defaults.
 - **The in-repo scripts and fixtures seed an HMAC key and admin passwords
   the server accepts (SONNY-6436 item 1).** The netns cluster scripts
   (`tests/cluster/netns_cluster_replication_test.sh`,

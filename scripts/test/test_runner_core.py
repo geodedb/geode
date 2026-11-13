@@ -251,7 +251,7 @@ def substitute_server_variables(
     if "${secret" in text:
         secrets = resolved_secrets or {}
         text = text.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
-        text = text.replace("${secret:user_password}", secrets.get("user_password", "UserPass123!"))
+        text = text.replace("${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase"))
         text = text.replace("${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase"))
         for match in re.findall(r"\$\{secret:([^}]+)\}", text):
             text = text.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))

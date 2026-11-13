@@ -5,7 +5,7 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
     var cfg = geode.config.Config.init();
     cfg.username = "geode";
-    cfg.password = "GeodeTestPassword123!";
+    cfg.password = "Geode Example Client Passphrase";
 
     var client = try geode.GeodeClient.initFromConfig(allocator, cfg);
     defer client.deinit();

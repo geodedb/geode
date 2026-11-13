@@ -182,7 +182,7 @@ def run_test(
             # Use spec-resolved secrets first, then hardcoded fallbacks
             processed_arg = processed_arg.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
             processed_arg = processed_arg.replace(
-                "${secret:user_password}", secrets.get("user_password", "UserPass123!")
+                "${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase")
             )
             processed_arg = processed_arg.replace(
                 "${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase")
