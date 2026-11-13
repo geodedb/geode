@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:29:36.209390413Z",
+  "generated_at": "2026-11-13T14:29:51.615593255Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81096,6 +81096,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6297-PER-ROW-ITEM-LEAKS",
+      "features": [
+        {
+          "feature": "LegacyReturnProjection",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6297_per_row_item_leaks.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_per_row_item_leaks.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6300-STAGED-RESTORE-ONLY",
       "features": [
         {
@@ -94562,7 +94581,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4933
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -97710,7 +97729,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 324,
+      "Regression": 325,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

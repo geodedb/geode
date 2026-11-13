@@ -12168,6 +12168,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6483_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6483_step = b.step("test-sonny6483-query-residuals", "Run SONNY-6483 regression (an aggregating WITH followed by another WITH, aggregates over no MATCH under RLS, an any-direction pattern matching a self-loop once, a failing property map failing the statement: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6483_step.dependOn(&run_sonny6483_tests.step);
+    const sonny6297_rows_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6297_per_row_item_leaks.zig"), .target = target, .optimize = optimize });
+    sonny6297_rows_test_mod.addImport("geode", root_mod);
+    sonny6297_rows_test_mod.addImport("logging", logging_mod);
+    sonny6297_rows_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6297_rows_tests = b.addTest(.{ .root_module = sonny6297_rows_test_mod });
+    const run_sonny6297_rows_tests = b.addRunArtifact(sonny6297_rows_tests);
+    shardDep(test_step, &run_sonny6297_rows_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6297_rows_step = b.step("test-sonny6297-per-row-item-leaks", "Run SONNY-6297 regression (allocating per-row WITH and RETURN items of the shared projection and of the legacy traversals are freed, on success and on error: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6297_rows_step.dependOn(&run_sonny6297_rows_tests.step);
     const sonny3126_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3126_list_projection_leaks.zig"), .target = target, .optimize = optimize });
     sonny3126_test_mod.addImport("geode", root_mod);
     sonny3126_test_mod.addImport("logging", logging_mod);
