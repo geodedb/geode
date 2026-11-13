@@ -2365,6 +2365,7 @@ pub const ContextEvaluator = struct {
 
     // CANARY: REQ=REQ-RLS-EVAL-001; FEATURE="RLSExpressionEvaluation"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-01-30
     // CANARY: REQ=REQ-SONNY-6436-RLS-RAW-TRUTHINESS; FEATURE="RLSExpressionEvaluation"; ASPECT=OnlyTrueAdmits; STATUS=TESTED; TEST=tests/test_sonny6436_rls_raw_truthiness.zig; OWNER=security; UPDATED=2026-11-12
+    // CANARY: REQ=REQ-SONNY-6447-RLS-RAW-TOKENIZE; FEATURE="RLSExpressionEvaluation"; ASPECT=QuoteAndParenAwareSplit; STATUS=TESTED; TEST=tests/test_sonny6447_rls_raw_tokenize.zig; OWNER=security; UPDATED=2026-11-12
     /// Evaluate an RLS expression string against row data and security context.
     /// Supports patterns: `column = value`, `column = current_user()`, `has_role('name')`, AND/OR combinations
     ///
@@ -2386,6 +2387,11 @@ pub const ContextEvaluator = struct {
         // Empty (or blank) expression defaults to true (permissive)
         if (std.mem.trim(u8, expression, " \t\n\r").len == 0) return true;
 
+        // SONNY-6447: a policy whose quotes or parentheses do not balance
+        // does not parse. Refuse it (every caller turns an error into a
+        // deny) rather than evaluate it up to the first OR that holds.
+        if (!balanced(expression)) return error.InvalidExpression;
+
         // Parse and evaluate the expression
         return self.evaluateExpr(expression, row, context);
     }
@@ -2401,8 +2407,9 @@ pub const ContextEvaluator = struct {
         // (it was). An empty policy is `evaluate`'s, which admits.
         if (trimmed.len == 0) return false;
 
-        // Handle OR (lowest precedence)
-        if (std.mem.indexOf(u8, trimmed, " OR ")) |or_pos| {
+        // Handle OR (lowest precedence). SONNY-6447: only an operator outside
+        // quotes and parentheses splits (`name = 'a OR b'` is one comparison).
+        if (topLevelIndex(trimmed, " OR ")) |or_pos| {
             const left = trimmed[0..or_pos];
             const right = trimmed[or_pos + 4 ..];
             return (try self.evaluateExpr(left, row, context)) or
@@ -2410,41 +2417,35 @@ pub const ContextEvaluator = struct {
         }
 
         // Handle AND
-        if (std.mem.indexOf(u8, trimmed, " AND ")) |and_pos| {
+        if (topLevelIndex(trimmed, " AND ")) |and_pos| {
             const left = trimmed[0..and_pos];
             const right = trimmed[and_pos + 5 ..];
             return (try self.evaluateExpr(left, row, context)) and
                 (try self.evaluateExpr(right, row, context));
         }
 
-        // Handle parentheses
-        if (trimmed[0] == '(' and trimmed[trimmed.len - 1] == ')') {
+        // Handle parentheses: only one group around the whole expression
+        // (`(a) AND (b)` was split above).
+        if (trimmed[0] == '(' and matchingParen(trimmed, 0) == trimmed.len - 1) {
             return self.evaluateExpr(trimmed[1 .. trimmed.len - 1], row, context);
         }
 
-        // Handle function calls: func_name(args)
-        if (std.mem.indexOf(u8, trimmed, "(")) |paren_pos| {
+        // Handle function calls: func_name(args). SONNY-6447: the call's
+        // parenthesis is the first one outside quotes, closed by its match.
+        if (firstUnquotedParen(trimmed)) |paren_pos| {
             const func_name = trimmed[0..paren_pos];
-            const args_end = std.mem.lastIndexOf(u8, trimmed, ")") orelse return error.InvalidExpression;
+            const args_end = matchingParen(trimmed, paren_pos) orelse return error.InvalidExpression;
             const args_str = trimmed[paren_pos + 1 .. args_end];
 
             // Check for built-in functions. SONNY-6436: only when the call is
             // the whole expression; `current_user() = 999` is a comparison
             // (below), and was evaluated as the call alone.
-            const whole_call = args_end + 1 == trimmed.len and matchingParen(trimmed, paren_pos) == args_end;
+            const whole_call = args_end + 1 == trimmed.len;
             if (whole_call) {
                 if (self.functions.get(func_name)) |func| {
                     var args_list = std.ArrayList(Value).empty;
                     defer args_list.deinit(self.allocator);
-
-                    // Parse arguments (simple comma-separated values)
-                    if (args_str.len > 0) {
-                        var args_iter = std.mem.splitSequence(u8, args_str, ",");
-                        while (args_iter.next()) |arg| {
-                            const arg_trimmed = std.mem.trim(u8, arg, " \t'\"");
-                            try args_list.append(self.allocator, .{ .string = arg_trimmed });
-                        }
-                    }
+                    try self.parseCallArgs(args_str, &args_list);
 
                     // SONNY-6436: only a boolean TRUE holds (any other
                     // result, e.g. current_user()'s integer, was true).
@@ -2462,7 +2463,7 @@ pub const ContextEvaluator = struct {
         };
 
         for (ops) |op_info| {
-            if (std.mem.indexOf(u8, trimmed, op_info.op)) |op_pos| {
+            if (topLevelIndex(trimmed, op_info.op)) |op_pos| {
                 const left_side = std.mem.trim(u8, trimmed[0..op_pos], " \t");
                 const right_side = std.mem.trim(u8, trimmed[op_pos + op_info.op.len ..], " \t");
 
@@ -2492,6 +2493,85 @@ pub const ContextEvaluator = struct {
             .boolean => |b| b,
             else => false,
         };
+    }
+
+    /// SONNY-6447: whether every quoted string closes and every parenthesis
+    /// outside quotes is matched.
+    fn balanced(text: []const u8) bool {
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        for (text) |c| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => depth += 1,
+                ')' => {
+                    if (depth == 0) return false;
+                    depth -= 1;
+                },
+                else => {},
+            }
+        }
+        return quote == null and depth == 0;
+    }
+
+    /// SONNY-6447: the index of the first `needle` in `text` outside a quoted
+    /// string and at parenthesis depth 0, or null. `needle` must not start
+    /// with a quote or a parenthesis.
+    fn topLevelIndex(text: []const u8, needle: []const u8) ?usize {
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        for (text, 0..) |c, i| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => depth += 1,
+                ')' => depth -|= 1,
+                else => if (depth == 0 and std.mem.startsWith(u8, text[i..], needle)) return i,
+            }
+        }
+        return null;
+    }
+
+    /// SONNY-6447: the index of the first `(` outside a quoted string, or null.
+    fn firstUnquotedParen(text: []const u8) ?usize {
+        var quote: ?u8 = null;
+        for (text, 0..) |c, i| {
+            if (quote) |q| {
+                if (c == q) quote = null;
+                continue;
+            }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '(' => return i,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    /// SONNY-6447: a call's arguments, split at commas outside quotes and
+    /// parentheses (`has_role('a,b')` is one argument). Each is trimmed and
+    /// loses one pair of enclosing quotes; all are passed as strings.
+    fn parseCallArgs(self: *ContextEvaluator, args_str: []const u8, out: *std.ArrayList(Value)) !void {
+        if (std.mem.trim(u8, args_str, " \t").len == 0) return;
+        var rest = args_str;
+        while (true) {
+            const comma = topLevelIndex(rest, ",");
+            const arg = std.mem.trim(u8, rest[0 .. comma orelse rest.len], " \t");
+            const unquoted = if (arg.len >= 2 and (arg[0] == '\'' or arg[0] == '"') and arg[arg.len - 1] == arg[0])
+                arg[1 .. arg.len - 1]
+            else
+                arg;
+            try out.append(self.allocator, .{ .string = unquoted });
+            rest = rest[(comma orelse return) + 1 ..];
+        }
     }
 
     /// SONNY-6436: the index of the `)` closing the `(` at `open`, or null.
@@ -2540,25 +2620,20 @@ pub const ContextEvaluator = struct {
             return .{ .integer = int_val };
         } else |_| {}
 
-        // Check for function call
-        if (std.mem.indexOf(u8, trimmed, "(")) |paren_pos| {
+        // Check for function call (SONNY-6447: a whole call, its parenthesis
+        // outside quotes and its arguments split as `parseCallArgs` does)
+        if (firstUnquotedParen(trimmed)) |paren_pos| {
             const func_name = trimmed[0..paren_pos];
-            const args_end = std.mem.lastIndexOf(u8, trimmed, ")") orelse return error.InvalidExpression;
+            const args_end = matchingParen(trimmed, paren_pos) orelse return error.InvalidExpression;
             const args_str = trimmed[paren_pos + 1 .. args_end];
 
-            if (self.functions.get(func_name)) |func| {
-                var args_list = std.ArrayList(Value).empty;
-                defer args_list.deinit(self.allocator);
-
-                if (args_str.len > 0) {
-                    var args_iter = std.mem.splitSequence(u8, args_str, ",");
-                    while (args_iter.next()) |arg| {
-                        const arg_trimmed = std.mem.trim(u8, arg, " \t'\"");
-                        try args_list.append(self.allocator, .{ .string = arg_trimmed });
-                    }
+            if (args_end + 1 == trimmed.len) {
+                if (self.functions.get(func_name)) |func| {
+                    var args_list = std.ArrayList(Value).empty;
+                    defer args_list.deinit(self.allocator);
+                    try self.parseCallArgs(args_str, &args_list);
+                    return func(self.allocator, args_list.items, context);
                 }
-
-                return func(self.allocator, args_list.items, context);
             }
         }
 

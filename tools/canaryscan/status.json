@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:41:38.870494558Z",
+  "generated_at": "2026-11-13T01:50:08.407969816Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84509,6 +84509,20 @@
       "features": [
         {
           "feature": "RLSExpressionEvaluation",
+          "aspect": "QuoteAndParenAwareSplit",
+          "status": "TESTED",
+          "files": [
+            "src/security/rls_core.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_rls_raw_tokenize.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RLSExpressionEvaluation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -92171,7 +92185,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4796
+      "TESTED": 4797
     },
     "by_aspect": {
       "2PC": 3,
@@ -95145,6 +95159,7 @@
       "QuicTransportAdapter": 1,
       "QuicWriteGate": 1,
       "QuotaManager": 1,
+      "QuoteAndParenAwareSplit": 1,
       "QuoteEscape": 1,
       "RADIANS": 1,
       "RBAC": 2,

@@ -4519,9 +4519,9 @@ REQ-RLS-EXPR-001,RLSExpressionCompilation,Compilation,TESTED,,,security,2026-01-
 REQ-RLS-EXPR-002,RLSExpressionCompilation,PolicyCompilation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,545
 REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,872
 REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1205
-REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,3142
+REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,3217
 REQ-RLS-EXPR-VM-BOUNDS,RLSBytecodeVM,MemorySafety,TESTED,,,security,2026-04-16,src/security/rls_core.zig,50
-REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2653
+REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2728
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileErrorSurfaced,TESTED,,,security,2026-08-25,tests/test_rls_policy_ddl.zig,65
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileFailureMode,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig,192
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CreatePolicyStrictCompile,TESTED,,,security,2026-08-25,src/execution.zig,3139
@@ -4534,7 +4534,7 @@ REQ-RLS-SECURITY-002,RLS,RowFiltering,IMPL,,,security,2026-11-12,tests/test_gap_
 REQ-RLS-SECURITY-003,RLS,PolicyCompilation,IMPL,,,security,2026-11-12,tests/test_gap_0193_batch2_security.zig,248
 REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1301
 REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,1726
-REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,3673
+REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,3748
 REQ-SEC-ABAC-001,Security,ABAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,21
 REQ-SEC-ACCESS-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,35
 REQ-SEC-ACCESS-CTRL-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,56
@@ -4874,7 +4874,7 @@ REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TES
 REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TESTED,,,security,2026-09-25,src/server/rls_filter.zig,464
 REQ-SONNY-2679-RLS-HOP-TARGETS,TraversalRowVisibility,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2679_rls_hop_targets.zig,61
 REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,143
-REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4476
+REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4551
 REQ-SONNY-2683-RETURN-SHAPES,ForStatement,NoGroupedReturn,TESTED,,,parser,2026-09-25,src/gql/parser.zig,6400
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,ExcludedShapes,TESTED,,,engine,2026-09-25,src/execution/match_operations.zig,9386
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2683_return_shapes.zig,32
@@ -4926,10 +4926,10 @@ REQ-SONNY-2694-WRITE-BEHIND-AGGREGATE,ReadFastPaths,Regression,TESTED,,,engine,2
 REQ-SONNY-2707-VARLEN-WRITE,VariableLengthPaths,PathEndWrites,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,8765
 REQ-SONNY-2707-VARLEN-WRITE,VariableLengthPaths,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny2707_varlen_set.zig,34
 REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1449
-REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4573
+REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4648
 REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLS Expression Wiring,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2709_rls_range_fail_closed.zig,18
 REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1512
-REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4309
+REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4384
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,ExecutorPerTableVerdict,TESTED,,,security,2026-09-26,src/execution/match_operations.zig,344
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,LabelEntries,TESTED,,,security,2026-09-26,src/security/rls_types.zig,191
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,PermissiveRestrictive,TESTED,,,security,2026-09-26,src/security/rls_core.zig,89
@@ -4953,7 +4953,7 @@ REQ-SONNY-2729-ONE-LABEL-DENY-ENGINE,RLS Query Enforcement,Regression,TESTED,,,s
 REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED,RLS Query Enforcement,FailClosed,TESTED,,,security,2026-09-26,src/server/rls_filter.zig,45
 REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED,RLS Query Enforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2729_postfilter_fail_closed.zig,23
 REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,57
-REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4831
+REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4906
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,OverlongStoredPolicy,TESTED,,,security,2026-09-25,src/storage/user_storage.zig,794
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,PersistableLengths,TESTED,,,security,2026-09-25,src/security/policy_catalog.zig,66
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,RestartSameMeaning,TESTED,,,security,2026-09-25,tests/test_gps_policy_persistence.zig,201
@@ -4961,7 +4961,7 @@ REQ-SONNY-2732-RLS-STRICT-POLICIES,GPS Policy DDL,InvalidPolicyListing,TESTED,,,
 REQ-SONNY-2732-RLS-STRICT-POLICIES,GPS Policy DDL,InvalidPolicyListing,TESTED,,,security,2026-09-25,tests/test_rls_policy_ddl.zig,361
 REQ-SONNY-2732-RLS-STRICT-POLICIES,RLS deny-policy procedure,AttributePolicyIdentifiers,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,348
 REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,AtomicUpdatePolicy,TESTED,,,security,2026-09-25,src/security/rls_core.zig,672
-REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,Regression,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4924
+REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,Regression,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4999
 REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,StrictCreatePolicy,TESTED,,,security,2026-09-25,src/security/rls_core.zig,469
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,HandlerLockBypass,TESTED,,,security,2026-09-25,src/query/query_traits.zig,1002
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,OneGraphLockAtATime,TESTED,,,security,2026-09-25,src/graph_store.zig,9090
@@ -5096,7 +5096,7 @@ REQ-SONNY-2817-MERGE-REFUSAL-LIMIT,MergeRowVisibility,Limiter,TESTED,,,security,
 REQ-SONNY-2817-MERGE-REFUSAL-LIMIT,MergeRowVisibility,Regression,TESTED,,,security,2026-11-12,tests/test_sonny2817_merge_refusal_limit.zig,17
 REQ-SONNY-2818-PARAM-MAP-DUP-KEYS,WireParameters,DuplicateMapKeys,TESTED,,,security,2026-09-27,src/server/proto_util.zig,134
 REQ-SONNY-2818-PARAM-MAP-DUP-KEYS,WireParameters,DuplicateMapKeys,TESTED,,,security,2026-09-27,tests/test_sonny2818_param_map_dup_keys.zig,18
-REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,JsonStringEscape,TESTED,,,security,2026-09-27,src/security/rls_core.zig,3290
+REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,JsonStringEscape,TESTED,,,security,2026-09-27,src/security/rls_core.zig,3365
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,RefusalKeysHexEncoded,TESTED,,,security,2026-09-27,src/execution/crud_operations.zig,231
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,Regression,TESTED,,,security,2026-09-27,tests/test_sonny2819_audit_log_injection.zig,21
 REQ-SONNY-2820-KNN-HIDDEN-PROPERTY-EMPTY,VectorKnn,HiddenOnlyPropertyEmptyList,TESTED,,,security,2026-11-12,src/eval.zig,3402
@@ -5262,7 +5262,7 @@ REQ-SONNY-3145-SET-BEFORE-CREATE,PropertyStorage,StorableValues,TESTED,,,engine,
 REQ-SONNY-3146-DELETE-PATHS,DeleteStatement,ExpandPathsAndLists,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,10087
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,Audit Verification,FullRecordEventHash,TESTED,,,security,2026-11-12,tests/test_sonny3147_audit_hash_coverage.zig,1
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,Audit Verification,RecomputeEveryRecordHash,TESTED,,,security,2026-11-12,src/cli/geode_audit_verify.zig,222
-REQ-SONNY-3147-AUDIT-HASH-COVERAGE,AuditDurability,CanonicalRecordHash,TESTED,,,security,2026-11-12,src/security/rls_core.zig,3337
+REQ-SONNY-3147-AUDIT-HASH-COVERAGE,AuditDurability,CanonicalRecordHash,TESTED,,,security,2026-11-12,src/security/rls_core.zig,3412
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,AuditDurability,WriterHashesWholeRecord,TESTED,,,security,2026-11-12,src/security/audit.zig,764
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,EvaluatedValueOwnership,TESTED,,,engine,2026-09-27,src/execution/value_utilities.zig,360
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny3148_write_leaks.zig,34
@@ -5585,7 +5585,7 @@ REQ-SONNY-6345-AUTH-VERIFY-NO-STATE,OfflineAuthStoreSafety,VerifyCreatesNothing,
 REQ-SONNY-6345-CLI-DEFAULT-DATA-DIR,OfflineAuthStoreSafety,ServerDefaultDataDir,TESTED,,,security,2026-11-12,src/cli/cli_auth_helpers.zig,389
 REQ-SONNY-6345-GRANT-MISSING-USER,GQL Auth DDL,GrantMissingUserIsError,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1520
 REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,CleanupOwnDirectory,TESTED,,,security,2026-11-12,src/security/audit.zig,999
-REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,EveryDetailKey,TESTED,,,security,2026-11-12,src/security/rls_core.zig,3547
+REQ-SONNY-6346-NO-SILENT-DEGRADE,AuditDurability,EveryDetailKey,TESTED,,,security,2026-11-12,src/security/rls_core.zig,3622
 REQ-SONNY-6346-NO-SILENT-DEGRADE,Server Startup,TenantRegistryDurableOrRefuse,TESTED,,,security,2026-11-12,tests/test_sonny6346_silent_degrade_audit_housekeeping.zig,1
 REQ-SONNY-6346-NO-SILENT-DEGRADE,TenantRegistry,DurableOrError,TESTED,,,security,2026-11-12,src/security/tenant_registry.zig,104
 REQ-SONNY-6348-KMS-TMP-SELFTESTS,TDE Procedures,NoFabricatedKmsSelfTestTruth,TESTED,,,security,2026-11-12,tests/test_sonny6348_kms_tmp_selftests_stale.zig,19
@@ -5714,6 +5714,7 @@ REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,QuicRetryStopsWithSummary,TESTE
 REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,Regression,TESTED,,,cli,2026-11-12,tests/test_sonny6436_quic_retry_stops.zig,20
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,OnlyTrueAdmits,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2367
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6436_rls_raw_truthiness.zig,24
+REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2368
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6447_rls_raw_tokenize.zig,17
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,293
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1

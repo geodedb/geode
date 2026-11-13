@@ -5,6 +5,23 @@
 ### Security
 
 - **BREAKING (policy outcomes, `-Dallow-rls-raw-interp=true` builds only):
+  the raw-string RLS interpreter splits a policy only outside quotes and
+  parentheses, and denies a policy that does not parse (SONNY-6447 item
+  4).** `rls_core.ContextEvaluator` split at the first ` OR ` / ` AND `,
+  comparison operator and `(`, and at every `,` of a call's arguments,
+  wherever they were. `name = 'q OR true OR q'` therefore admitted every
+  row (its tail `true OR q'` held), a policy whose quotes or parentheses
+  do not balance was evaluated up to the first OR that held (`active OR (`,
+  `active OR 'unterminated` admitted), a parenthesised group inside AND /
+  OR (`(off OR active) AND active`) failed to parse, and
+  `has_role('a,b')` passed two arguments. Operators, comparisons, call
+  parentheses and argument commas now count only outside quoted strings
+  and at parenthesis depth 0, a call argument loses one pair of enclosing
+  quotes, and an unbalanced policy is refused with `InvalidExpression`,
+  which every caller turns into a deny. Default builds are unaffected (they
+  refuse a raw-only policy, GAP-0732). Regression:
+  `zig build test-sonny6447-rls-raw-tokenize`.
+- **BREAKING (policy outcomes, `-Dallow-rls-raw-interp=true` builds only):
   a raw-string RLS policy admits a row only when its predicate is True
   (SONNY-6436 item 5).** The raw-string interpreter
   (`rls_core.ContextEvaluator`, used for a policy without compiled code
