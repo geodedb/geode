@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -9607,6 +9608,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2978_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2978_step = b.step("test-sonny2978-overlapping-engine-txn-crash", "Run SONNY-2978 regression (a REMOVE, DELETE, label SET or REMOVE, relationship DELETE or edge-property REMOVE inside a Geode transaction, on the session engine transaction's shard, survives a SIGKILL of a real server and a restart)");
     sonny2978_step.dependOn(&run_sonny2978_tests.step);
+
+    // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
+    // transaction open at a SIGKILL must leave nothing after the restart
+    // (multi-request, and one request left open). Not in shardDep until the
+    // design fix lands; compiled by test-compile.
+    const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny2979_test_mod.link_libc = true;
+    sonny2979_test_mod.addImport("geode", root_mod);
+    sonny2979_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2979_test_mod.addImport("schema", schema_mod);
+    sonny2979_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2979_tests = b.addTest(.{ .root_module = sonny2979_test_mod });
+    const run_sonny2979_tests = b.addRunArtifact(sonny2979_tests);
+    spawnsBuiltGeode(sonny2979_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2979_tests.step);
+    const sonny2979_step = b.step("test-sonny2979-txn-crash-atomicity", "Run SONNY-2979 reproduction (intentionally red: a transaction open at a SIGKILL of a real server, over several requests or left open by one, leaves nothing after the restart)");
+    sonny2979_step.dependOn(&run_sonny2979_tests.step);
 
     // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
     // session-graph gate (internal, permission, existence) and creates a
