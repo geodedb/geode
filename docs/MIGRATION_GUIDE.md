@@ -24,7 +24,9 @@ Before this, every backup was written unencrypted, whatever the key.
 builds pinning graph_storage 0.4.11 or older lost the last 16 bytes of every
 encrypted store page (the AES-GCM tag overwrote them): at 8 KiB pages the
 node in slot 169 of each node page lost its label count and deleted flag,
-and the last two incoming-edge heads of each directory page were lost.
+the last two incoming-edge heads of each directory page were lost, and the
+last entry of each full v1 adjacency block (stores from before inline edge
+ids) lost its edge type and property head.
 graph_storage 0.4.12 stops the loss and reads the old pages, but cannot
 bring the bytes back, and a store it has written cannot be opened by an
 older build (`DecryptionFailed`).
@@ -38,7 +40,11 @@ older build (`DecryptionFailed`).
 - If it reports damage, run
   `geode storage repair --tde-page-tail --i-have-a-backup --data-dir <dir>`,
   keep its output, and review the nodes it lists as `nodes_liveness_unknown`
-  (deleted or not cannot be derived) and `nodes_lost`.
+  (deleted or not cannot be derived) and `nodes_lost`, and the edges it
+  lists under `adjacency_unrepaired`. Damaged adjacency entries are restored
+  from the edge's other-direction copy (geode with graph_storage 0.4.13 or
+  later; a build with 0.4.12 reported them but could not repair them, so
+  run the repair again with the new build).
 - To roll back, restore the backup; do not start an older build on the
   upgraded directory.
 

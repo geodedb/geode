@@ -51,6 +51,31 @@
   graph_storage 0.4.12". Regression: `zig build
   test-sonny6452-tde-page-tail-repair` (a store rewritten in the old page
   format).
+- **`geode storage repair --tde-page-tail` restores damaged adjacency
+  entries (SONNY-6452 item 1; graph-storage v0.4.13, SONNY-6461).** The last
+  entry of a full v1 adjacency block (stores from before inline edge ids)
+  lost its edge type and property head to the old page envelope, so the
+  edge read untyped and without properties. The repair now runs
+  graph_storage's `repairAdjTailEntries` first, which copies the lost
+  fields back from the same edge's entry in the other direction's chain,
+  then the node and directory repairs; the summary reports
+  `adjacency_entries_repaired` and lists each entry it could not repair,
+  with the reason, in `adjacency_unrepaired` (for example `mirror_in_tail`,
+  when both copies lost the same bytes). geode had never updated the
+  incoming copy's property head when it set an edge property, so the repair
+  first sets it from the edge index the old build wrote
+  (`adjacency_mirrors_realigned`); without that the edge would have been
+  restored with no properties and, for an edge without an inline id, no
+  public id. The repair also lowers a shard's live-node count by the nodes
+  it reports lost (`node_count_corrected`): geode refused to load a graph
+  whose shard counted more live nodes than it held, so a repaired store
+  with a lost node could not be opened. The check takes its table of lost
+  slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
+  test-sonny6452-tde-page-tail-repair`.
+- **graph-storage v0.4.13 (SONNY-6461).** Adds `repairAdjTailEntries`,
+  hardware CRC32C page checksums (an 8 KiB page about 15.6 us -> 0.75 us,
+  on every buffer-pool miss and flush), an offline `free.store` reader and
+  the compare-bench zero-baseline fix.
 - **Crash durability (SONNY-6424): wal v0.1.23, graph-storage v0.4.12,
   raft v0.1.22, timeseries-storage v0.2.20.** The storage engine anchors its
   WAL sequence at the last checkpoint on open, and the WAL keeps its

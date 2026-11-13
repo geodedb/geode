@@ -5786,6 +5786,7 @@ REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,T
 REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,,,distributed,2026-11-12,tests/test_sonny6451_raft_restarted_peer.zig,31
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,,,security,2026-11-12,tests/test_sonny6436_fixture_secrets.zig,41
 REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR,Storage CLI,RepairsDerivableOldEnvelopeDamage,TESTED,,,storage,2026-11-13,src/cli/storage_cli.zig,248
+REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR,Storage CLI,RestoresAdjacencyEntriesFromMirror,TESTED,,,storage,2026-11-13,src/storage/tde_page_tail.zig,511
 REQ-SONNY-6452-TDE-PAGE-TAIL-VERIFY,Storage CLI,ReportsOldEnvelopePageDamage,TESTED,,,storage,2026-11-13,src/cli/storage_cli.zig,209
 REQ-SONNY-6453-HYGIENE,Docs,ComposePidsAndTestSteps,TESTED,,,docs,2026-11-13,tests/test_sonny6453_hygiene.zig,17
 REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP,DistributedCluster,ClusterListenerReapsDeadConnections,TESTED,,,distributed,2026-11-13,tests/test_sonny6456_cluster_dead_conn_reap.zig,21

@@ -17,17 +17,20 @@
 //!     empty slot when the rest of its record (heads) is zero too.
 //!   - in_dir (`adj_in_dir.store`): the last two incoming-chain heads of a
 //!     page (dst 1018/1019 of 1020 at 8 KiB) read as "no head".
-//!   - adj_out / adj_in / in_idx chain blocks (v1/v2/v3 entry formats): an
-//!     entry whose bytes reach the tail (the last v1 entry at 8 KiB, the
-//!     last v3 entry at 4 KiB). Slab blocks, props and var reserve the tail.
+//!   - adj_out / adj_in / in_idx chain blocks (v1/v2/v3 entry formats): the
+//!     last entry of a full block, for the (page size, format) pairs
+//!     graph_storage's `edge.legacyTailLoss` names (at 8 KiB: v1, losing
+//!     rel_type and prop_head). Slab blocks, props and var reserve the tail.
 //!
 //! `scan` reads the store files directly (never opens the store, so it
 //! writes nothing and cannot move a page to the new envelope before it has
 //! been reported). `repair` opens the store through a `StorageAdapter` and
-//! uses only graph_storage's public engine API: `getNode`/`putNodeTxn`, the
+//! uses only graph_storage's public engine API: `repairAdjTailEntries`
+//! (graph_storage 0.4.13: restores a damaged adjacency entry from the same
+//! edge's entry in the other direction's chain), `getNode`/`putNodeTxn`, the
 //! label block (`label_store.getLabels`), and `migrateColocateInEdges`, the
 //! library's rebuild of a shard's incoming-edge directory from its outgoing
-//! edges.
+//! edges, in the order graph_storage's operations guide gives.
 
 const std = @import("std");
 const gs = @import("graph_storage");
@@ -408,23 +411,18 @@ fn scanShard(allocator: Allocator, report: *Report, s: *ShardReport, shard_dir: 
     }
 }
 
-/// A chain block (v1/v2/v3 entries after the 16-byte block header): report
-/// the entries whose bytes reach the tail. Slab blocks reserve the tail.
+/// A chain block: report its entry in the slot graph_storage's loss table
+/// (`edge.legacyTailLoss`, a pure function of page size and entry format)
+/// names, when the block is full. Slab blocks reserve the tail.
 fn scanChainBlock(allocator: Allocator, s: *ShardReport, fid: gs.FileId, pid: u64, frame: []const u8, page_size: u32) !void {
     const hdr_size = @sizeOf(gs.edge.EdgeBlockHeader);
     const bh = std.mem.bytesToValue(gs.edge.EdgeBlockHeader, frame[PAGE_HEADER_SIZE..][0..hdr_size]);
-    const fmt = bh.entry_format;
-    if (fmt != gs.edge.ENTRY_FORMAT_V1 and fmt != gs.edge.ENTRY_FORMAT_V2 and fmt != gs.edge.ENTRY_FORMAT_V3) return;
-    if (bh.count == 0 or bh.count > gs.edge.entriesPerBlock(page_size, fmt)) return;
-    const esz: usize = gs.edge.entrySize(fmt);
-    const tail_start = page_size - TAG_SIZE;
-    var slot: usize = 0;
-    while (slot < bh.count) : (slot += 1) {
-        const off = PAGE_HEADER_SIZE + hdr_size + slot * esz;
-        if (off + esz <= tail_start) continue;
-        const e = gs.edge.decodeEntry(frame[off..][0..esz], fmt);
-        try s.adjacency.append(allocator, .{ .file = fid, .page = pid, .slot = @intCast(slot), .edge_id = e.edge_id, .neighbor = e.neighbor });
-    }
+    const loss = gs.edge.legacyTailLoss(page_size, bh.entry_format) orelse return;
+    if (bh.count != loss.slot + 1) return;
+    const esz: usize = gs.edge.entrySize(bh.entry_format);
+    const off = PAGE_HEADER_SIZE + hdr_size + @as(usize, loss.slot) * esz;
+    const e = gs.edge.decodeEntry(frame[off..][0..esz], bh.entry_format);
+    try s.adjacency.append(allocator, .{ .file = fid, .page = pid, .slot = loss.slot, .edge_id = e.edge_id, .neighbor = e.neighbor });
 }
 
 pub const RepairSummary = struct {
@@ -438,21 +436,48 @@ pub const RepairSummary = struct {
     lost_pages_left: u64 = 0,
     /// Shards whose incoming-edge directory was rebuilt from outgoing edges.
     in_dir_rebuilt_shards: u64 = 0,
-    /// Shards whose directory was NOT rebuilt because their outgoing
-    /// adjacency is itself damaged (a rebuild would copy the damage over the
-    /// incoming side's intact copy). Needs a graph_storage API.
+    /// Shards whose directory was NOT rebuilt because an outgoing adjacency
+    /// entry is still damaged (a rebuild would copy the damage over the
+    /// incoming side's intact copy).
     in_dir_blocked_shards: u64 = 0,
-    /// Damaged chain entries left as they are (no graph_storage API rewrites
-    /// one entry of an adjacency block).
+    /// Lost fields of chain entries rewritten from the same edge's entry in
+    /// the other direction's chain (`GraphEngine.repairAdjTailEntries`).
+    adjacency_entries_repaired: u64 = 0,
+    /// Damaged chain entries left as they are; each is listed, with the
+    /// library's reason, in `adjacency_unrepaired`.
     adjacency_entries_unrepaired: u64 = 0,
+    /// Co-located incoming entries (`in_idx`) whose `prop_head` was set from
+    /// the edge index before the adjacency repair, because geode had left it
+    /// stale (see `realignInMirrorPropHeads`).
+    adjacency_mirrors_realigned: u64 = 0,
+    /// Lost nodes taken out of their shard's live-node count, which
+    /// otherwise promises records that no longer exist and keeps the graph
+    /// from loading (hydration refuses a shard with fewer live records than
+    /// its count, REQ-GQL-028).
+    node_count_corrected: u64 = 0,
     /// Graph directories on disk the registry does not name (not opened).
     graphs_skipped: u64 = 0,
+    /// The entries counted in `adjacency_entries_unrepaired`.
+    adjacency_unrepaired: std.ArrayList(gs.engine.AdjTailIssue) = .empty,
+
+    pub fn deinit(self: *RepairSummary, allocator: Allocator) void {
+        self.adjacency_unrepaired.deinit(allocator);
+    }
 
     pub fn writeJson(self: RepairSummary, w: *std.Io.Writer) !void {
-        try w.print("{{\"nodes_repaired\":{d},\"lost_pages_rewritten\":{d},\"lost_pages_left\":{d},\"in_dir_rebuilt_shards\":{d},\"in_dir_blocked_shards\":{d},\"adjacency_entries_unrepaired\":{d},\"graphs_skipped\":{d}}}", .{
-            self.nodes_repaired,        self.lost_pages_rewritten,         self.lost_pages_left, self.in_dir_rebuilt_shards,
-            self.in_dir_blocked_shards, self.adjacency_entries_unrepaired, self.graphs_skipped,
+        try w.print("{{\"nodes_repaired\":{d},\"lost_pages_rewritten\":{d},\"lost_pages_left\":{d},\"node_count_corrected\":{d},\"in_dir_rebuilt_shards\":{d},\"in_dir_blocked_shards\":{d},\"adjacency_entries_repaired\":{d},\"adjacency_entries_unrepaired\":{d},\"adjacency_mirrors_realigned\":{d},\"graphs_skipped\":{d},\"adjacency_unrepaired\":[", .{
+            self.nodes_repaired,             self.lost_pages_rewritten,         self.lost_pages_left,
+            self.node_count_corrected,       self.in_dir_rebuilt_shards,        self.in_dir_blocked_shards,
+            self.adjacency_entries_repaired, self.adjacency_entries_unrepaired, self.adjacency_mirrors_realigned,
+            self.graphs_skipped,
         });
+        for (self.adjacency_unrepaired.items, 0..) |is, i| {
+            if (i != 0) try w.writeByte(',');
+            try w.print("{{\"file\":\"{s}\",\"page\":{d},\"slot\":{d},\"owner\":{d},\"edge_id\":{d},\"neighbor\":{d},\"reason\":\"{s}\"}}", .{
+                paged_names[pagedIndex(is.file)], is.page, is.slot, is.owner, is.edge_id, is.neighbor, @tagName(is.reason),
+            });
+        }
+        try w.writeAll("]}");
     }
 };
 
@@ -461,6 +486,7 @@ pub const RepairSummary = struct {
 /// caller holds the data-directory lock and checkpoints afterwards.
 pub fn repair(allocator: Allocator, adapter: *graph_storage_adapter.StorageAdapter, report: *const Report) !RepairSummary {
     var summary: RepairSummary = .{};
+    errdefer summary.deinit(allocator);
     for (report.graphs.items) |g| {
         var any = false;
         for (g.shards.items) |*s| any = any or s.damaged() or s.old_pages[pagedIndex(.in_dir)] != 0;
@@ -482,8 +508,24 @@ pub fn repair(allocator: Allocator, adapter: *graph_storage_adapter.StorageAdapt
     return summary;
 }
 
+// CANARY: REQ=REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR; FEATURE="Storage CLI"; ASPECT=RestoresAdjacencyEntriesFromMirror; STATUS=TESTED; TEST=tests/test_sonny6452_tde_page_tail_repair.zig; OWNER=storage; UPDATED=2026-11-13
 fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardReport, summary: *RepairSummary) !void {
-    // 1. Node records: label_count is the label block's count (the block
+    // 1. Adjacency entries, first: graph_storage's operations guide asks for
+    //    `repairAdjTailEntries` before any other write (a later removeEdge in
+    //    a damaged block moves the damaged entry out of the slot that marks
+    //    it). The realignment before it rewrites only the prop_head of intact
+    //    incoming entries, which moves nothing.
+    summary.adjacency_mirrors_realigned += try realignInMirrorPropHeads(shard, s);
+    var out_damaged = false;
+    {
+        var adj = try shard.repairAdjTailEntries(allocator);
+        defer adj.deinit(allocator);
+        summary.adjacency_entries_repaired += adj.repaired;
+        summary.adjacency_entries_unrepaired += adj.unrepairable.items.len;
+        try summary.adjacency_unrepaired.appendSlice(allocator, adj.unrepairable.items);
+        for (adj.unrepairable.items) |is| out_damaged = out_damaged or is.file == .adj_out;
+    }
+    // 2. Node records: label_count is the label block's count (the block
     //    lives in var.store and was not in the tail); txn_stamp is the stamp
     //    geode writes at creation. flags stay 0: whether the node had been
     //    deleted is recorded nowhere else (the label index keeps deleted
@@ -500,7 +542,7 @@ fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardRepo
         try shard.commitTxn(txn);
         summary.nodes_repaired += 1;
     }
-    // 2. Pages with a lost record: nothing to restore; rewrite a live record
+    // 3. Pages with a lost record: nothing to restore; rewrite a live record
     //    of the same page unchanged so the page moves to the current
     //    envelope (the lost slot stays empty, as the engine already reads it).
     const npp: u64 = shard.node_store.nodes_per_page;
@@ -519,22 +561,93 @@ fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardRepo
         } else false;
         if (done) summary.lost_pages_rewritten += 1 else summary.lost_pages_left += 1;
     }
-    // 3. The incoming-edge directory and chains (in_dir + in_idx): rebuilt
-    //    from this shard's outgoing edges, the authoritative copy, rewriting
-    //    every directory page. Not when an outgoing chain entry is itself
-    //    damaged: the rebuild would copy that damage over the incoming
-    //    side's copy of the entry.
-    const out_damaged = s.adjacencyIn(.adj_out) != 0;
+    if (s.nodes_lost.items.len != 0) summary.node_count_corrected += try reconcileNodeCount(shard);
+    // 4. The incoming-edge directory and chains (in_dir + in_idx): rebuilt
+    //    from this shard's outgoing edges, the authoritative copy (repaired
+    //    in step 1), rewriting every directory page. Not when an outgoing
+    //    entry is still damaged: the rebuild would copy that damage over the
+    //    incoming side's copy of the entry.
     if (s.in_dir_lost_heads.items.len != 0 or s.old_pages[pagedIndex(.in_dir)] != 0 or s.adjacencyIn(.in_idx) != 0) {
         if (out_damaged) {
             summary.in_dir_blocked_shards += 1;
-            summary.adjacency_entries_unrepaired += s.adjacencyIn(.in_idx);
         } else {
             try shard.migrateColocateInEdges();
             summary.in_dir_rebuilt_shards += 1;
         }
     }
-    // No graph_storage API rewrites a single entry of an adjacency block.
-    summary.adjacency_entries_unrepaired += s.adjacencyIn(.adj_out) + s.adjacencyIn(.adj_in);
     try shard.checkpoint();
+}
+
+/// Set the `prop_head` of a damaged outgoing entry's co-located incoming
+/// copy (`adj_in_remote`) from the edge index, so that
+/// `repairAdjTailEntries` restores the outgoing entry's lost prop_head from a
+/// current copy. geode's `StorageAdapter.setEdgeProperty` updates the
+/// outgoing entry, the legacy `adj_in` chain and the edge index, but not the
+/// co-located incoming copy, so for an edge whose properties were set after
+/// it was created (every pre-inline-id edge: its public id is a property)
+/// that copy still holds the head the edge was created with, usually 0.
+/// Copying it back would detach the edge from its properties and its public
+/// id.
+///
+/// The edge index is used only when it can be shown not to derive from the
+/// damaged bytes: it agrees with the intact incoming copy on the edge's type
+/// and differs from the damaged entry on a lost field. On a cleanly closed
+/// store it is the snapshot the old binary wrote from its intact in-memory
+/// entries. Returns the number of incoming entries rewritten.
+fn realignInMirrorPropHeads(shard: *gs.GraphEngine, s: *const ShardReport) !u64 {
+    if (s.adjacencyIn(.adj_out) == 0) return 0;
+    try shard.ensureDerivedHydrated();
+    var txn: ?u64 = null;
+    errdefer if (txn) |t| shard.abortTxn(t) catch {};
+    var rewritten: u64 = 0;
+    for (s.adjacency.items) |e| {
+        if (e.file != .adj_out) continue;
+        const ix = (try shard.edge_index.get(e.edge_id)) orelse continue;
+        if (ix.neighbor != e.neighbor) continue;
+        const src = (try shard.getNode(ix.from)) orelse continue;
+        const out = (try shard.adj_out.locateEntry(src.out_head, e.edge_id)) orelse continue;
+        const lost_from = out.tail_lost_from orelse continue;
+        if (out.page != e.page or out.slot != e.slot) continue;
+        const in_head = try shard.in_head_dir.getHead(e.neighbor);
+        const mirror = (try shard.adj_in_remote.locateEntry(in_head, e.edge_id)) orelse continue;
+        if (mirror.tail_lost_from != null or mirror.entry.neighbor != ix.from) continue;
+        if (ix.rel_type != mirror.entry.rel_type or ix.prop_head == mirror.entry.prop_head) continue;
+        var from_index = out.entry;
+        from_index.rel_type = ix.rel_type;
+        from_index.prop_head = ix.prop_head;
+        if (!gs.edge.formatHasWideHead(out.entry_format) and (ix.prop_head >> 32) != 0) continue;
+        if (gs.edge.lostFieldsEqual(out.entry, from_index, lost_from, out.entry_format)) continue;
+        const t = txn orelse try shard.beginTxn();
+        txn = t;
+        const page = (shard.adj_in_remote.updateEdgePropHead(in_head, e.edge_id, ix.prop_head) catch |err| switch (err) {
+            error.WideHeadInLegacyChainBlock => continue,
+            else => return err,
+        }) orelse continue;
+        try shard.logPagePublic(t, .in_idx, page);
+        rewritten += 1;
+    }
+    if (txn) |t| {
+        txn = null;
+        try shard.commitTxn(t);
+    }
+    return rewritten;
+}
+
+/// Lower the shard's live-node count to the live records it holds, after
+/// lost nodes (whole record in the tail: they read as empty slots) were
+/// reported. Returns by how much it was lowered.
+fn reconcileNodeCount(shard: *gs.GraphEngine) !u64 {
+    const Count = struct {
+        n: u64 = 0,
+        fn add(self: *@This(), _: u64, _: NodeRec) void {
+            self.n += 1;
+        }
+    };
+    var live: Count = .{};
+    try shard.node_store.scanNodes(shard.manifest.next_node_id, &live, Count.add);
+    if (live.n >= shard.manifest.node_count) return 0;
+    const lowered = shard.manifest.node_count - live.n;
+    shard.manifest.node_count = live.n;
+    shard.markPersistenceDirty();
+    return lowered;
 }

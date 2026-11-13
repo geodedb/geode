@@ -317,6 +317,7 @@ fn runTdePageTailRepair(allocator: std.mem.Allocator, data_dir: []const u8, key:
     aw.clearRetainingCapacity();
 
     var summary: tde_page_tail.RepairSummary = .{};
+    defer summary.deinit(allocator);
     var repair_err: ?anyerror = null;
     if (!before.ok()) {
         const adapter = graph_store.openDetachedAdapter(allocator, data_dir) catch |err| {
