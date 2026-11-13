@@ -12081,6 +12081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-6296: legacy read gaps from SONNY-2734's comments. See tests/test_sonny6296_legacy_read_gaps.zig.
+    const sonny6296_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6296_legacy_read_gaps.zig"), .target = target, .optimize = optimize });
+    sonny6296_q_test_mod.addImport("geode", root_mod);
+    sonny6296_q_test_mod.addImport("logging", logging_mod);
+    sonny6296_q_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6296_q_tests = b.addTest(.{ .root_module = sonny6296_q_test_mod });
+    const run_sonny6296_q_tests = b.addRunArtifact(sonny6296_q_tests);
+    shardDep(test_step, &run_sonny6296_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6296_q_step = b.step("test-sonny6296-legacy-read-gaps", "Run SONNY-6296 regression (WITH DISTINCT, a relationship property map with a parameter, b IN nodes(p), MATCH-less aggregates under RLS, WHERE errors fail the query, NEXT-chain aggregates over non-integers: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6296_q_step.dependOn(&run_sonny6296_q_tests.step);
+
     // SONNY-6267: the ISO abbreviated edge patterns parse and match. See tests/test_sonny6267_abbreviated_edge_patterns.zig.
     const sonny6267_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6267_abbreviated_edge_patterns.zig"), .target = target, .optimize = optimize });
     sonny6267_q_test_mod.addImport("geode", root_mod);

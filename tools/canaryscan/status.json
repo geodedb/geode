@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:03:51.254775866Z",
+  "generated_at": "2026-11-13T12:04:06.983881075Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80523,6 +80523,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6296-LEGACY-READ-GAPS",
+      "features": [
+        {
+          "feature": "ReadSemantics",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6296_legacy_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6300-STAGED-RESTORE-ONLY",
       "features": [
         {
@@ -93643,7 +93662,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4882
+      "TESTED": 4883
     },
     "by_aspect": {
       "2PC": 3,
@@ -96772,7 +96791,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 307,
+      "Regression": 308,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
