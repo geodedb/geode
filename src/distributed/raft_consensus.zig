@@ -1706,7 +1706,10 @@ pub const Transport = struct {
     /// for k8s churn validation via GEODE_RAFT_DEAD_CONN_REAP_MS (0 disables).
     pub const default_server_dead_conn_reap_ms: u64 = 30000;
 
-    fn serverDeadConnReapMs(allocator: Allocator) u64 {
+    /// The raft listener's dead-connection reap budget: GEODE_RAFT_DEAD_CONN_REAP_MS
+    /// or `default_server_dead_conn_reap_ms`. Also used by the cluster
+    /// coordinator's listener (`ClusterCoordinator.start`, SONNY-6456).
+    pub fn serverDeadConnReapMs(allocator: Allocator) u64 {
         const raw = getEnvVarOwned(allocator, "GEODE_RAFT_DEAD_CONN_REAP_MS") catch return default_server_dead_conn_reap_ms;
         defer allocator.free(raw);
         return std.fmt.parseInt(u64, std.mem.trim(u8, raw, " \t\r\n"), 10) catch default_server_dead_conn_reap_ms;

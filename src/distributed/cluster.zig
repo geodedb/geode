@@ -1281,6 +1281,12 @@ pub const ClusterCoordinator = struct {
             var qt_config = quic.QuicTransport.Config{
                 .address = self.listen_address,
                 .port = self.cluster_port,
+                // SONNY-6456: this listener IS the raft listener in production
+                // (`raft_consensus.Transport.listen` is never called), so it
+                // must carry the dead-connection reap: an inbound connection
+                // whose peer vanished without CONNECTION_CLOSE is closed after
+                // GEODE_RAFT_DEAD_CONN_REAP_MS (default 30 s; 0 disables).
+                .dead_conn_reap_ms = raft_consensus.Transport.serverDeadConnReapMs(self.allocator),
             };
             if (self.cert_path.len > 0) qt_config.cert_path = self.cert_path;
             if (self.key_path.len > 0) qt_config.key_path = self.key_path;
@@ -1480,7 +1486,8 @@ pub const ClusterCoordinator = struct {
                     Attr.uint("active", self.active_connections.load(.acquire)),
                     Attr.uint("max", self.max_connections),
                 });
-                // Connection will be cleaned up when it goes out of scope
+                // SONNY-6456: close and untrack it (it used to stay tracked).
+                self.network_transport.quic_server.?.destroyConnection(conn);
                 continue;
             }
 
@@ -1501,6 +1508,7 @@ pub const ClusterCoordinator = struct {
                 })) {
                     self.allocator.destroy(ctx);
                     log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                    self.network_transport.quic_server.?.destroyConnection(conn);
                 }
             }
         }
@@ -1634,6 +1642,13 @@ pub const ClusterCoordinator = struct {
         task_ctx.coordinator.handleQuicConnection(task_ctx.conn, accepted_ms) catch |err| {
             log.err("Cluster connection handler failed", &.{Attr.string("error", @errorName(err))});
         };
+        // SONNY-6456: give the connection back to the listener. Without this
+        // the handler released its worker but the wrapper stayed in the
+        // listener's tracked list for the life of the process and no
+        // CONNECTION_CLOSE ever reached the peer (a reaped or abandoned
+        // connection was never closed by this side). `stop()` joins this pool
+        // before it frees the server, so the server is live here.
+        task_ctx.coordinator.network_transport.quic_server.?.destroyConnection(task_ctx.conn);
     }
 
     /// RC-A: register an inbound connection in the live occupancy registry,

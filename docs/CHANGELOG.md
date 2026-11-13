@@ -1902,6 +1902,23 @@
 
 ### Fixed
 
+- **Operator-visible: a cluster node closes inbound raft connections whose
+  peer went silent, and gives every finished inbound connection back to
+  its listener (SONNY-6456 item 2).** `ClusterCoordinator.start` creates
+  the intra-cluster QUIC listener itself and never set its
+  dead-connection reap; `raft_consensus.Transport.listen`, the only code
+  that did (`GEODE_RAFT_DEAD_CONN_REAP_MS`, default 30 s), is never called,
+  so a connection from a peer that vanished without CONNECTION_CLOSE stayed
+  open until the inbound idle deadline or the 300 s QUIC idle timeout. The
+  production listener now uses the same reap budget. In addition, an
+  inbound cluster connection handler that finished (peer gone, idle
+  deadline, sweeper request, shutdown), and a connection dropped at accept
+  because the connection limit or the worker queue was full, never closed
+  the connection or removed it from the listener's tracked list: each one
+  stayed tracked for the life of the process and the peer never received
+  CONNECTION_CLOSE. They are now closed and untracked
+  (`destroyConnection`). Regression:
+  `zig build test-sonny6456-cluster-dead-conn-reap`.
 - **Operator-visible: SIGTERM no longer stalls up to ~10 s before the final
   flush, and the default graph's periodic light checkpoint lands again
   (SONNY-6456 item 4).** The persistence loop and the final flush in
