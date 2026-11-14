@@ -2386,6 +2386,37 @@
   that said a 400-CREATE chunk takes ~38 s in a Debug server with about 13
   fdatasync calls per statement: measured for SONNY-6534 it takes 6-10 s,
   about 2 per statement. Regression: `zig build -l` (configuration).
+- **The CLI says what is wrong with a malformed `--server` or `--dsn`, in
+  the MCP path's words (SONNY-6531 item 2).** `geode auth login` and
+  `geode restore --server` printed `Invalid server address format. Expected
+  host:port`, `geode backup create` a bare `InvalidAddress`, `geode shell`
+  `REPL error: InvalidAddress` (after starting the REPL), and `geode query`
+  its own line that echoed the address, which `--dsn` had cut out of a DSN
+  (a password containing `@` could end up in it). They now print `Error:
+  <message>` with the message `geode mcp` gives for the same fault (host,
+  port, port 0, scheme, IPv6 zone; docs/DSN.md), from one mapping
+  (`zig_quic_bridge.endpointErrorMessage`, which `src/mcp/client.zig` now
+  re-exports), and never echo the address. `geode shell` checks the address
+  before it starts the REPL; `geode migrate run` uses the same message. A
+  `--dsn` with any scheme other than `quic://` / `grpc://` (not only
+  `http`, `https`, `tcp`) is refused as an unsupported scheme, and a DSN
+  without a host gets the host message instead of `DSN missing host`.
+  Regression: `zig build test-sonny6531-cli-address-errors`.
+
+- **canaryscan writes rows in source order, whatever `--root` is (SONNY-6531
+  item 3).** The rows of one requirement in `tools/canaryscan/status.csv`
+  and `status.json` were sorted by FEATURE, then ASPECT, STATUS, OWNER,
+  UPDATED and file lists, so editing one of those fields moved rows inside
+  the requirement, and the file column was the raw walk path, so `--root .`
+  and an absolute root wrote different files. Entries are now sorted by
+  their first marker's file and line, then the remaining fields; files are
+  relative to `--root`; and the report is built from the collected markers
+  so the visit order cannot matter. Both files were regenerated once in
+  the new order (same rows; only the order changed). `docs/status.csv`
+  (`make status-csv`) was already stable: its sort key ends in file and
+  line, and two runs are byte-identical. Regression: `cd tools/canaryscan
+  && go test ./...` (`order_test.go`).
+
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

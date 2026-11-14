@@ -23,22 +23,12 @@ pub const GeodeClientError = error{
 };
 
 /// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
-/// on; null when `err` is not about the DSN. geode-client-zig (v0.3.16)
-/// parses it with geode's host:port grammar (docs/DSN.md) and names the
-/// fault; port 0 and an IPv6 zone parse but cannot be dialled
+/// on; null when `err` is not about the DSN. SONNY-6531: the one mapping is
+/// `zig_quic_bridge.endpointErrorMessage`, shared with the CLI's `--server`
+/// and `--dsn`. Port 0 and an IPv6 zone parse but cannot be dialled
 /// (`parseEndpoint`). The DSN itself is not part of the message: it may
 /// carry a password.
-pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
-    return switch (err) {
-        error.InvalidDSN => "Invalid Geode endpoint DSN: the host must be a name, an IPv4 address or a bracketed IPv6 address ([::1]), optionally followed by :port (docs/DSN.md)",
-        error.InvalidPort => "Invalid Geode endpoint DSN: the port must be 1-65535, written as 1-5 digits; port 0 cannot be dialled (docs/DSN.md)",
-        error.UnsupportedScheme => "Invalid Geode endpoint DSN: unsupported scheme; use quic:// or grpc:// (docs/DSN.md)",
-        error.InputTooLong => "Invalid Geode endpoint DSN: a credential or parameter value is too long",
-        error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
-        error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
-        else => null,
-    };
-}
+pub const endpointErrorMessage = geode.zig_quic_bridge.endpointErrorMessage;
 
 /// `endpointErrorMessage`, or `fallback` for any other error.
 pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {

@@ -29,6 +29,9 @@ type featureEntry struct {
     Benches []string `json:"benches"`
     Owner   string   `json:"owner,omitempty"`
     Updated string   `json:"updated,omitempty"`
+    // first is where the entry's first marker is (SONNY-6531); it orders
+    // the entries of one requirement and is not written out.
+    first srcPos
 }
 
 type summary struct {

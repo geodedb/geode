@@ -26,6 +26,16 @@ go build -o ./bin/canaryscan ./tools/canaryscan
 CANARY: REQ=<id>; FEATURE=<name>; ASPECT=<aspect>; STATUS=<status>; TEST=<path>; BENCH=<path>; OWNER=<team>; UPDATED=<date>
 ```
 
+## Output Order
+
+`status.csv` and `status.json` depend only on the markers in the tree
+(SONNY-6531): requirements are sorted by ID; the entries of one requirement
+by where their first marker is (file, then line), then by the remaining
+fields. A file is named relative to `--root` with forward slashes, so
+`--root .`, `--root ./` and an absolute root write the same files, and the
+order the walk visits files in does not matter. Two runs over one tree
+differ only in `generated_at`.
+
 ## Status Auto-Promotion
 
 The scanner auto-promotes statuses based on evidence references:

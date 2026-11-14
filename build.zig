@@ -8141,6 +8141,18 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6494-mcp-dsn-errors", "Run SONNY-6494 regression (MCP tools/call and resources/read answer a malformed endpoint DSN - unbracketed IPv6, junk after ], a bad or zero port, an unsupported scheme, an IPv6 zone - with what is wrong instead of a generic failure; geode mcp refuses it at startup without echoing credentials; geode query --server <host>:0 is refused as an address)").dependOn(&run_tests.step);
     }
+    // SONNY-6531 (2): geode query, shell, auth login, backup create and
+    // restore report a malformed --server / --dsn with the MCP path's
+    // specific message, without echoing the address or its credentials.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6531_cli_address_errors.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6531-cli-address-errors", "Run SONNY-6531 item 2 regression (geode query, shell, auth login, backup create and restore name what is wrong with a malformed --server or --dsn - host, port, port 0, scheme - with the MCP path's message instead of a generic one, and never echo the address or DSN credentials)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);

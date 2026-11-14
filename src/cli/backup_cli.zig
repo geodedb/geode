@@ -498,6 +498,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 std.debug.print("Error: the backup is complete at {s}, but syncing its directory failed, so the rename may not survive a crash; sync the filesystem before relying on it.\n", .{output.?});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+            // SONNY-6531: executeRemoteBackup said what is wrong with --server.
+            if (err == error.InvalidServerAddress) std.process.exit(@intFromEnum(ExitCode.general_error));
             std.debug.print("Error: Backup from server {s} failed: {}. No backup was created.\n", .{ server, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1281,6 +1283,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         } else null;
         // GAP-0137: pass TLS config
         executeRemoteRestore(allocator, "", target_ms, server, tls_config, username, password, timeout_s) catch |err| {
+            // SONNY-6531: executeRemoteRestore said what is wrong with --server.
+            if (err == error.InvalidServerAddress) std.process.exit(@intFromEnum(ExitCode.general_error));
             std.debug.print("error: {s}\nServer restore failed.\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1350,7 +1354,11 @@ const MigrationExecContext = struct {
 };
 
 fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8, tls_config: TlsConfig) !*zig_client.GeodeClient {
-    const parsed = try zig_quic_bridge.parseHostPort(server_addr, 3141);
+    // SONNY-6531: say what is wrong with --server, as the MCP path does.
+    const parsed = zig_quic_bridge.parseHostPort(server_addr, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return error.InvalidServerAddress;
+    };
     const client = try allocator.create(zig_client.GeodeClient);
     errdefer allocator.destroy(client);
 
@@ -2119,7 +2127,11 @@ fn executeRemoteBackup(
     password: ?[]const u8,
     timeout_s: u32,
 ) !void {
-    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch return error.InvalidAddress;
+    // SONNY-6531: say what is wrong with --server, as the MCP path does.
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return error.InvalidServerAddress;
+    };
 
     var client = zig_quic_bridge.initClientStrictTls(
         allocator,
@@ -2365,9 +2377,10 @@ fn executeRemoteRestore(
 ) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
-    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
-        std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
-        return error.InvalidServerPort;
+    // SONNY-6531: say what is wrong with --server, as the MCP path does.
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return error.InvalidServerAddress;
     };
 
     var client = zig_quic_bridge.initClientStrictTls(
