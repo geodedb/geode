@@ -2417,6 +2417,71 @@
   line, and two runs are byte-identical. Regression: `cd tools/canaryscan
   && go test ./...` (`order_test.go`).
 
+- **A Raft `drop_graph` apply no longer deadlocks the Raft node with a
+  leader request on the graph (SONNY-6541 item 1).** The apply runs under
+  the Raft node's `inner_mutex` and drops the graph under its write lock,
+  waiting for every holder (SONNY-3350). A statement on the leader holds
+  its graph's lock until its writes are proposed and committed, and the
+  propose takes `inner_mutex`: with a drop of that graph applying, each
+  waited for the other forever, and the node stopped ticking, sending
+  heartbeats and applying (forced in the regression: the request's propose
+  never returned). The apply now announces its wait on the graph
+  (`StorageAdapter.beginReplicatedDrop`); a request that holds the graph's
+  lock no longer waits for `inner_mutex` or for a commit while it is
+  announced (`RaftNode.lockInnerForRequest`,
+  `waitForCommittedThenApplied`): a propose fails with GraphNotFound
+  (nothing proposed), a commit wait with Timeout (the entry comes after the
+  drop, and its writes to the graph are refused when it applies), and
+  SHOW CLUSTER STATUS reads the term and leader unlocked. The request lets
+  go of the lock and the drop proceeds. Lock order: a graph's rwlock ->
+  `inner_mutex` -> `replicated_apply_mutex`. Nothing in the server proposes
+  a `schema_change` today (CREATE and DROP GRAPH are not replicated in
+  cluster mode), so no deployment reached this. Regression: `zig build
+  test-sonny6541-drop-apply-deadlock`.
+- **A checkpoint of a graph waits for a 2PC commit's write to it (SONNY-6541
+  item 2).** A committed Raft `txn_decide` applies its prepared write set
+  (`TxnCoordinator.handleDecide`) on the Raft apply thread, like a
+  replicated graph mutation, but without the graph's
+  `replicated_apply_mutex` that SONNY-6528 item 1 gave the mutation apply:
+  a full checkpoint ran in the middle of its node create (forced in the
+  regression). Each write-set operation now holds its graph's
+  `replicated_apply_mutex`, after hydrating the graph outside it. Every
+  cluster node registers the coordinator (`ClusterCoordinator.init`); no
+  geode code proposes `txn_prepare` / `txn_decide` entries yet. Regression:
+  `zig build test-sonny6541-2pc-apply-checkpoint-exclusion`.
+- **The first read of a damaged graph fails closed in process too (SONNY-6541
+  item 3).** The executor's quarantine gate (SONNY-6528) hydrated a
+  program's graphs only for a change; the engine-direct reads (a filtered
+  count, an ORDER BY, `max()`) read the pages and never hydrate, so as the
+  first statement after a restart on a graph whose node pages were zeroed
+  they answered from the zeroed pages (a count, no rows, a null maximum),
+  on the default graph and on another one. The gate now hydrates the
+  program's graphs for a read as well, so the damage is found and the read
+  fails with 58000. Over the wire this was already closed: the QUIC and
+  gRPC reads hydrate in their read snapshot (`snapshotUnderReadLock`)
+  first. Cost on a healthy store, in process (the regression prints it):
+  the gate's per-graph check of a hydrated graph is about 0.25 us (317 ns
+  per call before, 569 ns with the hydration check); the first read after a
+  restart now hydrates the graph, as a server's first read already did.
+  Regression: `zig build test-sonny6541-quarantine-first-read` (in process
+  and against a real server).
+- **SHOW TABLES fails when its label listing fails (SONNY-6541 item 4).** It
+  answered an empty table list instead (`catch &.{}`): forced in the
+  regression by failing each of the statement's allocations in turn, four
+  of which answered zero rows. A quarantined graph was refused only through
+  the store's separate quarantine note. Regression: `zig build
+  test-sonny6541-show-tables-errors`.
+- **A session whose graph is quarantined can switch to another graph
+  (SONNY-6541 item 7).** The QUIC and gRPC handlers' quarantine gate
+  (SONNY-6523) checked the session's current graph for every program, so `USE GRAPH
+  default`, `SESSION SET GRAPH default` and `SESSION RESET GRAPH` from a
+  session on a damaged graph were refused with 58000 and the client had to
+  reconnect. A program that touches no graph's data (`programDataGraph` is
+  none: session and graph selection, transaction control) is no longer
+  checked; `USE GRAPH damaged; MATCH ...` is still refused. The executor's
+  own gate (SONNY-6528) already checked only the graphs whose data a
+  program touches. Regression: `zig build test-sonny6541-quarantine-use-graph`
+  (QUIC against a real server, gRPC and the executor in process).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
@@ -6360,6 +6425,16 @@
 
 ### Removed
 
+- **`tests/benchmark_merge_adapter_variance.zig` (SONNY-6541 item 6).**
+  `tests/all_tests.zig` imported it as an unreferenced constant, so nothing
+  ever compiled it, and it could not compile (`std.time.nanoTimestamp`,
+  `std.Io.getStdErr`, both gone in Zig 0.16). Its counter assertions are
+  stale as well: MERGE resolves its node through the MERGE property index
+  since GAP-0894, which the exact-lookup counter it asserted on does not
+  count. What it checked live elsewhere: node and relationship MERGE take
+  no read snapshot and no label scan (`zig build test-gap0511-regression`),
+  and MERGE throughput (`zig build bench-merge`). Its two CANARY markers
+  (REQ-PERF-MERGE-004, REQ-PERF-MERGE-007, BENCHED) go with it.
 - **A statement or session transaction keeps its shard's WAL record batch
   (SONNY-6528 item 7).** `beginStatementTxn` and `beginSessionTxn` wrote out
   the batch `beginTxn` had opened (`releaseSpanningTxnWalBatch`), so a

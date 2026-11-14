@@ -256,7 +256,10 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // read paths).
             const session_tenant: ?[]const u8 = try tenancy.resolveTenantFilter(context.tenant_id);
             // SONNY-6344: a parent tenant also lists its descendants' labels.
-            const labels = tenant_visibility.listNodeLabelsVisible(allocator, read_store, session_tenant) catch &.{};
+            // CANARY: REQ=REQ-SONNY-6541-SHOW-TABLES-ERRORS; FEATURE="SHOW TABLES"; ASPECT=ListingErrorPropagates; STATUS=TESTED; TEST=tests/test_sonny6541_show_tables_errors.zig; OWNER=execution; UPDATED=2026-11-14
+            // SONNY-6541 (4): a listing that fails fails the statement; it
+            // answered no rows (out of memory, a quarantined graph).
+            const labels = try tenant_visibility.listNodeLabelsVisible(allocator, read_store, session_tenant);
             defer {
                 for (labels) |label| {
                     allocator.free(label);

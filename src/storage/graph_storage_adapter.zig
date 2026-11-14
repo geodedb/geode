@@ -1858,6 +1858,12 @@ pub const ManagedGraph = struct {
     /// the apply itself starts (its hydration's persist-on-complete) does
     /// not wait for it.
     replicated_apply_holder: std.atomic.Value(u64) = .init(0),
+    /// SONNY-6541 (1): Raft `drop_graph` applies waiting for this graph's
+    /// `rwlock` (`beginReplicatedDrop`). Such an apply waits under the Raft
+    /// node's `inner_mutex`, so a thread holding this graph's lock must not
+    /// wait for `inner_mutex` or for a commit while it is set
+    /// (`threadHoldsGraphAwaitedByReplicatedDrop`): it gives up instead.
+    replicated_drop_waiters: std.atomic.Value(u32) = .init(0),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -3753,6 +3759,32 @@ pub fn threadHoldsGraphLock(mg: *const ManagedGraph) bool {
     return false;
 }
 
+/// SONNY-6541 (1): does this thread hold any graph's `rwlock` through the
+/// graph-lock API?
+pub fn threadHoldsAnyGraphLock() bool {
+    for (t_held_graph_locks) |held| {
+        if (held != null) return true;
+    }
+    return t_held_graph_locks_overflow.items.len > 0;
+}
+
+// CANARY: REQ=REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK; FEATURE="DistributedCluster"; ASPECT=HolderYieldsToReplicatedDrop; STATUS=TESTED; TEST=tests/test_sonny6541_drop_apply_deadlock.zig; OWNER=distributed; UPDATED=2026-11-14
+/// SONNY-6541 (1): does this thread hold the `rwlock` of a graph a Raft
+/// `drop_graph` apply waits for (`ManagedGraph.replicated_drop_waiters`)?
+/// That apply holds the Raft node's `inner_mutex` while it waits, so this
+/// thread waiting for `inner_mutex` (a propose) or for a commit deadlocks
+/// with it. The Raft request paths ask before and while they wait, and give
+/// up (`RaftNode.proposeCommand`, `ClusterCoordinator.waitForCommittedThenApplied`).
+pub fn threadHoldsGraphAwaitedByReplicatedDrop() bool {
+    for (t_held_graph_locks) |held| {
+        if (held) |mg| if (mg.replicated_drop_waiters.load(.acquire) > 0) return true;
+    }
+    for (t_held_graph_locks_overflow.items) |mg| {
+        if (mg.replicated_drop_waiters.load(.acquire) > 0) return true;
+    }
+    return false;
+}
+
 /// SONNY-6375 test seam (test builds only): runs on the scanning thread
 /// between two batches of one `orderedScan`, when it holds no graph or shard
 /// lock — the window a concurrent write or ordered-index rebuild can use.
@@ -4259,6 +4291,22 @@ pub const StorageAdapter = struct {
     pub fn endReplicatedApply(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.replicated_apply_holder.store(0, .release);
         mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.unpinGraph(mg);
+    }
+
+    /// SONNY-6541 (1): a Raft `drop_graph` apply of `graph_name` is about to
+    /// wait for the graph's write lock under the Raft node's `inner_mutex`:
+    /// a holder of the graph's lock that would wait for Raft gives up
+    /// instead (`threadHoldsGraphAwaitedByReplicatedDrop`). Null when the
+    /// graph is not there. The graph is pinned until `endReplicatedDrop`.
+    pub fn beginReplicatedDrop(self: *StorageAdapter, graph_name: []const u8) ?*ManagedGraph {
+        const mg = self.pinGraph(graph_name) orelse return null;
+        _ = mg.replicated_drop_waiters.fetchAdd(1, .acq_rel);
+        return mg;
+    }
+
+    pub fn endReplicatedDrop(self: *StorageAdapter, mg: *ManagedGraph) void {
+        _ = mg.replicated_drop_waiters.fetchSub(1, .acq_rel);
         self.unpinGraph(mg);
     }
 

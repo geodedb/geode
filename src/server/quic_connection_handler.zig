@@ -7915,7 +7915,14 @@ fn handleClientMessage(
             // dropping a damaged graph is how an operator removes it. A read
             // of several graphs is checked by its snapshot
             // (`snapshotUnderReadLocks`).
-            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs) {
+            // SONNY-6541 (7): nor a program that touches no graph's data
+            // (`programDataGraph` is `.none`: USE GRAPH, SESSION SET / RESET
+            // GRAPH, transaction control alone): a session on a quarantined
+            // graph moves off it without reconnecting. A switch followed by
+            // a read is checked on the graph it switched to.
+            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
+                query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
+            {
                 if (graph_store.programQuarantineError(gpa, &.{lock_graph}, is_mutation)) |qerr| {
                     const info = proto_util.mapError(qerr);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});

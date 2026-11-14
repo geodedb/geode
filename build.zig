@@ -10359,6 +10359,66 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0511_reg_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0511_reg_step = b.step("test-gap0511-regression", "Run GAP-0511 regressions (node and relationship MERGE and DELETE resolve their nodes through the exact property index with no read snapshot and no label scan; commitDeferRebuilds leaves queued advanced-index rebuilds for the separate flush)");
     gap0511_reg_step.dependOn(&run_gap0511_reg_tests.step);
+    // SONNY-6541 (1): a Raft drop_graph apply and a leader request that holds
+    // the graph's lock and proposes do not deadlock. In-process 3-node cluster.
+    const sonny6541_dd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_drop_apply_deadlock.zig"), .target = target, .optimize = optimize });
+    sonny6541_dd_test_mod.link_libc = true;
+    sonny6541_dd_test_mod.addImport("geode", root_mod);
+    sonny6541_dd_test_mod.addImport("schema", schema_mod);
+    sonny6541_dd_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6541_dd_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6541_dd_test_mod.addImport("logging", logging_mod);
+    sonny6541_dd_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6541_dd_tests = b.addTest(.{ .root_module = sonny6541_dd_test_mod });
+    const run_sonny6541_dd_tests = b.addRunArtifact(sonny6541_dd_tests);
+    shardDep(test_step, &run_sonny6541_dd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_dd_step = b.step("test-sonny6541-drop-apply-deadlock", "Run SONNY-6541 item 1 regression (a leader request holding a graph's write lock proposes while the leader's Raft drop_graph apply of that graph waits for the lock under inner_mutex: the request is answered GraphNotFound instead of deadlocking the Raft node; the drop then applies on every node and the cluster still commits; in-process 3-node cluster)");
+    sonny6541_dd_step.dependOn(&run_sonny6541_dd_tests.step);
+    // SONNY-6541 (2): a checkpoint waits for a 2PC commit's write.
+    const sonny6541_tp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig"), .target = target, .optimize = optimize });
+    sonny6541_tp_test_mod.addImport("geode", root_mod);
+    const sonny6541_tp_tests = b.addTest(.{ .root_module = sonny6541_tp_test_mod });
+    const run_sonny6541_tp_tests = b.addRunArtifact(sonny6541_tp_tests);
+    shardDep(test_step, &run_sonny6541_tp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_tp_step = b.step("test-sonny6541-2pc-apply-checkpoint-exclusion", "Run SONNY-6541 item 2 regression (a full checkpoint of a graph started while a committed 2PC txn_decide's node create is between the engine counting the node and writing its record does not complete until the decide's write is done)");
+    sonny6541_tp_step.dependOn(&run_sonny6541_tp_tests.step);
+    // SONNY-6541 (3): the first read of a never-hydrated damaged graph fails
+    // closed, in process and against a real server.
+    const sonny6541_fr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_quarantine_first_read.zig"), .target = target, .optimize = optimize });
+    sonny6541_fr_test_mod.link_libc = true;
+    sonny6541_fr_test_mod.addImport("geode", root_mod);
+    sonny6541_fr_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6541_fr_test_mod.addImport("schema", schema_mod);
+    sonny6541_fr_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6541_fr_tests = b.addTest(.{ .root_module = sonny6541_fr_test_mod });
+    const run_sonny6541_fr_tests = b.addRunArtifact(sonny6541_fr_tests);
+    spawnsBuiltGeode(sonny6541_fr_tests);
+    shardDep(test_step, &run_sonny6541_fr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_fr_step = b.step("test-sonny6541-quarantine-first-read", "Run SONNY-6541 item 3 regression (every read shape, filtered counts, ORDER BY and max()/min()/sum() included, run as the FIRST statement after a restart on a default or second graph whose node pages were zeroed fails closed with a corruption error, in process and against a real server)");
+    sonny6541_fr_step.dependOn(&run_sonny6541_fr_tests.step);
+    // SONNY-6541 (4): SHOW TABLES fails when its label listing fails.
+    const sonny6541_st_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_show_tables_errors.zig"), .target = target, .optimize = optimize });
+    sonny6541_st_test_mod.addImport("geode", root_mod);
+    const sonny6541_st_tests = b.addTest(.{ .root_module = sonny6541_st_test_mod });
+    const run_sonny6541_st_tests = b.addRunArtifact(sonny6541_st_tests);
+    shardDep(test_step, &run_sonny6541_st_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_st_step = b.step("test-sonny6541-show-tables-errors", "Run SONNY-6541 item 4 regression (SHOW TABLES run in process with each of its allocations failing in turn either fails or lists every label; it never answers a short or empty list from a failed listing)");
+    sonny6541_st_step.dependOn(&run_sonny6541_st_tests.step);
+    // SONNY-6541 (7): a session on a quarantined graph can switch off it.
+    const sonny6541_ug_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_quarantine_use_graph.zig"), .target = target, .optimize = optimize });
+    sonny6541_ug_test_mod.link_libc = true;
+    sonny6541_ug_test_mod.addImport("geode", root_mod);
+    sonny6541_ug_test_mod.addImport("schema", schema_mod);
+    sonny6541_ug_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6541_ug_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6541_ug_test_mod.addImport("logging", logging_mod);
+    sonny6541_ug_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6541_ug_tests = b.addTest(.{ .root_module = sonny6541_ug_test_mod });
+    const run_sonny6541_ug_tests = b.addRunArtifact(sonny6541_ug_tests);
+    spawnsBuiltGeode(sonny6541_ug_tests);
+    shardDep(test_step, &run_sonny6541_ug_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_ug_step = b.step("test-sonny6541-quarantine-use-graph", "Run SONNY-6541 item 7 regression (a session whose current graph is quarantined switches to another graph with USE GRAPH, SESSION SET GRAPH and SESSION RESET GRAPH and reads it, over QUIC against a real server, through the gRPC handler and through the executor in process; USE GRAPH of the damaged graph followed by a read is still refused)");
+    sonny6541_ug_step.dependOn(&run_sonny6541_ug_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.

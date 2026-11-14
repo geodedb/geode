@@ -544,7 +544,32 @@ pub const TxnCoordinator = struct {
         });
     }
 
+    // CANARY: REQ=REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=DecideHoldsReplicatedApplyMutex; STATUS=TESTED; TEST=tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6541 (2): each operation holds its graph's
+    /// `replicated_apply_mutex`, as a Raft graph mutation's apply does
+    /// (SONNY-6528 (1), `raft_apply.applyGraphMutationInner`): a checkpoint
+    /// of the graph waits for it. It runs on the Raft apply thread under the
+    /// node's `inner_mutex`, so it cannot take the graph's `rwlock`. The
+    /// graph is hydrated first, outside the mutex (a first hydration persists
+    /// its products with a checkpoint of the graph).
     fn applyOperation(self: *TxnCoordinator, op: WriteSetOp) !void {
+        const op_graph = switch (op) {
+            .node_op => |n| n.graph,
+            .edge_op => |e| e.graph,
+        };
+        const graph_name = if (op_graph.len > 0) op_graph else graph_store.DEFAULT_GRAPH_NAME;
+        self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
+            error.GraphAlreadyExists => {},
+            else => return err,
+        };
+        self.store.ensureGraphHydrated(graph_name);
+        const adapter = graph_store.getGlobalAdapter();
+        const apply_mg = if (adapter) |a| try a.beginReplicatedApply(graph_name) else null;
+        defer if (apply_mg) |mg| adapter.?.endReplicatedApply(mg);
+        return self.applyOperationLocked(op);
+    }
+
+    fn applyOperationLocked(self: *TxnCoordinator, op: WriteSetOp) !void {
         switch (op) {
             .node_op => |node_op| {
                 const graph_name = if (node_op.graph.len > 0) node_op.graph else graph_store.DEFAULT_GRAPH_NAME;

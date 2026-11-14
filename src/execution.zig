@@ -1586,8 +1586,9 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
 /// engine-direct reads (an exact-index or ordered-index read, a pushed-down
 /// aggregate, a fulltext search) and the index-served writes never pass the
 /// hydration chokepoint that notes a quarantined graph: they answered from
-/// it. A program that changes data hydrates its graph first, so its damage
-/// is found before anything is written. CREATE and DROP GRAPH alone run
+/// it. A program hydrates its graphs first, so its damage is found before
+/// anything is read or written (SONNY-6541 (3): reads too). CREATE and DROP
+/// GRAPH alone run
 /// (dropping a damaged graph is how an operator removes it).
 fn refuseQuarantinedProgram(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !void {
     // Only an engine-backed store hydrates, and so quarantines, a graph.
@@ -1598,7 +1599,14 @@ fn refuseQuarantinedProgram(allocator: std.mem.Allocator, program: *const ast.Pr
     const graphs = try query_traits.programDataGraphList(allocator, program, start, home);
     defer allocator.free(graphs);
     if (graphs.len == 0) return;
-    if (graph_store.programQuarantineError(allocator, graphs, query_traits.isMutatingProgram(program))) |err| return err;
+    // CANARY: REQ=REQ-SONNY-6541-FIRST-READ-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=ExecutorGateHydrates; STATUS=TESTED; TEST=tests/test_sonny6541_quarantine_first_read.zig; OWNER=storage; UPDATED=2026-11-14
+    // SONNY-6541 (3): a read hydrates its graphs here too. In process, the
+    // engine-direct reads (a filtered count, an ORDER BY, max()) read the
+    // pages and never hydrate, so as the first statement on a damaged graph
+    // they answered from its zeroed pages before anything found the damage.
+    // The transports' reads hydrate in their read snapshot before this runs;
+    // a hydrated graph costs one lookup.
+    if (graph_store.programQuarantineError(allocator, graphs, true)) |err| return err;
 }
 
 fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {

@@ -3605,9 +3605,7 @@ REQ-PERF-MERGE-001,MergeThroughput,BulkInsert,BENCHED,benchmarks/benchmark_merge
 REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,build.zig,,,build,2026-04-09
 REQ-PERF-MERGE-001,IndexRebuild,DeferredRebuild,IMPL,src/index/index_manager.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
-REQ-PERF-MERGE-004,Execution,AdapterMergeVarianceEnvelope,BENCHED,tests/benchmark_merge_adapter_variance.zig,,BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope,engine,2026-04-08
 REQ-PERF-MERGE-006,Execution,RelationshipMergeEndpointLookup,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
-REQ-PERF-MERGE-007,Execution,RelationshipMergeAdjacencyEnvelope,BENCHED,tests/benchmark_merge_adapter_variance.zig,,BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope,engine,2026-04-08
 REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-NO-SNAPSHOT-CLONE,MergeStatementIsMutating,Regression,TESTED,tests/test_merge_query_is_mutating.zig,tests/test_merge_query_is_mutating.zig,,performance,2026-06-21
 REQ-PERF-METRICS-001,RuntimeMetrics,RegistryInit,TESTED,src/server/main.zig,src/server/runtime_metrics.zig,,server,2026-06-11
@@ -5506,6 +5504,17 @@ REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,CrossGraphListingsFailClos
 REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,Regression,TESTED,tests/test_sonny6528_quarantine_in_process.zig,tests/test_sonny6528_quarantine_in_process.zig,,storage,2026-11-14
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,SecurityGraphWriteLock,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,Regression,TESTED,tests/test_sonny6528_security_write_exclusion.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,DecideHoldsReplicatedApplyMutex,TESTED,src/distributed/txn_coordinator.zig,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,,distributed,2026-11-14
+REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,Regression,TESTED,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,,distributed,2026-11-14
+REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK,DistributedCluster,DropApplyAnnouncesWait,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6541_drop_apply_deadlock.zig,,distributed,2026-11-14
+REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK,DistributedCluster,RequestInnerMutexYields,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6541_drop_apply_deadlock.zig,,distributed,2026-11-14
+REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK,DistributedCluster,HolderYieldsToReplicatedDrop,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6541_drop_apply_deadlock.zig,,distributed,2026-11-14
+REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK,DistributedCluster,Regression,TESTED,tests/test_sonny6541_drop_apply_deadlock.zig,tests/test_sonny6541_drop_apply_deadlock.zig,,distributed,2026-11-14
+REQ-SONNY-6541-FIRST-READ-FAIL-CLOSED,StorageIntegrity,ExecutorGateHydrates,TESTED,src/execution.zig,tests/test_sonny6541_quarantine_first_read.zig,,storage,2026-11-14
+REQ-SONNY-6541-FIRST-READ-FAIL-CLOSED,StorageIntegrity,Regression,TESTED,tests/test_sonny6541_quarantine_first_read.zig,tests/test_sonny6541_quarantine_first_read.zig,,storage,2026-11-14
+REQ-SONNY-6541-QUARANTINE-SESSION-SWITCH,StorageIntegrity,Regression,TESTED,tests/test_sonny6541_quarantine_use_graph.zig,tests/test_sonny6541_quarantine_use_graph.zig,,storage,2026-11-14
+REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,ListingErrorPropagates,TESTED,src/execution/statement_handlers.zig,tests/test_sonny6541_show_tables_errors.zig,,execution,2026-11-14
+REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,Regression,TESTED,tests/test_sonny6541_show_tables_errors.zig,tests/test_sonny6541_show_tables_errors.zig,,execution,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

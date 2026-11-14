@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:01:01.381222281Z",
+  "generated_at": "2026-11-14T06:52:12.443210137Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -55453,25 +55453,6 @@
       ]
     },
     {
-      "id": "REQ-PERF-MERGE-004",
-      "features": [
-        {
-          "feature": "Execution",
-          "aspect": "AdapterMergeVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_merge_adapter_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2026-04-08"
-        }
-      ]
-    },
-    {
       "id": "REQ-PERF-MERGE-006",
       "features": [
         {
@@ -55485,25 +55466,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-PERF-MERGE-007",
-      "features": [
-        {
-          "feature": "Execution",
-          "aspect": "RelationshipMergeAdjacencyEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_merge_adapter_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope"
-          ],
-          "owner": "engine",
-          "updated": "2026-04-08"
         }
       ]
     },
@@ -86351,6 +86313,185 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DecideHoldsReplicatedApplyMutex",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/txn_coordinator.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DropApplyAnnouncesWait",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_drop_apply_deadlock.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RequestInnerMutexYields",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_drop_apply_deadlock.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HolderYieldsToReplicatedDrop",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_drop_apply_deadlock.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6541_drop_apply_deadlock.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_drop_apply_deadlock.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6541-FIRST-READ-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ExecutorGateHydrates",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_quarantine_first_read.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6541_quarantine_first_read.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_quarantine_first_read.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6541-QUARANTINE-SESSION-SWITCH",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6541_quarantine_use_graph.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_quarantine_use_graph.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6541-SHOW-TABLES-ERRORS",
+      "features": [
+        {
+          "feature": "SHOW TABLES",
+          "aspect": "ListingErrorPropagates",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_show_tables_errors.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "SHOW TABLES",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6541_show_tables_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6541_show_tables_errors.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93908,11 +94049,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 144,
+      "BENCHED": 142,
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4957
+      "TESTED": 4968
     },
     "by_aspect": {
       "2PC": 3,
@@ -93960,7 +94101,6 @@
       "AdapterGuard": 1,
       "AdapterImport": 1,
       "AdapterMergeSnapshotElision": 1,
-      "AdapterMergeVarianceEnvelope": 1,
       "AdapterRefusesDefault": 1,
       "AdapterRegistryLifetime": 1,
       "AdapterRegression": 1,
@@ -94758,6 +94898,7 @@
       "DecTypeReexport": 1,
       "DecideEvalExpression": 1,
       "DecideHit": 1,
+      "DecideHoldsReplicatedApplyMutex": 1,
       "DecideInsert": 1,
       "DecideLookup": 1,
       "DecideOneCatalog": 1,
@@ -94904,6 +95045,7 @@
       "DrainedConnectionCancelsEveryStream": 1,
       "DriftPolicyOutcomeStrict": 1,
       "DropAllRowsOfTheName": 1,
+      "DropApplyAnnouncesWait": 1,
       "DropClearsDimPin": 1,
       "DropConstraintLockedAndSaved": 1,
       "DropConstraintPersisted": 1,
@@ -95164,6 +95306,7 @@
       "ExecutionTests": 1,
       "Execution_QUIC": 1,
       "ExecutorFunction": 1,
+      "ExecutorGateHydrates": 1,
       "ExecutorGates": 1,
       "ExecutorPerTableVerdict": 1,
       "ExecutorProgramGate": 1,
@@ -95605,6 +95748,7 @@
       "HistogramStats": 1,
       "HitCounter": 1,
       "HmacKeyFileVsTdeKeyExplained": 1,
+      "HolderYieldsToReplicatedDrop": 1,
       "HomogeneousDetection": 1,
       "HomogeneousNodes": 1,
       "HomogeneousOperations": 1,
@@ -95903,6 +96047,7 @@
       "ListenErrorOwnership": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
+      "ListingErrorPropagates": 1,
       "ListsRecordsUniversal": 1,
       "LiteralParsing": 2,
       "LiteralTrue": 1,
@@ -97018,7 +97163,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 352,
+      "Regression": 357,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97032,7 +97177,6 @@
       "RelationshipLabelIndexScan": 1,
       "RelationshipMapParameters": 1,
       "RelationshipMatchEdgeRls": 1,
-      "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
       "RelativeDataDirAndRefusalCleanup": 1,
       "ReleaseAtStatement": 1,
@@ -97082,6 +97226,7 @@
       "RequestBurstShaping": 1,
       "RequestFrameSplitting": 1,
       "RequestGate": 1,
+      "RequestInnerMutexYields": 1,
       "RequestLineLifetime": 1,
       "RequiredChain": 1,
       "RequiredExpand": 1,

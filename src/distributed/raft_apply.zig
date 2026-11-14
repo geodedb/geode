@@ -681,6 +681,17 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
             // `graphExists` first and then took `acquireGraphWriteLock`; a
             // drop in between sent that lock to its global-exclusive
             // fallback for a graph that no longer existed.
+            // CANARY: REQ=REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK; FEATURE="DistributedCluster"; ASPECT=DropApplyAnnouncesWait; STATUS=TESTED; TEST=tests/test_sonny6541_drop_apply_deadlock.zig; OWNER=distributed; UPDATED=2026-11-14
+            // SONNY-6541 (1): that wait runs under the Raft node's
+            // `inner_mutex`, and a request on the leader holds its graph's
+            // lock while it proposes (taking `inner_mutex`) and waits for the
+            // commit. The wait is announced on the graph first: a holder of
+            // its lock that would wait for Raft gives up instead
+            // (`threadHoldsGraphAwaitedByReplicatedDrop`), lets go of the
+            // lock, and the drop goes on.
+            const drop_adapter = graph_store_mod.getGlobalAdapter();
+            const drop_mg = if (drop_adapter) |a| a.beginReplicatedDrop(sc.graph) else null;
+            defer if (drop_mg) |mg| drop_adapter.?.endReplicatedDrop(mg);
             store.dropGraph(sc.graph) catch |err| switch (err) {
                 error.GraphNotFound => {
                     log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
