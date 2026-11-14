@@ -10254,6 +10254,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0511_reg_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0511_reg_step = b.step("test-gap0511-regression", "Run GAP-0511 regressions (node and relationship MERGE and DELETE resolve their nodes through the exact property index with no read snapshot and no label scan; commitDeferRebuilds leaves queued advanced-index rebuilds for the separate flush)");
     gap0511_reg_step.dependOn(&run_gap0511_reg_tests.step);
+    // SONNY-6541 (1): a Raft drop_graph apply and a leader request that holds
+    // the graph's lock and proposes do not deadlock. In-process 3-node cluster.
+    const sonny6541_dd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6541_drop_apply_deadlock.zig"), .target = target, .optimize = optimize });
+    sonny6541_dd_test_mod.link_libc = true;
+    sonny6541_dd_test_mod.addImport("geode", root_mod);
+    sonny6541_dd_test_mod.addImport("schema", schema_mod);
+    sonny6541_dd_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6541_dd_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6541_dd_test_mod.addImport("logging", logging_mod);
+    sonny6541_dd_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6541_dd_tests = b.addTest(.{ .root_module = sonny6541_dd_test_mod });
+    const run_sonny6541_dd_tests = b.addRunArtifact(sonny6541_dd_tests);
+    shardDep(test_step, &run_sonny6541_dd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6541_dd_step = b.step("test-sonny6541-drop-apply-deadlock", "Run SONNY-6541 item 1 regression (a leader request holding a graph's write lock proposes while the leader's Raft drop_graph apply of that graph waits for the lock under inner_mutex: the request is answered GraphNotFound instead of deadlocking the Raft node; the drop then applies on every node and the cluster still commits; in-process 3-node cluster)");
+    sonny6541_dd_step.dependOn(&run_sonny6541_dd_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.
