@@ -8309,6 +8309,26 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info/rotate, authn config and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory; a relative XDG_STATE_HOME is ignored and the state dir goes under HOME)").dependOn(&run_tests.step);
     }
+    // SONNY-6551: the saved session file, REPL history, the server's default
+    // data directory and DSN query-parameter credentials (real binaries).
+    for ([_][3][]const u8{
+        .{ "tests/test_sonny6551_saved_session.zig", "test-sonny6551-saved-session", "Run SONNY-6551 items 1 and 2 regression (geode auth login --save-session writes one std.json credentials file, 0600 in a 0700 ~/.geode, through temp + rename and never through a symbolic link; geode query reads it back for that server only, ignores a garbage, old-format, foreign, expired, linked or world-readable file with a warning, and a read creates no ~/.geode)" },
+        .{ "tests/test_sonny6551_repl_history.zig", "test-sonny6551-repl-history", "Run SONNY-6551 item 3 regression (geode shell through a pseudo-terminal: statements that set a password and \\connect userinfo stay out of a 0600 history file, and a relative or unset HOME writes no history under the working directory)" },
+        .{ "tests/test_sonny6551_relative_state_home.zig", "test-sonny6551-relative-state-home", "Run SONNY-6551 item 4 regression (geode serve with no --data-dir ignores a relative XDG_STATE_HOME or HOME and never puts its data directory under the working directory)" },
+        .{ "tests/test_sonny6551_dsn_query_credentials.zig", "test-sonny6551-dsn-query-credentials", "Run SONNY-6551 item 5 regression (geode query and shell log in with user=/pass= and username=/password= DSN query parameters, a userinfo value takes precedence, and no credential is printed)" },
+    }) |spec| {
+        const mod = b.createModule(.{ .root_source_file = b.path(spec[0]), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(spec[1], spec[2]).dependOn(&run_tests.step);
+    }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig (std-only).
     {
         const dsn_mod = b.createModule(.{ .root_source_file = b.path("src/client/dsn_credentials.zig"), .target = target, .optimize = optimize });
