@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:24:54.613431954Z",
+  "generated_at": "2026-11-14T01:29:09.76021382Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85810,6 +85810,20 @@
       "features": [
         {
           "feature": "StorageIntegrity",
+          "aspect": "FailedCreateGivesSlotBack",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93473,7 +93487,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4932
+      "TESTED": 4933
     },
     "by_aspect": {
       "2PC": 3,
@@ -94794,6 +94808,7 @@
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
       "FailedAddUntrustsIndex": 1,
+      "FailedCreateGivesSlotBack": 1,
       "FailedLogin": 1,
       "FailedQueryExitsNonZero": 1,
       "FailedTransactionSemantics": 1,

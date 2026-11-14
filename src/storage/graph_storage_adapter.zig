@@ -2448,6 +2448,42 @@ fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from
     shard.edge_index_dirty = true;
 }
 
+// CANARY: REQ=REQ-SONNY-6523-FAILED-CREATE-COUNT; FEATURE="StorageIntegrity"; ASPECT=FailedCreateGivesSlotBack; STATUS=TESTED; TEST=tests/test_sonny6523_failed_create_count.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (2): give back the node slot `allocNode` handed a create that
+/// then failed. `allocNode` counts the node in the shard manifest at once,
+/// and an aborted engine transaction neither returns the slot nor restores
+/// the pages it wrote (graph-storage's abort only drops the transaction's WAL
+/// records): the count stayed one ahead of the live records, or a
+/// half-written record with no geode node over it stayed in the page, and the
+/// next checkpoint persisted either. The live-count check (REQ-GQL-028) then
+/// failed the graph with DataCorruption after a restart.
+///
+/// `txn`: the transaction the record would have been written in, still
+/// active. A record in the slot is deleted in it (`deleteNodeTxn`: the
+/// tombstone is logged and the count taken back), so the slot reads the
+/// same whether the transaction then commits (a joined statement
+/// transaction) or aborts. With no record (or no transaction yet), only the
+/// count is taken back, and the id too when it is still the last one the
+/// shard issued. The caller holds what serializes its `allocNode` on the
+/// shard (the graph's write lock, or its shard lock), so neither is another
+/// writer's.
+fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId) void {
+    if (txn) |t| {
+        if (shard.node_store.getRawSlot(node_id) catch null) |rec| {
+            if (!gs.node.isDeleted(&rec)) {
+                if (shard.deleteNodeTxn(node_id, t)) |_| return else |err| {
+                    log.err("SONNY-6523: could not delete the record of failed node create {d} ({s}); the shard's live-node count may be off by one", .{ node_id, @errorName(err) });
+                    return;
+                }
+            }
+            return; // already tombstoned: deleteNodeTxn took the count back
+        }
+    }
+    if (shard.manifest.node_count > 0) shard.manifest.node_count -= 1;
+    const stride: u64 = if (shard.config.base_shard_index != null) gs.sharded_engine.SHARD_COUNT else 1;
+    if (shard.manifest.next_node_id == node_id + stride) shard.manifest.next_node_id = node_id;
+}
+
 /// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
 /// node's label var_store page inside the mutating txn so it commits (and, on
 /// the security graph's `sync_each_commit` engines, fsyncs) with the mutation.
@@ -4432,6 +4468,9 @@ pub const StorageAdapter = struct {
             try mg.engine.allocNode();
         if (node_slot_allocated_hook) |hook| hook(mg);
         const node_shard = mg.shardEngineForNode(node_id);
+        // SONNY-6523 (2): a failure from here on gives the slot back.
+        var slot_txn_open = false;
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -4444,11 +4483,14 @@ pub const StorageAdapter = struct {
             shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
         else
             try node_shard.beginTxn();
+        slot_txn_open = true;
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
         errdefer if (own_txn) {
             // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
+        // SONNY-6523 (2): runs before the abort above, in the live txn.
+        errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn);
 
         // Write an initial node record.  The txn_stamp must be non-zero so
         // that getNode() does not treat the slot as empty (isEmpty checks all
@@ -4775,17 +4817,25 @@ pub const StorageAdapter = struct {
         defer mg.endNodeCensusWrite();
         const slot_id = try node_shard.allocNode();
         if (node_slot_allocated_hook) |hook| hook(mg);
+        // SONNY-6523 (2): a failure from here on gives the slot back.
+        var slot_txn_open = false;
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, slot_id, null);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, slot_id)
         else
             null;
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
+        slot_txn_open = true;
         const own_txn = stmt_local == null;
         errdefer if (own_txn) {
             // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
+        // SONNY-6523 (2): before the abort above; not once the node is in
+        // the in-memory store (a later failure leaves it, as before).
+        var slot_kept = false;
+        errdefer if (!slot_kept) releaseFailedNodeSlot(node_shard, slot_id, local_txn);
 
         var rec = gs.node.NodeRec{
             .out_head = 0,
@@ -4880,6 +4930,7 @@ pub const StorageAdapter = struct {
             defer mg.string_indexes_mutex.unlock(io);
             try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
         }
+        slot_kept = true;
         if (own_txn) try node_shard.commitTxn(local_txn);
 
         if (props.len > 0) {
@@ -6454,9 +6505,18 @@ pub const StorageAdapter = struct {
 
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
+        // SONNY-6523 (2): on a failure every slot allocated here is given
+        // back (before the shard txns are aborted above).
+        var allocated: usize = 0;
+        errdefer for (out[0..allocated]) |id| {
+            const si = gs.shard_count.shardOfNode(id);
+            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si]);
+        };
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
+            out[i] = node_id;
+            allocated = i + 1;
             const si = gs.shard_count.shardOfNode(node_id);
             const node_shard = mg.engine.shards[si];
             if (shard_txns[si] == null) shard_txns[si] = try node_shard.beginTxn();

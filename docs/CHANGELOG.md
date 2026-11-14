@@ -2323,6 +2323,25 @@
   already did. Regression: `zig build test-sonny6523-quarantine-fail-closed`
   (real server, zeroed node pages; 27 read and write shapes, each as the
   first statement after the restart and again).
+- **A node create that fails part-way leaves no record behind (SONNY-6523
+  item 2).** The storage adapter's node creates (`createNode`, the
+  reserved-id bulk insert behind the CREATE and MERGE fast paths and the
+  group commit, `createNodesBatch`) allocate the engine slot first: the
+  shard manifest counts the node at once. On a later error (a new label's
+  dictionary write failing, any engine write error) they aborted their
+  engine transaction and returned. graph-storage's abort drops the
+  transaction's WAL records but neither returns the slot nor restores the
+  pages it wrote, so the node record written before the error stayed in
+  the page with no geode node over it, counted, and the next checkpoint
+  made it durable: a ghost node that `MATCH (n)` did not return but every
+  engine scan did (and, had the record not been written yet, a count one
+  ahead of the records, which the live-count check reports as
+  `DataCorruption`). The failed create now deletes the record in its own
+  transaction (or, with none written, takes the count and the id back)
+  before the abort (`releaseFailedNodeSlot`). Regression: `zig build
+  test-sonny6523-failed-create-count` (each create path, failed by a
+  directory at every shard's `labels.dict.tmp`; 25 live records instead of
+  24 after the failure and 27 instead of 26 after a restart, before).
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20
