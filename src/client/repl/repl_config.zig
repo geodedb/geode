@@ -16,26 +16,33 @@ const builtin = @import("builtin");
 // CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="Config Library Migration"; ASPECT=ReplConfigXdg; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const config_lib = @import("config");
 
-pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
-    // Check GEODE_HISTORY environment variable first (user override)
-    if (getEnvVarOwned(allocator, "GEODE_HISTORY")) |path| {
-        return path;
-    } else |_| {}
+// CANARY: REQ=REQ-SONNY-6551-REPL-HISTORY-SECRETS; FEATURE="REPL history"; ASPECT=AbsoluteHistoryPathOnly; STATUS=TESTED; TEST=tests/test_sonny6551_repl_history.zig; OWNER=cli; UPDATED=2026-11-14
+/// Where the shell keeps its history, or why it keeps none.
+pub const HistoryPath = union(enum) {
+    /// Owned by the caller.
+    path: []u8,
+    unavailable: []const u8,
+};
 
-    // Primary: Try ~/.geode_history as the default preference
-    if (comptime builtin.os.tag != .windows) {
-        if (posixGetenv("HOME")) |home| {
-            return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
+/// SONNY-6551: `GEODE_HISTORY`, else `<HOME>/.geode_history` (USERPROFILE
+/// on Windows when HOME is unset), each only when it is an absolute path:
+/// the CLI's HOME rule (src/cli/security/home_dir.zig, SONNY-6544). A
+/// relative HOME, and the old fallback of `.geode_history` in the working
+/// directory, wrote the history (statements, user names) wherever the shell
+/// was started; with no usable path there is no history file.
+pub fn getHistoryPath(allocator: std.mem.Allocator) !HistoryPath {
+    if (posixGetenv("GEODE_HISTORY")) |path| {
+        if (path.len > 0 and std.fs.path.isAbsolute(path)) return .{ .path = try allocator.dupe(u8, path) };
+        return .{ .unavailable = "GEODE_HISTORY is not an absolute path" };
+    }
+    const home: ?[:0]const u8 = posixGetenv("HOME") orelse
+        if (builtin.os.tag == .windows) posixGetenv("USERPROFILE") else null;
+    if (home) |h| {
+        if (h.len > 0 and std.fs.path.isAbsolute(h)) {
+            return .{ .path = try std.fs.path.join(allocator, &[_][]const u8{ h, ".geode_history" }) };
         }
     }
-
-    // Secondary: Use XDG-compliant platform-specific data directory
-    const data_dir = config_lib.xdg.getDataDir(allocator, "geode") catch {
-        return allocator.dupe(u8, ".geode_history");
-    };
-    defer allocator.free(data_dir);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ data_dir, "history" });
+    return .{ .unavailable = "HOME is not set or not an absolute path" };
 }
 
 pub fn shouldUseColor() bool {

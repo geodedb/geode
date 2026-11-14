@@ -76,7 +76,18 @@ pub const ReplLoop = struct {
         // Interrupt checking is done via polling stdin for Ctrl+C (ASCII 3) in blocking loops.
 
         // Initialize components
-        const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;
+        // SONNY-6551: no history file rather than one in an unsafe place;
+        // the session still keeps its in-memory history.
+        const history_path: ?[]u8 = if (opts.history_enabled) switch (try repl_config.getHistoryPath(opts.allocator)) {
+            .path => |path| path,
+            .unavailable => |why| blk: {
+                const stderr_file = platform.getStderrHandle();
+                stderr_file.writeStreamingAll(replIo(), "Note: shell history is not saved to a file: ") catch {};
+                stderr_file.writeStreamingAll(replIo(), why) catch {};
+                stderr_file.writeStreamingAll(replIo(), "\r\n") catch {};
+                break :blk null;
+            },
+        } else null;
         defer if (history_path) |path| opts.allocator.free(path);
 
         var history = try repl_history.HistoryStore.init(opts.allocator, history_path, opts.history_enabled);
