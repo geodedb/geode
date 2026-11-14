@@ -118,6 +118,45 @@
   with a lost node could not be opened. The check takes its table of lost
   slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
   test-sonny6452-tde-page-tail-repair`.
+- **A graph refused for disagreeing shard label dictionaries says so, and a
+  split left by the old ORDER BY path can be repaired on request
+  (SONNY-6524).** Every label id geode has written into a record, on any
+  shard, is shard 0's: names were given through a view of shard 0's
+  dictionary (from the move to the sharded engine, 2026-04-25) or through
+  `ShardedGraphEngine.getOrAssignLabel`, which has returned shard 0's id
+  since it was added, and geode reads names through shard 0's dictionary
+  only. When graph-storage 0.4.15 refuses a graph (above), geode now reads
+  its 16 dictionaries and logs which of two shapes it has (ERROR, scope
+  `storage`, with the graph name). (a) Shard 0 names every label the other
+  shards name, in the same id order: what the old ORDER BY path, the
+  shard-0-only naming before 2026-05-29 and a 0.4.14 broadcast that failed
+  part-way left. Shard 0's names are the ones the records were written with.
+  (b) A shard names a label shard 0 does not have, or orders two labels the
+  other way round: shard 0 lost a name (graph-storage 0.4.13 and older wrote
+  dictionaries only at checkpoint and went on to the next shard after one
+  failed), and rewriting the other shards from shard 0 would drop or rename
+  labels. New `GEODE_LABEL_DICT_ADOPT_SHARD0` (comma-separated graph names):
+  a graph named there in shape (a) is opened with graph-storage's
+  `.adopt_shard0`, which rewrites shards 1..15 from shard 0 (logged as a
+  WARN); it opens normally from then on. Shape (b) is refused even then and
+  needs a manual repair. geode does not adopt on its own: if shard 0 lost a
+  name, the old ORDER BY path gave its id to a label no node had yet, and
+  the lost name was named again, the dictionaries look exactly like shape
+  (a) while the nodes written before the loss carry the reused id, and
+  adopting reads them under the other label (as geode already did before
+  0.4.15). Reads and writes of a refused graph now fail with 58000
+  `LabelDictionaryDiverged` (they reported the generic `GraphQuarantined
+  ... restart the server to retry`, which a restart does not fix).
+  Regression: `zig build test-sonny6524-label-dict-split` (each shape built
+  with the engine calls that produced it and written through the adapter's
+  CREATE paths: refused by default with nothing written; adopted on
+  request with every node and relationship on every shard read back under
+  the label it was created with, through geode and through the owning
+  shard's own dictionary; the lost-name shapes refused even when asked,
+  and graph-storage's own adoption shown to read each of the 32 nodes
+  written before the loss under a wrong label or none; a real server
+  answers its other graphs throughout and counts the adopted graph's
+  labels as created).
 - **graph-storage v0.4.15 (SONNY-6524): a new label name costs about a
   sixth of what it did, a failed label write is undone, and shard label
   dictionaries are compared at open.** `ShardedGraphEngine.getOrAssignLabel`

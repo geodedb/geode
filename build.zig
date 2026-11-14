@@ -10252,8 +10252,7 @@ pub fn build(b: *std.Build) void {
     const sonny6524_tests = b.addTest(.{ .root_module = sonny6524_test_mod });
     const run_sonny6524_tests = b.addRunArtifact(sonny6524_tests);
     spawnsBuiltGeode(sonny6524_tests);
-    // Intentionally red until the fix (docs/KNOWN_TEST_ISSUES.md): not in shardDep yet.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6524_tests.step);
+    shardDep(test_step, &run_sonny6524_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6524_step = b.step("test-sonny6524-label-dict-split", "Run SONNY-6524 regression (graphs whose shard label dictionaries disagree, in every shape older geode and graph-storage left: refused at open by default with nothing written; a shift adopted from shard 0 when GEODE_LABEL_DICT_ADOPT_SHARD0 names the graph, every node and edge on every shard keeping the label it was created with; shapes in which shard 0 lost a name refused even then; a real server keeps serving its other graphs)");
     sonny6524_step.dependOn(&run_sonny6524_tests.step);
 

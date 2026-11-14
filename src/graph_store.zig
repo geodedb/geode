@@ -2430,20 +2430,25 @@ pub fn dropGraphMapScans() u64 {
 /// answer OK with missing rows (a corrupt graph read as empty). A storage
 /// corruption error from the build is reported as itself; any other cause
 /// (out of memory, I/O) as `GraphQuarantined`. Reopening the store
-/// re-registers the graph and retries the build.
-pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData };
+/// re-registers the graph and retries the build. SONNY-6524: a graph the
+/// storage engine refused to open because its shard label dictionaries
+/// disagree is reported as `LabelDictionaryDiverged` (a restart does not
+/// clear it).
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged };
 
 const QuarantineCause = enum(u8) {
     unknown,
     checksum_mismatch,
     data_corruption,
     invalid_data,
+    label_dictionary_diverged,
 
     fn of(err: anyerror) QuarantineCause {
         return switch (err) {
             error.ChecksumMismatch => .checksum_mismatch,
             error.DataCorruption => .data_corruption,
             error.InvalidData => .invalid_data,
+            error.LabelDictionaryDiverged => .label_dictionary_diverged,
             else => .unknown,
         };
     }
@@ -2454,6 +2459,7 @@ const QuarantineCause = enum(u8) {
             .checksum_mismatch => error.ChecksumMismatch,
             .data_corruption => error.DataCorruption,
             .invalid_data => error.InvalidData,
+            .label_dictionary_diverged => error.LabelDictionaryDiverged,
         };
     }
 };

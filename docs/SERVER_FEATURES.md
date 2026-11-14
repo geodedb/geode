@@ -157,6 +157,19 @@ the key is loaded by `src/storage/tde_file_encryption.zig` (`loadKey`).
 - All database files created with mode 0o600 (owner-only access)
 - Parent directory fsync for durability guarantees
 
+**Shard label dictionaries** (SONNY-6524): each of a graph's 16 shards keeps
+a `labels.dict`. A graph whose shards disagree on what a label id used by
+its records means is not opened: its reads and writes fail with 58000
+`LabelDictionaryDiverged`, the server and its other graphs keep serving,
+and the server log (ERROR, scope `storage`) names the graph and the shape.
+For the shape geode's old ORDER BY path left (shard 0 names every label the
+other shards name, in the same order), `GEODE_LABEL_DICT_ADOPT_SHARD0=<graph>[,<graph>...]`
+rewrites shards 1..15 from shard 0 at the next open. Do not set it for a
+store that ran graph-storage 0.4.13 or older and had a checkpoint of shard 0
+fail before a crash. A graph in which a shard names a label shard 0 lacks,
+or orders two labels differently, is refused even then and needs a manual
+repair.
+
 ### 1.4 Backup (local files only)
 
 **Status (2026-11-12, SONNY-6422):** there is no S3 / DigitalOcean Spaces

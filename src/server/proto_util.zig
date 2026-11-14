@@ -692,6 +692,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // reopens it. A storage corruption error from the build is reported
         // as itself (58000 ChecksumMismatch / DataCorruption / InvalidData).
         error.GraphQuarantined => .{ .code = "58000", .message = "GraphQuarantined: the graph's indexes could not be loaded from storage, so it is quarantined and refuses reads and writes; see the server log, then restart the server to retry" },
+        // SONNY-6524: graph-storage refused to open the graph because its
+        // shards' label dictionaries disagree on what a label id used by
+        // records means; serving it could return wrong labels.
+        error.LabelDictionaryDiverged => .{ .code = "58000", .message = "LabelDictionaryDiverged: the graph's shard label dictionaries disagree, so it is not opened and refuses reads and writes; other graphs are unaffected. The server log names the graph and says whether GEODE_LABEL_DICT_ADOPT_SHARD0 can repair it or it needs a manual repair" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }
