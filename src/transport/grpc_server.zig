@@ -3381,7 +3381,11 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             }
             // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=GrpcProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
             // SONNY-6523: as the QUIC handler (`programQuarantineError`).
-            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs) {
+            // SONNY-6541 (7): and as it, not for a program that touches no
+            // graph's data.
+            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
+                query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
+            {
                 if (graph_store.programQuarantineError(allocator, &.{lock_graph}, is_mutation)) |qerr| {
                     const info = proto_util.mapError(qerr);
                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});

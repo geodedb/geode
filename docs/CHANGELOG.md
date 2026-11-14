@@ -2352,6 +2352,17 @@
   of which answered zero rows. A quarantined graph was refused only through
   the store's separate quarantine note. Regression: `zig build
   test-sonny6541-show-tables-errors`.
+- **A session whose graph is quarantined can switch to another graph
+  (SONNY-6541 item 7).** The QUIC and gRPC handlers' quarantine gate
+  (SONNY-6523) checked the session's current graph for every program, so `USE GRAPH
+  default`, `SESSION SET GRAPH default` and `SESSION RESET GRAPH` from a
+  session on a damaged graph were refused with 58000 and the client had to
+  reconnect. A program that touches no graph's data (`programDataGraph` is
+  none: session and graph selection, transaction control) is no longer
+  checked; `USE GRAPH damaged; MATCH ...` is still refused. The executor's
+  own gate (SONNY-6528) already checked only the graphs whose data a
+  program touches. Regression: `zig build test-sonny6541-quarantine-use-graph`
+  (QUIC against a real server, gRPC and the executor in process).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

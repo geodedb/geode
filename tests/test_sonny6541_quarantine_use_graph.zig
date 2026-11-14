@@ -363,7 +363,13 @@ test "SONNY-6541 (7): a session on a quarantined graph switches off it over QUIC
         defer geode.txn_undo_log.setThreadTxnId(0);
         const sid = try sessions.createSession("s6541", "", null, null, null, false, 0);
         for (steps) |s| {
-            const code = try fx.outcome(arena.allocator(), sid, s.q);
+            // A request the handler fails with an error of its own (not a
+            // response) is refused too: the node-scan read of a quarantined
+            // graph does that (`node_scan_stream.prepare`).
+            const code = fx.outcome(arena.allocator(), sid, s.q) catch |err| {
+                failures += judge("gRPC", s, false, @errorName(err));
+                continue;
+            };
             failures += judge("gRPC", s, code == null, code orelse "");
         }
     }
