@@ -1716,6 +1716,22 @@ pub fn shouldExposePropertyKey(key: []const u8) bool {
 
 const merge_tuple_lock_count: usize = 16384;
 
+/// SONNY-6523 (5): the data directory's dropped-graph names
+/// (`StorageAdapter.saveDroppedGraphNamesLocked`).
+const dropped_graphs_file_name = "dropped_graphs.dat";
+const dropped_graphs_magic = "GEODROP1";
+
+/// SONNY-6523 (5): fsync the directory holding `path`, so a rename into it
+/// survives power loss (as graph-storage's `syncGraphDir`: `.iterate = true`
+/// opens a real directory fd; the default O_PATH one fails fsync).
+fn syncDirOf(path: []const u8) !void {
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(sio, std.fs.path.dirname(path) orelse ".", .{ .iterate = true });
+    defer dir.close(sio);
+    const dir_file = std.Io.File{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
+    try dir_file.sync(sio);
+}
+
 // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=QuarantinedGraphRefusesWrites; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
 /// SONNY-6523: `ManagedGraph.quarantine`'s codes, one per
 /// `graph_store.GraphQuarantineError`.
@@ -3829,6 +3845,8 @@ pub const StorageAdapter = struct {
     config: gs.GraphConfig,
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
+    /// SONNY-6523 (5): `dropped_graph_names` on disk (`saveDroppedGraphNamesLocked`).
+    dropped_graphs_path: []const u8, // owned
     mutex: std.Io.Mutex,
     /// SONNY-6472 (2): names of graphs dropped since this adapter opened
     /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
@@ -3943,6 +3961,7 @@ pub const StorageAdapter = struct {
             .config = config,
             .registry = gs.registry.GraphRegistry.init(allocator),
             .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
+            .dropped_graphs_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ owned_dir, dropped_graphs_file_name }),
             .mutex = std.Io.Mutex.init,
             // GAP-0900: checkpoint-cadence observability counters.
             .checkpoints_total = std.atomic.Value(u64).init(0),
@@ -3955,6 +3974,8 @@ pub const StorageAdapter = struct {
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
+        errdefer allocator.free(self.dropped_graphs_path);
+        errdefer self.freeDroppedGraphNames();
 
         // CANARY: REQ=REQ-SONNY-6430-REGISTRY-FAIL-CLOSED; FEATURE="Storage Adapter"; ASPECT=UnloadableRegistryRefuses; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=storage; UPDATED=2026-11-12
         // SONNY-6430: a registry that exists but cannot be loaded is an
@@ -3966,6 +3987,13 @@ pub const StorageAdapter = struct {
                 log.warn("cannot load the graph registry {s}: {}; refusing to open the data directory without its graphs", .{ self.registry_path, err });
                 return err;
             },
+        };
+        // SONNY-6523 (5): the names of the graphs dropped before this open.
+        // One that cannot be read refuses the open, as the registry does: a
+        // late write would otherwise create a dropped graph again.
+        self.loadDroppedGraphNames() catch |err| {
+            log.warn("cannot load the dropped-graph names {s}: {}; refusing to open the data directory", .{ self.dropped_graphs_path, err });
+            return err;
         };
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
@@ -4031,6 +4059,7 @@ pub const StorageAdapter = struct {
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -4081,6 +4110,7 @@ pub const StorageAdapter = struct {
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -4135,10 +4165,18 @@ pub const StorageAdapter = struct {
     /// SONNY-6472 (2): CREATE GRAPH: `getOrCreateGraph`, and a graph dropped
     /// earlier under this name is created afresh (its name leaves
     /// `dropped_graph_names`).
+    ///
+    /// SONNY-6523 (5): the name leaves the tombstone file on disk before the
+    /// graph is created; a failed write leaves the name dropped (and the
+    /// create fails).
     pub fn createGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.dropped_graph_names.fetchRemove(name)) |kv| {
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                self.dropped_graph_names.putAssumeCapacity(kv.key, {});
+                return err;
+            };
             self.allocator.free(kv.key);
         }
         return self.getOrCreateGraphLocked(name);
@@ -4159,6 +4197,79 @@ pub const StorageAdapter = struct {
         var it = self.dropped_graph_names.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
         self.dropped_graph_names.deinit(self.allocator);
+        self.dropped_graph_names = .empty;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE; FEATURE="MultiGraphIsolation"; ASPECT=DurableDroppedNames; STATUS=TESTED; TEST=tests/test_sonny6523_dropped_graph_restart.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6523 (5): write `dropped_graph_names` to `dropped_graphs_path`
+    /// durably (a temporary file, fsync, rename, directory fsync). Format:
+    /// the magic, a u32 count, then each name as a u16 length and its bytes
+    /// (little-endian). No names: the file is removed. Caller holds `mutex`.
+    fn saveDroppedGraphNamesLocked(self: *StorageAdapter) !void {
+        const sio = std.Io.Threaded.global_single_threaded.io();
+        if (self.dropped_graph_names.count() == 0) {
+            std.Io.Dir.cwd().deleteFile(sio, self.dropped_graphs_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+            return syncDirOf(self.dropped_graphs_path);
+        }
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.allocator);
+        try buf.appendSlice(self.allocator, dropped_graphs_magic);
+        var count_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &count_bytes, @intCast(self.dropped_graph_names.count()), .little);
+        try buf.appendSlice(self.allocator, &count_bytes);
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| {
+            if (k.len > std.math.maxInt(u16)) return error.NameTooLong;
+            var len_bytes: [2]u8 = undefined;
+            std.mem.writeInt(u16, &len_bytes, @intCast(k.len), .little);
+            try buf.appendSlice(self.allocator, &len_bytes);
+            try buf.appendSlice(self.allocator, k.*);
+        }
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.dropped_graphs_path});
+        defer self.allocator.free(tmp_path);
+        {
+            const file = try std.Io.Dir.cwd().createFile(sio, tmp_path, .{ .truncate = true });
+            defer file.close(sio);
+            try file.writeStreamingAll(sio, buf.items);
+            try file.sync(sio);
+        }
+        try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), self.dropped_graphs_path, sio);
+        try syncDirOf(self.dropped_graphs_path);
+    }
+
+    /// SONNY-6523 (5): load `dropped_graphs_path` into `dropped_graph_names`
+    /// (none when it is absent). A name the registry holds is not dropped (a
+    /// crash between the tombstone and the drop left it); a malformed file is
+    /// an error.
+    fn loadDroppedGraphNames(self: *StorageAdapter) !void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        const data = std.Io.Dir.cwd().readFileAlloc(lio, self.dropped_graphs_path, self.allocator, .limited(64 << 20)) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer self.allocator.free(data);
+        if (data.len < dropped_graphs_magic.len + 4 or !std.mem.eql(u8, data[0..dropped_graphs_magic.len], dropped_graphs_magic)) return error.InvalidData;
+        var pos: usize = dropped_graphs_magic.len;
+        const n = std.mem.readInt(u32, data[pos..][0..4], .little);
+        pos += 4;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            if (pos + 2 > data.len) return error.InvalidData;
+            const len = std.mem.readInt(u16, data[pos..][0..2], .little);
+            pos += 2;
+            if (pos + len > data.len) return error.InvalidData;
+            const name = data[pos .. pos + len];
+            pos += len;
+            if (self.findRegistryEntryLocked(name) != null) continue;
+            if (self.dropped_graph_names.contains(name)) continue;
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.dropped_graph_names.put(self.allocator, owned, {});
+        }
+        if (pos != data.len) return error.InvalidData;
     }
 
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
@@ -4264,7 +4375,12 @@ pub const StorageAdapter = struct {
     /// SONNY-6472 (2): the name is recorded in `dropped_graph_names` (room
     /// taken before anything is dropped: OutOfMemory drops nothing), so a
     /// write racing the drop cannot create the graph again.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
+    ///
+    /// SONNY-6523 (5): and written to the tombstone file
+    /// (`saveDroppedGraphNamesLocked`) before anything is dropped, so the
+    /// name stays dropped across a restart. A failed write drops nothing
+    /// (`DroppedGraphNamesNotSaved`).
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory, DroppedGraphNamesNotSaved }!void {
         // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
         if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -4278,6 +4394,11 @@ pub const StorageAdapter = struct {
             try self.dropped_graph_names.ensureUnusedCapacity(self.allocator, 1);
             const owned = try self.allocator.dupe(u8, name);
             self.dropped_graph_names.putAssumeCapacity(owned, {});
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                log.warn("cannot record the drop of graph '{s}' in {s}: {}; the graph is not dropped", .{ name, self.dropped_graphs_path, err });
+                if (self.dropped_graph_names.fetchRemove(name)) |kv| self.allocator.free(kv.key);
+                return error.DroppedGraphNamesNotSaved;
+            };
         }
 
         var dropped_uuid: ?[16]u8 = null;

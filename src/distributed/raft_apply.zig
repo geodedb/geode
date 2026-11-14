@@ -686,7 +686,9 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 },
                 // SONNY-6433: no room to record the graph lock; nothing was
                 // dropped, and the apply fails.
-                error.OutOfMemory => return err,
+                // SONNY-6523 (5): or the drop could not be recorded on disk;
+                // nothing was dropped either.
+                error.OutOfMemory, error.DroppedGraphNamesNotSaved => return err,
             };
             log.info("raft apply: dropped graph via schema_change", &.{
                 Attr.string("graph", sc.graph),

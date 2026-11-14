@@ -2362,6 +2362,21 @@
   rather than pointed at the shard files: a malformed shard `free.store`
   fails the graph's open (fail closed), as graph-storage decides. No
   behaviour changes.
+- **A graph dropped before a restart stays dropped after it (SONNY-6523
+  item 5).** SONNY-6472 / SONNY-6492 made a write to a dropped graph's name
+  (a bulk write, a replicated Raft apply) answer `GraphNotFound` instead of
+  creating the graph again, but the dropped names lived in memory only:
+  after a restart a replayed or late replicated write for a name dropped
+  before it created the graph again, with the write in it. DROP GRAPH now
+  records the name in `<data dir>/dropped_graphs.dat` (temporary file,
+  fsync, rename, directory fsync) before it drops anything, and the adapter
+  loads the names at open; CREATE GRAPH removes the name from the file
+  before it creates the graph, which starts empty. A drop whose name cannot
+  be written drops nothing and fails (`DroppedGraphNamesNotSaved`, also a
+  failed replicated drop); a file that cannot be read refuses the open, as
+  an unreadable graph registry does. Regression: `zig build
+  test-sonny6523-dropped-graph-restart` (the real Raft apply entry point
+  across three restarts).
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

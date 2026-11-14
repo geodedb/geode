@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:44:01.488072969Z",
+  "generated_at": "2026-11-14T01:57:46.233658506Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85843,6 +85843,20 @@
       "features": [
         {
           "feature": "MultiGraphIsolation",
+          "aspect": "DurableDroppedNames",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93527,7 +93541,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4935
+      "TESTED": 4936
     },
     "by_aspect": {
       "2PC": 3,
@@ -94557,6 +94571,7 @@
       "DurabilityFlushBeforeWatchdog": 1,
       "DurableAuthStateOrRefuse": 1,
       "DurableDdl": 1,
+      "DurableDroppedNames": 1,
       "DurableFleRoleGrants": 1,
       "DurableOrError": 1,
       "DurablePersistTestSuite": 1,
