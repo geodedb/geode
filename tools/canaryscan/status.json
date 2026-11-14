@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T03:04:36.145857496Z",
+  "generated_at": "2026-11-14T03:06:31.904827303Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85859,6 +85859,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6518-EXEC-ORDER",
+      "features": [
+        {
+          "feature": "StandaloneExec",
+          "aspect": "ReferenceOrder",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6518_exec_order.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_exec_order.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6525-CORRELATED-SUBQUERY",
       "features": [
         {
@@ -85930,6 +85949,25 @@
           ],
           "tests": [
             "tests/test_sonny6525_statement_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-WITH-GROUP-KEYS",
+      "features": [
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "TypedGroupKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_with_group_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_with_group_keys.zig"
           ],
           "benches": [],
           "owner": "engine",
@@ -93511,7 +93549,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4933
+      "TESTED": 4935
     },
     "by_aspect": {
       "2PC": 3,
@@ -96592,6 +96630,7 @@
       "RefactorBenchmark": 1,
       "RefactoredFunction": 1,
       "RefcountMaintenance": 1,
+      "ReferenceOrder": 1,
       "RefreshLogic": 1,
       "RefreshOncePerWrite": 1,
       "RefreshScheduler": 1,
@@ -97375,6 +97414,7 @@
       "TypeSystemIsolation": 1,
       "TypeValidation": 1,
       "TypeValidators": 1,
+      "TypedGroupKeys": 1,
       "Types": 10,
       "TypesIndep": 1,
       "UbuntuVersionFallback": 1,

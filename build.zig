@@ -12863,6 +12863,14 @@ pub fn build(b: *std.Build) void {
     const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
     shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
+    // SONNY-6518 item 3: the gql tool's ORDER BY orders as the server's full sort. See tests/test_sonny6518_exec_order.zig.
+    const sonny6518_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_exec_order.zig"), .target = target, .optimize = optimize });
+    sonny6518_exec_mod.addImport("geode", root_mod);
+    sonny6518_exec_mod.addImport("logging", logging_mod);
+    const sonny6518_exec_tests = b.addTest(.{ .root_module = sonny6518_exec_mod });
+    const run_sonny6518_exec_tests = b.addRunArtifact(sonny6518_exec_tests);
+    shardDep(test_step, &run_sonny6518_exec_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-exec-order", "Run SONNY-6518 item 3 regression (src/exec.zig stableOrderByTemporal: numbers by value across INT and DECIMAL, NULLS FIRST by default in either direction, as the server's full sort)").dependOn(&run_sonny6518_exec_tests.step);
 
     // SONNY-6499 (5): the exec ORDER BY text fallback orders strings by NFC.
     const sonny6499_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_exec_order_nfc.zig"), .target = target, .optimize = optimize });
@@ -13359,6 +13367,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6525_order_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6525_order_step = b.step("test-sonny6525-order-by-scope", "Run SONNY-6525 item 8 regression (after a RETURN or WITH that is DISTINCT or aggregates, an ORDER BY key reads only the projected names, a projected expression, or a variable inside an aggregate; an incoming variable is refused with 42000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6525_order_step.dependOn(&run_sonny6525_order_tests.step);
+    // SONNY-6525 item 4: an intermediate aggregating WITH groups by typed keys and reads the parameters. See tests/test_sonny6525_with_group_keys.zig.
+    const sonny6525_gk_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_with_group_keys.zig"), .target = target, .optimize = optimize });
+    sonny6525_gk_mod.addImport("geode", root_mod);
+    sonny6525_gk_mod.addImport("logging", logging_mod);
+    sonny6525_gk_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_gk_tests = b.addTest(.{ .root_module = sonny6525_gk_mod });
+    const run_sonny6525_gk_tests = b.addRunArtifact(sonny6525_gk_tests);
+    shardDep(test_step, &run_sonny6525_gk_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6525-with-group-keys", "Run SONNY-6525 item 4 regression (an aggregating WITH between parts groups 1 and '1', 'null' and NULL apart and reads $parameters in its keys and aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6525_gk_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
