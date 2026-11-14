@@ -1,18 +1,16 @@
-//! SONNY-6548 reproduction (intentionally red until fixed; KNOWN_TEST_ISSUES).
+//! SONNY-6548 reproduction, fixed by SONNY-6561.
 //!
 //! The QUIC CDC_CONTROL and CDC_DIAGNOSTICS frames read
-//! `ServerState.cdc_engine` (src/server/quic_connection_handler.zig, the
-//! `.cdc_diag` and `.cdc_ctrl` arms), a field nothing assigns
-//! (src/server/server_state.zig declares it `= null`). CDC runs in
+//! `ServerState.cdc_engine`, a field nothing assigned. CDC runs in
 //! `storage_dispatch.global_cdc_engine`, which `CALL cdc.enable()` starts and
-//! the gRPC CdcControl handler reads (src/transport/grpc_server.zig,
-//! "parity with QUIC handler"). So over QUIC, with CDC running, CDC_CONTROL
-//! answers NO_ENGINE and CDC_DIAGNOSTICS reports CDC disabled: the
-//! RESET_GUARDRAILS action is unreachable and an unknown action is not
-//! answered UNSUPPORTED.
+//! the gRPC handler read. So over QUIC, with CDC running, CDC_CONTROL
+//! answered NO_ENGINE and CDC_DIAGNOSTICS reported CDC disabled: the
+//! RESET_GUARDRAILS action was unreachable and an unknown action was not
+//! answered UNSUPPORTED. Both transports now answer through
+//! `execution.cdcControlAnswer` / `cdcDiagnosticsAnswer` (the field is gone);
+//! tests/test_sonny6561_cdc_transport_parity.zig compares them.
 //!
-//! Replaces tests/e2e_protocol_cdc_control{,_unsupported,_malformed}.zig,
-//! which set GEODE_CDC_ENABLE=1, a variable nothing reads.
+//! Replaces tests/e2e_protocol_cdc_control{,_unsupported,_malformed}.zig.
 const std = @import("std");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");

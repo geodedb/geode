@@ -6656,6 +6656,19 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
     fle_integration.setCurrentUserRole(null);
 }
 
+/// SONNY-6561: why this session may not send CDC_DIAGNOSTICS / CDC_CONTROL
+/// (the gRPC handler refuses the same callers with the same SQLSTATEs).
+fn cdcFrameRefusal(gpa: std.mem.Allocator, state: *ServerState) !?execution.CdcRefusal {
+    switch (try validateSessionAuth(gpa, state)) {
+        .ok => {},
+        .missing, .invalidated => return .unauthenticated,
+    }
+    if (!user_mgmt.isAuthEnabled()) return null;
+    const role = state.authenticated_role orelse return .not_admin;
+    if (state.authenticated_user == null or @as(user_mgmt.Role, @enumFromInt(role)) != .Admin) return .not_admin;
+    return null;
+}
+
 fn validateSessionAuth(gpa: std.mem.Allocator, state: *ServerState) !SessionAuthStatus {
     if (!user_mgmt.isAuthEnabled()) return .ok;
     const username = state.authenticated_user orelse return .missing;
@@ -9449,66 +9462,20 @@ fn handleClientMessage(
             }
         },
         .cdc_diag => {
-            switch (try validateSessionAuth(gpa, state)) {
-                .ok => {},
-                .missing, .invalidated => {
-                    try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
-                    return;
-                },
+            // SONNY-6561: the engine and the answer are the gRPC handler's
+            // (`execution.cdcDiagnosticsAnswer`); a refusal is its SQLSTATE.
+            if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
+                return;
             }
-            if (user_mgmt.isAuthEnabled()) {
-                const is_admin = if (state.authenticated_role) |r|
-                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
-                else
-                    false;
-                if (state.authenticated_user == null or !is_admin) {
-                    try sendExecuteError(gpa, stream, "42000", "Permission denied: Admin role required for CDC diagnostics", &.{}, &.{});
-                    return;
-                }
-            }
-            if (state.cdc_engine) |eng| {
-                const payload = try eng.exportDiagnostics(gpa);
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
-            } else {
-                const payload = schema.CdcDiagnosticsResponse{
-                    .config = .{ .enabled = false },
-                    .engine = .{ .is_running = false },
-                    .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-                    .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-                    .version = try gpa.dupe(u8, @import("build_options").version),
-                    .timestamp_ms = compat_milliTimestamp(),
-                };
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
-            }
+            try sendQuicMessage(gpa, stream, .{ .cdc_diag = try execution.cdcDiagnosticsAnswer(gpa) });
         },
         .cdc_ctrl => |ctrl| {
-            switch (try validateSessionAuth(gpa, state)) {
-                .ok => {},
-                .missing, .invalidated => {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "AUTH_REQUIRED"), .guardrail_epoch = 0 } });
-                    return;
-                },
+            if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
+                return;
             }
-            if (user_mgmt.isAuthEnabled()) {
-                const is_admin = if (state.authenticated_role) |r|
-                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
-                else
-                    false;
-                if (state.authenticated_user == null or !is_admin) {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "PERMISSION_DENIED"), .guardrail_epoch = 0 } });
-                    return;
-                }
-            }
-            if (state.cdc_engine) |eng| {
-                if (std.ascii.eqlIgnoreCase(ctrl.action, "RESET_GUARDRAILS")) {
-                    eng.resetGuardrailState();
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = true, .status = try gpa.dupe(u8, "OK"), .guardrail_epoch = eng.guardrail_epoch } });
-                } else {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "UNSUPPORTED"), .guardrail_epoch = eng.guardrail_epoch } });
-                }
-            } else {
-                try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "NO_ENGINE"), .guardrail_epoch = 0 } });
-            }
+            try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = try execution.cdcControlAnswer(gpa, ctrl.action) });
         },
         .backup => |backup_req| {
             switch (try validateSessionAuth(gpa, state)) {

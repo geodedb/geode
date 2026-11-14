@@ -486,3 +486,64 @@ test "SONNY-6561: with CDC running, RESET_GUARDRAILS resets the running engine o
     for (answers) |answer| try testing.expectEqualStrings("refused 28000", answer);
     try testing.expectEqual(e0 + 2, try adminEpoch(a, &srv));
 }
+
+test "SONNY-6561: GEODE_CDC_ENABLE=1 starts the CDC engine at startup, as CALL cdc.enable() does" {
+    const a = testing.allocator;
+    const quic_port = try util.getRandomPort();
+    var grpc_port = try util.getRandomTcpPort();
+    while (grpc_port == quic_port) grpc_port = try util.getRandomTcpPort();
+    var srv: Server = .{
+        .quic_addr = try util.formatAddr(a, quic_port),
+        .grpc_addr = try util.formatAddr(a, grpc_port),
+        .allocator = a,
+        .handle = undefined,
+    };
+    srv.handle = util.spawnServer(
+        a,
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", srv.quic_addr, "--listen-grpc", srv.grpc_addr },
+        &.{ "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1", "GEODE_QUIC_PASSIVE_TEARDOWN=1", "GEODE_CDC_ENABLE=1" },
+    ) catch |err| {
+        a.free(srv.quic_addr);
+        a.free(srv.grpc_addr);
+        return err;
+    };
+    defer srv.deinit();
+    try util.waitForServerReady(a, srv.quic_addr, 15000);
+    try util.waitForGrpcServerReady(a, srv.grpc_addr, 15000);
+
+    var qc = try quicConnect(a, &srv, .admin);
+    defer qc.deinit();
+    var gs = try GrpcSession.open(a, &srv, .admin);
+    defer gs.deinit();
+    const qd = try quicDiag(a, &qc);
+    defer a.free(qd);
+    const gd = try gs.diag(a);
+    defer a.free(gd);
+    try testing.expect(std.mem.startsWith(u8, qd, "diag enabled=true running=true"));
+    try testing.expectEqualStrings(qd, gd);
+    const status = try quicCall(a, &srv, .admin, "CALL cdc.status()");
+    defer a.free(status);
+    try testing.expectEqualStrings("rows cols=enabled,streaming,event_count,last_checkpoint [true,true,0,0]", status);
+}
+
+test "SONNY-6561: in cluster mode CDC_CONTROL is refused as CALL cdc.reset_guardrails() is" {
+    const cluster = geode.distributed.cluster;
+    const storage_dispatch = geode.storage_dispatch;
+    const a = testing.allocator;
+
+    var coord_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer coord_arena.deinit();
+    // A fresh coordinator is a follower (as in test-sonny6321-tde-fle-cases).
+    var coord = try cluster.ClusterCoordinator.init(coord_arena.allocator(), 1, .{ .peers = &.{}, .cluster_token = "sonny6561" });
+    const saved = cluster.getGlobalClusterCoordinator();
+    cluster.setGlobalClusterCoordinator(&coord);
+    defer if (saved) |c| cluster.setGlobalClusterCoordinator(c) else cluster.clearGlobalClusterCoordinator();
+
+    for ([_][]const u8{ "RESET_GUARDRAILS", "UNKNOWN_ACTION", "" }) |action| {
+        var resp = try storage_dispatch.cdcControlAnswer(a, action);
+        defer resp.deinit(a);
+        try testing.expect(!resp.success);
+        try testing.expectEqualStrings("CLUSTER_NOT_LEADER", resp.status);
+    }
+    try testing.expectError(error.ClusterNotLeader, cluster.gateUnreplicatedWrite());
+}

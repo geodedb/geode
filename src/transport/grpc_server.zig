@@ -1407,13 +1407,9 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
         } else if (std.mem.endsWith(u8, method, "/CdcDiag")) {
-            const resp = try handleCdcDiag(request_bytes, allocator);
-            defer allocator.free(resp);
-            return sendUnaryResponse(trans, resp);
+            return sendCdcReply(trans, try handleCdcDiag(request_bytes, allocator), allocator);
         } else if (std.mem.endsWith(u8, method, "/CdcCtrl")) {
-            const resp = try handleCdcCtrl(request_bytes, allocator);
-            defer allocator.free(resp);
-            return sendUnaryResponse(trans, resp);
+            return sendCdcReply(trans, try handleCdcCtrl(request_bytes, allocator), allocator);
         } else if (std.mem.endsWith(u8, method, "/Backup")) {
             const resp = try handleBackup(request_bytes, allocator);
             defer allocator.free(resp);
@@ -2098,7 +2094,12 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
         .cdc_diag => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleCdcDiag(req_bytes, allocator);
+            const resp_bytes = switch (try handleCdcDiag(req_bytes, allocator)) {
+                .answer => |bytes| bytes,
+                // SONNY-6561: the QUIC handler's error frame.
+                .refused => |refusal| break :blk buildPacketError(allocator, refusal.sqlstate(), refusal.message()),
+                .invalid => break :blk buildPacketError(allocator, "22023", "Invalid CDC request"),
+            };
             defer allocator.free(resp_bytes);
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
             const resp = try protobuf.decode(schema.CdcDiagnosticsResponse, &resp_reader, allocator);
@@ -2109,7 +2110,11 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
         .cdc_ctrl => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleCdcCtrl(req_bytes, allocator);
+            const resp_bytes = switch (try handleCdcCtrl(req_bytes, allocator)) {
+                .answer => |bytes| bytes,
+                .refused => |refusal| break :blk buildPacketError(allocator, refusal.sqlstate(), refusal.message()),
+                .invalid => break :blk buildPacketError(allocator, "22023", "Invalid CDC request"),
+            };
             defer allocator.free(resp_bytes);
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
             const resp = try protobuf.decode(schema.CdcControlResponse, &resp_reader, allocator);
@@ -4441,69 +4446,71 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     return encodeMessage(allocator, resp);
 }
 
-fn handleCdcDiag(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // SEC-002 (#849): Authenticate before exposing any diagnostic data.
-    // Decode the request to read session_id; on any non-.ok auth status return
-    // the SAFE empty/default response (leaks no diagnostics).
-    var diag_reader: std.Io.Reader = .fixed(request_bytes);
-    var diag_req = protobuf.decode(schema.CdcDiagnosticsRequest, &diag_reader, allocator) catch {
-        // Undecodable body — treat as unauthenticated (no session_id). Return safe default.
-        var safe_resp = schema.CdcDiagnosticsResponse{
-            .config = .{ .enabled = false },
-            .engine = .{ .is_running = false },
-            .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-            .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-            .version = try allocator.dupe(u8, @import("build_options").version),
-            .timestamp_ms = compat_milliTimestamp(),
-        };
-        defer safe_resp.deinit(allocator);
-        return try encodeMessage(allocator, safe_resp);
-    };
-    defer diag_req.deinit(allocator);
+// CANARY: REQ=REQ-SONNY-6561-CDC-WIRE-PARITY; FEATURE="CDCControlProtocol"; ASPECT=GrpcRefusalStatus; STATUS=TESTED; TEST=tests/test_sonny6561_cdc_transport_parity.zig; OWNER=cdc; UPDATED=2026-11-14
+/// SONNY-6561: the reply to a CDC_DIAGNOSTICS / CDC_CONTROL request. The
+/// answer and the refusals are the QUIC handler's (`execution.cdc*Answer`,
+/// `execution.CdcRefusal`): a refused caller gets the SQLSTATE QUIC sends,
+/// as a grpc-status trailer (`sendCdcReply`). The diagnostics refusal used to
+/// be an empty "CDC disabled" payload, and CDC_CONTROL answered AUTH_REQUIRED
+/// to a non-admin.
+const CdcReply = union(enum) {
+    /// The encoded CdcDiagnosticsResponse / CdcControlResponse.
+    answer: []u8,
+    refused: execution.CdcRefusal,
+    /// The request body did not decode.
+    invalid,
+};
 
-    switch (try authorizeAdminSession(diag_req.session_id, allocator)) {
-        .ok => {},
-        .missing, .invalidated, .forbidden => {
-            // Return safe default — leaks no diagnostics.
-            var safe_resp = schema.CdcDiagnosticsResponse{
-                .config = .{ .enabled = false },
-                .engine = .{ .is_running = false },
-                .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-                .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-                .version = try allocator.dupe(u8, @import("build_options").version),
-                .timestamp_ms = compat_milliTimestamp(),
-            };
-            defer safe_resp.deinit(allocator);
-            return try encodeMessage(allocator, safe_resp);
-        },
-    }
-
-    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
-    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
-    const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (execution.getGlobalCdcEngine()) |eng| {
-        const resp = try eng.exportDiagnostics(allocator);
-        return encodeMessage(allocator, resp);
-    }
-    // No CDC engine running — return default diagnostics
-    const resp = schema.CdcDiagnosticsResponse{
-        .config = .{ .enabled = false },
-        .engine = .{ .is_running = false },
-        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-        .version = try allocator.dupe(u8, @import("build_options").version),
-        .timestamp_ms = compat_milliTimestamp(),
+fn cdcRefusal(session_id: []const u8, allocator: std.mem.Allocator) !?execution.CdcRefusal {
+    return switch (try authorizeAdminSession(session_id, allocator)) {
+        .ok => null,
+        .missing, .invalidated => .unauthenticated,
+        .forbidden => .not_admin,
     };
-    return encodeMessage(allocator, resp);
 }
 
-fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // SEC-002 (#849): Authenticate before touching the CDC engine.
-    // Decode the request FIRST to read session_id, then gate before
-    // execution.getGlobalCdcEngine().  This closes both the native gRPC path
-    // AND the legacy handleLegacyPacket shim which calls this handler directly.
+fn cdcRefusalGrpcStatus(refusal: execution.CdcRefusal) u8 {
+    return switch (refusal) {
+        .unauthenticated => 16, // UNAUTHENTICATED
+        .not_admin => 7, // PERMISSION_DENIED
+    };
+}
+
+/// "<SQLSTATE>: <message>" (under the 127 bytes `endStreamWithStatus` keeps).
+fn cdcRefusalGrpcMessage(refusal: execution.CdcRefusal) []const u8 {
+    return switch (refusal) {
+        inline else => |r| comptime r.sqlstate() ++ ": " ++ r.message(),
+    };
+}
+
+const cdc_invalid_request_grpc_message = "22023: Invalid CDC request";
+
+fn sendCdcReply(trans: *GrpcTransport, reply: CdcReply, allocator: std.mem.Allocator) !void {
+    switch (reply) {
+        .answer => |bytes| {
+            defer allocator.free(bytes);
+            return sendUnaryResponse(trans, bytes);
+        },
+        .refused => |refusal| return trans.endStreamWithStatus(trans.last_stream_id, cdcRefusalGrpcStatus(refusal), cdcRefusalGrpcMessage(refusal)),
+        .invalid => return trans.endStreamWithStatus(trans.last_stream_id, 3, cdc_invalid_request_grpc_message), // INVALID_ARGUMENT
+    }
+}
+
+fn handleCdcDiag(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcReply {
+    // SEC-002 (#849): authenticate before exposing any diagnostic data.
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.CdcDiagnosticsRequest, &reader, allocator) catch return .invalid;
+    defer req.deinit(allocator);
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| return .{ .refused = refusal };
+
+    var resp = try execution.cdcDiagnosticsAnswer(allocator);
+    defer resp.deinit(allocator);
+    return .{ .answer = try encodeMessage(allocator, resp) };
+}
+
+fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcReply {
+    // SEC-002 (#849): authenticate before touching the CDC engine. This
+    // gates the native gRPC path and the legacy handleLegacyPacket shim.
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {
         var inval_resp = schema.CdcControlResponse{
@@ -4512,56 +4519,14 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             .guardrail_epoch = 0,
         };
         defer inval_resp.deinit(allocator);
-        return try encodeMessage(allocator, inval_resp);
+        return .{ .answer = try encodeMessage(allocator, inval_resp) };
     };
     defer req.deinit(allocator);
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| return .{ .refused = refusal };
 
-    switch (try authorizeAdminSession(req.session_id, allocator)) {
-        .ok => {},
-        .missing, .invalidated, .forbidden => {
-            var auth_resp = schema.CdcControlResponse{
-                .success = false,
-                .status = try allocator.dupe(u8, "AUTH_REQUIRED"),
-                .guardrail_epoch = 0,
-            };
-            defer auth_resp.deinit(allocator);
-            return try encodeMessage(allocator, auth_resp);
-        },
-    }
-
-    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
-    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
-    const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (execution.getGlobalCdcEngine()) |eng| {
-        if (std.ascii.eqlIgnoreCase(req.action, "RESET_GUARDRAILS")) {
-            eng.resetGuardrailState();
-            var ok_resp = schema.CdcControlResponse{
-                .success = true,
-                .status = try allocator.dupe(u8, "OK"),
-                .guardrail_epoch = eng.guardrail_epoch,
-            };
-            defer ok_resp.deinit(allocator);
-            return try encodeMessage(allocator, ok_resp);
-        } else {
-            var unsup_resp = schema.CdcControlResponse{
-                .success = false,
-                .status = try allocator.dupe(u8, "UNSUPPORTED"),
-                .guardrail_epoch = eng.guardrail_epoch,
-            };
-            defer unsup_resp.deinit(allocator);
-            return try encodeMessage(allocator, unsup_resp);
-        }
-    }
-    // No CDC engine running — return NO_ENGINE
-    var no_eng_resp = schema.CdcControlResponse{
-        .success = false,
-        .status = try allocator.dupe(u8, "NO_ENGINE"),
-        .guardrail_epoch = 0,
-    };
-    defer no_eng_resp.deinit(allocator);
-    return try encodeMessage(allocator, no_eng_resp);
+    var resp = try execution.cdcControlAnswer(allocator, req.action);
+    defer resp.deinit(allocator);
+    return .{ .answer = try encodeMessage(allocator, resp) };
 }
 
 fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
@@ -4827,14 +4792,11 @@ test "unauthenticated gRPC cdc_ctrl is rejected (SEC-002 live-engine path)" {
     const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
     const req_bytes = try encodeMessage(a, req);
     defer a.free(req_bytes);
-    const resp_bytes = try handleCdcCtrl(req_bytes, a);
-    defer a.free(resp_bytes);
-    var reader: std.Io.Reader = .fixed(resp_bytes);
-    var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
-    defer resp.deinit(a);
-    // POST-fix: gate fires before engine logic -> "AUTH_REQUIRED".
-    // PRE-fix: never returns AUTH_REQUIRED (returns OK / NO_ENGINE / UNSUPPORTED).
-    try std.testing.expectEqualStrings("AUTH_REQUIRED", resp.status);
+    const reply = try handleCdcCtrl(req_bytes, a);
+    if (reply == .answer) a.free(reply.answer);
+    // The gate fires before engine logic: refused 28000 (SONNY-6561: the
+    // QUIC handler's refusal; it was an AUTH_REQUIRED answer).
+    try std.testing.expectEqual(CdcReply{ .refused = .unauthenticated }, reply);
 }
 
 test "auth-disabled gRPC cdc_ctrl bypasses the gate (no over-block)" {
@@ -4844,12 +4806,13 @@ test "auth-disabled gRPC cdc_ctrl bypasses the gate (no over-block)" {
     const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
     const req_bytes = try encodeMessage(a, req);
     defer a.free(req_bytes);
-    const resp_bytes = try handleCdcCtrl(req_bytes, a);
-    defer a.free(resp_bytes);
-    var reader: std.Io.Reader = .fixed(resp_bytes);
+    const reply = try handleCdcCtrl(req_bytes, a);
+    // When auth is disabled, authorizeAdminSession returns .ok -> gate does NOT fire.
+    try std.testing.expect(reply == .answer);
+    defer a.free(reply.answer);
+    var reader: std.Io.Reader = .fixed(reply.answer);
     var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
     defer resp.deinit(a);
-    // When auth is disabled, authorizeAdminSession returns .ok -> gate does NOT fire.
-    // With no engine running, status is "NO_ENGINE" (not "AUTH_REQUIRED").
-    try std.testing.expect(!std.mem.eql(u8, "AUTH_REQUIRED", resp.status));
+    // With no engine running, the status is "NO_ENGINE".
+    try std.testing.expectEqualStrings("NO_ENGINE", resp.status);
 }

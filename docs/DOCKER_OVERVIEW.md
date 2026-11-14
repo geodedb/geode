@@ -192,8 +192,8 @@ environment (corrected 2026-11-12, SONNY-6435;
 | `GEODE_TELEMETRY_PAGING` | - | Enable telemetry paging |
 
 FIPS is a build (`-Dfips=true`, the `fips` image), not a variable: geode
-reads no `FIPS_MODE`. The server reads none of `GEODE_CDC_ENABLE` (corrected
-2026-11-12, SONNY-6435).
+reads no `FIPS_MODE`. `GEODE_CDC_ENABLE=1` starts the CDC engine at startup,
+as `CALL cdc.enable()` does (SONNY-6561; nothing read it before, SONNY-6435).
 
 ### Backup & Recovery
 

@@ -2438,6 +2438,30 @@
 
 ### Fixed
 
+- **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
+  (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
+  nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC
+  answered `NO_ENGINE` to every CDC_CONTROL action and reported CDC
+  disabled, while gRPC read the running engine. Both transports now answer
+  through one implementation (`storage_dispatch.cdcDiagnosticsAnswer` /
+  `cdcControlAnswer`) and the field is deleted. **Changed refusals (both
+  frames, both transports):** an unauthenticated caller is refused `28000`
+  and a caller that is not an administrator `42501` (QUIC: an error frame;
+  gRPC: grpc-status 16 / 7 with a grpc-message starting with the SQLSTATE).
+  QUIC refused a non-admin's diagnostics `42000` (the 18 other privilege
+  refusals answer `42501`) and answered its CDC_CONTROL `PERMISSION_DENIED`;
+  gRPC answered a non-admin's or an unauthenticated caller's diagnostics
+  with an empty "CDC disabled" payload and its CDC_CONTROL
+  `AUTH_REQUIRED`. In cluster mode CDC_CONTROL is refused
+  (`CLUSTER_NOT_LEADER` / `CLUSTER_WRITE_NOT_REPLICABLE`) as `CALL
+  cdc.reset_guardrails()` is. `GEODE_CDC_ENABLE=1`, which
+  docs/QUICK_REFERENCE.md documents and nothing read, starts the engine at
+  startup through the path `CALL cdc.enable()` takes; the engine lives in
+  the process allocator and `CALL cdc.disable()` now frees it
+  (`CDCEngine.deinit`). Regression: `zig build
+  test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
+  40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
+
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when

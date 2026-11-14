@@ -324,10 +324,6 @@ pub const ServerState = struct {
     // Telemetry toggles (env-driven). When enabled, server emits JSON log lines on paging events.
     telemetry_paging: bool = false,
 
-    // Optional CDC engine pointer for diagnostics protocol frame
-    // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
-    cdc_engine: ?*@import("../streaming/cdc_enhanced.zig").CDCEngine = null,
-
     // Session management state
     session_config: ?SessionConfiguration = null,
     // Execution session state (SESSION SET/RESET/CLOSE)
