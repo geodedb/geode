@@ -2482,6 +2482,30 @@
   own gate (SONNY-6528) already checked only the graphs whose data a
   program touches. Regression: `zig build test-sonny6541-quarantine-use-graph`
   (QUIC against a real server, gRPC and the executor in process).
+- **A refused graph answers every statement alike over QUIC, gRPC and the
+  request handlers called in process (SONNY-6547 item 1).** Against a real
+  server, QUIC and gRPC already agreed on all 85 shapes of the regression (a
+  graph quarantined by zeroed node pages, the default one and a second one,
+  and a graph whose shard label dictionaries diverged; every read and write
+  shape of test-sonny6523-quarantine-fail-closed, first statement after a
+  restart and again): a server always installs a row-security engine, so
+  its reads go through a read snapshot that hydrates the graph first. The
+  gRPC handler called in process with no row-security engine (embedded
+  use) serves reads engine-direct and differed on 45 of 85 answers: 24 read
+  the damaged graph and answered rows (a quarantine fail-open; the
+  transport gate hydrated a graph only for a change), and 21 failed the
+  call with a handler error (the node-scan stream returned every error but
+  a limit out of the handler; the QUIC connection loop answers such an
+  error with the generic "58000 Internal Server Error"). Both transports'
+  gates now hydrate for a read too, as the executor's does (SONNY-6541
+  item 3); the node-scan stream answers a storage-integrity refusal as
+  itself; and an error a handler leaves unanswered is answered the same way
+  by both (`proto_util.unhandledErrorInfo`: a limit or a storage-integrity
+  refusal as itself, anything else 58000 "Internal Server Error"; gRPC
+  failed the call). Regression: `zig build test-sonny6547-transport-parity`
+  (real server, QUIC and gRPC, plus the gRPC handler in process). The
+  regression's gRPC client opens one connection per Execute: the test
+  client (`grpc_query_transport`) sends every Execute on HTTP/2 stream 3.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
