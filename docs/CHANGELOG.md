@@ -2349,6 +2349,19 @@
   from its start once per key removed. It now removes up to 256 keys per
   scan. Regression: `zig build test-sonny6523-drop-graph-purge` (a graph
   with 600 labels and 599 relationship types: 11 map scans, 1206 before).
+- **The storage adapter's `free.store` sanitizer is removed (SONNY-6523
+  item 4).** Before opening a graph, `sanitizeFreeStoreBeforeOpenLocked`
+  validated `<graph root>/free.store` against its own copy of graph-storage's
+  bitmap format and truncated it when it looked invalid. Every graph is
+  sharded, and a shard keeps its `free.store` in its own directory
+  (`<graph root>/graphs/<shard>/`), so the file it checked never exists and
+  the check never ran. graph-storage 0.4.14 validates each shard's file
+  itself (`loadFreeStore`: bounded per-store deserialization, and a stale
+  bitmap is detected and rebuilt), so the function, its helpers and the
+  test of it in the unbuilt `test_gap_0511_regression.zig` are deleted
+  rather than pointed at the shard files: a malformed shard `free.store`
+  fails the graph's open (fail closed), as graph-storage decides. No
+  behaviour changes.
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

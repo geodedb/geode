@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:34:52.733408474Z",
+  "generated_at": "2026-11-14T01:43:22.403493122Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87280,18 +87280,6 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-04-06"
-        },
-        {
-          "feature": "EngineBackedPersistence",
-          "aspect": "StartupMetadataRepair",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0511_regression.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -93520,7 +93508,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4935
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -97097,7 +97085,6 @@
       "StartupGuard": 1,
       "StartupHydration": 2,
       "StartupLoad": 1,
-      "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
       "StartupReport": 1,

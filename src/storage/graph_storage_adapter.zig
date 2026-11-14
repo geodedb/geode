@@ -317,17 +317,6 @@ const prop_rev_index_file_name = "prop_rev.idx";
 // stale.
 const prop_rev_index_magic = "GENRVIX3";
 
-const graph_store_file_names = [_][]const u8{
-    "nodes.store",
-    "adj_out.store",
-    "adj_in.store",
-    "props.store",
-    "var.store",
-};
-
-const free_store_header_size: usize = 16;
-const free_store_path_name = "free.store";
-
 pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
     g_label_scan_lookup_count.store(0, .release);
@@ -11019,99 +11008,6 @@ pub const StorageAdapter = struct {
         };
     }
 
-    fn freeStoreMaskCount(total_pages: u64) usize {
-        return @intCast((total_pages + @bitSizeOf(usize) - 1) / @bitSizeOf(usize));
-    }
-
-    fn truncateFreeStoreIfPresent(allocator: Allocator, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer allocator.free(free_store_path);
-
-        const trunc_io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(trunc_io, free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
-            error.FileNotFound => return false,
-            else => return err,
-        };
-        defer file.close(trunc_io);
-
-        try file.setLength(trunc_io, 0);
-        return true;
-    }
-
-    fn maxPersistedPagesForStorePath(self: *StorageAdapter, graph_dir: []const u8, file_name: []const u8) !u64 {
-        const store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, file_name });
-        defer self.allocator.free(store_path);
-
-        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return 64,
-            else => return err,
-        };
-
-        const page_count = stat.size / self.config.page_size;
-        if (page_count >= std.math.maxInt(u64) / 2) return std.math.maxInt(u64);
-        return @max(@as(u64, 64), page_count * 2);
-    }
-
-    fn freeStoreLooksValidLocked(self: *StorageAdapter, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer self.allocator.free(free_store_path);
-
-        const io_fv = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(io_fv, free_store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return true,
-            else => return err,
-        };
-        defer file.close(io_fv);
-
-        const stat = try file.stat(io_fv);
-        if (stat.size == 0) return true;
-
-        const word_size = @sizeOf(usize);
-        const min_section_size = free_store_header_size + word_size;
-        const min_total_size = min_section_size * graph_store_file_names.len;
-        if (stat.size < min_total_size) return false;
-
-        var max_total_size: u64 = 0;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            max_total_size += free_store_header_size + freeStoreMaskCount(max_pages) * word_size;
-        }
-        if (stat.size > max_total_size) return false;
-
-        var offset: u64 = 0;
-        var header_buf: [free_store_header_size]u8 = undefined;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            const bytes_read = try file.readPositionalAll(io_fv, &header_buf, offset);
-            if (bytes_read != header_buf.len) return false;
-
-            const total_pages = std.mem.readInt(u64, header_buf[0..8], .little);
-            const next_free_hint = std.mem.readInt(u64, header_buf[8..16], .little);
-            if (total_pages < 64 or total_pages > max_pages) return false;
-            if (next_free_hint == 0 or next_free_hint > total_pages) return false;
-
-            const section_size: u64 = free_store_header_size + freeStoreMaskCount(total_pages) * word_size;
-            if (offset + section_size > stat.size) return false;
-            offset += section_size;
-        }
-
-        return offset == stat.size;
-    }
-
-    fn sanitizeFreeStoreBeforeOpenLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !void {
-        const graph_dir = try graphDirPath(self.allocator, self.data_dir, graph_uuid);
-        defer self.allocator.free(graph_dir);
-
-        if (!(try self.freeStoreLooksValidLocked(graph_dir))) {
-            if (try truncateFreeStoreIfPresent(self.allocator, graph_dir)) {
-                log.warn("graph '{s}' has invalid persisted free.store; truncating it so GraphEngine.open can rebuild from disk", .{name});
-            }
-        }
-        // SONNY-6492 (1): a shard free.store left stale by a crash during a
-        // graph-storage <= 0.4.13 checkpoint is detected and rebuilt by
-        // graph-storage >= 0.4.14 itself (`loadFreeStore`, SONNY-6491).
-    }
-
     // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
     /// The security graph's audit logger (only `__geode_security` has one).
     /// Every failure is an error, so the graph never opens unaudited.
@@ -11367,8 +11263,6 @@ pub const StorageAdapter = struct {
 
     /// Open an existing graph engine from a known UUID directory.
     fn openGraphLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
-        try self.sanitizeFreeStoreBeforeOpenLocked(name, graph_uuid);
-
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 

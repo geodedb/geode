@@ -5553,7 +5553,6 @@ REQ-STORAGE-ENGINE-PHASE2-003,EngineBackedPersistence,LegacyCleanup,IMPL,src/gra
 REQ-STORAGE-ENGINE-PHASE2-004,EngineBackedPersistence,LoadFromAdapter,TESTED,src/graph_store.zig,test-graph-store,,storage,2026-06-11
 REQ-STORAGE-ENGINE-PHASE2-005,EngineBackedPersistence,LoadFromFile,TESTED,src/graph_store.zig,test-graph-store,,storage,2026-07-04
 REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,PersistSplitPhase,IMPL,src/graph_store.zig,,,storage,2026-04-06
-REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,StartupMetadataRepair,TESTED,tests/test_gap_0511_regression.zig,,,storage,2026-04-10
 REQ-STORAGE-ENGINE-PHASE2-007,EngineBackedPersistence,ServerInit,TESTED,src/server/server_init.zig,geodetestlab/specs/geode_auth_ddl_persistence.yml,,storage,2026-06-11
 REQ-STORAGE-FLUSH-001,Storage,FlushStorage,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,storage,2026-01-16
 REQ-STORAGE-FTS-ADAPTER-001,FTS storage adapter,Wrapper,TESTED,src/storage/fts_storage_adapter.zig,,,core,2026-05-30
