@@ -13945,6 +13945,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
     shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6555 item 7: a WITH stage after a FOR or a CALL subquery reads every row reaching it. See tests/test_sonny6555_for_chain_stage.zig.
+    const sonny6555_fcs_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_for_chain_stage.zig"), .target = target, .optimize = optimize });
+    sonny6555_fcs_mod.addImport("geode", root_mod);
+    sonny6555_fcs_mod.addImport("logging", logging_mod);
+    sonny6555_fcs_mod.addImport("rls_types", rls_types_mod);
+    const sonny6555_fcs_tests = b.addTest(.{ .root_module = sonny6555_fcs_mod });
+    const run_sonny6555_fcs_tests = b.addRunArtifact(sonny6555_fcs_tests);
+    shardDep(test_step, &run_sonny6555_fcs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-for-chain-stage", "Run SONNY-6555 item 7 regression (ISO/IEC 39075 14.3 / 14.8 / 14.11: a FOR whose body reads runs it over the FOR's whole table, at the start of a statement or after a part, so its aggregate, DISTINCT, ORDER BY and LIMIT read every element; a chain's last RETURN DISTINCT reads every row: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6555_fcs_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
