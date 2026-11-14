@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T02:48:06.97715746Z",
+  "generated_at": "2026-11-14T02:48:51.302181058Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85879,6 +85879,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6525-STAR-ITEMS",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "AsteriskProjection",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_star_items.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_star_items.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6525-STATEMENT-SCOPE",
       "features": [
         {
@@ -93472,7 +93491,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4931
+      "TESTED": 4932
     },
     "by_aspect": {
       "2PC": 3,
@@ -93639,6 +93658,7 @@
       "AssertionTesting": 1,
       "Assertions": 1,
       "AstMissSingleFlight": 1,
+      "AsteriskProjection": 1,
       "AsyncConnection": 1,
       "AtomicCounter": 1,
       "AtomicLabelCountRefcounts": 1,

@@ -13353,6 +13353,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6525_order_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6525_order_step = b.step("test-sonny6525-order-by-scope", "Run SONNY-6525 item 8 regression (after a RETURN or WITH that is DISTINCT or aggregates, an ORDER BY key reads only the projected names, a projected expression, or a variable inside an aggregate; an incoming variable is refused with 42000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6525_order_step.dependOn(&run_sonny6525_order_tests.step);
+    // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
+    const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
+    sonny6525_star_mod.addImport("geode", root_mod);
+    const sonny6525_star_tests = b.addTest(.{ .root_module = sonny6525_star_mod });
+    const run_sonny6525_star_tests = b.addRunArtifact(sonny6525_star_tests);
+    shardDep(test_step, &run_sonny6525_star_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6525-star-items", "Run SONNY-6525 item 3 regression (ISO/IEC 39075 14.11: `*` is the whole projection; `WITH *, n.k AS k` and `RETURN *, n` are refused with 42000 and a message naming the rule; `*` alone parses)").dependOn(&run_sonny6525_star_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });
