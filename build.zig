@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-gql-conformance-rq", .reason = "red on a gql dependency defect (SONNY-6517 item 4, KNOWN_TEST_ISSUES): gql 0.1.21 status.privilegeViolation answers 42501 where ISO/IEC 39075 names access rule violations 42000 (RQ-0019); 23/24 pass; compiled by test-compile; register it through shardDep in the commit that pins a gql release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -13186,7 +13185,7 @@ pub fn build(b: *std.Build) void {
     sonny6517_rq_mod.addImport("logging", logging_mod);
     const sonny6517_rq_tests = b.addTest(.{ .root_module = sonny6517_rq_mod });
     const run_sonny6517_rq_tests = b.addRunArtifact(sonny6517_rq_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6517_rq_tests.step);
+    shardDep(test_step, &run_sonny6517_rq_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-gql-conformance-rq", "Run SONNY-6517 item 4: the ISO/IEC 39075 conformance-requirement unit tests (RQ-0001 .. RQ-0024), which all_tests.zig named but never ran").dependOn(&run_sonny6517_rq_tests.step);
     // SONNY-6517 item 4: tests/e2e_multi_graph_security.zig was an unreferenced all_tests.zig constant (never analysed, never run).
     const sonny6517_mgs_mod = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph_security.zig"), .target = target, .optimize = optimize });

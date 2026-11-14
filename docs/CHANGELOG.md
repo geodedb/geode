@@ -2648,9 +2648,11 @@
   constants that never ran (their CANARY markers said TESTED). They are
   named steps now: `test-e2e-multi-graph-security` (stale `User` and
   `EnvironmentInfo` fields fixed) passes in the aggregate;
-  `test-gql-conformance-rq` passes 23 of 24 and stays out of the
-  aggregate: RQ-0019 finds the gql dependency's `status.privilegeViolation`
-  answering 42501 where ISO/IEC 39075 names 42000 (KNOWN_TEST_ISSUES).
+  `test-gql-conformance-rq` passes 24 of 24 in the aggregate. RQ-0019
+  first demanded exactly 42000 for a privilege violation and failed on the
+  gql dependency's 42501; ISO/IEC 39075:2024 23.1 allows subclass `000` or
+  an implementation-defined subclass where 4.2.4.2 names none, so 42501
+  conforms and the test now asserts that rule (SONNY-6536).
   Removed, as they name removed code and no build compiled them:
   `tests/test_feature_completion.zig` (`src/graph/builtin_algorithms.zig`),
   `fuzz/fuzz_distributed_features.zig` and
