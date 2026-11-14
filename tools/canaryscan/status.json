@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:32:46.432086912Z",
+  "generated_at": "2026-11-14T06:32:57.719252464Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86417,6 +86417,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6544-MCP-COMPLETION",
+      "features": [
+        {
+          "feature": "MCPCompletion",
+          "aspect": "CompleteResultShape",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93978,7 +93997,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4961
+      "TESTED": 4962
     },
     "by_aspect": {
       "2PC": 3,
@@ -94565,6 +94584,7 @@
       "CompileTimeStackBound": 1,
       "CompiledPlan": 1,
       "CompilerLimits": 1,
+      "CompleteResultShape": 1,
       "CompletionTenantGate": 1,
       "Completions": 2,
       "Complex": 1,
