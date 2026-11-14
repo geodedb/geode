@@ -21,9 +21,19 @@ test "protocol PROFILE committed_txns" {
     var client = try util.QuicProtoClient.connect(allocator, server.getAddr());
     defer client.deinit();
 
+    // SONNY-6548: BEGIN before HELLO is refused (the server answers the
+    // unauthenticated frame with an error, which the client reported as
+    // InvalidMessage); authenticate first, and commit a write.
+    var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
+    hello.deinit(allocator);
+
     util.progress("Executing transaction...", .{});
     var begin_result = try client.begin(allocator);
-    begin_result.deinit(allocator);
+    defer begin_result.deinit(allocator);
+    try testing.expect(begin_result.tx_id.len > 0);
+    var write = try client.executeAndCollect(allocator, "CREATE (:Committed6548 {k: 1})", util.emptyParams(), 100);
+    defer write.deinit(allocator);
+    try testing.expect(write.error_code == null);
     try testing.expect(try client.commit(allocator));
 
     util.progress("Checking PROFILE for committed_txns metric...", .{});

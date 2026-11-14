@@ -2,7 +2,7 @@ const std = @import("std");
 const varcfg = @import("geode").benchmarks.variance_config;
 
 // Basic unit tests for computeStatsF128 and thresholds
-// CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigStats; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_VarianceConfigStats; OWNER=tooling; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigStats; STATUS=TESTED; TEST=tests/test_variance_config.zig; OWNER=tooling; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_021_VarianceConfigStats" {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -25,8 +25,10 @@ test "TestCANARY_REQ_GQL_021_VarianceConfigStats" {
 
 test "TestCANARY_REQ_GQL_021_VarianceConfigThresholds" {
     const redo = varcfg.thresholdsForBenchmark("redo_optimization_delta_variance");
-    try std.testing.expectApproxEqAbs(@as(f128, 0.18), redo.cv_max, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f128, 1.35), redo.p95_ratio_max, 0.0001);
+    // SONNY-6548: raised in src/benchmarks/variance_config.zig (cv 0.18 ->
+    // 0.22, p95/mean 1.35 -> 1.45, for logging jitter; min_mean unchanged).
+    try std.testing.expectApproxEqAbs(@as(f128, 0.22), redo.cv_max, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f128, 1.45), redo.p95_ratio_max, 0.0001);
     try std.testing.expectApproxEqAbs(@as(f128, 1.0), redo.min_mean, 0.0001);
     const path = varcfg.thresholdsForBenchmark("path_cache_degree_bucket_utilization_variance");
     try std.testing.expectApproxEqAbs(@as(f128, 0.22), path.cv_max, 0.0001);

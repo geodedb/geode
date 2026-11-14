@@ -158,45 +158,6 @@ pub fn Hash(allocator: std.mem.Allocator, alg: []const u8, hex: []const u8) Eval
     return Value{ .Hash = .{ .alg = alg_enum, .digest = digest } };
 }
 
-// Special constructor for Argon2id with salt and parameters
-pub fn Argon2idHash(allocator: std.mem.Allocator, password: []const u8, salt: []const u8, iterations: ?u32, memory_kb: ?u32, parallelism: ?u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const params = heap.Argon2Params{
-        .iterations = iterations orelse 3,
-        .memory_kb = memory_kb orelse 4096,
-        .parallelism = parallelism orelse 1,
-    };
-
-    const h = hash_module.hash(allocator, .ARGON2ID, password, salt, params) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Hash = h };
-}
-
-// Hash data using specified algorithm
-pub fn HashData(allocator: std.mem.Allocator, alg: []const u8, data: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const alg_enum = hash_module.parseAlg(alg) catch return EvaluatorError.InvalidFormat;
-    const h = hash_module.hash(allocator, alg_enum, data, null, null) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Hash = h };
-}
-
-// Create Blake2b KDF
-pub fn Blake2bKdf(allocator: std.mem.Allocator, out_len: u64, context: []const u8, key: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const kdf_output = hash_module.blake2bKdf(allocator, @intCast(out_len), context, key) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Bytea = kdf_output };
-}
-
-// Create Blake2s KDF
-pub fn Blake2sKdf(allocator: std.mem.Allocator, out_len: u64, context: []const u8, key: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const kdf_output = hash_module.blake2sKdf(allocator, @intCast(out_len), context, key) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Bytea = kdf_output };
-}
-
 pub fn Currency(text: []const u8) EvaluatorError!Value {
     if (text.len != 3) return EvaluatorError.InvalidFormat;
     var code: [3]u8 = undefined;

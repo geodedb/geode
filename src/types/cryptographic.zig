@@ -13,7 +13,7 @@ fn compat_fillRandom(buf: []u8) void {
         std.c.arc4random_buf(buf.ptr, buf.len);
     }
 }
-const hash_impl = @import("hash.zig");
+const heap = @import("../storage/heap.zig");
 
 // CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="Cryptographic Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_CRYPTO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
 
@@ -21,9 +21,9 @@ const hash_impl = @import("hash.zig");
 /// Supports hashing, digital signatures, and cryptographic primitives
 
 // Re-export existing hash types
-pub const HashAlg = hash_impl.HashAlg;
-pub const Hash = hash_impl.Hash;
-pub const Argon2Params = hash_impl.Argon2Params;
+pub const HashAlg = heap.HashAlg;
+pub const Hash = heap.Hash;
+pub const Argon2Params = heap.Argon2Params;
 
 /// Digital signature with algorithm identification
 pub const Signature = struct {
@@ -700,10 +700,6 @@ fn derEcSigToRaw(der: []const u8, out: []u8, coord_len: usize) error{BadSigLen}!
 // ---------------------------------------------------------------------------
 
 // Utility functions for cryptographic operations
-pub fn hashString(alg: HashAlg, data: []const u8, allocator: std.mem.Allocator) !Hash {
-    return hash_impl.hash(allocator, alg, data, null, null);
-}
-
 pub fn verifySignature(sig: Signature, data: []const u8) !bool {
     return sig.verify(data);
 }

@@ -25,13 +25,13 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     // Get two random ports for QUIC and gRPC
     const quic_port = util.getRandomPort() catch |err| {
         util.progress("QUIC port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     const grpc_port = util.getRandomPort() catch |err| {
         util.progress("gRPC port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
 
     const addr = try util.formatAddr(allocator, quic_port);
@@ -57,16 +57,16 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
         "GEODE_ORDER_KEYS_EXPR=0",
     }) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     defer server.deinit();
 
     // Wait for server readiness
     util.waitForServerReady(allocator, addr, 10000) catch |err| {
         util.progress("Server readiness timeout: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
 
     util.progress("Connecting QUIC client...", .{});

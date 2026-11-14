@@ -751,6 +751,11 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6548-cli-query-options", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): geode query ignores an unknown --format and unknown options; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6548-quic-cdc-control", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): QUIC CDC_CONTROL reads ServerState.cdc_engine, which nothing assigns; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6548-raft-persistent-voted-for", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): raft_persistent.RaftNode does not persist voted_for; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -3801,10 +3806,6 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("log/logger.zig", logging_mod);
     // Backup & restore module for tests (GraphStore snapshots)
     custom_tests.root_module.addImport("storage_backup", storage_backup_mod);
-
-    // Selectivity estimator module (frequency sampler + adaptive feedback)
-    const selectivity_estimator_mod_tests = b.createModule(.{ .root_source_file = b.path("src/optimizer/selectivity_estimator.zig"), .target = target, .optimize = optimize });
-    custom_tests.root_module.addImport("optimizer/selectivity_estimator.zig", selectivity_estimator_mod_tests);
 
     // Note: transport/quic comes through the geode module (root_mod) which already has it
     // No separate transport/quic import needed here to avoid duplicate module conflicts
@@ -18938,4 +18939,30 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6542_revived_tests.step, 4, test_shard_loads, test_shard_index);
     const sonny6542_revived_step = b.step("test-sonny6542-revived", "Run the SONNY-6542 revived tests: tests/ files no build step compiled (all_tests.zig imported some as unreferenced consts) that pass against this build; the e2e ones spawn this build's geode");
     sonny6542_revived_step.dependOn(&run_sonny6542_revived_tests.step);
+    // SONNY-6548: intentionally red TDD reproductions of product bugs found
+    // triaging the SONNY-6542 tests that compiled but failed (listed in
+    // docs/KNOWN_TEST_ISSUES.md and not_in_aggregate_steps). Each is compiled
+    // by test-compile and stays out of shardDep until the commit that fixes
+    // it registers it there. They get tests/all_tests.zig's module graph; the
+    // e2e ones spawn this build's geode.
+    const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{
+        .{ .file = "tests/test_sonny6548_cli_query_options.zig", .step = "test-sonny6548-cli-query-options", .desc = "Run SONNY-6548 reproduction (intentionally red: geode query prints nothing and exits 0 for --format txt, exits 0 for an unknown option, and commits a write under the --begin --rollback its --help documents)" },
+        .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 reproduction (intentionally red: with CDC running, QUIC CDC_CONTROL answers NO_ENGINE to RESET_GUARDRAILS and to an unknown action; it reads ServerState.cdc_engine, which nothing assigns)" },
+        .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 reproduction (intentionally red: an exact numeric column is typed FLOAT, a UNION column INTEGER although it holds 1.25; FOR ... ORDER BY reports ordered:false; PROFILE reports spill_reason with no spill)" },
+        .{ .file = "tests/test_sonny6548_raft_persistent_voted_for.zig", .step = "test-sonny6548-raft-persistent-voted-for", .desc = "Run SONNY-6548 reproduction (intentionally red: raft_persistent.RaftNode persists current_term and not voted_for, so a reopened node forgets its vote; the cluster's raft_consensus node is not affected)" },
+        .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 reproduction (intentionally red: SET and REMOVE refuse a variable named with an ISO/IEC 39075 non-reserved word such as type or property, which MATCH binds and RETURN reads; a reserved word such as MATCH is accepted as a variable)" },
+    };
+    for (sonny6548_repros) |repro| {
+        const repro_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(repro.file), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| repro_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        repro_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            repro_tests.root_module.linkSystemLibrary("ssl", .{});
+            repro_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) repro_tests.root_module.linkSystemLibrary("dl", .{});
+        if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
+        b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
+    }
 }

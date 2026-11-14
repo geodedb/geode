@@ -112,7 +112,10 @@ shared, loaded dev host (details and limits in
 
 ## RLS/ABAC Authorization Benchmarks
 
-**Benchmark File:** `benchmarks/benchmark_rls_abac_variance.zig`
+**Benchmark File:** none. `benchmarks/benchmark_rls_abac_variance.zig`, which
+no build step built, timed a placeholder policy catalog defined in
+`tests/canary_rls_abac.zig`, not geode's RLS/ABAC engine; both were removed
+(SONNY-6548). The targets below are not measured.
 
 <!-- CANARY: REQ=REQ-BENCHMARK-ABAC-001; FEATURE="ABAC Benchmark"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-14 -->
 

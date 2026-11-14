@@ -3,7 +3,7 @@ const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMappingThreshold2; OWNER=engine; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=tests/e2e_protocol_match_guard_status_threshold2.zig; OWNER=engine; UPDATED=2026-11-14
 // This test sets max_results=2 and expects ExecutionGuardTrip advisory still surfaces (query produces >2 rows)
 
 fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
@@ -66,7 +66,11 @@ test "protocol: MATCH guard trip with max_results 2 surfaces advisory" {
 
     try testing.expect(res.error_code == null);
     try testing.expect(res.rows.len <= 2);
-    try testing.expect(hasStatus(res.additional_statuses, "ExecutionGuardTrip"));
+    // SONNY-6548: the guard reports the trip as a flagger finding
+    // (execution.zig applyMatchGuard -> appendFlagIfMissing), not as an
+    // additional status.
+    try testing.expect(hasStatus(res.flagger_findings, "ExecutionGuardTrip"));
+    try testing.expect(!hasStatus(res.additional_statuses, "ExecutionGuardTrip"));
 
     util.testPass();
 }

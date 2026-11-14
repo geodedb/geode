@@ -83,7 +83,7 @@ inline fn scaledPpm(val: f64) u64 {
 // Variance thresholds (General class, generous for a single-core wall-clock
 // micro-bench that touches the WAL/fsync path). Scaled by 1e4 like the rest of
 // the variance suite. These are NOT enforced unless FTS_STORAGE_ENFORCE=1 is
-// set, mirroring the opt-in enforcement of benchmark_rls_abac_variance — the
+// set (opt-in enforcement, like the other variance benchmarks) — the
 // envelope is informational on noisy shared CI, and the VARIANCE_OK/FAIL token
 // reflects the threshold evaluation either way.
 const CV_MAX_PPM: u64 = 20000; // cv <= 2.00

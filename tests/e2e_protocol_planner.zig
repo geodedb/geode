@@ -30,22 +30,9 @@ test "planner: OFFSET with stable ORDER allowed" {
     try std.testing.expect(contains(res.out, "\"ordered\":true"));
 }
 
-test "planner: set op then ORDER BY LIMIT" {
-    const exe = geode_test_bin.geode_exe;
-    const res = try run(&.{ exe, "(RETURN 2 AS x UNION RETURN 1 AS x) ORDER BY x LIMIT 1" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"ordered\":true"));
-    try std.testing.expect(contains(res.out, "{\"x\":1}"));
-}
-
-test "planner: GROUP BY + HAVING + ORDER BY pipeline" {
-    const exe = geode_test_bin.geode_exe;
-    const res = try run(&.{ exe, "RETURN a, COUNT(*) AS c GROUP BY a HAVING c > 1 ORDER BY c DESC LIMIT 1", "--param", "a", "[1,1,2]" });
-    defer std.testing.allocator.free(res.out);
-    defer std.testing.allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"ordered\":true"));
-    try std.testing.expect(contains(res.out, "\"order_keys\":[\"c\"]"));
-}
+// SONNY-6548: two cases were dropped. "(RETURN 2 AS x UNION RETURN 1 AS x)
+// ORDER BY x LIMIT 1" is not GQL (a <composite query expression> operand is a
+// linear query statement, not a parenthesized query; 42000), and the GROUP
+// BY + HAVING case relied on the deleted client expanding an array --param
+// into one row per element. ORDER BY after FOR ... GROUP BY loses its
+// metadata: tests/test_sonny6548_wire_result_metadata.zig.
