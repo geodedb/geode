@@ -13937,6 +13937,14 @@ pub fn build(b: *std.Build) void {
     const run_sonny6540_cws_tests = b.addRunArtifact(sonny6540_cws_tests);
     shardDep(test_step, &run_sonny6540_cws_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6540-chain-with-stage", "Run SONNY-6540 item 5 regression (an aggregating, DISTINCT or windowed WITH in a later part of a chain is computed over every row reaching it, with its WHERE, ORDER BY, SKIP and LIMIT, whatever parts come before it: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6540_cws_tests.step);
+    // SONNY-6555 item 4: a NULL argument gives NULL. See tests/test_sonny6555_null_arguments.zig.
+    const sonny6555_null_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_null_arguments.zig"), .target = target, .optimize = optimize });
+    sonny6555_null_mod.addImport("geode", root_mod);
+    sonny6555_null_mod.addImport("logging", logging_mod);
+    const sonny6555_null_tests = b.addTest(.{ .root_module = sonny6555_null_mod });
+    const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
+    shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
