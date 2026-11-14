@@ -2319,6 +2319,17 @@
   a `schema_change` today (CREATE and DROP GRAPH are not replicated in
   cluster mode), so no deployment reached this. Regression: `zig build
   test-sonny6541-drop-apply-deadlock`.
+- **A checkpoint of a graph waits for a 2PC commit's write to it (SONNY-6541
+  item 2).** A committed Raft `txn_decide` applies its prepared write set
+  (`TxnCoordinator.handleDecide`) on the Raft apply thread, like a
+  replicated graph mutation, but without the graph's
+  `replicated_apply_mutex` that SONNY-6528 item 1 gave the mutation apply:
+  a full checkpoint ran in the middle of its node create (forced in the
+  regression). Each write-set operation now holds its graph's
+  `replicated_apply_mutex`, after hydrating the graph outside it. Every
+  cluster node registers the coordinator (`ClusterCoordinator.init`); no
+  geode code proposes `txn_prepare` / `txn_decide` entries yet. Regression:
+  `zig build test-sonny6541-2pc-apply-checkpoint-exclusion`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
