@@ -12856,6 +12856,14 @@ pub fn build(b: *std.Build) void {
     const run_sonny6499_cast_tests = b.addRunArtifact(sonny6499_cast_tests);
     shardDep(test_step, &run_sonny6499_cast_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6499-cast-matrix", "Run SONNY-6499 item 2 regression (CAST per ISO/IEC 39075 20.8: a DOUBLE casts to its approximate numeric literal and back, an approximate target gives a DOUBLE, a stored DOUBLE converts, text is trimmed and read as a numeric literal, no cell answers a silent NULL)").dependOn(&run_sonny6499_cast_tests.step);
+    // SONNY-6518 item 1: built-in functions raise their argument errors; NULL in is NULL out. See tests/test_sonny6518_builtin_errors.zig.
+    const sonny6518_builtin_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_builtin_errors.zig"), .target = target, .optimize = optimize });
+    sonny6518_builtin_mod.addImport("geode", root_mod);
+    sonny6518_builtin_mod.addImport("logging", logging_mod);
+    const sonny6518_builtin_tests = b.addTest(.{ .root_module = sonny6518_builtin_mod });
+    const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
+    shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
 
     // SONNY-6499 (5): the exec ORDER BY text fallback orders strings by NFC.
     const sonny6499_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_exec_order_nfc.zig"), .target = target, .optimize = optimize });

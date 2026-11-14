@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T02:16:53.125090704Z",
+  "generated_at": "2026-11-14T02:17:42.384674124Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85820,6 +85820,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6518-BUILTIN-ERRORS",
+      "features": [
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "ArgumentErrors",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6518_builtin_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_builtin_errors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6525-CORRELATED-SUBQUERY",
       "features": [
         {
@@ -93453,7 +93472,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4930
+      "TESTED": 4931
     },
     "by_aspect": {
       "2PC": 3,
@@ -93611,6 +93630,7 @@
       "ApplyUpdate": 1,
       "ArgParsing": 1,
       "ArgReachability": 1,
+      "ArgumentErrors": 1,
       "ArgumentErrorsEscape": 1,
       "ArithmeticRounding": 1,
       "ArmLimitRelay": 1,
