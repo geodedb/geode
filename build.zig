@@ -13018,6 +13018,13 @@ pub fn build(b: *std.Build) void {
     const run_sonny6511_gt_tests = b.addRunArtifact(sonny6511_gt_tests);
     shardDep(test_step, &run_sonny6511_gt_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6511-graph-type-string-field", "Run SONNY-6511 item 6 / SONNY-6517 item 2 regression (CREATE GRAPH TYPE T AS { x STRING } and the other type keywords INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME, TIMESTAMP, DURATION parse as field types)").dependOn(&run_sonny6511_gt_tests.step);
+    // SONNY-6517 item 1: an allocation failure while parsing is OutOfMemory, never a syntax error. See tests/test_sonny6517_parse_oom.zig.
+    const sonny6517_oom_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6517_parse_oom.zig"), .target = target, .optimize = optimize });
+    sonny6517_oom_mod.addImport("geode", root_mod);
+    const sonny6517_oom_tests = b.addTest(.{ .root_module = sonny6517_oom_mod });
+    const run_sonny6517_oom_tests = b.addRunArtifact(sonny6517_oom_tests);
+    shardDep(test_step, &run_sonny6517_oom_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6517-parse-oom", "Run SONNY-6517 item 1 regression (parseGqlOutcome with its N-th allocation failing, every N, answers error.OutOfMemory with nothing leaked, never a refused statement (42000))").dependOn(&run_sonny6517_oom_tests.step);
 
     const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
     sonny2848_mod.addImport("geode", root_mod);

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T02:56:07.439503755Z",
+  "generated_at": "2026-11-14T02:56:33.602986291Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85820,6 +85820,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6517-PARSE-OOM",
+      "features": [
+        {
+          "feature": "ParserErrors",
+          "aspect": "OutOfMemoryIdentity",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6517_parse_oom.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6517_parse_oom.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6518-BUILTIN-ERRORS",
       "features": [
         {
@@ -93491,7 +93510,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4932
+      "TESTED": 4933
     },
     "by_aspect": {
       "2PC": 3,
@@ -95945,6 +95964,7 @@
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
       "OrdinalComparison": 1,
+      "OutOfMemoryIdentity": 1,
       "OutOfRangePositional": 1,
       "OutcomeClassification": 1,
       "OuterVariableBinding": 1,
