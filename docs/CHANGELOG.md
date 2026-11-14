@@ -6195,6 +6195,16 @@
 
 ### Removed
 
+- **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
+  `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
+  no query: nothing outside `planner.zig` named them except 17 test and
+  benchmark files that no build step compiled (they imported
+  `../src/planner.zig`, outside any module) and the two inline tests
+  `test-sonny6511-lib-inline` ran. Its simple-path check compared edge ids
+  with node ids, and every result's `start_id` was the first start node, so
+  it would have answered wrongly had anything called it. Variable-length
+  patterns are expanded by `src/execution/match_operations.zig`. Removed
+  with the 17 files and their REQ-GQL-016 CANARY markers.
 - **Dead code: the `tryBasicFunction` branches the call handlers answer
   first (SONNY-6540 item 7).** `evalExpr` tries `src/eval/call_handlers.zig`
   (math, string, type-cast, collection, aggregate and advanced-type
