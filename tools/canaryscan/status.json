@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:24:00.662422571Z",
+  "generated_at": "2026-11-14T02:37:56.503006694Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85806,6 +85806,213 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6523-CHECKPOINT-SETTINGS",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "CheckpointFailureLogLimit",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "OneScanPerBatch",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "DurableDroppedNames",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6523-FAILED-CREATE-COUNT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "FailedCreateGivesSlotBack",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "GrpcProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "QuarantinedGraphRefusesWrites",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "QuicProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "TransportProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -87139,18 +87346,6 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-04-06"
-        },
-        {
-          "feature": "EngineBackedPersistence",
-          "aspect": "StartupMetadataRepair",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0511_regression.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -93379,7 +93574,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4926
+      "TESTED": 4938
     },
     "by_aspect": {
       "2PC": 3,
@@ -93862,6 +94057,7 @@
       "CheckedRecordRemoval": 1,
       "CheckedResult": 1,
       "CheckedStoredCasts": 1,
+      "CheckpointFailureLogLimit": 1,
       "CheckpointPolicy": 1,
       "ChecksOnThrowawayCopy": 1,
       "ChildVerifier": 1,
@@ -94409,6 +94605,7 @@
       "DurabilityFlushBeforeWatchdog": 1,
       "DurableAuthStateOrRefuse": 1,
       "DurableDdl": 1,
+      "DurableDroppedNames": 1,
       "DurableFleRoleGrants": 1,
       "DurableOrError": 1,
       "DurablePersistTestSuite": 1,
@@ -94700,6 +94897,7 @@
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
       "FailedAddUntrustsIndex": 1,
+      "FailedCreateGivesSlotBack": 1,
       "FailedLogin": 1,
       "FailedQueryExitsNonZero": 1,
       "FailedTransactionSemantics": 1,
@@ -94983,6 +95181,7 @@
       "GrpcNoRetryAfterSend": 1,
       "GrpcProfileSettle": 1,
       "GrpcProfileTxn": 1,
+      "GrpcProgramGate": 1,
       "GrpcReadGate": 1,
       "GrpcRollbackTo": 1,
       "GrpcSavepoint": 1,
@@ -95790,6 +95989,7 @@
       "OneResolver": 1,
       "OneResourceRule": 1,
       "OneRowPerPath": 1,
+      "OneScanPerBatch": 1,
       "OneSetPath": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
@@ -96297,6 +96497,7 @@
       "QuantifierCallHandlers": 1,
       "QuantifierTieBreakStress": 1,
       "QuarantinedGraphFailClosed": 1,
+      "QuarantinedGraphRefusesWrites": 1,
       "Query": 7,
       "QueryCache": 1,
       "QueryCommand": 2,
@@ -96350,6 +96551,7 @@
       "QuicPerMessage": 2,
       "QuicProfileSettle": 1,
       "QuicProfileTxn": 1,
+      "QuicProgramGate": 1,
       "QuicProgressHookFollowup": 1,
       "QuicProgressHookIntegration": 1,
       "QuicReadGate": 1,
@@ -96468,7 +96670,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 341,
+      "Regression": 346,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -96951,7 +97153,6 @@
       "StartupGuard": 1,
       "StartupHydration": 2,
       "StartupLoad": 1,
-      "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
       "StartupReport": 1,
@@ -97198,6 +97399,7 @@
       "TransportIntegration": 1,
       "TransportParitySmokeWiring": 1,
       "TransportProfile": 1,
+      "TransportProgramGate": 1,
       "TransportSend": 1,
       "Traversal": 1,
       "TraversalBuffers": 1,

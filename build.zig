@@ -10141,6 +10141,56 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6492_fs_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression against a real server with SIGKILLs, with and without TDE: a store an old graph-storage release crashed in its checkpoint window (newer manifest, empty WAL, older free.store) keeps every node, also after many new nodes; a failed free.store save fails the checkpoint before its manifest and WAL replay keeps every node; a restart after a completed checkpoint rebuilds no page bitmaps");
     sonny6492_fs_step.dependOn(&run_sonny6492_fs_tests.step);
+    // SONNY-6523 (1): a quarantined graph refuses every read and write on
+    // every path a real server serves it by.
+    const sonny6523_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_quarantine_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6523_q_test_mod.link_libc = true;
+    sonny6523_q_test_mod.addImport("geode", root_mod);
+    sonny6523_q_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6523_q_test_mod.addImport("schema", schema_mod);
+    sonny6523_q_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6523_q_tests = b.addTest(.{ .root_module = sonny6523_q_test_mod });
+    const run_sonny6523_q_tests = b.addRunArtifact(sonny6523_q_tests);
+    spawnsBuiltGeode(sonny6523_q_tests);
+    shardDep(test_step, &run_sonny6523_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6523_q_step = b.step("test-sonny6523-quarantine-fail-closed", "Run SONNY-6523 item 1 regression against a real server: after a hydration that met a damaged node store, every read shape (label, unlabeled, relationship and filtered counts, index seeks, ordered reads, scans, db.labels/relationshipTypes/propertyKeys, fulltext search) and every write shape (default, bulk and batch fast paths, the executor) of the quarantined graph fails closed; no write reaches the engine");
+    sonny6523_q_step.dependOn(&run_sonny6523_q_tests.step);
+    // SONNY-6523 (2): a node create that fails after its slot was
+    // allocated leaves the shard's live-node count and records as they were.
+    const sonny6523_fc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_failed_create_count.zig"), .target = target, .optimize = optimize });
+    sonny6523_fc_test_mod.addImport("geode", root_mod);
+    const sonny6523_fc_tests = b.addTest(.{ .root_module = sonny6523_fc_test_mod });
+    const run_sonny6523_fc_tests = b.addRunArtifact(sonny6523_fc_tests);
+    shardDep(test_step, &run_sonny6523_fc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6523_fc_step = b.step("test-sonny6523-failed-create-count", "Run SONNY-6523 item 2 regression (a node create that fails after the engine allocated its slot, through createNode, the reserved-id bulk insert, createNodesBatch and a CREATE statement, leaves the shard live-node count and records as they were; the live-count check passes before and after a restart)");
+    sonny6523_fc_step.dependOn(&run_sonny6523_fc_tests.step);
+    // SONNY-6523 (7): DROP GRAPH scans each shared label/type map a bounded
+    // number of times, not once per removed key.
+    const sonny6523_dp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_drop_graph_purge.zig"), .target = target, .optimize = optimize });
+    sonny6523_dp_test_mod.addImport("geode", root_mod);
+    const sonny6523_dp_tests = b.addTest(.{ .root_module = sonny6523_dp_test_mod });
+    const run_sonny6523_dp_tests = b.addRunArtifact(sonny6523_dp_tests);
+    shardDep(test_step, &run_sonny6523_dp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6523_dp_step = b.step("test-sonny6523-drop-graph-purge", "Run SONNY-6523 item 7 regression (DROP GRAPH of a graph with 600 labels and relationship types scans each shared label/type/tenant map a bounded number of times, not once per removed key; another graph keeps its entries)");
+    sonny6523_dp_step.dependOn(&run_sonny6523_dp_tests.step);
+    // SONNY-6523 (5): a graph dropped before a restart is not created again
+    // by a late (replayed or replicated) write after it.
+    const sonny6523_dr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_dropped_graph_restart.zig"), .target = target, .optimize = optimize });
+    sonny6523_dr_test_mod.addImport("geode", root_mod);
+    const sonny6523_dr_tests = b.addTest(.{ .root_module = sonny6523_dr_test_mod });
+    const run_sonny6523_dr_tests = b.addRunArtifact(sonny6523_dr_tests);
+    shardDep(test_step, &run_sonny6523_dr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6523_dr_step = b.step("test-sonny6523-dropped-graph-restart", "Run SONNY-6523 item 5 regression (a replicated write for a graph dropped before a restart answers GraphNotFound after it, also after a second restart; CREATE GRAPH of the name then makes a fresh empty graph that survives a restart)");
+    sonny6523_dr_step.dependOn(&run_sonny6523_dr_tests.step);
+    // SONNY-6523 (6): the checkpoint settings do what they are documented to
+    // do; a failing light checkpoint is counted and logged once per cause.
+    const sonny6523_ck_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_checkpoint_settings.zig"), .target = target, .optimize = optimize });
+    sonny6523_ck_test_mod.addImport("geode", root_mod);
+    const sonny6523_ck_tests = b.addTest(.{ .root_module = sonny6523_ck_test_mod });
+    const run_sonny6523_ck_tests = b.addRunArtifact(sonny6523_ck_tests);
+    shardDep(test_step, &run_sonny6523_ck_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6523_ck_step = b.step("test-sonny6523-checkpoint-settings", "Run SONNY-6523 item 6 regression (the deferred-mode checkpoint interval counts from the adapter's open, not from boot; a failing light checkpoint is counted in adapter_checkpoint_failures_total and logged at ERROR once per cause, again at most every 10 minutes, and its recovery once)");
+    sonny6523_ck_step.dependOn(&run_sonny6523_ck_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.

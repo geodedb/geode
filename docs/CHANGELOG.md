@@ -2298,6 +2298,111 @@
 
 ### Fixed
 
+- **A quarantined graph refuses every read and every write (SONNY-6523
+  item 1).** A graph whose first-touch hydration fails (REQ-GQL-028: its
+  store is damaged) is quarantined, and the executor failed a statement that
+  touched it. The transports' fast paths did not: over QUIC, `MATCH (n:L)
+  RETURN count(n)`, `MATCH (n) RETURN count(n)`, `count(*)`, the
+  relationship counts and the filtered counts answered 0 (from the products
+  the failed hydration left partial), an exact-index count answered from the
+  index, `max(n.i)` answered NULL, `CALL db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()` and `geode.fts.search`
+  answered, and every write shape (the default and bulk CREATE and MERGE
+  fast paths, `/*+BATCH*/`, MATCH ... CREATE of a relationship, the
+  executor's SET) was accepted and written to the damaged store. The QUIC
+  and gRPC handlers now refuse a program on a quarantined graph's data
+  before any path serves it (`graph_store.programQuarantineError`; a
+  program that changes data hydrates the graph first, so its damage is
+  found before anything is written), the count fast paths and the
+  engine-direct count check the quarantine their own hydration may have
+  just found, and every storage-adapter write path refuses a quarantined
+  graph (`ManagedGraph.quarantine`, set when the hydration fails). DROP
+  GRAPH of a quarantined graph still runs, and CREATE GRAPH of the name
+  makes a fresh graph. **Operator-visible:** the first write to a graph
+  after a restart now waits for that graph's hydration, as its first read
+  already did. Regression: `zig build test-sonny6523-quarantine-fail-closed`
+  (real server, zeroed node pages; 27 read and write shapes, each as the
+  first statement after the restart and again).
+- **A node create that fails part-way leaves no record behind (SONNY-6523
+  item 2).** The storage adapter's node creates (`createNode`, the
+  reserved-id bulk insert behind the CREATE and MERGE fast paths and the
+  group commit, `createNodesBatch`) allocate the engine slot first: the
+  shard manifest counts the node at once. On a later error (a new label's
+  dictionary write failing, any engine write error) they aborted their
+  engine transaction and returned. graph-storage's abort drops the
+  transaction's WAL records but neither returns the slot nor restores the
+  pages it wrote, so the node record written before the error stayed in
+  the page with no geode node over it, counted, and the next checkpoint
+  made it durable: a ghost node that `MATCH (n)` did not return but every
+  engine scan did (and, had the record not been written yet, a count one
+  ahead of the records, which the live-count check reports as
+  `DataCorruption`). The failed create now deletes the record in its own
+  transaction (or, with none written, takes the count and the id back)
+  before the abort (`releaseFailedNodeSlot`). Regression: `zig build
+  test-sonny6523-failed-create-count` (each create path, failed by a
+  directory at every shard's `labels.dict.tmp`; 25 live records instead of
+  24 after the failure and 27 instead of 26 after a restart, before).
+- **DROP GRAPH no longer takes time quadratic in the graph's label and
+  relationship-type count (SONNY-6523 item 7).** Removing a graph's entries
+  from the label postings, the label and relationship-type counts and the
+  per-tenant introspection maps (shared by every graph) scanned each map
+  from its start once per key removed. It now removes up to 256 keys per
+  scan. Regression: `zig build test-sonny6523-drop-graph-purge` (a graph
+  with 600 labels and 599 relationship types: 11 map scans, 1206 before).
+- **The storage adapter's `free.store` sanitizer is removed (SONNY-6523
+  item 4).** Before opening a graph, `sanitizeFreeStoreBeforeOpenLocked`
+  validated `<graph root>/free.store` against its own copy of graph-storage's
+  bitmap format and truncated it when it looked invalid. Every graph is
+  sharded, and a shard keeps its `free.store` in its own directory
+  (`<graph root>/graphs/<shard>/`), so the file it checked never exists and
+  the check never ran. graph-storage 0.4.14 validates each shard's file
+  itself (`loadFreeStore`: bounded per-store deserialization, and a stale
+  bitmap is detected and rebuilt), so the function, its helpers and the
+  test of it in the unbuilt `test_gap_0511_regression.zig` are deleted
+  rather than pointed at the shard files: a malformed shard `free.store`
+  fails the graph's open (fail closed), as graph-storage decides. No
+  behaviour changes.
+- **A graph dropped before a restart stays dropped after it (SONNY-6523
+  item 5).** SONNY-6472 / SONNY-6492 made a write to a dropped graph's name
+  (a bulk write, a replicated Raft apply) answer `GraphNotFound` instead of
+  creating the graph again, but the dropped names lived in memory only:
+  after a restart a replayed or late replicated write for a name dropped
+  before it created the graph again, with the write in it. DROP GRAPH now
+  records the name in `<data dir>/dropped_graphs.dat` (temporary file,
+  fsync, rename, directory fsync) before it drops anything, and the adapter
+  loads the names at open; CREATE GRAPH removes the name from the file
+  before it creates the graph, which starts empty. A drop whose name cannot
+  be written drops nothing and fails (`DroppedGraphNamesNotSaved`, also a
+  failed replicated drop); a file that cannot be read refuses the open, as
+  an unreadable graph registry does. Regression: `zig build
+  test-sonny6523-dropped-graph-restart` (the real Raft apply entry point
+  across three restarts).
+- **Checkpoint settings do what they say; a failing checkpoint is counted
+  and no longer floods the log (SONNY-6523 item 6).** The persistence tick
+  (`--persist-interval`, 30 s by default) runs a light checkpoint every
+  time; `GEODE_CHECKPOINT_OPS` and `GEODE_CHECKPOINT_INTERVAL_MS` only add
+  bulk-ingest triggers and never stopped it (now documented in
+  `docs/SERVER_FEATURES.md`, Checkpoints). The interval trigger measured
+  the time since the last checkpoint from 0 on the monotonic clock, which
+  counts from boot, until the first checkpoint: on a host up longer than
+  the interval, the first tick with bulk work pending fired a checkpoint
+  ("deferred-mode auto-checkpoint fired" with a 1-day interval). It now
+  counts from the adapter's open. `--help` said `--persist-interval`
+  defaults to 100 (it is 30000), and an unparsable value fell back to 100;
+  it keeps the default now. A light checkpoint that fails for a graph (the
+  pass carries on with the others and returns no error) was a WARN on every
+  tick, and the tick's other failures an ERROR on every tick from up to
+  three places: each is now counted (`adapter_checkpoint_failures_total`,
+  `geode.runtime.*`) and logged at ERROR once per distinct cause, again at
+  most every 10 minutes while it repeats, and once when checkpoints succeed
+  again. Three crash tests whose comments said they ran with no checkpoint
+  before the kill (`test-sonny6491-label-name-crash`,
+  `test-sonny6491-orderby-label-intern`,
+  `test-sonny2978-overlapping-engine-txn-crash`) set only the two
+  variables; they now also start the server with no persistence tick. The
+  hydration scan's comment that no write runs during a hydration is
+  corrected (the shard-locked bulk writers do; SONNY-6492 item 2 allows for
+  them). Regression: `zig build test-sonny6523-checkpoint-settings`.
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

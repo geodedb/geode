@@ -363,8 +363,10 @@ test "GAP-0900: deferred-mode time-based checkpoint fires for un-checkpointed bu
     try std.testing.expect(!not_yet);
 
     // Inject elapsed time past the 60 s cadence — the time trigger must fire
-    // because there IS un-checkpointed bulk work.
-    const elapsed_ns: u64 = (time_threshold_ms + 1) * std.time.ns_per_ms;
+    // because there IS un-checkpointed bulk work. SONNY-6523 (6): measured
+    // from the adapter's open on the monotonic clock (it was from 0, i.e.
+    // from boot), so the injected "now" is that open plus the interval.
+    const elapsed_ns: u64 = adapter.last_checkpoint_mono_ns.load(.acquire) + (time_threshold_ms + 1) * std.time.ns_per_ms;
     const fired = try adapter.maybeCheckpoint(checkpoint_ops_threshold, time_threshold_ms, elapsed_ns);
     try std.testing.expect(fired);
     try std.testing.expect(adapter.checkpointsTotal() >= 1);

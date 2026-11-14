@@ -317,17 +317,6 @@ const prop_rev_index_file_name = "prop_rev.idx";
 // stale.
 const prop_rev_index_magic = "GENRVIX3";
 
-const graph_store_file_names = [_][]const u8{
-    "nodes.store",
-    "adj_out.store",
-    "adj_in.store",
-    "props.store",
-    "var.store",
-};
-
-const free_store_header_size: usize = 16;
-const free_store_path_name = "free.store";
-
 pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
     g_label_scan_lookup_count.store(0, .release);
@@ -1727,6 +1716,108 @@ pub fn shouldExposePropertyKey(key: []const u8) bool {
 
 const merge_tuple_lock_count: usize = 16384;
 
+// CANARY: REQ=REQ-SONNY-6523-CHECKPOINT-SETTINGS; FEATURE="CrashRecovery"; ASPECT=CheckpointFailureLogLimit; STATUS=TESTED; TEST=tests/test_sonny6523_checkpoint_settings.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (6): while the same cause keeps failing light checkpoints, an
+/// ERROR at most this often.
+pub const checkpoint_failure_log_interval_ms: i64 = 10 * std.time.ms_per_min;
+
+/// SONNY-6523 (6): which failing light checkpoints are logged at ERROR: the
+/// first of a cause (the first failure, or one with another cause than the
+/// previous), then the same cause again at most every
+/// `checkpoint_failure_log_interval_ms`. The rest are only counted. Not
+/// thread-safe (`StorageAdapter.checkpoint_failure_log_mutex`).
+pub const CheckpointFailureLog = struct {
+    /// The previous failure's cause; null while checkpoints succeed.
+    cause: ?anyerror = null,
+    /// When the cause was last logged.
+    logged_ms: i64 = 0,
+    /// Failures in a row (0 while checkpoints succeed).
+    consecutive: u64 = 0,
+
+    pub const Verdict = enum { first, repeated, suppressed };
+
+    pub fn noteFailure(self: *CheckpointFailureLog, err: anyerror, now_ms: i64) Verdict {
+        self.consecutive += 1;
+        if (self.cause == null or self.cause.? != err) {
+            self.cause = err;
+            self.logged_ms = now_ms;
+            return .first;
+        }
+        if (now_ms - self.logged_ms >= checkpoint_failure_log_interval_ms) {
+            self.logged_ms = now_ms;
+            return .repeated;
+        }
+        return .suppressed;
+    }
+
+    /// The failures in a row that this success ends, or null if none.
+    pub fn noteSuccess(self: *CheckpointFailureLog) ?u64 {
+        if (self.consecutive == 0) return null;
+        const n = self.consecutive;
+        self.* = .{};
+        return n;
+    }
+};
+
+fn checkpointLogNowMs() i64 {
+    return @intCast(monoNanosNow() / std.time.ns_per_ms);
+}
+
+/// SONNY-6523 (5): the data directory's dropped-graph names
+/// (`StorageAdapter.saveDroppedGraphNamesLocked`).
+const dropped_graphs_file_name = "dropped_graphs.dat";
+const dropped_graphs_magic = "GEODROP1";
+
+/// SONNY-6523 (5): fsync the directory holding `path`, so a rename into it
+/// survives power loss (as graph-storage's `syncGraphDir`: `.iterate = true`
+/// opens a real directory fd; the default O_PATH one fails fsync).
+fn syncDirOf(path: []const u8) !void {
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(sio, std.fs.path.dirname(path) orelse ".", .{ .iterate = true });
+    defer dir.close(sio);
+    const dir_file = std.Io.File{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
+    try dir_file.sync(sio);
+}
+
+// CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=QuarantinedGraphRefusesWrites; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523: `ManagedGraph.quarantine`'s codes, one per
+/// `graph_store.GraphQuarantineError`.
+pub const Quarantine = enum(u8) {
+    none,
+    quarantined,
+    checksum_mismatch,
+    data_corruption,
+    invalid_data,
+
+    fn of(err: anyerror) Quarantine {
+        return switch (err) {
+            error.ChecksumMismatch => .checksum_mismatch,
+            error.DataCorruption => .data_corruption,
+            error.InvalidData => .invalid_data,
+            else => .quarantined,
+        };
+    }
+
+    fn toError(q: Quarantine) ?graph_store.GraphQuarantineError {
+        return switch (q) {
+            .none => null,
+            .quarantined => error.GraphQuarantined,
+            .checksum_mismatch => error.ChecksumMismatch,
+            .data_corruption => error.DataCorruption,
+            .invalid_data => error.InvalidData,
+        };
+    }
+};
+
+/// SONNY-6523: refuse a write to a quarantined graph before it reaches the
+/// engine. The graph's hydration found its store damaged (REQ-GQL-028); a
+/// write would build on it, and its WAL records would be replayed onto it.
+/// Called by every adapter write entry point once it has the graph.
+fn refuseQuarantinedWrite(mg: *const ManagedGraph) graph_store.GraphQuarantineError!void {
+    const q: Quarantine = @enumFromInt(mg.quarantine.load(.acquire));
+    if (q.toError()) |err| return err;
+}
+
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
 pub const ManagedGraph = struct {
@@ -1735,6 +1826,12 @@ pub const ManagedGraph = struct {
     exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// SONNY-6523: why the graph is quarantined (REQ-GQL-028: its first-touch
+    /// hydration failed, so the store is known to be damaged), as a
+    /// `Quarantine` code; `.none` while it is not. Set once by
+    /// `markGraphQuarantined`, never cleared for the process lifetime. Every
+    /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
+    quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -2401,6 +2498,42 @@ fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from
     // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
     try shard.edge_index.updatePropHead(edge_id, new_head);
     shard.edge_index_dirty = true;
+}
+
+// CANARY: REQ=REQ-SONNY-6523-FAILED-CREATE-COUNT; FEATURE="StorageIntegrity"; ASPECT=FailedCreateGivesSlotBack; STATUS=TESTED; TEST=tests/test_sonny6523_failed_create_count.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (2): give back the node slot `allocNode` handed a create that
+/// then failed. `allocNode` counts the node in the shard manifest at once,
+/// and an aborted engine transaction neither returns the slot nor restores
+/// the pages it wrote (graph-storage's abort only drops the transaction's WAL
+/// records): the count stayed one ahead of the live records, or a
+/// half-written record with no geode node over it stayed in the page, and the
+/// next checkpoint persisted either. The live-count check (REQ-GQL-028) then
+/// failed the graph with DataCorruption after a restart.
+///
+/// `txn`: the transaction the record would have been written in, still
+/// active. A record in the slot is deleted in it (`deleteNodeTxn`: the
+/// tombstone is logged and the count taken back), so the slot reads the
+/// same whether the transaction then commits (a joined statement
+/// transaction) or aborts. With no record (or no transaction yet), only the
+/// count is taken back, and the id too when it is still the last one the
+/// shard issued. The caller holds what serializes its `allocNode` on the
+/// shard (the graph's write lock, or its shard lock), so neither is another
+/// writer's.
+fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId) void {
+    if (txn) |t| {
+        if (shard.node_store.getRawSlot(node_id) catch null) |rec| {
+            if (!gs.node.isDeleted(&rec)) {
+                if (shard.deleteNodeTxn(node_id, t)) |_| return else |err| {
+                    log.err("SONNY-6523: could not delete the record of failed node create {d} ({s}); the shard's live-node count may be off by one", .{ node_id, @errorName(err) });
+                    return;
+                }
+            }
+            return; // already tombstoned: deleteNodeTxn took the count back
+        }
+    }
+    if (shard.manifest.node_count > 0) shard.manifest.node_count -= 1;
+    const stride: u64 = if (shard.config.base_shard_index != null) gs.sharded_engine.SHARD_COUNT else 1;
+    if (shard.manifest.next_node_id == node_id + stride) shard.manifest.next_node_id = node_id;
 }
 
 /// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
@@ -3759,6 +3892,8 @@ pub const StorageAdapter = struct {
     config: gs.GraphConfig,
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
+    /// SONNY-6523 (5): `dropped_graph_names` on disk (`saveDroppedGraphNamesLocked`).
+    dropped_graphs_path: []const u8, // owned
     mutex: std.Io.Mutex,
     /// SONNY-6472 (2): names of graphs dropped since this adapter opened
     /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
@@ -3787,6 +3922,14 @@ pub const StorageAdapter = struct {
     checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): light checkpoints that failed (`checkpointAllLight`);
+    /// `adapter_checkpoint_failures_total` in the runtime metrics.
+    checkpoint_failures_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): how often a failing light checkpoint was logged at
+    /// ERROR (`CheckpointFailureLog`), for the regression test.
+    checkpoint_failure_error_logs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    checkpoint_failure_log: CheckpointFailureLog = .{},
+    checkpoint_failure_log_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-0900: load-driven checkpoint cadence. The timer-based persistence
     // loop is unreliable under sustained ingest (its futex timeout is starved
     // when all I/O workers are busy), so the bulk write path itself drives the
@@ -3873,18 +4016,22 @@ pub const StorageAdapter = struct {
             .config = config,
             .registry = gs.registry.GraphRegistry.init(allocator),
             .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
+            .dropped_graphs_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ owned_dir, dropped_graphs_file_name }),
             .mutex = std.Io.Mutex.init,
             // GAP-0900: checkpoint-cadence observability counters.
             .checkpoints_total = std.atomic.Value(u64).init(0),
             .pending_bulk_ops = std.atomic.Value(u64).init(0),
-            // GAP-0900: 0 means "no checkpoint has run yet". The persistence
-            // loop and tests pass a monotonic `now`; until the first
-            // checkpointAll resets this to a real `monoNanosNow()`, the
-            // time-based cadence is measured from process start (clock 0).
-            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(0),
+            // GAP-0900 / SONNY-6523 (6): until the first checkpoint, the
+            // time-based cadence is measured from this open. It was 0, and
+            // the monotonic clock counts from boot, not from the process's
+            // start: on a host up longer than GEODE_CHECKPOINT_INTERVAL_MS
+            // the first tick with bulk work pending fired a checkpoint.
+            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(monoNanosNow()),
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
+        errdefer allocator.free(self.dropped_graphs_path);
+        errdefer self.freeDroppedGraphNames();
 
         // CANARY: REQ=REQ-SONNY-6430-REGISTRY-FAIL-CLOSED; FEATURE="Storage Adapter"; ASPECT=UnloadableRegistryRefuses; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=storage; UPDATED=2026-11-12
         // SONNY-6430: a registry that exists but cannot be loaded is an
@@ -3896,6 +4043,13 @@ pub const StorageAdapter = struct {
                 log.warn("cannot load the graph registry {s}: {}; refusing to open the data directory without its graphs", .{ self.registry_path, err });
                 return err;
             },
+        };
+        // SONNY-6523 (5): the names of the graphs dropped before this open.
+        // One that cannot be read refuses the open, as the registry does: a
+        // late write would otherwise create a dropped graph again.
+        self.loadDroppedGraphNames() catch |err| {
+            log.warn("cannot load the dropped-graph names {s}: {}; refusing to open the data directory", .{ self.dropped_graphs_path, err });
+            return err;
         };
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
@@ -3961,6 +4115,7 @@ pub const StorageAdapter = struct {
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -4011,6 +4166,7 @@ pub const StorageAdapter = struct {
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -4065,19 +4221,111 @@ pub const StorageAdapter = struct {
     /// SONNY-6472 (2): CREATE GRAPH: `getOrCreateGraph`, and a graph dropped
     /// earlier under this name is created afresh (its name leaves
     /// `dropped_graph_names`).
+    ///
+    /// SONNY-6523 (5): the name leaves the tombstone file on disk before the
+    /// graph is created; a failed write leaves the name dropped (and the
+    /// create fails).
     pub fn createGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.dropped_graph_names.fetchRemove(name)) |kv| {
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                self.dropped_graph_names.putAssumeCapacity(kv.key, {});
+                return err;
+            };
             self.allocator.free(kv.key);
         }
         return self.getOrCreateGraphLocked(name);
+    }
+
+    /// SONNY-6523: the graph's first-touch hydration failed with `err`
+    /// (`GraphStore.ensureGraphHydrated`): its store is damaged, and every
+    /// write to it is refused from now on (`refuseQuarantinedWrite`). A graph
+    /// not open in this adapter has no writes to refuse.
+    pub fn markGraphQuarantined(self: *StorageAdapter, name: []const u8, err: anyerror) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(name) orelse return;
+        mg.quarantine.store(@intFromEnum(Quarantine.of(err)), .release);
     }
 
     fn freeDroppedGraphNames(self: *StorageAdapter) void {
         var it = self.dropped_graph_names.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
         self.dropped_graph_names.deinit(self.allocator);
+        self.dropped_graph_names = .empty;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE; FEATURE="MultiGraphIsolation"; ASPECT=DurableDroppedNames; STATUS=TESTED; TEST=tests/test_sonny6523_dropped_graph_restart.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6523 (5): write `dropped_graph_names` to `dropped_graphs_path`
+    /// durably (a temporary file, fsync, rename, directory fsync). Format:
+    /// the magic, a u32 count, then each name as a u16 length and its bytes
+    /// (little-endian). No names: the file is removed. Caller holds `mutex`.
+    fn saveDroppedGraphNamesLocked(self: *StorageAdapter) !void {
+        const sio = std.Io.Threaded.global_single_threaded.io();
+        if (self.dropped_graph_names.count() == 0) {
+            std.Io.Dir.cwd().deleteFile(sio, self.dropped_graphs_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+            return syncDirOf(self.dropped_graphs_path);
+        }
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.allocator);
+        try buf.appendSlice(self.allocator, dropped_graphs_magic);
+        var count_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &count_bytes, @intCast(self.dropped_graph_names.count()), .little);
+        try buf.appendSlice(self.allocator, &count_bytes);
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| {
+            if (k.len > std.math.maxInt(u16)) return error.NameTooLong;
+            var len_bytes: [2]u8 = undefined;
+            std.mem.writeInt(u16, &len_bytes, @intCast(k.len), .little);
+            try buf.appendSlice(self.allocator, &len_bytes);
+            try buf.appendSlice(self.allocator, k.*);
+        }
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.dropped_graphs_path});
+        defer self.allocator.free(tmp_path);
+        {
+            const file = try std.Io.Dir.cwd().createFile(sio, tmp_path, .{ .truncate = true });
+            defer file.close(sio);
+            try file.writeStreamingAll(sio, buf.items);
+            try file.sync(sio);
+        }
+        try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), self.dropped_graphs_path, sio);
+        try syncDirOf(self.dropped_graphs_path);
+    }
+
+    /// SONNY-6523 (5): load `dropped_graphs_path` into `dropped_graph_names`
+    /// (none when it is absent). A name the registry holds is not dropped (a
+    /// crash between the tombstone and the drop left it); a malformed file is
+    /// an error.
+    fn loadDroppedGraphNames(self: *StorageAdapter) !void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        const data = std.Io.Dir.cwd().readFileAlloc(lio, self.dropped_graphs_path, self.allocator, .limited(64 << 20)) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer self.allocator.free(data);
+        if (data.len < dropped_graphs_magic.len + 4 or !std.mem.eql(u8, data[0..dropped_graphs_magic.len], dropped_graphs_magic)) return error.InvalidData;
+        var pos: usize = dropped_graphs_magic.len;
+        const n = std.mem.readInt(u32, data[pos..][0..4], .little);
+        pos += 4;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            if (pos + 2 > data.len) return error.InvalidData;
+            const len = std.mem.readInt(u16, data[pos..][0..2], .little);
+            pos += 2;
+            if (pos + len > data.len) return error.InvalidData;
+            const name = data[pos .. pos + len];
+            pos += len;
+            if (self.findRegistryEntryLocked(name) != null) continue;
+            if (self.dropped_graph_names.contains(name)) continue;
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.dropped_graph_names.put(self.allocator, owned, {});
+        }
+        if (pos != data.len) return error.InvalidData;
     }
 
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
@@ -4183,7 +4431,12 @@ pub const StorageAdapter = struct {
     /// SONNY-6472 (2): the name is recorded in `dropped_graph_names` (room
     /// taken before anything is dropped: OutOfMemory drops nothing), so a
     /// write racing the drop cannot create the graph again.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
+    ///
+    /// SONNY-6523 (5): and written to the tombstone file
+    /// (`saveDroppedGraphNamesLocked`) before anything is dropped, so the
+    /// name stays dropped across a restart. A failed write drops nothing
+    /// (`DroppedGraphNamesNotSaved`).
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory, DroppedGraphNamesNotSaved }!void {
         // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
         if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -4197,6 +4450,11 @@ pub const StorageAdapter = struct {
             try self.dropped_graph_names.ensureUnusedCapacity(self.allocator, 1);
             const owned = try self.allocator.dupe(u8, name);
             self.dropped_graph_names.putAssumeCapacity(owned, {});
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                log.warn("cannot record the drop of graph '{s}' in {s}: {}; the graph is not dropped", .{ name, self.dropped_graphs_path, err });
+                if (self.dropped_graph_names.fetchRemove(name)) |kv| self.allocator.free(kv.key);
+                return error.DroppedGraphNamesNotSaved;
+            };
         }
 
         var dropped_uuid: ?[16]u8 = null;
@@ -4344,6 +4602,7 @@ pub const StorageAdapter = struct {
         // mutex, so a dropped graph is never found (GraphNotFound); a drop
         // after it waits for this pin before freeing the graph.
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
@@ -4375,6 +4634,9 @@ pub const StorageAdapter = struct {
             try mg.engine.allocNode();
         if (node_slot_allocated_hook) |hook| hook(mg);
         const node_shard = mg.shardEngineForNode(node_id);
+        // SONNY-6523 (2): a failure from here on gives the slot back.
+        var slot_txn_open = false;
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -4387,11 +4649,14 @@ pub const StorageAdapter = struct {
             shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
         else
             try node_shard.beginTxn();
+        slot_txn_open = true;
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
         errdefer if (own_txn) {
             // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
+        // SONNY-6523 (2): runs before the abort above, in the live txn.
+        errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn);
 
         // Write an initial node record.  The txn_stamp must be non-zero so
         // that getNode() does not treat the slot as empty (isEmpty checks all
@@ -4618,6 +4883,7 @@ pub const StorageAdapter = struct {
         for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         // Build it FIRST (before any node/index write below) so this insert's
         // posting lands on top of the fully-rebuilt index. No-op (one atomic
@@ -4690,6 +4956,9 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        // SONNY-6523: also here, after the bulk MERGE paths' probe (its
+        // hydration may have just quarantined the graph).
+        try refuseQuarantinedWrite(mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4714,17 +4983,25 @@ pub const StorageAdapter = struct {
         defer mg.endNodeCensusWrite();
         const slot_id = try node_shard.allocNode();
         if (node_slot_allocated_hook) |hook| hook(mg);
+        // SONNY-6523 (2): a failure from here on gives the slot back.
+        var slot_txn_open = false;
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, slot_id, null);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, slot_id)
         else
             null;
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
+        slot_txn_open = true;
         const own_txn = stmt_local == null;
         errdefer if (own_txn) {
             // error-policy: A — best-effort rollback on an already-failing path.
             node_shard.abortTxn(local_txn) catch {};
         };
+        // SONNY-6523 (2): before the abort above; not once the node is in
+        // the in-memory store (a later failure leaves it, as before).
+        var slot_kept = false;
+        errdefer if (!slot_kept) releaseFailedNodeSlot(node_shard, slot_id, local_txn);
 
         var rec = gs.node.NodeRec{
             .out_head = 0,
@@ -4819,6 +5096,7 @@ pub const StorageAdapter = struct {
             defer mg.string_indexes_mutex.unlock(io);
             try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
         }
+        slot_kept = true;
         if (own_txn) try node_shard.commitTxn(local_txn);
 
         if (props.len > 0) {
@@ -4900,6 +5178,7 @@ pub const StorageAdapter = struct {
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -5030,6 +5309,7 @@ pub const StorageAdapter = struct {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
         if (mg.isDropped()) return error.GraphNotFound;
@@ -5226,6 +5506,7 @@ pub const StorageAdapter = struct {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         if (edges.len == 0) return;
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -5386,6 +5667,7 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // ENG-3914 (RC-2): the delegated insert below runs under THIS
         // function's SHARED hold, so its deferred exact-index build has to
         // happen out here — before that hold is taken. Idempotent; a no-op
@@ -5584,6 +5866,7 @@ pub const StorageAdapter = struct {
 
         // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
         if (mg.isDropped()) return error.GraphNotFound;
@@ -6346,6 +6629,7 @@ pub const StorageAdapter = struct {
         // registered; subsequent engine operations don't need the adapter
         // mutex.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Resolve label strings → label ids once; apply to every new slot.
         var label_ids_buf: [8]gs.LabelId = undefined;
@@ -6387,9 +6671,18 @@ pub const StorageAdapter = struct {
 
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
+        // SONNY-6523 (2): on a failure every slot allocated here is given
+        // back (before the shard txns are aborted above).
+        var allocated: usize = 0;
+        errdefer for (out[0..allocated]) |id| {
+            const si = gs.shard_count.shardOfNode(id);
+            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si]);
+        };
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
+            out[i] = node_id;
+            allocated = i + 1;
             const si = gs.shard_count.shardOfNode(node_id);
             const node_shard = mg.engine.shards[si];
             if (shard_txns[si] == null) shard_txns[si] = try node_shard.beginTxn();
@@ -6418,6 +6711,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
 
@@ -6530,6 +6824,7 @@ pub const StorageAdapter = struct {
         // span emission. The `_om12e.recordEdgeMutation` counter below
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
@@ -6611,6 +6906,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
         if (currentStatementTxnForGraph(graph_name)) |s| {
@@ -6740,6 +7036,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -6825,6 +7122,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -6905,6 +7203,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7372,6 +7671,7 @@ pub const StorageAdapter = struct {
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // CANARY: REQ=REQ-SONNY-6491-ORDERBY-LABEL-INTERN; FEATURE="CrashRecovery"; ASPECT=OrderedIndexLabelViaEngine; STATUS=TESTED; TEST=tests/test_sonny6491_orderby_label_intern.zig; OWNER=storage; UPDATED=2026-11-13
         // SONNY-6491: a new label is named through the engine, as every other
         // writer names it (`resolvePersistedLabelId`): on all 16 shards, made
@@ -8656,6 +8956,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
@@ -8782,6 +9083,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
@@ -9309,6 +9611,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         return mg.engine.beginTxn();
     }
 
@@ -9350,8 +9653,59 @@ pub const StorageAdapter = struct {
     /// node ingest in deferred mode (the full derived-index re-save was O(graph)
     /// and fell behind, letting the WAL + dirty pages grow until OOM). On reopen,
     /// graph-storage rebuilds the stale derived indexes from the durable pages.
+    ///
+    /// SONNY-6523 (6): a failure is counted (`checkpoint_failures_total`)
+    /// and logged at ERROR once per distinct cause, then at most every
+    /// `checkpoint_failure_log_interval_ms` while it repeats, and the
+    /// recovery once (`CheckpointFailureLog`). The persistence tick runs one
+    /// on every --persist-interval, and every failing tick logged at ERROR.
     pub fn checkpointAllLight(self: *StorageAdapter) !void {
-        return self.checkpointAllEx(true, true);
+        const failures_before = self.checkpoint_failures_total.load(.acquire);
+        self.checkpointAllEx(true, true) catch |err| {
+            self.noteCheckpointFailure(null, err);
+            return err;
+        };
+        // A graph whose engine checkpoint failed is counted by
+        // `checkpointOneGraph`, and the pass returns without an error.
+        if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
+    }
+
+    /// SONNY-6523 (6): light checkpoints that failed since this adapter opened.
+    pub fn checkpointFailuresTotal(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failures_total.load(.acquire);
+    }
+
+    /// SONNY-6523 (6): ERROR lines a failing light checkpoint has logged.
+    pub fn checkpointFailureErrorLogs(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failure_error_logs.load(.acquire);
+    }
+
+    fn noteCheckpointFailure(self: *StorageAdapter, graph: ?[]const u8, err: anyerror) void {
+        _ = self.checkpoint_failures_total.fetchAdd(1, .acq_rel);
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const verdict = self.checkpoint_failure_log.noteFailure(err, checkpointLogNowMs());
+        const consecutive = self.checkpoint_failure_log.consecutive;
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        switch (verdict) {
+            .suppressed => {},
+            .first, .repeated => {
+                _ = self.checkpoint_failure_error_logs.fetchAdd(1, .acq_rel);
+                slog.err("light checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)", &.{
+                    SAttr.string("graph", graph orelse "(all)"),
+                    SAttr.string("error", @errorName(err)),
+                    SAttr.uint("consecutive_failures", consecutive),
+                });
+            },
+        }
+    }
+
+    fn noteCheckpointSuccess(self: *StorageAdapter) void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const recovered = self.checkpoint_failure_log.noteSuccess();
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        if (recovered) |n| slog.info("light checkpoint succeeded again", &.{SAttr.uint("after_consecutive_failures", n)});
     }
 
     /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
@@ -9805,7 +10159,9 @@ pub const StorageAdapter = struct {
         var engine_ok = true;
         if (light) {
             mg.engine.checkpointLight() catch |err| {
-                log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                // SONNY-6523 (6): counted, and logged at ERROR once per
+                // cause (it was a WARN on every tick, forever).
+                self.noteCheckpointFailure(mg.name, err);
                 engine_ok = false;
             };
         } else {
@@ -10693,6 +11049,7 @@ pub const StorageAdapter = struct {
         if (self.checkpoint_metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
         reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
         reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
+        reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
     }
 
     /// Bulk write ops applied since the last checkpoint.
@@ -10880,99 +11237,6 @@ pub const StorageAdapter = struct {
             error.FileNotFound => {},
             else => log.warn("failed to invalidate stale prop_exact.idx: {s}", .{@errorName(err)}),
         };
-    }
-
-    fn freeStoreMaskCount(total_pages: u64) usize {
-        return @intCast((total_pages + @bitSizeOf(usize) - 1) / @bitSizeOf(usize));
-    }
-
-    fn truncateFreeStoreIfPresent(allocator: Allocator, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer allocator.free(free_store_path);
-
-        const trunc_io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(trunc_io, free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
-            error.FileNotFound => return false,
-            else => return err,
-        };
-        defer file.close(trunc_io);
-
-        try file.setLength(trunc_io, 0);
-        return true;
-    }
-
-    fn maxPersistedPagesForStorePath(self: *StorageAdapter, graph_dir: []const u8, file_name: []const u8) !u64 {
-        const store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, file_name });
-        defer self.allocator.free(store_path);
-
-        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return 64,
-            else => return err,
-        };
-
-        const page_count = stat.size / self.config.page_size;
-        if (page_count >= std.math.maxInt(u64) / 2) return std.math.maxInt(u64);
-        return @max(@as(u64, 64), page_count * 2);
-    }
-
-    fn freeStoreLooksValidLocked(self: *StorageAdapter, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer self.allocator.free(free_store_path);
-
-        const io_fv = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(io_fv, free_store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return true,
-            else => return err,
-        };
-        defer file.close(io_fv);
-
-        const stat = try file.stat(io_fv);
-        if (stat.size == 0) return true;
-
-        const word_size = @sizeOf(usize);
-        const min_section_size = free_store_header_size + word_size;
-        const min_total_size = min_section_size * graph_store_file_names.len;
-        if (stat.size < min_total_size) return false;
-
-        var max_total_size: u64 = 0;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            max_total_size += free_store_header_size + freeStoreMaskCount(max_pages) * word_size;
-        }
-        if (stat.size > max_total_size) return false;
-
-        var offset: u64 = 0;
-        var header_buf: [free_store_header_size]u8 = undefined;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            const bytes_read = try file.readPositionalAll(io_fv, &header_buf, offset);
-            if (bytes_read != header_buf.len) return false;
-
-            const total_pages = std.mem.readInt(u64, header_buf[0..8], .little);
-            const next_free_hint = std.mem.readInt(u64, header_buf[8..16], .little);
-            if (total_pages < 64 or total_pages > max_pages) return false;
-            if (next_free_hint == 0 or next_free_hint > total_pages) return false;
-
-            const section_size: u64 = free_store_header_size + freeStoreMaskCount(total_pages) * word_size;
-            if (offset + section_size > stat.size) return false;
-            offset += section_size;
-        }
-
-        return offset == stat.size;
-    }
-
-    fn sanitizeFreeStoreBeforeOpenLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !void {
-        const graph_dir = try graphDirPath(self.allocator, self.data_dir, graph_uuid);
-        defer self.allocator.free(graph_dir);
-
-        if (!(try self.freeStoreLooksValidLocked(graph_dir))) {
-            if (try truncateFreeStoreIfPresent(self.allocator, graph_dir)) {
-                log.warn("graph '{s}' has invalid persisted free.store; truncating it so GraphEngine.open can rebuild from disk", .{name});
-            }
-        }
-        // SONNY-6492 (1): a shard free.store left stale by a crash during a
-        // graph-storage <= 0.4.13 checkpoint is detected and rebuilt by
-        // graph-storage >= 0.4.14 itself (`loadFreeStore`, SONNY-6491).
     }
 
     // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
@@ -11230,8 +11494,6 @@ pub const StorageAdapter = struct {
 
     /// Open an existing graph engine from a known UUID directory.
     fn openGraphLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
-        try self.sanitizeFreeStoreBeforeOpenLocked(name, graph_uuid);
-
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
@@ -11656,6 +11918,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (adding a label re-indexes the node's properties under the new label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11688,6 +11951,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (removing a label drops the node's postings under that label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11733,6 +11997,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
                 const from_shard = mg.shardEngineForNode(from_id);
@@ -12202,6 +12467,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         const txn_id = try mg.engine.beginTxn();
         // SONNY-2978: the statement's transaction must not hold its shard's
@@ -12245,6 +12511,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Open a local txn on the shard directly, then re-encode it in the
         // ShardedGraphEngine wire format so commitTxn/abortTxn route back.
@@ -12284,6 +12551,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         const txn_id = try mg.engine.beginTxn();
         // SONNY-2978: the session's transaction must not hold its shard's

@@ -22,6 +22,12 @@ const Attr = logging.Attr;
 
 /// The hook's checkpoint policy: a light checkpoint on every persistence
 /// tick (the loop's own cadence bounds how often that is).
+///
+/// SONNY-6523 (6): this is the server's checkpoint cadence, and only
+/// `--persist-interval` sets it. GEODE_CHECKPOINT_OPS and
+/// GEODE_CHECKPOINT_INTERVAL_MS add bulk-ingest triggers
+/// (`StorageAdapter.maybeCheckpoint` / `maybeCheckpointInline`); they do
+/// not stop or space out this one (docs/SERVER_FEATURES.md, Checkpoints).
 pub fn needsCheckpointHook() bool {
     return true;
 }
@@ -31,7 +37,12 @@ pub fn needsCheckpointHook() bool {
 /// checkpoint (GAP-0900).
 pub fn checkpointHook(store: *graph_store.GraphStore) void {
     store.saveToFileEx(true) catch |err| {
-        log.err("WAL: saveToFile failed — data may not be persisted", &.{Attr.string("error", @errorName(err))});
+        // SONNY-6523 (6): a failed light checkpoint is counted and logged by
+        // the adapter (`checkpointAllLight`), once per cause; this logged it
+        // again on every tick.
+        if (graph_store.getGlobalAdapter() == null) {
+            log.err("WAL: saveToFile failed — data may not be persisted", &.{Attr.string("error", @errorName(err))});
+        }
     };
 }
 

@@ -5466,6 +5466,19 @@ REQ-SONNY-6499-GQLSTATE-RESIDUALS,ErrorMapping,DataExceptionGqlstatusResiduals,T
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,OrderedIndex,ColumnEntriesAndNfc,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,storage,2026-11-13
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,TopKOrderedFastPath,FastPathsReturnFullSortPrefix,TESTED,tests/test_sonny6499_orderby_fastpath_nulls.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,execution,2026-11-13
 REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup,TESTED,tests/test_sonny6499_relative_data_dir.zig,tests/test_sonny6499_relative_data_dir.zig,,security,2026-11-13
+REQ-SONNY-6523-CHECKPOINT-SETTINGS,CrashRecovery,CheckpointFailureLogLimit,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_checkpoint_settings.zig,,storage,2026-11-13
+REQ-SONNY-6523-CHECKPOINT-SETTINGS,CrashRecovery,Regression,TESTED,tests/test_sonny6523_checkpoint_settings.zig,tests/test_sonny6523_checkpoint_settings.zig,,storage,2026-11-13
+REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR,MultiGraphIsolation,OneScanPerBatch,TESTED,src/graph_store.zig,tests/test_sonny6523_drop_graph_purge.zig,,storage,2026-11-13
+REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6523_drop_graph_purge.zig,tests/test_sonny6523_drop_graph_purge.zig,,storage,2026-11-13
+REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE,MultiGraphIsolation,DurableDroppedNames,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_dropped_graph_restart.zig,,storage,2026-11-13
+REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6523_dropped_graph_restart.zig,tests/test_sonny6523_dropped_graph_restart.zig,,storage,2026-11-13
+REQ-SONNY-6523-FAILED-CREATE-COUNT,StorageIntegrity,FailedCreateGivesSlotBack,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_failed_create_count.zig,,storage,2026-11-13
+REQ-SONNY-6523-FAILED-CREATE-COUNT,StorageIntegrity,Regression,TESTED,tests/test_sonny6523_failed_create_count.zig,tests/test_sonny6523_failed_create_count.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,GrpcProgramGate,TESTED,src/transport/grpc_server.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuarantinedGraphRefusesWrites,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuicProgramGate,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,Regression,TESTED,tests/test_sonny6523_quarantine_fail_closed.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,TransportProgramGate,TESTED,src/graph_store.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
@@ -5544,7 +5557,6 @@ REQ-STORAGE-ENGINE-PHASE2-003,EngineBackedPersistence,LegacyCleanup,IMPL,src/gra
 REQ-STORAGE-ENGINE-PHASE2-004,EngineBackedPersistence,LoadFromAdapter,TESTED,src/graph_store.zig,test-graph-store,,storage,2026-06-11
 REQ-STORAGE-ENGINE-PHASE2-005,EngineBackedPersistence,LoadFromFile,TESTED,src/graph_store.zig,test-graph-store,,storage,2026-07-04
 REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,PersistSplitPhase,IMPL,src/graph_store.zig,,,storage,2026-04-06
-REQ-STORAGE-ENGINE-PHASE2-006,EngineBackedPersistence,StartupMetadataRepair,TESTED,tests/test_gap_0511_regression.zig,,,storage,2026-04-10
 REQ-STORAGE-ENGINE-PHASE2-007,EngineBackedPersistence,ServerInit,TESTED,src/server/server_init.zig,geodetestlab/specs/geode_auth_ddl_persistence.yml,,storage,2026-06-11
 REQ-STORAGE-FLUSH-001,Storage,FlushStorage,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,storage,2026-01-16
 REQ-STORAGE-FTS-ADAPTER-001,FTS storage adapter,Wrapper,TESTED,src/storage/fts_storage_adapter.zig,,,core,2026-05-30

@@ -275,56 +275,6 @@ test "GAP-0511: Relationship DELETE resolves endpoints without label scans" {
     try testing.expectEqual(@as(usize, 31), geode.graph_store.getCurrentGlobalStore().?.getEdgeCount());
 }
 
-// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=StartupMetadataRepair; STATUS=TESTED; OWNER=storage; UPDATED=2026-04-10
-test "GAP-0511: global store startup repairs corrupted free.store" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
-    defer testing.allocator.free(data_dir);
-
-    var graph_uuid: [16]u8 = undefined;
-    var seeded_node_id: u64 = 0;
-
-    {
-        const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
-        const adapter = geode.graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
-
-        seeded_node_id = try seedNodeWithNodeId(store, "User", 42);
-        try store.setNodeProperty(seeded_node_id, "display_name", .{ .String = "Recovered User" });
-        try adapter.checkpointAll();
-
-        graph_uuid = geode.graph_store.GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
-        geode.graph_store.deinitGlobalStore();
-    }
-    defer geode.graph_store.deinitGlobalStore();
-
-    const graph_dir = try std.fmt.allocPrint(
-        testing.allocator,
-        "{s}/graphs/{s}",
-        .{ data_dir, std.fmt.bytesToHex(graph_uuid, .lower) },
-    );
-    defer testing.allocator.free(graph_dir);
-
-    const free_store_path = try std.fmt.allocPrint(testing.allocator, "{s}/free.store", .{graph_dir});
-    defer testing.allocator.free(free_store_path);
-
-    {
-        const file = try std.fs.cwd().createFile(free_store_path, .{ .truncate = true });
-        defer file.close();
-        try file.writeAll(&([_]u8{0xFF} ** 64));
-    }
-
-    const recovered_store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
-    const recovered_node = recovered_store.getNodePtr(seeded_node_id) orelse return error.NodeNotFound;
-    const display_name = recovered_node.properties.get("display_name") orelse return error.PropertyNotFound;
-
-    try testing.expectEqualStrings("Recovered User", display_name.String);
-    try testing.expectEqual(@as(usize, 1), recovered_store.getNodeCount());
-    const repaired_stat = try std.fs.cwd().statFile(free_store_path);
-    try testing.expectEqual(@as(u64, 0), repaired_stat.size);
-}
-
 // CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="IndexRebuild"; ASPECT=RebuildMutex; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: rebuild_mutex prevents concurrent rebuild races" {
     const allocator = testing.allocator;

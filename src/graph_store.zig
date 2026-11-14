@@ -2413,6 +2413,16 @@ const HydrationEntry = struct {
     failure: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(QuarantineCause.unknown)),
 };
 
+/// SONNY-6523 (7): keys DROP GRAPH collects per scan of a shared map.
+const drop_purge_batch: usize = 256;
+
+/// SONNY-6523 (7): scans of the shared graph-keyed maps DROP GRAPH has made
+/// (`purgeGraphKeyedIndexes`), for the regression test.
+var g_drop_graph_map_scans = std.atomic.Value(u64).init(0);
+pub fn dropGraphMapScans() u64 {
+    return g_drop_graph_map_scans.load(.monotonic);
+}
+
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=QuarantinedGraphFailClosed; STATUS=TESTED; TEST=tests/canary_recovery_corrupt_latency.zig; OWNER=storage; UPDATED=2026-10-19
 /// The errors a read of a quarantined graph fails with. A graph is
 /// quarantined when its first-touch hydration fails (`ensureGraphHydrated`):
@@ -3204,63 +3214,74 @@ pub const GraphStore = struct {
     /// never touched. Allocation-free (a re-scan after each removal), like
     /// `removeHydrationCounterContributionsForGraph`; removing an entry moves
     /// no other entry, so other graphs' posting pointers stay valid.
+    // CANARY: REQ=REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR; FEATURE="MultiGraphIsolation"; ASPECT=OneScanPerBatch; STATUS=TESTED; TEST=tests/test_sonny6523_drop_graph_purge.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6523 (7): remove from `map` every entry whose key `matches`
+    /// `graph_name`, collecting up to `drop_purge_batch` keys per scan of the
+    /// map. DROP GRAPH scanned each shared map from its start once per key it
+    /// removed (O(keys of every graph) per removed key: quadratic in the
+    /// dropped graph's label and relationship-type count). `release` frees
+    /// what a removed entry owns. Allocates nothing.
+    fn removeGraphKeyed(
+        map: anytype,
+        graph_name: []const u8,
+        comptime matches: fn ([]const u8, []const u8) bool,
+        allocator: std.mem.Allocator,
+        comptime release: fn (std.mem.Allocator, @TypeOf(map.*).KV) void,
+    ) void {
+        var batch: [drop_purge_batch][]const u8 = undefined;
+        while (true) {
+            _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
+            var n: usize = 0;
+            var it = map.iterator();
+            while (it.next()) |e| {
+                if (!matches(e.key_ptr.*, graph_name)) continue;
+                batch[n] = e.key_ptr.*;
+                n += 1;
+                if (n == batch.len) break;
+            }
+            for (batch[0..n]) |key| {
+                if (map.fetchRemove(key)) |kv| release(allocator, kv);
+            }
+            if (n < batch.len) return;
+        }
+    }
+
+    fn graphTenantKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
+        return std.mem.eql(u8, graphTenantKeyGraph(key), graph_name);
+    }
+
     fn purgeGraphKeyedIndexes(self: *GraphStore, graph_name: []const u8) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         {
             self.label_index_mutex.lockUncancelable(io);
             defer self.label_index_mutex.unlock(io);
-            while (true) {
-                var victim: ?[]const u8 = null;
-                var it = self.label_index.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (self.label_index.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(&self.label_index, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "label_index").KV) void {
+                    a.free(kv.key);
                     var posting = kv.value;
-                    posting.deinit(self.allocator);
+                    posting.deinit(a);
                 }
-            }
+            }.release);
         }
         {
             self.label_count_rwlock.lockUncancelable(io);
             defer self.label_count_rwlock.unlock(io);
-            while (true) {
-                var victim: ?[]const u8 = null;
-                var it = self.label_counts_by_graph.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
+            removeGraphKeyed(&self.label_counts_by_graph, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "label_counts_by_graph").KV) void {
+                    a.free(kv.key);
                 }
-                const key = victim orelse break;
-                if (self.label_counts_by_graph.fetchRemove(key)) |kv| self.allocator.free(kv.key);
-            }
+            }.release);
         }
         {
             self.edge_type_index_lock.lockUncancelable(io);
             defer self.edge_type_index_lock.unlock(io);
-            while (true) {
-                var victim: ?[]const u8 = null;
-                var it = self.edge_type_index.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (self.edge_type_index.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(&self.edge_type_index, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "edge_type_index").KV) void {
+                    a.free(kv.key);
                     var list = kv.value;
-                    list.deinit(self.allocator);
+                    list.deinit(a);
                 }
-            }
+            }.release);
         }
         {
             self.nodes_by_graph_mutex.lockUncancelable(io);
@@ -13561,6 +13582,9 @@ pub const GraphStore = struct {
             // partial-but-counter-current snapshot forever.
             entry.failure.store(@intFromEnum(QuarantineCause.of(err)), .release);
             entry.failed.store(true, .release);
+            // SONNY-6523: and the adapter refuses every write to it (the
+            // security graph excepted, as for reads: `noteQuarantinedRead`).
+            if (!std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME)) adapter.markGraphQuarantined(graph_name, err);
             break :blk null;
         };
         entry.done.store(true, .release);
@@ -14078,20 +14102,11 @@ pub const GraphStore = struct {
         {
             self.edge_type_count_rwlock.lockUncancelable(io);
             defer self.edge_type_count_rwlock.unlock(io);
-            while (true) {
-                var victim: ?[]const u8 = null;
-                var it = self.edge_type_counts_by_graph.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
+            removeGraphKeyed(&self.edge_type_counts_by_graph, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "edge_type_counts_by_graph").KV) void {
+                    a.free(kv.key);
                 }
-                const key = victim orelse break;
-                if (self.edge_type_counts_by_graph.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
-                }
-            }
+            }.release);
         }
         self.perf_c_refcount_mutex.lockUncancelable(io);
         defer self.perf_c_refcount_mutex.unlock(io);
@@ -14101,24 +14116,15 @@ pub const GraphStore = struct {
             &self.label_properties_by_tenant,
         };
         for (outers) |outer| {
-            while (true) {
-                var victim: ?[]const u8 = null;
-                var it = outer.iterator();
-                while (it.next()) |e| {
-                    if (std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (outer.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(outer, graph_name, graphTenantKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: std.StringHashMap(std.StringHashMap(usize)).KV) void {
+                    a.free(kv.key);
                     var inner = kv.value;
                     var iit = inner.iterator();
-                    while (iit.next()) |ie| self.allocator.free(ie.key_ptr.*);
+                    while (iit.next()) |ie| a.free(ie.key_ptr.*);
                     inner.deinit();
                 }
-            }
+            }.release);
         }
     }
 
@@ -16740,7 +16746,7 @@ const AdapterVTable = struct {
     // engine transaction open on. SONNY-3132: and the default graph.
     // SONNY-6472 (2): OutOfMemory when the dropped name cannot be recorded
     // (nothing is dropped then).
-    dropGraphFn: *const fn (*anyopaque, []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void,
+    dropGraphFn: *const fn (*anyopaque, []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory, DroppedGraphNamesNotSaved }!void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
     // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
     // stored INLINE in the durable adjacency records (v2 blocks) so a
@@ -17499,7 +17505,7 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             const mg = try castAdapter(ctx).createGraph(name);
             return @ptrCast(mg);
         }
-        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
+        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory, DroppedGraphNamesNotSaved }!void {
             try castAdapter(ctx).dropGraph(name);
         }
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {
@@ -18355,10 +18361,9 @@ fn persistenceLoop() void {
                     checkpoint_ops,
                     checkpoint_interval_ms,
                     monoNanosNow(),
-                ) catch |err| blk: {
-                    log.err("deferred-mode auto-checkpoint failed", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
+                ) catch blk: {
+                    // SONNY-6523 (6): `checkpointAllLight` counted it and
+                    // logged it (once per cause, not once per tick).
                     break :blk false;
                 };
                 if (fired) {
@@ -18395,6 +18400,7 @@ fn persistenceLoop() void {
                     // on every tick, and stall SIGTERM by up to two deadlines
                     // (this tick, then the final flush).
                     const runs_before = adapter.checkpointsTotal();
+                    const failures_before = adapter.checkpointFailuresTotal();
                     const tick_result: anyerror!void = if (g_wal_checkpoint_fn) |checkpoint_fn| blk: {
                         // The hook logs its own failure; a run that landed
                         // advanced the counter.
@@ -18415,9 +18421,14 @@ fn persistenceLoop() void {
                             Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
                         });
                     } else |err| {
-                        log.err("per-graph storage checkpoint failed", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
+                        // SONNY-6523 (6): a failed light checkpoint is
+                        // counted and logged by `checkpointAllLight` (once
+                        // per cause); a hook that ran none is logged here.
+                        if (err == error.CheckpointHookFailed and adapter.checkpointFailuresTotal() == failures_before) {
+                            log.err("per-graph storage checkpoint failed", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                        }
                     }
                 } else {
                     // Fallback: global shared lock (via the helpers so the
@@ -18454,12 +18465,9 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
     // stay O(dirty). A full O(graph) checkpoint here stalls a large ingest for
     // minutes under the exclusive store lock (full is kept for clean shutdown).
     if (global_adapter) |adapter| {
-        adapter.checkpointAllLight() catch |err| {
-            log.err("per-graph storage checkpoint failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return;
-        };
+        // SONNY-6523 (6): a failure is counted and logged (once per cause)
+        // by `checkpointAllLight`.
+        adapter.checkpointAllLight() catch return;
         // GAP-ENT-0038: like the WAL-triggered branch above, this dirty-flush
         // backstop silently resets the deferred cadence state — make it
         // visible so operators can account for every checkpoint driver.
@@ -18824,6 +18832,36 @@ pub fn getWritableGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 /// read store this thread has pushed: a snapshot copy has no hydration state.
 pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const u8) ?GraphQuarantineError {
     return getPrimaryGlobalStore(allocator).graphQuarantineError(graph_name);
+}
+
+// CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=TransportProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523: the transports' gate. A program on the data of `graph_names`
+/// (the graphs its statements run on) fails with the first quarantined
+/// one's error, before any path serves it: the fast paths answered counts,
+/// metadata and fulltext reads from the products a failed hydration left
+/// partial (`MATCH (n:L) RETURN count(n)` answered 0), and took writes.
+/// Also clears this thread's quarantined-read note, so a fast path that
+/// hydrates a graph for the first time can be checked afterwards
+/// (`takeQuarantinedReadError`).
+///
+/// `writes`: the program changes data. A graph not hydrated yet is then
+/// hydrated first, so its damage is found before anything is written to it:
+/// the write fast paths read no resident product, and wrote to a damaged
+/// store whose hydration had not run yet. A read is not hydrated here (the
+/// engine-direct read paths need no resident product, and a read that does
+/// hydrates and is checked after it).
+pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, writes: bool) ?GraphQuarantineError {
+    clearQuarantinedReadError();
+    const store = getPrimaryGlobalStore(allocator);
+    for (graph_names) |g| {
+        if (writes) store.ensureGraphHydrated(g);
+        if (store.graphQuarantineError(g)) |err| {
+            clearQuarantinedReadError();
+            return err;
+        }
+    }
+    clearQuarantinedReadError();
+    return null;
 }
 
 /// The live global store, never the calling thread's active query read

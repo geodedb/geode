@@ -1049,6 +1049,9 @@ pub fn prepare(
     if (eligibility.mode == .count and where_expr == null and !has_inline_props) {
         if (graph_store.getGlobalAdapter()) |adapter| {
             if (eligibility.pattern.labels.len == 1) {
+                // SONNY-6523: only this count's own hydration may note a
+                // quarantined graph (checked below), not an earlier request's.
+                graph_store.clearQuarantinedReadError();
                 count_precomputed = graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, eligibility.pattern.labels[0], null);
             } else if (eligibility.pattern.labels.len == 0) {
                 // Unlabeled count: scan the engine node store (no clone). The
@@ -1062,6 +1065,10 @@ pub fn prepare(
             // `nodeMatchesPattern` verifies the FULL label set. (The previous
             // `scanAllNodes` arm counted EVERY node in the graph for
             // multi-label patterns — silent over-count.)
+            // SONNY-6523: the label count hydrates the graph; one whose
+            // hydration failed just now is quarantined, and its count is
+            // partial (it answered 0).
+            if (graph_store.takeQuarantinedReadError()) |err| return err;
         } else {
             // SONNY-1218: now redundant — prepare's shared
             // `adapterCanServeEngineDirect` guard declined before we got here.
