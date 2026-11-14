@@ -386,7 +386,7 @@ Index use is rule-based (see 4.3).
 ### 4.1 Query Planner
 
 **Implementation**: `/src/planner.zig`
-**CANARY**: `REQ-GQL-016`, `REQ-GQL-021`
+**CANARY**: `REQ-GQL-021`
 
 **Planning Phases**:
 
@@ -397,28 +397,12 @@ Index use is rule-based (see 4.3).
 5. **Cost**: Estimate execution cost
 6. **Select**: Choose lowest-cost plan
 
-**Path Expansion Operator**:
-
-- Variable-length path queries: `(a)-[*1..5]->(b)`
-- BFS traversal with cycle detection
-- Tie-breaking policy: (length, start_id, end_id)
-- Pruning: visited node tracking
-
-**Example**:
-
-```sql
-MATCH (a:Person)-[r:KNOWS*1..3]->(b:Person)
-WHERE a.name = 'Alice'
-RETURN b.name, length(r) as hops
-```
-
-**Plan**:
-
-```
-PathExpand(min=1, max=3)
-  ← IndexScan(Person, name='Alice')
-  → Filter(label=Person)
-```
+**Path expansion** (SONNY-6540 item 6): variable-length patterns
+(`(a)-[*1..5]->(b)`) are expanded by the executor (the planned read's
+`VarLengthExpand` operator, as EXPLAIN and PROFILE name it, and
+`src/execution/match_operations.zig`). The planner's `PathExpand` operator, which this section described
+(BFS with a (length, start_id, end_id) tie-break), was reached by no query
+and has been removed.
 
 ### 4.2 Cost-Based Optimizer (CBO)
 

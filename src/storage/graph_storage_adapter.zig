@@ -14111,7 +14111,11 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
     }
 }
 
-test "StorageAdapter: reopen repairs corrupted free.store" {
+// SONNY-6523 removed the root free.store sanitizer as dead code: every graph
+// is sharded, so nothing reads `<graph root>/free.store` (each shard's own
+// free.store is validated by graph-storage). A stray file there must not
+// affect the reopen; it is no longer truncated (SONNY-6555 item 9).
+test "StorageAdapter: reopen ignores a stray root free.store" {
     const allocator = std.testing.allocator;
 
     var tmp = std.testing.tmpDir(.{});
@@ -14158,8 +14162,6 @@ test "StorageAdapter: reopen repairs corrupted free.store" {
 
         try std.testing.expectEqualStrings("Alice", name_prop.string);
         try std.testing.expectEqual(@as(u64, 1), try adapter.nodeCount(graph_name));
-        const repaired_stat = try std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{});
-        try std.testing.expectEqual(@as(u64, 0), repaired_stat.size);
     }
 }
 

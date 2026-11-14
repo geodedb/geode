@@ -7039,12 +7039,6 @@ pub fn build(b: *std.Build) void {
     const e2e_cbo_v0_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_cbo_v0.zig"), .target = target, .optimize = optimize }) });
     e2e_cbo_v0_test.root_module.addImport("geode", root_mod);
     test_e2e_step.dependOn(&e2e_cbo_v0_test.step);
-    const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
-    e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
-    // GAP-0863a: actually RUN these tests (pure in-memory community-detection
-    // assertions, no server) instead of compile-only like the stub-era wiring.
-    const run_e2e_graph_algos_new_test = b.addRunArtifact(e2e_graph_algos_new_test);
-    test_e2e_step.dependOn(&run_e2e_graph_algos_new_test.step);
 
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
@@ -13918,6 +13912,31 @@ pub fn build(b: *std.Build) void {
     const run_sonny6525_gk_tests = b.addRunArtifact(sonny6525_gk_tests);
     shardDep(test_step, &run_sonny6525_gk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6525-with-group-keys", "Run SONNY-6525 item 4 regression (an aggregating WITH between parts groups 1 and '1', 'null' and NULL apart and reads $parameters in its keys and aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6525_gk_tests.step);
+    // SONNY-6540 item 9: abs('x'), abs(1, 2) and toString(1, 2) are syntax-rule violations, 42000. See tests/test_sonny6540_syntax_rule_refusals.zig.
+    const sonny6540_syn_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_syntax_rule_refusals.zig"), .target = target, .optimize = optimize });
+    sonny6540_syn_mod.addImport("geode", root_mod);
+    sonny6540_syn_mod.link_libc = true;
+    const sonny6540_syn_tests = b.addTest(.{ .root_module = sonny6540_syn_mod });
+    const run_sonny6540_syn_tests = b.addRunArtifact(sonny6540_syn_tests);
+    shardDep(test_step, &run_sonny6540_syn_tests.step, 0, test_shard_loads, test_shard_index);
+    b.step("test-sonny6540-syntax-rule-refusals", "Run SONNY-6540 item 9 pin (abs('x'), abs(1, 2) and toString(1, 2) are refused by the parser with 42000, as ISO/IEC 39075:2024 4.7.3 and 20.21 SR 3 give)").dependOn(&run_sonny6540_syn_tests.step);
+    // SONNY-6540 item 3: the adjacency hydrate frees its edge slice at every allocation failure. See tests/test_sonny6540_adjacency_hydrate_oom.zig.
+    const sonny6540_adj_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_adjacency_hydrate_oom.zig"), .target = target, .optimize = optimize });
+    sonny6540_adj_mod.addImport("geode", root_mod);
+    sonny6540_adj_mod.link_libc = true;
+    const sonny6540_adj_tests = b.addTest(.{ .root_module = sonny6540_adj_mod });
+    const run_sonny6540_adj_tests = b.addRunArtifact(sonny6540_adj_tests);
+    shardDep(test_step, &run_sonny6540_adj_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6540-adjacency-hydrate-oom", "Run SONNY-6540 item 3 regression (the lazy adjacency hydrate frees what it allocated at every allocation failure, outgoing and incoming)").dependOn(&run_sonny6540_adj_tests.step);
+    // SONNY-6540 item 5: a later part's aggregating, DISTINCT or windowed WITH reads every row reaching it. See tests/test_sonny6540_chain_with_stage.zig.
+    const sonny6540_cws_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_chain_with_stage.zig"), .target = target, .optimize = optimize });
+    sonny6540_cws_mod.addImport("geode", root_mod);
+    sonny6540_cws_mod.addImport("logging", logging_mod);
+    sonny6540_cws_mod.addImport("rls_types", rls_types_mod);
+    const sonny6540_cws_tests = b.addTest(.{ .root_module = sonny6540_cws_mod });
+    const run_sonny6540_cws_tests = b.addRunArtifact(sonny6540_cws_tests);
+    shardDep(test_step, &run_sonny6540_cws_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6540-chain-with-stage", "Run SONNY-6540 item 5 regression (an aggregating, DISTINCT or windowed WITH in a later part of a chain is computed over every row reaching it, with its WHERE, ORDER BY, SKIP and LIMIT, whatever parts come before it: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6540_cws_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
@@ -16736,6 +16755,17 @@ pub fn build(b: *std.Build) void {
     const eng3922_tests = b.addTest(.{ .root_module = eng3922_test_mod });
     const run_eng3922_tests = b.addRunArtifact(eng3922_tests);
     shardDep(test_step, &run_eng3922_tests.step, 0, test_shard_loads, test_shard_index);
+    // SONNY-6540 item 8: a 65,535-dimension vector literal parses inside the
+    // 64 MiB parser budget (decimal literals no longer leave a digit buffer
+    // on the arena; a sign on a numeric literal is not an operator link).
+    const sonny6540_vlit_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_vector_literal_parse.zig"), .target = target, .optimize = optimize });
+    sonny6540_vlit_mod.addImport("geode", root_mod);
+    sonny6540_vlit_mod.link_libc = true;
+    const sonny6540_vlit_tests = b.addTest(.{ .root_module = sonny6540_vlit_mod });
+    const run_sonny6540_vlit = b.addRunArtifact(sonny6540_vlit_tests);
+    shardDep(test_step, &run_sonny6540_vlit.step, 0, test_shard_loads, test_shard_index);
+    const sonny6540_vlit_step = b.step("test-sonny6540-vector-literal-parse", "SONNY-6540 item 8: a 65,535-dimension vector literal parses inside the parser budget");
+    sonny6540_vlit_step.dependOn(&run_sonny6540_vlit.step);
     const eng3922_step = b.step("test-eng3922", "Run ENG-3922 vector dimension-guard + over-cap regressions");
     eng3922_step.dependOn(&run_eng3922_tests.step);
 
@@ -17233,8 +17263,6 @@ pub fn build(b: *std.Build) void {
             "ml.graph_embeddings.test.",
             "planner.cost_calibration.test.",
             "planner.pipeline.test.",
-            "graph.community_louvain.test.",
-            "graph.community_label_propagation.test.",
             "graph.containers.lfu.test.",
             // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
             "planner.test.",

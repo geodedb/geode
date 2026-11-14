@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:59:42.223331192Z",
+  "generated_at": "2026-11-14T08:19:27.343005003Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -6581,20 +6581,6 @@
       "id": "REQ-BUG731-MATCH-SCOPING",
       "features": [
         {
-          "feature": "PathLength",
-          "aspect": "NullPropagation",
-          "status": "TESTED",
-          "files": [
-            "src/eval.zig"
-          ],
-          "tests": [
-            "tests/test_bug731_match_scoping.zig:553"
-          ],
-          "benches": [],
-          "owner": "eval",
-          "updated": "2026-07-31"
-        },
-        {
           "feature": "MultiChainRelationshipMatch",
           "aspect": "VarLengthHop",
           "status": "TESTED",
@@ -9889,7 +9875,6 @@
           "aspect": "BuiltinFunctions",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -18647,7 +18632,6 @@
           "aspect": "VectorDimension",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig",
             "tests/test_fn_dispatch_parity.zig"
           ],
@@ -27182,22 +27166,6 @@
       "id": "REQ-GQL-016",
       "features": [
         {
-          "feature": "Variable Length Path Expand",
-          "aspect": "Planner",
-          "status": "BENCHED",
-          "files": [
-            "src/canary.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathExpandBfs"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathPrune"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
           "feature": "Weighted Path Cost",
           "aspect": "Planner",
           "status": "TESTED",
@@ -27210,90 +27178,6 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-20"
-        },
-        {
-          "feature": "Path Expansion Operator",
-          "aspect": "Planner",
-          "status": "TESTED",
-          "files": [
-            "src/planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathExpandBfs"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Path Cycle Determinism",
-          "aspect": "Planner",
-          "status": "TESTED",
-          "files": [
-            "src/planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathCycleDeterminism"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Path Expansion Cycle Pruning Perf",
-          "aspect": "PathCyclePruningPerf",
-          "status": "BENCHED",
-          "files": [
-            "src/planner.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathCyclePruningPerf"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Path Expansion Pruning Stats Perf",
-          "aspect": "PathPruningStatsPerf",
-          "status": "BENCHED",
-          "files": [
-            "src/planner.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Path Expansion Memory Perf",
-          "aspect": "PathExpandMemPerf",
-          "status": "BENCHED",
-          "files": [
-            "src/planner.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathExpandAllocVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_expand_alloc_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathExpandAllocVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
         },
         {
           "feature": "Path Expand Breadth",
@@ -27334,146 +27218,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_016_PathExpansionHeuristicVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathMultiBranchDeterminismVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_multibranch_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathMultiBranchDeterminismVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathQuantifierBoundedVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_quantifier_bounded_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathQuantifierBoundedVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathHighBranchVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_path_quantifier_high_branch_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_PathHighBranchVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathMultiBranchDeterminism",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_multibranch_determinism.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathMultiBranchDeterminism"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathQuantifierBoundedExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_bounded.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathQuantifierBoundedExecution"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Path Cycle Determinism",
-          "aspect": "PathTieBreakMultiBranchDeterminism",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_bounded.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathTieBreakMultiBranchDeterminism"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathCycleStressDeterminism",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_stress.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathCycleStressDeterminism"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathZeroLengthInclusionPolicy",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_stress.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathZeroLengthInclusionPolicy"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "PathHighBranchDeterminism",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_stress.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathHighBranchDeterminism"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Variable Length Path Expand",
-          "aspect": "QuantifierTieBreakStress",
-          "status": "TESTED",
-          "files": [
-            "tests/test_path_quantifier_tiebreak_stress.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_QuantifierTieBreakStress"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2026-11-14"
         }
@@ -30627,25 +30371,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-065",
-      "features": [
-        {
-          "feature": "CommunityDetection",
-          "aspect": "LabelPropagation",
-          "status": "TESTED",
-          "files": [
-            "src/graph/community_label_propagation.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_graph_algorithms.yml"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-12-30"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-068",
       "features": [
         {
@@ -32256,7 +31981,6 @@
           "aspect": "Evaluation",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [],
@@ -34190,11 +33914,11 @@
             "src/execution/query_execution.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
+            "tests/test_sonny6540_chain_with_stage.zig"
           ],
           "benches": [],
           "owner": "execution",
-          "updated": "2025-12-26"
+          "updated": "2026-11-14"
         },
         {
           "feature": "GQLChainedAggregation",
@@ -35707,7 +35431,6 @@
           "aspect": "HeadElement",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -36381,20 +36104,6 @@
       "id": "REQ-GQL-KEYS-001",
       "features": [
         {
-          "feature": "KeysFunction",
-          "aspect": "NodePropertyKeys",
-          "status": "TESTED",
-          "files": [
-            "src/eval.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_type_system_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "eval",
-          "updated": "2025-12-28"
-        },
-        {
           "feature": "GQLProperties",
           "aspect": "Keys",
           "status": "TESTED",
@@ -36440,25 +36149,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-KEYS-003",
-      "features": [
-        {
-          "feature": "KeysFunction",
-          "aspect": "NodeEdgeMapKeys",
-          "status": "TESTED",
-          "files": [
-            "src/eval.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_type_system_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "eval",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -36527,7 +36217,6 @@
           "aspect": "LastElement",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -39380,7 +39069,6 @@
           "aspect": "ListPropertySize",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -39645,7 +39333,6 @@
           "aspect": "TailElements",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -40013,7 +39700,6 @@
           "aspect": "ToBooleanConversion",
           "status": "TESTED",
           "files": [
-            "src/eval.zig",
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -40927,25 +40613,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-WITH-CHAIN-AGG-002",
-      "features": [
-        {
-          "feature": "ChainedWithAggregation",
-          "aspect": "ComputeAggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/query_execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-WITH-GROUPBY-001",
       "features": [
         {
@@ -41404,34 +41071,6 @@
       "features": [
         {
           "feature": "LouvainCommunityDetection",
-          "aspect": "GraphAnalytics",
-          "status": "TESTED",
-          "files": [
-            "src/graph/community_louvain.zig"
-          ],
-          "tests": [
-            "src/graph/community_louvain.zig"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2026-01-25"
-        },
-        {
-          "feature": "LouvainCommunityDetection",
-          "aspect": "E2ECommunityDetection",
-          "status": "TESTED",
-          "files": [
-            "tests/e2e_graph_algos_new.zig"
-          ],
-          "tests": [
-            "tests/e2e_graph_algos_new.zig"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "LouvainCommunityDetection",
           "aspect": "CallProcedureE2E",
           "status": "TESTED",
           "files": [
@@ -41443,25 +41082,6 @@
           "benches": [],
           "owner": "graph",
           "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GRAPH-LOUVAIN-002",
-      "features": [
-        {
-          "feature": "ModularityScore",
-          "aspect": "GraphAnalytics",
-          "status": "TESTED",
-          "files": [
-            "src/graph/community_louvain.zig"
-          ],
-          "tests": [
-            "src/graph/community_louvain.zig"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2026-01-25"
         }
       ]
     },
@@ -83317,7 +82937,20 @@
           "aspect": "TypedGroupKeys",
           "status": "TESTED",
           "files": [
-            "src/execution/query_execution.zig",
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_with_group_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "TypedGroupKeys",
+          "status": "TESTED",
+          "files": [
             "tests/test_sonny6525_with_group_keys.zig"
           ],
           "tests": [
@@ -83551,6 +83184,72 @@
           ],
           "benches": [],
           "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6540-CHAIN-WITH-STAGE",
+      "features": [
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "SharedWithStage",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6540_chain_with_stage.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "StagePartReadsEveryRow",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6540_chain_with_stage.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6540-VECTOR-LITERAL-PARSE",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "DecimalLiteralScratch",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6540_vector_literal_parse.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "GQLParser",
+          "aspect": "SignedNumericLiteralNotALink",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6540_vector_literal_parse.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-11-14"
         }
       ]
@@ -91169,11 +90868,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 143,
+      "BENCHED": 135,
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4271
+      "TESTED": 4259
     },
     "by_aspect": {
       "2PC": 3,
@@ -91759,7 +91458,6 @@
       "ComptimeLists": 1,
       "Computation": 1,
       "ComputationalOperation": 2,
-      "ComputeAggregation": 1,
       "ComputedTemporaries": 1,
       "ConcurrencyPerf": 1,
       "ConcurrencySafety": 1,
@@ -91998,6 +91696,7 @@
       "DecideShowMetadata": 1,
       "DecideShowMetadataAdmin": 1,
       "DecimalConversion": 1,
+      "DecimalLiteralScratch": 1,
       "DecimalOverflowAvg": 1,
       "DecimalOverflowHandling": 1,
       "DecimalOverflowSum": 1,
@@ -92194,7 +91893,6 @@
       "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
       "E2E": 8,
-      "E2ECommunityDetection": 1,
       "E2EFailClosed": 1,
       "E2ENoEngine": 1,
       "E2ETestFramework": 1,
@@ -92678,7 +92376,6 @@
       "GrantWidening": 1,
       "GrantWriteThrough": 1,
       "Graph": 3,
-      "GraphAnalytics": 2,
       "GraphBoundError": 1,
       "GraphBoundaryEnforcement": 1,
       "GraphBuilderThroughputVarianceEnvelope": 1,
@@ -93024,7 +92721,6 @@
       "LabelMatching": 1,
       "LabelMetadata": 1,
       "LabelPostingLocking": 1,
-      "LabelPropagation": 1,
       "LabelScanHydrationGuard": 1,
       "LabelScopedCount": 1,
       "LabelSetExistingVectors": 1,
@@ -93443,7 +93139,7 @@
       "NodeCreation": 1,
       "NodeDegree": 2,
       "NodeDelete": 1,
-      "NodeEdgeMapKeys": 2,
+      "NodeEdgeMapKeys": 1,
       "NodeFallbackToId": 1,
       "NodeFiltering": 1,
       "NodeGraphNameLoad": 1,
@@ -93454,7 +93150,6 @@
       "NodeMergeFastPathGate": 1,
       "NodePersistence": 1,
       "NodeProperties": 1,
-      "NodePropertyKeys": 1,
       "NodePropertyWrite": 1,
       "NodeScanPushedPages": 1,
       "NodeStorage": 1,
@@ -93494,7 +93189,6 @@
       "NullIf": 1,
       "NullKeyRefused": 1,
       "NullOnNoRows": 1,
-      "NullPropagation": 1,
       "NullRemovesProperty": 1,
       "NullSemantics": 1,
       "NullType": 1,
@@ -93665,33 +93359,20 @@
       "PathCacheStructuralKeySelectivityEnrichment": 1,
       "PathCacheStructuralKeyValueShapeEnrichment": 1,
       "PathConnectivity": 2,
-      "PathCyclePruningPerf": 1,
-      "PathCycleStressDeterminism": 1,
       "PathEndWrites": 1,
-      "PathExpandAllocVarianceEnvelope": 1,
       "PathExpandBreadthVarianceEnvelope": 1,
-      "PathExpandMemPerf": 1,
       "PathExpansion": 2,
       "PathExpansionHeuristicVarianceEnvelope": 1,
-      "PathHighBranchDeterminism": 1,
-      "PathHighBranchVarianceEnvelope": 1,
       "PathIsolation": 1,
       "PathIterator": 1,
       "PathIteratorGate": 1,
       "PathMaterialization": 1,
       "PathModeFilter": 1,
       "PathModes": 1,
-      "PathMultiBranchDeterminism": 1,
-      "PathMultiBranchDeterminismVarianceEnvelope": 1,
-      "PathPruningStatsPerf": 1,
-      "PathQuantifierBoundedExecution": 1,
-      "PathQuantifierBoundedVarianceEnvelope": 1,
       "PathResolution": 1,
-      "PathTieBreakMultiBranchDeterminism": 1,
       "PathTraversal": 1,
       "PathType": 1,
       "PathVariable": 1,
-      "PathZeroLengthInclusionPolicy": 1,
       "Paths": 1,
       "Pattern": 2,
       "PatternBindings": 1,
@@ -93809,7 +93490,7 @@
       "PlannedFinalProjection": 1,
       "PlannedReadRows": 1,
       "PlannedRuntimeDeclinesWrites": 1,
-      "Planner": 7,
+      "Planner": 4,
       "PlannerCardinalityEstimateVarianceEnvelope": 1,
       "PlannerIndexOrdered": 1,
       "PlannerOps": 1,
@@ -94022,7 +93703,6 @@
       "QUIC_HANDLERS": 1,
       "QualityAssurance": 1,
       "QuantifierCallHandlers": 1,
-      "QuantifierTieBreakStress": 1,
       "QuarantinedGraphFailClosed": 1,
       "QuarantinedGraphRefusesWrites": 1,
       "Query": 7,
@@ -94557,7 +94237,7 @@
       "SharedUtility": 1,
       "SharedVerifyOrRecord": 1,
       "SharedVisibilityPredicate": 2,
-      "SharedWithStage": 1,
+      "SharedWithStage": 2,
       "ShellCompletions": 1,
       "ShortCircuit": 1,
       "ShortHeaderTimingHarness": 1,
@@ -94597,6 +94277,7 @@
       "SignatureSigning": 1,
       "SignatureVerification": 2,
       "SignatureVerifyTamperDetect": 1,
+      "SignedNumericLiteralNotALink": 1,
       "SilentSuccess": 1,
       "SimpleMatchPath": 1,
       "SimpleNodeCheck": 1,
@@ -94665,6 +94346,7 @@
       "StableUnsupportedContract": 1,
       "StackAndSpawnFailure": 1,
       "StackGuard": 2,
+      "StagePartReadsEveryRow": 1,
       "StagedRestoreIntoEmptyTarget": 1,
       "StagedVerifiedRestore": 1,
       "StaleDetection": 1,
@@ -94958,7 +94640,7 @@
       "TypeSystemIsolation": 1,
       "TypeValidation": 1,
       "TypeValidators": 1,
-      "TypedGroupKeys": 1,
+      "TypedGroupKeys": 2,
       "Types": 10,
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,

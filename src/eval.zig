@@ -3685,65 +3685,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
-    // B06 Fix: Handle keys() function for maps AND nodes
-    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            // GAP-0910 (same class as labels()/properties()): key strings are
-            // duplicated so the projected list owns its memory.
-            .Map => |map| {
-                var keys = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            .Node => |node| {
-                // Return property keys from node
-                var keys = try allocator.alloc(Value, node.properties.count());
-                var iter = node.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            .Edge => |edge| {
-                // Return property keys from edge
-                var keys = try allocator.alloc(Value, edge.properties.count());
-                var iter = edge.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Handle values() function for maps
-    if (std.ascii.eqlIgnoreCase(function_name, "values")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var values = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    values[i] = entry.value_ptr.*;
-                }
-                return Value{ .List = values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
     // CANARY: REQ=REQ-GQL-PATH-002; FEATURE="ShortestPath"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper path finding implementation
     // Handle shortestPath function - returns shortest path between nodes
@@ -3982,23 +3923,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return try visibleNodeDegree(allocator, arg, .outgoing);
     }
 
-    // Handle length() function - returns length of path, string, or list
-    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
-            .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Path => |p| return Value{ .Int = @intCast(p.edges.len) }, // Path length is number of relationships
-            // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="PathLength"; ASPECT=NullPropagation; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=eval; UPDATED=2026-07-31
-            // GQL 3VL: length(NULL) is NULL, not 0. Returning 0 made an
-            // unresolved binding (e.g. a path variable dropped by a WITH
-            // projection) silently look like a real zero-length path.
-            .Null => return Value{ .Null = {} },
-            else => return Value{ .Int = 0 },
-        }
-    }
-
     // Handle nodes() function - returns list of nodes in a path
     if (std.ascii.eqlIgnoreCase(function_name, "nodes")) {
         if (args.len != 1) return null;
@@ -4026,37 +3950,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     edge_values[i] = Value{ .Edge = edge };
                 }
                 return Value{ .List = edge_values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Handle string case conversion functions
-    if (std.ascii.eqlIgnoreCase(function_name, "toupper") or std.ascii.eqlIgnoreCase(function_name, "upper")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var upper = try allocator.alloc(u8, s.len);
-                for (s, 0..) |c, i| {
-                    upper[i] = std.ascii.toUpper(c);
-                }
-                return Value{ .Str = upper };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    if (std.ascii.eqlIgnoreCase(function_name, "tolower") or std.ascii.eqlIgnoreCase(function_name, "lower")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var lower = try allocator.alloc(u8, s.len);
-                for (s, 0..) |c, i| {
-                    lower[i] = std.ascii.toLower(c);
-                }
-                return Value{ .Str = lower };
             },
             else => return Value{ .Null = {} },
         }
@@ -4101,268 +3994,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // icontains(str, substr) - case-insensitive containment check
-    if (std.ascii.eqlIgnoreCase(function_name, "icontains")) {
-        if (args.len != 2) return null;
-        const str_arg = try evalExpr(allocator, args[0].*, env);
-        const needle_arg = try evalExpr(allocator, args[1].*, env);
-
-        const str_val = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
-        };
-        const needle_val = switch (needle_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
-        };
-
-        if (needle_val.len == 0) return Value{ .Bool = true };
-
-        var lower_str = try allocator.alloc(u8, str_val.len);
-        for (str_val, 0..) |c, i| {
-            lower_str[i] = std.ascii.toLower(c);
-        }
-        var lower_needle = try allocator.alloc(u8, needle_val.len);
-        for (needle_val, 0..) |c, i| {
-            lower_needle[i] = std.ascii.toLower(c);
-        }
-
-        return Value{ .Bool = std.mem.indexOf(u8, lower_str, lower_needle) != null };
-    }
-
-    // Handle reverse function
-    if (std.ascii.eqlIgnoreCase(function_name, "reverse")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var reversed = try allocator.alloc(u8, s.len);
-                var i: usize = 0;
-                while (i < s.len) : (i += 1) {
-                    reversed[i] = s[s.len - 1 - i];
-                }
-                return Value{ .Str = reversed };
-            },
-            .List => |l| {
-                var reversed = try allocator.alloc(Value, l.len);
-                var i: usize = 0;
-                while (i < l.len) : (i += 1) {
-                    reversed[i] = l[l.len - 1 - i];
-                }
-                return Value{ .List = reversed };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Math functions are now handled as special cases in the Call block above
-
-    // Handle aggregation functions (simplified for now - real implementation needs context)
-    if (std.ascii.eqlIgnoreCase(function_name, "count")) {
-        // COUNT(*) or COUNT(expr)
-        if (args.len == 1) {
-            // Check if argument is "*"
-            if (args[0].* == .Ident and std.mem.eql(u8, args[0].Ident.orig, "*")) {
-                // COUNT(*) - for now return 1 since we're in a single-row context
-                return Value{ .Int = 1 };
-            }
-            // Evaluate the argument
-            const arg = try evalExpr(allocator, args[0].*, env);
-            // If the argument is not null, count it as 1
-            if (arg != .Null) {
-                return Value{ .Int = 1 };
-            }
-            return Value{ .Int = 0 };
-        }
-        return Value{ .Int = 0 };
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sum")) {
-        // SUM aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                // Check if we have any decimals
-                var has_decimal = false;
-                for (list) |item| {
-                    if (item == .Decimal) {
-                        has_decimal = true;
-                        break;
-                    }
-                }
-
-                // Check if we have any float types (Real or Double)
-                var has_float = false;
-                for (list) |item| {
-                    if (item == .Real or item == .Double) {
-                        has_float = true;
-                        break;
-                    }
-                }
-
-                if (has_float or has_decimal) {
-                    // Sum as float (f64)
-                    var sum: f64 = 0.0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| sum += @floatFromInt(n),
-                            .Real => |f| sum += @floatCast(f),
-                            .Double => |f| sum += f,
-                            .Decimal => |d| {
-                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                            },
-                            else => {},
-                        }
-                    }
-                    return Value{ .Double = sum };
-                } else {
-                    // Sum as integer (SONNY-2769: checked; `+=` aborted)
-                    var sum: i64 = 0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow,
-                            else => {},
-                        }
-                    }
-                    return Value{ .Int = sum };
-                }
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "avg")) {
-        // AVG aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                // Check if we have any float types
-                var has_float = false;
-                var has_decimal = false;
-                for (list) |item| {
-                    if (item == .Real or item == .Double) {
-                        has_float = true;
-                        break;
-                    }
-                    if (item == .Decimal) {
-                        has_decimal = true;
-                    }
-                }
-
-                var count: usize = 0;
-                if (has_float or has_decimal) {
-                    var sum: f64 = 0.0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| {
-                                sum += @floatFromInt(n);
-                                count += 1;
-                            },
-                            .Real => |f| {
-                                sum += @floatCast(f);
-                                count += 1;
-                            },
-                            .Double => |f| {
-                                sum += f;
-                                count += 1;
-                            },
-                            .Decimal => |d| {
-                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                                count += 1;
-                            },
-                            else => {},
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Double = sum / @as(f64, @floatFromInt(count)) };
-                } else {
-                    var sum: i64 = 0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| {
-                                // SONNY-2769: checked; `+=` aborted the server.
-                                sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow;
-                                count += 1;
-                            },
-                            else => {},
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
-                }
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "min")) {
-        // MIN aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                var min_val = list[0];
-                for (list[1..]) |item| {
-                    // Simple comparison for common types
-                    const is_less = switch (item) {
-                        .Int => |n| switch (min_val) {
-                            .Int => |m| n < m,
-                            else => false,
-                        },
-                        .Str => |s| switch (min_val) {
-                            .Str => |ms| std.mem.order(u8, s, ms) == .lt,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_less) {
-                        min_val = item;
-                    }
-                }
-                return min_val;
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "max")) {
-        // MAX aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                var max_val = list[0];
-                for (list[1..]) |item| {
-                    // Simple comparison for common types
-                    const is_greater = switch (item) {
-                        .Int => |n| switch (max_val) {
-                            .Int => |m| n > m,
-                            else => false,
-                        },
-                        .Str => |s| switch (max_val) {
-                            .Str => |ms| std.mem.order(u8, s, ms) == .gt,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_greater) {
-                        max_val = item;
-                    }
-                }
-                return max_val;
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
     // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="RandomFunction"; ASPECT=RandAlias; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
     // Handle random() function which takes no arguments.
     // FN-DISPATCH-PARITY: `rand()` is advertised by BOTH SHOW FUNCTIONS and
@@ -4371,9 +4002,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // already-implemented, already-tested `random()`, which returns a Double
     // in [0,1) from the same seeded CSPRNG, so it is implemented here rather
     // than un-advertised.
-    if (std.ascii.eqlIgnoreCase(function_name, "random") or
-        std.ascii.eqlIgnoreCase(function_name, "rand"))
-    {
+    // SONNY-6540 item 7: `random()` itself is the math handler's
+    // (`call_handlers.evalMathFunction`), which answers it first.
+    if (std.ascii.eqlIgnoreCase(function_name, "rand")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.random_val(allocator) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
@@ -4557,7 +4188,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
     // Handle duration() function - parses ISO 8601 duration string and returns Interval
-    if (std.ascii.eqlIgnoreCase(function_name, "duration") or std.ascii.eqlIgnoreCase(function_name, "interval")) {
+    // SONNY-6540 item 7: `interval()` is the advanced-type handler's
+    // (`call_handlers.evalAdvancedTypeFunction`), which answers it first.
+    if (std.ascii.eqlIgnoreCase(function_name, "duration")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
@@ -4634,15 +4267,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // interval_contains(a, b) — a contains b iff a is at least as long as b
         // and b is non-negative (a zero-length b is trivially contained).
         return Value{ .Bool = b_total >= 0 and a_total >= b_total };
-    }
-
-    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
-    // Handle type() function - returns the type name of a value
-    if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        const type_name = getTypeName(arg);
-        return Value{ .Str = type_name };
     }
 
     // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
@@ -4752,86 +4376,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     const first_arg = try evalExpr(allocator, args[0].*, env);
     const heap_first_arg = evalValueToHeapValue(first_arg);
 
-    // Handle common string functions
-    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
-        const result = evaluator_functions.length_chars(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "upper")) {
-        const result = evaluator_functions.upper(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "lower")) {
-        const result = evaluator_functions.lower(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "trim")) {
-        const result = evaluator_functions.trim(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "abs")) {
-        const result = evaluator_functions.abs_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sqrt")) {
-        const result = evaluator_functions.sqrt_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                // SONNY-6499: every other error keeps its identity (an
-                // out-of-memory was a TypeMismatch, now 22G03).
-                else => call_handlers.mapEvaluatorError(err),
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "ceil")) {
-        const result = evaluator_functions.ceil_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "floor")) {
-        const result = evaluator_functions.floor_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "pow") or std.ascii.eqlIgnoreCase(function_name, "power")) {
+    // SONNY-6540 item 7: the call handlers (`src/eval/call_handlers.zig`,
+    // tried first in `evalExpr`) answer every other one-argument function
+    // this chain named (length, size, upper, lower, trim, abs, sqrt, ceil,
+    // floor, pow, sin, cos, tan, asin, acos, log, exp, toString, toInteger,
+    // toFloat, toBoolean, head, tail, last) and never pass one on; `type`
+    // is answered above. Those branches were unreachable.
+    if (std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return null;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sin")) {
-        const result = evaluator_functions.sin_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "cos")) {
-        const result = evaluator_functions.cos_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tan")) {
-        const result = evaluator_functions.tan_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "asin")) {
-        const result = evaluator_functions.asin_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                // SONNY-6499: every other error keeps its identity (an
-                // out-of-memory was a TypeMismatch, now 22G03).
-                else => call_handlers.mapEvaluatorError(err),
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "acos")) {
-        const result = evaluator_functions.acos_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                // SONNY-6499: every other error keeps its identity (an
-                // out-of-memory was a TypeMismatch, now 22G03).
-                else => call_handlers.mapEvaluatorError(err),
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "log")) {
-        const result = evaluator_functions.log_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                // SONNY-6499: every other error keeps its identity (an
-                // out-of-memory was a TypeMismatch, now 22G03).
-                else => call_handlers.mapEvaluatorError(err),
-            };
-        };
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "log10")) {
         // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
@@ -4859,28 +4414,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Null => return Value{ .Null = {} },
             else => return EvalError.TypeMismatch,
         }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "exp")) {
-        const result = evaluator_functions.exp_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        const result = evaluator_functions.type_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tostring")) {
-        const result = evaluator_functions.toString_val(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
-        const result = evaluator_functions.toInteger_val(heap_first_arg) catch |err| {
-            // Convert evaluator errors to eval errors
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
-                // SONNY-6499: every other error keeps its identity (an
-                // out-of-memory was a TypeMismatch, now 22G03).
-                else => call_handlers.mapEvaluatorError(err),
-            };
-        };
-        return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "toreal")) {
         const result = evaluator_functions.toReal_val(heap_first_arg) catch |err| {
             return switch (err) {
@@ -4893,122 +4426,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "size") or std.ascii.eqlIgnoreCase(function_name, "length")) {
-        // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-        // Size of a list, string, or map
-        switch (first_arg) {
-            .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
-            .Map => |m| return Value{ .Int = @intCast(m.count()) },
-            // Handle ExtValue.List for list properties stored on nodes
-            // CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
-            // FN-DISPATCH-PARITY: see src/eval/call_handlers.zig — a VECTOR reports its
-            // dimension, not 0.
-            .ExtValue => |ext| switch (ext) {
-                .List => |l| return Value{ .Int = @intCast(l.len) },
-                .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                else => return Value{ .Int = 0 },
-            },
-            else => return Value{ .Int = 0 },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "head")) {
-        // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-        // Return the first element of a list
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len == 0) return Value{ .Null = {} };
-                return l[0];
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tail")) {
-        // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-        // Return all elements except the first
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len <= 1) {
-                    return Value{ .List = &[_]Value{} };
-                }
-                const tail_slice = try allocator.alloc(Value, l.len - 1);
-                @memcpy(tail_slice, l[1..]);
-                return Value{ .List = tail_slice };
-            },
-            else => return Value{ .List = &[_]Value{} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "last")) {
-        // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
-        // Return the last element of a list
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len == 0) return Value{ .Null = {} };
-                return l[l.len - 1];
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toString")) {
-        // Convert to string
-        switch (first_arg) {
-            .Int => |i| {
-                var buf: [64]u8 = undefined;
-                const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
-                return Value{ .Str = try allocator.dupe(u8, str) };
-            },
-            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
-            // lost every digit past the 17th and the scale's trailing zeros.
-            .Decimal => |d| {
-                return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
-            },
-            .Str => |s| return Value{ .Str = s },
-            .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
-            .Null => return Value{ .Str = "null" },
-            else => return Value{ .Str = "" },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tofloat") or std.ascii.eqlIgnoreCase(function_name, "toFloat") or std.ascii.eqlIgnoreCase(function_name, "todouble") or std.ascii.eqlIgnoreCase(function_name, "toDouble")) {
-        // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
-        // Convert to float - use scale=6 for 6 decimal places of precision
-        const float_scale: u8 = 6;
-        switch (first_arg) {
-            .Int => |i| return Value{ .Decimal = .{ .coeff = i * float_to_decimal_scale, .scale = float_scale } },
-            .Decimal => |d| return Value{ .Decimal = d },
-            .Str => |s| {
-                const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                // SONNY-2739: 'nan', 'inf' or past the decimal is 22003.
-                const scaled = try @import("types/decimal128.zig").checkedScaledCoeff(@round(f * float_to_decimal_scale_f64), 1.0);
-                return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toint") or std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
-        // Convert to integer
-        switch (first_arg) {
-            .Int => |i| return Value{ .Int = i },
-            // SONNY-2739: exact and checked; the floor, as before.
-            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
-            .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
-            .Str => |s| {
-                const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
-                return Value{ .Int = i };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toboolean") or std.ascii.eqlIgnoreCase(function_name, "toBoolean") or std.ascii.eqlIgnoreCase(function_name, "tobool")) {
-        // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
-        // Convert to boolean
-        switch (first_arg) {
-            .Bool => |b| return Value{ .Bool = b },
-            .Int => |i| return Value{ .Bool = i != 0 },
-            .Str => |s| {
-                if (std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "TRUE") or std.mem.eql(u8, s, "1")) {
-                    return Value{ .Bool = true };
-                } else if (std.mem.eql(u8, s, "false") or std.mem.eql(u8, s, "FALSE") or std.mem.eql(u8, s, "0")) {
-                    return Value{ .Bool = false };
-                }
-                return Value{ .Null = {} };
-            },
-            .Null => return Value{ .Null = {} },
-            else => return Value{ .Null = {} },
-        }
     }
 
     // Handle two-argument functions
@@ -5016,25 +4433,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const second_arg = try evalExpr(allocator, args[1].*, env);
         const heap_second_arg = evalValueToHeapValue(second_arg);
 
-        if (std.ascii.eqlIgnoreCase(function_name, "substring")) {
-            if (args.len >= 3) {
-                const third_arg = try evalExpr(allocator, args[2].*, env);
-                const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-                return heapValueToEvalValue(result);
-            } else {
-                // Two-argument substring from start to end
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, null) catch |err| return call_handlers.mapEvaluatorError(err);
-                return heapValueToEvalValue(result);
-            }
-        } else if (std.ascii.eqlIgnoreCase(function_name, "replace")) {
-            if (args.len >= 3) {
-                const third_arg = try evalExpr(allocator, args[2].*, env);
-                const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.replace(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch |err| return call_handlers.mapEvaluatorError(err);
-                return heapValueToEvalValue(result);
-            }
-        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
+        // substring and replace are the string handler's (SONNY-6540 item 7).
+        if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
             const result = evaluator_functions.decimal_add(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
@@ -5055,127 +4455,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
             return heapValueToEvalValue(result);
         }
-    }
-
-    // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
-    // B06 Fix: Handle keys() for Map, Node, AND Edge types
-    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var keys = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            .Node => |node| {
-                var keys = try allocator.alloc(Value, node.properties.count());
-                var iter = node.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            .Edge => |edge| {
-                var keys = try allocator.alloc(Value, edge.properties.count());
-                var iter = edge.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "values")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var values = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    values[i] = entry.value_ptr.*;
-                }
-                return Value{ .List = values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-11-15
-    // Handle range(start, stop[, step]) function - generates integer sequences
-    // Used for performance testing: UNWIND range(1, 100) AS x RETURN x
-    if (std.ascii.eqlIgnoreCase(function_name, "range")) {
-        // range() requires 2 or 3 arguments
-        if (args.len < 2 or args.len > 3) return Value{ .Null = {} };
-
-        // Evaluate start argument (required)
-        const start_val = try evalExpr(allocator, args[0].*, env);
-        const start = switch (start_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
-        // Evaluate stop argument (required)
-        const stop_val = try evalExpr(allocator, args[1].*, env);
-        const stop = switch (stop_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
-        // Evaluate step argument (optional, defaults to 1)
-        const step = if (args.len == 3) blk: {
-            const step_val = try evalExpr(allocator, args[2].*, env);
-            break :blk switch (step_val) {
-                .Int => |i| i,
-                else => return Value{ .Null = {} },
-            };
-        } else 1;
-
-        // Step must not be zero
-        if (step == 0) return Value{ .Null = {} };
-
-        // Calculate the number of elements in the range
-        // SONNY-2769: in i128, so a span or a step at the edge of i64
-        // (`range(minInt, maxInt)`, a step of minInt) no longer overflows
-        // and aborts the server; every element still fits i64.
-        const count: i128 = if (step > 0) blk: {
-            if (stop <= start) break :blk 0;
-            break :blk @divFloor(@as(i128, stop) - start + step - 1, step);
-        } else blk: {
-            if (stop >= start) break :blk 0;
-            break :blk @divFloor(@as(i128, start) - stop - step - 1, -@as(i128, step));
-        };
-
-        // Allocate result array
-        if (count <= 0) {
-            return Value{ .List = &.{} };
-        }
-
-        // Safety check: limit range size to prevent OOM
-        const max_range_size: i64 = 10_000_000; // 10 million elements max
-        if (count > max_range_size) {
-            return error.RangeTooLarge;
-        }
-
-        const ucount = @as(usize, @intCast(count));
-        var result = try allocator.alloc(Value, ucount);
-
-        // Generate range values (i128: the step past the last one may leave i64)
-        var current: i128 = start;
-        for (0..ucount) |i| {
-            result[i] = Value{ .Int = @intCast(current) };
-            current += step;
-        }
-
-        return Value{ .List = result };
     }
 
     // Function not recognized

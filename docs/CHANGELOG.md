@@ -2638,6 +2638,62 @@
   own gate (SONNY-6528) already checked only the graphs whose data a
   program touches. Regression: `zig build test-sonny6541-quarantine-use-graph`
   (QUIC against a real server, gRPC and the executor in process).
+- **The lazy adjacency hydrate and the full graph load no longer leak a
+  node's edge slice when an allocation fails (SONNY-6540 item 3).**
+  `GraphStore.hydrateAdjFromEngine` (the adjacency caches' hydrate-on-miss
+  hook, on the query path) and `loadOneGraphFromAdapterFull` read a node's
+  edges through `StorageAdapter.iterateOutgoingEdges` /
+  `iterateIncomingEdges`; graph_storage (0.4.14, and 0.4.15) boxes the
+  engine's edge slice in an iterator state and leaks the slice when the box
+  cannot be allocated (`interface.zig` `sliceToEdgeIterator`). They now read
+  the engine's slice directly (`getOutgoingEdges` / `getIncomingEdges`, as
+  SONNY-6498 did for the other callers). The library defect remains for any
+  other caller of the type-erased iterators (one geode test). Regression:
+  `zig build test-sonny6540-adjacency-hydrate-oom` (every allocation-failure
+  point, both directions).
+- **A WITH in a later part of a chain that aggregates, is DISTINCT or has a
+  SKIP / LIMIT reads every row reaching it (SONNY-6540 item 5, BREAKING:
+  results change).** The chain executor (`executeQueryChain`) ran each
+  later part once per row of the first part. For the first aggregating WITH
+  it found it grouped the first part's rows directly, so a part in between
+  (`WITH z WITH z.k * 2 AS k2 WITH sum(k2) AS t`) and the aggregating
+  part's own MATCH (`WITH z MATCH (z)-[:R]->(y) WITH z.g AS g, sum(y.v)`)
+  were skipped and their variables read NULL, and that part's WHERE after
+  the WITH, ORDER BY, SKIP / LIMIT and DISTINCT were ignored; a DISTINCT or
+  windowed WITH in a later part was applied to each first-part row's rows
+  apart (`... MATCH (z)-->(y) WITH y ORDER BY y.v DESC LIMIT 1` gave one row
+  per z). Such a part now runs its whole WITH stage over all of the rows
+  reaching it, as the planned read runs one (the WHERE before the WITH, the
+  projection and its grouping, DISTINCT, ORDER BY, SKIP and LIMIT, the WHERE
+  after it; `match_operations.applyWithStage`, shared with the write
+  steps), and the rest of the chain reads its rows; a WITH that starts a
+  part before its MATCH is computed first, then the MATCH per row. ISO/IEC
+  39075:2024 14.3 / 14.11: a return statement (Geode's WITH) is applied to
+  the working table as a whole. Also: a WITH followed directly by another
+  WITH kept its items but dropped its DISTINCT, ORDER BY, SKIP and LIMIT in
+  the parser (`WITH DISTINCT g WITH g ...` returned duplicates), and the
+  scope check refused the WHERE of such a WITH (`WITH x.g AS g, count(*) AS
+  c WHERE c > 1 WITH ...`: 42000) because it read it before the
+  projection. Regression: `zig build test-sonny6540-chain-with-stage`.
+- **A 65,535-dimension vector literal parses (SONNY-6540 item 8).** The
+  documented vector cap is 65,535 dimensions, but the array-literal form
+  could not reliably reach it. Every decimal literal (`1.0`) built its
+  digits in a buffer on the parser's arena and left it there, so a decimal
+  element cost the parser more than twice an integer element; under an
+  in-process executor's arena-over-arena the 65,536-element ENG-3922 (c)
+  literal crossed the 64 MiB parser budget (SONNY-3244) and answered 54000
+  before the dimension check could answer VectorTooLarge (`test-eng3922` was
+  red). The digits are now stack scratch, freed at once: a decimal element
+  costs what an integer one does (139 bytes of arena capacity each at 65,535
+  elements over the page allocator; 300 before). And a sign on a numeric
+  literal counted as an operator link against the 4096-link expression cap
+  (SONNY-3181), so a vector literal with more than 4096 negative components
+  answered 42000; ISO/IEC 39075:2024 21.2 makes the sign part of the
+  `<signed numeric literal>`, and it is no longer counted. A sign on
+  anything else (`-x`) still is, and the 64 MiB budget is unchanged: a
+  1,000,000-element literal is still refused with 54000. Regression:
+  `zig build test-sonny6540-vector-literal-parse` (`test-eng3922` is green
+  again).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
@@ -6603,6 +6659,43 @@
   five runs out of five without it; `zig build
   test-sonny6492-edge-prop-image-cost` reports the same WAL bytes per SET
   before and after (8342 / 24826 B), in both sync modes.
+- **Dead code: the standalone Louvain and label propagation (SONNY-6540
+  item 10).** `src/graph/community_louvain.zig` and
+  `src/graph/community_label_propagation.zig` were called only by their own
+  inline tests and `tests/e2e_graph_algos_new.zig`; `CALL algo.louvain` and
+  `CALL algo.labelPropagation` run `src/execution/centrality_algorithms.zig`
+  (`test-gap0883`). Removed with that test file. Also corrected
+  `docs/kb/VARIANCE_ENVELOPES.md` (the two calibration envelopes listed as
+  tightened to CV 0.20 / p95 2.50 have no such thresholds; the structural-key
+  collision benchmark is compiled by no step) and annotated
+  `docs/performance/2026-04-20-query-bench/FINAL.md` (the AST cache does not
+  use `structural_key.zig`).
+- **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
+  `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
+  no query: nothing outside `planner.zig` named them except 17 test and
+  benchmark files that no build step compiled (they imported
+  `../src/planner.zig`, outside any module) and the two inline tests
+  `test-sonny6511-lib-inline` ran. Its simple-path check compared edge ids
+  with node ids, and every result's `start_id` was the first start node, so
+  it would have answered wrongly had anything called it. Variable-length
+  patterns are expanded by `src/execution/match_operations.zig`. Removed
+  with the 17 files and their REQ-GQL-016 CANARY markers.
+- **Dead code: the `tryBasicFunction` branches the call handlers answer
+  first (SONNY-6540 item 7).** `evalExpr` tries `src/eval/call_handlers.zig`
+  (math, string, type-cast, collection, aggregate and advanced-type
+  handlers) before `tryBasicFunction` (`src/eval.zig`), and each of those
+  handlers answers every call of the names it owns (a value or an error,
+  never "not mine"), so `tryBasicFunction`'s own branches for keys, values,
+  length, size, upper, lower, trim, abs, sqrt, ceil, floor, pow, sin, cos,
+  tan, asin, acos, log, exp, toString, toInteger, toFloat, toBoolean, head,
+  tail, last, substring, replace, icontains, reverse, count, sum, avg, min,
+  max, random, interval and range, and its second and third `type()`
+  branches, never ran. They are removed; `power`, `log10`, `toReal`,
+  `rand`, `duration` and the `decimal_*` functions, which only it answers,
+  stay. No behaviour changes. One of the removed branches carried a
+  CANARY claiming `length(NULL)` is NULL (REQ-BUG731-MATCH-SCOPING
+  PathLength/NullPropagation); the live handler answers 0, so the claim
+  was never true (reported for a follow-up).
 - **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
   `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
   `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)

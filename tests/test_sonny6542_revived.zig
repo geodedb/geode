@@ -37,7 +37,6 @@ test {
     _ = @import("test_fd_limit_raise.zig");
     _ = @import("test_fts_tokenizer.zig");
     _ = @import("test_fulltext_bm25.zig");
-    _ = @import("test_path_multibranch_determinism.zig");
     _ = @import("test_shell_requirements_verification.zig");
     _ = @import("unit_shortest_path_tiebreak.zig");
 }
