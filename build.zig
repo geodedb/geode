@@ -536,6 +536,9 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6528-evicted-node-create", .reason = "intentionally red TDD reproduction (SONNY-6528 item 3); compiled by test-compile; registered through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6528-quarantine-in-process", .reason = "intentionally red TDD reproduction (SONNY-6528 item 4); compiled by test-compile; registered through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6528-corruption-messages", .reason = "intentionally red TDD reproduction (SONNY-6528 item 5); compiled by test-compile; registered through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10191,6 +10194,30 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6523_ck_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6523_ck_step = b.step("test-sonny6523-checkpoint-settings", "Run SONNY-6523 item 6 regression (the deferred-mode checkpoint interval counts from the adapter's open, not from boot; a failing light checkpoint is counted in adapter_checkpoint_failures_total and logged at ERROR once per cause, again at most every 10 minutes, and its recovery once)");
     sonny6523_ck_step.dependOn(&run_sonny6523_ck_tests.step);
+    // SONNY-6528 (3): a replayed create of an evicted node is refused.
+    const sonny6528_ev_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_evicted_node_create.zig"), .target = target, .optimize = optimize });
+    sonny6528_ev_test_mod.addImport("geode", root_mod);
+    const sonny6528_ev_tests = b.addTest(.{ .root_module = sonny6528_ev_test_mod });
+    const run_sonny6528_ev_tests = b.addRunArtifact(sonny6528_ev_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6528_ev_tests.step);
+    const sonny6528_ev_step = b.step("test-sonny6528-evicted-node-create", "Run SONNY-6528 item 3 regression (a create with a given node id of a node that already exists is refused whether or not the bounded node cache holds it: 200 replicated creates re-applied on a 16-entry cache, live and after a clean restart, leave 200 nodes)");
+    sonny6528_ev_step.dependOn(&run_sonny6528_ev_tests.step);
+    // SONNY-6528 (4): a quarantined graph refuses in-process reads.
+    const sonny6528_qi_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_quarantine_in_process.zig"), .target = target, .optimize = optimize });
+    sonny6528_qi_test_mod.addImport("geode", root_mod);
+    const sonny6528_qi_tests = b.addTest(.{ .root_module = sonny6528_qi_test_mod });
+    const run_sonny6528_qi_tests = b.addRunArtifact(sonny6528_qi_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6528_qi_tests.step);
+    const sonny6528_qi_step = b.step("test-sonny6528-quarantine-in-process", "Run SONNY-6528 item 4 regression (in process, without the transports: every read shape of a quarantined graph through the executor, db.labels/relationshipTypes/propertyKeys, SHOW TABLES and fulltext search included, and the store's schema listings the LSP calls fail closed; DROP GRAPH of a quarantined graph runs and the listings answer again)");
+    sonny6528_qi_step.dependOn(&run_sonny6528_qi_tests.step);
+    // SONNY-6528 (5): the corruption errors carry a message.
+    const sonny6528_cm_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_corruption_messages.zig"), .target = target, .optimize = optimize });
+    sonny6528_cm_test_mod.addImport("geode", root_mod);
+    const sonny6528_cm_tests = b.addTest(.{ .root_module = sonny6528_cm_test_mod });
+    const run_sonny6528_cm_tests = b.addRunArtifact(sonny6528_cm_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6528_cm_tests.step);
+    const sonny6528_cm_step = b.step("test-sonny6528-corruption-messages", "Run SONNY-6528 item 5 regression (DataCorruption, ChecksumMismatch and InvalidData map to 58000 with an operator-facing message: what happened, that the graph refuses its statements, restore from a backup or DROP GRAPH; no file path)");
+    sonny6528_cm_step.dependOn(&run_sonny6528_cm_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.
