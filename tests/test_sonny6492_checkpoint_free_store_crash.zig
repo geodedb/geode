@@ -32,8 +32,8 @@
 //   2. 0.4.14 itself, a free.store save that fails (a directory at each
 //      shard's free.store.tmp: EISDIR): the checkpoint fails before the
 //      manifest, so no manifest advances and no WAL is truncated, and the
-//      server logs the failing checkpoint on every tick. After a SIGKILL every
-//      node comes back through WAL replay.
+//      server logs the failing checkpoint (once per cause, SONNY-6523 item
+//      6). After a SIGKILL every node comes back through WAL replay.
 //   3. A checkpoint that completed, then a SIGKILL: the restart rebuilds no
 //      bitmaps. geode's own pre-0.4.14 workaround (truncate a free.store older
 //      than its manifest) truncated EVERY free.store 0.4.14 writes, since it
@@ -406,14 +406,19 @@ fn failedSave(allocator: std.mem.Allocator, tde: bool) !void {
             defer allocator.free(obstacle);
             try std.Io.Dir.cwd().createDirPath(io(), obstacle);
         }
-        const failed_before = try e.countInLog("light checkpoint failed for graph 'g6492'");
+        const failed_needle = "light checkpoint failed; ";
+        const failed_before = try e.countInLog(failed_needle);
         try createNodes(&client, allocator, batch1, batch2);
-        // The server reports the failing checkpoint, tick after tick.
+        // The server reports the failing checkpoint.
         var waited_ms: u64 = 0;
-        while (try e.countInLog("light checkpoint failed for graph 'g6492'") < failed_before + 2) : (waited_ms += 100) {
+        while (try e.countInLog(failed_needle) < failed_before + 1) : (waited_ms += 100) {
             if (waited_ms > 60_000) return error.CheckpointFailureNotReported;
             io().sleep(.fromMilliseconds(100), .awake) catch {};
         }
+        // SONNY-6523 (6): once per cause, not on every tick (it was an ERROR
+        // every 300 ms here): still one after five more failing ticks.
+        io().sleep(.fromMilliseconds(1500), .awake) catch {};
+        try testing.expectEqual(failed_before + 1, try e.countInLog(failed_needle));
         // No manifest advanced and no WAL was truncated.
         var wal_total: u64 = 0;
         for (e.shards.items, before.manifest) |s, m| {

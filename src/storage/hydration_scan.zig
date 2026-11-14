@@ -37,10 +37,18 @@
 //! versus DIRTY pool pages is handled explicitly: before scanning, each
 //! shard snapshots its pool's dirty (file, page) set under the pool mutex
 //! and routes exactly those pages through `buffer_pool.pin` (the set is
-//! empty in practice: engine open ends with recovery flush + fresh
-//! checkpoint, and geode's write paths hydrate a graph BEFORE its first
-//! write, so no write can dirty this graph's pages while its hydration
-//! scan runs — `ensureGraphHydrated`'s entry mutex serializes them).
+//! often empty: engine open ends with recovery flush + fresh checkpoint).
+//! Writes CAN run during the scan (SONNY-6523 item 6 corrected the claim
+//! that they cannot): the executor's writes hydrate the graph first and wait
+//! on `ensureGraphHydrated`'s entry mutex, but the shard-locked bulk writers
+//! (the reserved-id insert behind the CREATE and MERGE fast paths and group
+//! commit) write the engine record first and reach the hydration chokepoint
+//! only for their in-memory insert, and nothing makes the hydration wait for
+//! them. A page such a write dirties after the snapshot
+//! is read as it is on disk; the live-count check allows one missing record
+//! per node write in flight (`ManagedGraph.node_census_writers`, SONNY-6472
+//! item 4 / SONNY-6492 item 2), and the write's own resident-product inserts
+//! are idempotent with the hydration's.
 //!
 //! The module produces per-shard accumulations (`ShardAccum`) that the
 //! GraphStore merges (core inserts shard-major on one thread, independent

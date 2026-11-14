@@ -52,7 +52,9 @@ const QuicServer = struct {
         errdefer allocator.free(addr);
         var handle = try util.spawnServer(
             allocator,
-            &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
+            // SONNY-6523 (6): no persistence tick (and so no checkpoint) before
+            // the kill; GEODE_CHECKPOINT_* only add bulk-ingest triggers.
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir, "--persist-interval", "86400000" },
             env,
         );
         errdefer handle.deinit();
@@ -141,6 +143,8 @@ fn tmpDataDir(buf: []u8, tag: []const u8) ![]const u8 {
     return dir;
 }
 
+/// With no persistence tick (`QuicServer.start`), the bulk-ingest
+/// checkpoint triggers off too: no checkpoint before the kill.
 const no_checkpoint: []const []const u8 = &.{ "GEODE_CHECKPOINT_INTERVAL_MS=86400000", "GEODE_CHECKPOINT_OPS=1000000000" };
 
 /// Cases (a) and (b).

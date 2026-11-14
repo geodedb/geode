@@ -298,7 +298,7 @@ pub fn printHelp() void {
     std.debug.print("  --grpc-session-idle-timeout <ms>    Close a gRPC session idle this long (default: 1800000; 0 = never)\n", .{});
     std.debug.print("  --grpc-max-sessions-per-principal <n>  Most gRPC sessions one user holds; past it the least recently used idle one is closed (default: 1024; 0 = no cap)\n", .{});
     std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 10000)\n", .{});
-    std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
+    std.debug.print("  --persist-interval <ms>      Persistence tick: WAL sync + light checkpoint every <ms> (default: 30000)\n", .{});
     std.debug.print("  --cluster-port <port>        Raft cluster listen port (also requires GEODE_CLUSTER_TOKEN to activate)\n", .{});
     std.debug.print("  --peers <h:p,h:p,...>        Comma-separated list of cluster peers (cluster ports, not client ports)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
@@ -624,7 +624,9 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             config.max_connections = std.fmt.parseUnsigned(usize, args[ai + 1], 10) catch 0;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
-            config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
+            // SONNY-6523 (6): an unparsable value keeps the default (30000);
+            // it fell back to 100, a checkpoint every 100 ms.
+            config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch config.persist_interval_ms;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cluster-port") and ai + 1 < args.len) {
             // CANARY: REQ=REQ-DIST-CLI-001; FEATURE="DistributedClusterCLI"; ASPECT=ClusterPort; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=core; UPDATED=2026-05-25

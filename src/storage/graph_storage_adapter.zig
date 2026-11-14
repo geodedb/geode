@@ -1716,6 +1716,53 @@ pub fn shouldExposePropertyKey(key: []const u8) bool {
 
 const merge_tuple_lock_count: usize = 16384;
 
+// CANARY: REQ=REQ-SONNY-6523-CHECKPOINT-SETTINGS; FEATURE="CrashRecovery"; ASPECT=CheckpointFailureLogLimit; STATUS=TESTED; TEST=tests/test_sonny6523_checkpoint_settings.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (6): while the same cause keeps failing light checkpoints, an
+/// ERROR at most this often.
+pub const checkpoint_failure_log_interval_ms: i64 = 10 * std.time.ms_per_min;
+
+/// SONNY-6523 (6): which failing light checkpoints are logged at ERROR: the
+/// first of a cause (the first failure, or one with another cause than the
+/// previous), then the same cause again at most every
+/// `checkpoint_failure_log_interval_ms`. The rest are only counted. Not
+/// thread-safe (`StorageAdapter.checkpoint_failure_log_mutex`).
+pub const CheckpointFailureLog = struct {
+    /// The previous failure's cause; null while checkpoints succeed.
+    cause: ?anyerror = null,
+    /// When the cause was last logged.
+    logged_ms: i64 = 0,
+    /// Failures in a row (0 while checkpoints succeed).
+    consecutive: u64 = 0,
+
+    pub const Verdict = enum { first, repeated, suppressed };
+
+    pub fn noteFailure(self: *CheckpointFailureLog, err: anyerror, now_ms: i64) Verdict {
+        self.consecutive += 1;
+        if (self.cause == null or self.cause.? != err) {
+            self.cause = err;
+            self.logged_ms = now_ms;
+            return .first;
+        }
+        if (now_ms - self.logged_ms >= checkpoint_failure_log_interval_ms) {
+            self.logged_ms = now_ms;
+            return .repeated;
+        }
+        return .suppressed;
+    }
+
+    /// The failures in a row that this success ends, or null if none.
+    pub fn noteSuccess(self: *CheckpointFailureLog) ?u64 {
+        if (self.consecutive == 0) return null;
+        const n = self.consecutive;
+        self.* = .{};
+        return n;
+    }
+};
+
+fn checkpointLogNowMs() i64 {
+    return @intCast(monoNanosNow() / std.time.ns_per_ms);
+}
+
 /// SONNY-6523 (5): the data directory's dropped-graph names
 /// (`StorageAdapter.saveDroppedGraphNamesLocked`).
 const dropped_graphs_file_name = "dropped_graphs.dat";
@@ -3875,6 +3922,14 @@ pub const StorageAdapter = struct {
     checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): light checkpoints that failed (`checkpointAllLight`);
+    /// `adapter_checkpoint_failures_total` in the runtime metrics.
+    checkpoint_failures_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): how often a failing light checkpoint was logged at
+    /// ERROR (`CheckpointFailureLog`), for the regression test.
+    checkpoint_failure_error_logs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    checkpoint_failure_log: CheckpointFailureLog = .{},
+    checkpoint_failure_log_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-0900: load-driven checkpoint cadence. The timer-based persistence
     // loop is unreliable under sustained ingest (its futex timeout is starved
     // when all I/O workers are busy), so the bulk write path itself drives the
@@ -3966,11 +4021,12 @@ pub const StorageAdapter = struct {
             // GAP-0900: checkpoint-cadence observability counters.
             .checkpoints_total = std.atomic.Value(u64).init(0),
             .pending_bulk_ops = std.atomic.Value(u64).init(0),
-            // GAP-0900: 0 means "no checkpoint has run yet". The persistence
-            // loop and tests pass a monotonic `now`; until the first
-            // checkpointAll resets this to a real `monoNanosNow()`, the
-            // time-based cadence is measured from process start (clock 0).
-            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(0),
+            // GAP-0900 / SONNY-6523 (6): until the first checkpoint, the
+            // time-based cadence is measured from this open. It was 0, and
+            // the monotonic clock counts from boot, not from the process's
+            // start: on a host up longer than GEODE_CHECKPOINT_INTERVAL_MS
+            // the first tick with bulk work pending fired a checkpoint.
+            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(monoNanosNow()),
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
@@ -9597,8 +9653,59 @@ pub const StorageAdapter = struct {
     /// node ingest in deferred mode (the full derived-index re-save was O(graph)
     /// and fell behind, letting the WAL + dirty pages grow until OOM). On reopen,
     /// graph-storage rebuilds the stale derived indexes from the durable pages.
+    ///
+    /// SONNY-6523 (6): a failure is counted (`checkpoint_failures_total`)
+    /// and logged at ERROR once per distinct cause, then at most every
+    /// `checkpoint_failure_log_interval_ms` while it repeats, and the
+    /// recovery once (`CheckpointFailureLog`). The persistence tick runs one
+    /// on every --persist-interval, and every failing tick logged at ERROR.
     pub fn checkpointAllLight(self: *StorageAdapter) !void {
-        return self.checkpointAllEx(true, true);
+        const failures_before = self.checkpoint_failures_total.load(.acquire);
+        self.checkpointAllEx(true, true) catch |err| {
+            self.noteCheckpointFailure(null, err);
+            return err;
+        };
+        // A graph whose engine checkpoint failed is counted by
+        // `checkpointOneGraph`, and the pass returns without an error.
+        if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
+    }
+
+    /// SONNY-6523 (6): light checkpoints that failed since this adapter opened.
+    pub fn checkpointFailuresTotal(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failures_total.load(.acquire);
+    }
+
+    /// SONNY-6523 (6): ERROR lines a failing light checkpoint has logged.
+    pub fn checkpointFailureErrorLogs(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failure_error_logs.load(.acquire);
+    }
+
+    fn noteCheckpointFailure(self: *StorageAdapter, graph: ?[]const u8, err: anyerror) void {
+        _ = self.checkpoint_failures_total.fetchAdd(1, .acq_rel);
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const verdict = self.checkpoint_failure_log.noteFailure(err, checkpointLogNowMs());
+        const consecutive = self.checkpoint_failure_log.consecutive;
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        switch (verdict) {
+            .suppressed => {},
+            .first, .repeated => {
+                _ = self.checkpoint_failure_error_logs.fetchAdd(1, .acq_rel);
+                slog.err("light checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)", &.{
+                    SAttr.string("graph", graph orelse "(all)"),
+                    SAttr.string("error", @errorName(err)),
+                    SAttr.uint("consecutive_failures", consecutive),
+                });
+            },
+        }
+    }
+
+    fn noteCheckpointSuccess(self: *StorageAdapter) void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const recovered = self.checkpoint_failure_log.noteSuccess();
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        if (recovered) |n| slog.info("light checkpoint succeeded again", &.{SAttr.uint("after_consecutive_failures", n)});
     }
 
     /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
@@ -10052,7 +10159,9 @@ pub const StorageAdapter = struct {
         var engine_ok = true;
         if (light) {
             mg.engine.checkpointLight() catch |err| {
-                log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                // SONNY-6523 (6): counted, and logged at ERROR once per
+                // cause (it was a WARN on every tick, forever).
+                self.noteCheckpointFailure(mg.name, err);
                 engine_ok = false;
             };
         } else {
@@ -10940,6 +11049,7 @@ pub const StorageAdapter = struct {
         if (self.checkpoint_metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
         reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
         reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
+        reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
     }
 
     /// Bulk write ops applied since the last checkpoint.

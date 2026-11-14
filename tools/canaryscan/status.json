@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:58:23.140149612Z",
+  "generated_at": "2026-11-14T02:10:41.309022549Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85810,6 +85810,20 @@
       "features": [
         {
           "feature": "CrashRecovery",
+          "aspect": "CheckpointFailureLogLimit",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "CrashRecovery",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93560,7 +93574,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4937
+      "TESTED": 4938
     },
     "by_aspect": {
       "2PC": 3,
@@ -94043,6 +94057,7 @@
       "CheckedRecordRemoval": 1,
       "CheckedResult": 1,
       "CheckedStoredCasts": 1,
+      "CheckpointFailureLogLimit": 1,
       "CheckpointPolicy": 1,
       "ChecksOnThrowawayCopy": 1,
       "ChildVerifier": 1,

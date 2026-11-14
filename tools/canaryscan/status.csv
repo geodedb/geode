@@ -5466,6 +5466,7 @@ REQ-SONNY-6499-GQLSTATE-RESIDUALS,ErrorMapping,DataExceptionGqlstatusResiduals,T
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,OrderedIndex,ColumnEntriesAndNfc,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,storage,2026-11-13
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,TopKOrderedFastPath,FastPathsReturnFullSortPrefix,TESTED,tests/test_sonny6499_orderby_fastpath_nulls.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,execution,2026-11-13
 REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup,TESTED,tests/test_sonny6499_relative_data_dir.zig,tests/test_sonny6499_relative_data_dir.zig,,security,2026-11-13
+REQ-SONNY-6523-CHECKPOINT-SETTINGS,CrashRecovery,CheckpointFailureLogLimit,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_checkpoint_settings.zig,,storage,2026-11-13
 REQ-SONNY-6523-CHECKPOINT-SETTINGS,CrashRecovery,Regression,TESTED,tests/test_sonny6523_checkpoint_settings.zig,tests/test_sonny6523_checkpoint_settings.zig,,storage,2026-11-13
 REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR,MultiGraphIsolation,OneScanPerBatch,TESTED,src/graph_store.zig,tests/test_sonny6523_drop_graph_purge.zig,,storage,2026-11-13
 REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6523_drop_graph_purge.zig,tests/test_sonny6523_drop_graph_purge.zig,,storage,2026-11-13

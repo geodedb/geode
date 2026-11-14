@@ -18361,10 +18361,9 @@ fn persistenceLoop() void {
                     checkpoint_ops,
                     checkpoint_interval_ms,
                     monoNanosNow(),
-                ) catch |err| blk: {
-                    log.err("deferred-mode auto-checkpoint failed", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
+                ) catch blk: {
+                    // SONNY-6523 (6): `checkpointAllLight` counted it and
+                    // logged it (once per cause, not once per tick).
                     break :blk false;
                 };
                 if (fired) {
@@ -18401,6 +18400,7 @@ fn persistenceLoop() void {
                     // on every tick, and stall SIGTERM by up to two deadlines
                     // (this tick, then the final flush).
                     const runs_before = adapter.checkpointsTotal();
+                    const failures_before = adapter.checkpointFailuresTotal();
                     const tick_result: anyerror!void = if (g_wal_checkpoint_fn) |checkpoint_fn| blk: {
                         // The hook logs its own failure; a run that landed
                         // advanced the counter.
@@ -18421,9 +18421,14 @@ fn persistenceLoop() void {
                             Attr.uint("checkpoints_total", adapter.checkpointsTotal()),
                         });
                     } else |err| {
-                        log.err("per-graph storage checkpoint failed", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
+                        // SONNY-6523 (6): a failed light checkpoint is
+                        // counted and logged by `checkpointAllLight` (once
+                        // per cause); a hook that ran none is logged here.
+                        if (err == error.CheckpointHookFailed and adapter.checkpointFailuresTotal() == failures_before) {
+                            log.err("per-graph storage checkpoint failed", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                        }
                     }
                 } else {
                     // Fallback: global shared lock (via the helpers so the
@@ -18460,12 +18465,9 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
     // stay O(dirty). A full O(graph) checkpoint here stalls a large ingest for
     // minutes under the exclusive store lock (full is kept for clean shutdown).
     if (global_adapter) |adapter| {
-        adapter.checkpointAllLight() catch |err| {
-            log.err("per-graph storage checkpoint failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return;
-        };
+        // SONNY-6523 (6): a failure is counted and logged (once per cause)
+        // by `checkpointAllLight`.
+        adapter.checkpointAllLight() catch return;
         // GAP-ENT-0038: like the WAL-triggered branch above, this dirty-flush
         // backstop silently resets the deferred cadence state — make it
         // visible so operators can account for every checkpoint driver.

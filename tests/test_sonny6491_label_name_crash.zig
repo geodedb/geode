@@ -39,7 +39,9 @@ const QuicServer = struct {
         errdefer allocator.free(addr);
         var handle = try util.spawnServer(
             allocator,
-            &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
+            // SONNY-6523 (6): no persistence tick (and so no checkpoint) before
+            // the kill; GEODE_CHECKPOINT_* only add bulk-ingest triggers.
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir, "--persist-interval", "86400000" },
             env,
         );
         errdefer handle.deinit();
@@ -213,7 +215,9 @@ test "SONNY-6491: label names assigned since the last checkpoint survive a kill"
     std.Io.Dir.cwd().createDirPath(io_fs, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     // No checkpoint before the kill: a checkpoint used to write labels.dict
-    // and would hide a name that was never made durable when assigned.
+    // and would hide a name that was never made durable when assigned. The
+    // server runs with no persistence tick (`QuicServer.start`); these two
+    // settings keep the bulk-ingest triggers off too.
     const env: []const []const u8 = &.{ "GEODE_CHECKPOINT_INTERVAL_MS=86400000", "GEODE_CHECKPOINT_OPS=1000000000" };
 
     var before: Observed = undefined;

@@ -1154,6 +1154,24 @@ The server reads none of `GEODE_PAGE_SIZE`, `GEODE_DISK_ENCRYPTION`,
 
 - `GEODE_WAL_SYNC`: `each_commit` (default, fsync per commit) or `deferred` (durable at the next checkpoint; replayable bulk loads only)
 
+**Checkpoints** (SONNY-6523 item 6):
+
+- `--persist-interval <ms>` (default 30000): the persistence tick. Every tick
+  syncs the WAL and runs a light (O(dirty)) checkpoint, which flushes the
+  dirty pages and truncates the WAL. This is the checkpoint cadence; nothing
+  else turns it off. A tick that cannot checkpoint is counted
+  (`adapter_checkpoint_failures_total` in the runtime metrics) and logged at
+  ERROR once per distinct cause, again at most every 10 minutes while the
+  same cause repeats, and once when checkpoints succeed again.
+- `GEODE_CHECKPOINT_OPS` (default 50000) and `GEODE_CHECKPOINT_INTERVAL_MS`
+  (default 60000): extra triggers for bulk ingest (the fast paths and group
+  commit), which a tick may not keep up with: a light checkpoint as soon as
+  that many bulk operations are pending, or when that long has passed since
+  the last checkpoint (or since the server opened its data directory) with
+  bulk operations pending. They add checkpoints; they do not delay or stop
+  the tick's. To run without checkpoints until shutdown (tests that need a
+  crash to replay the WAL), give a long `--persist-interval`.
+
 The server reads none of `GEODE_WAL_ENCRYPTION`, `GEODE_WAL_SEGMENT_SIZE`,
 `GEODE_WAL_FLUSH_MODE`, `GEODE_WAL_FLUSH_EVERY_N`, `GEODE_WAL_FLUSH_WINDOW_MS`
 (corrected 2026-11-12, SONNY-6430): the WAL is encrypted with

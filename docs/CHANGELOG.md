@@ -2377,6 +2377,32 @@
   an unreadable graph registry does. Regression: `zig build
   test-sonny6523-dropped-graph-restart` (the real Raft apply entry point
   across three restarts).
+- **Checkpoint settings do what they say; a failing checkpoint is counted
+  and no longer floods the log (SONNY-6523 item 6).** The persistence tick
+  (`--persist-interval`, 30 s by default) runs a light checkpoint every
+  time; `GEODE_CHECKPOINT_OPS` and `GEODE_CHECKPOINT_INTERVAL_MS` only add
+  bulk-ingest triggers and never stopped it (now documented in
+  `docs/SERVER_FEATURES.md`, Checkpoints). The interval trigger measured
+  the time since the last checkpoint from 0 on the monotonic clock, which
+  counts from boot, until the first checkpoint: on a host up longer than
+  the interval, the first tick with bulk work pending fired a checkpoint
+  ("deferred-mode auto-checkpoint fired" with a 1-day interval). It now
+  counts from the adapter's open. `--help` said `--persist-interval`
+  defaults to 100 (it is 30000), and an unparsable value fell back to 100;
+  it keeps the default now. A light checkpoint that fails for a graph (the
+  pass carries on with the others and returns no error) was a WARN on every
+  tick, and the tick's other failures an ERROR on every tick from up to
+  three places: each is now counted (`adapter_checkpoint_failures_total`,
+  `geode.runtime.*`) and logged at ERROR once per distinct cause, again at
+  most every 10 minutes while it repeats, and once when checkpoints succeed
+  again. Three crash tests whose comments said they ran with no checkpoint
+  before the kill (`test-sonny6491-label-name-crash`,
+  `test-sonny6491-orderby-label-intern`,
+  `test-sonny2978-overlapping-engine-txn-crash`) set only the two
+  variables; they now also start the server with no persistence tick. The
+  hydration scan's comment that no write runs during a hydration is
+  corrected (the shard-locked bulk writers do; SONNY-6492 item 2 allows for
+  them). Regression: `zig build test-sonny6523-checkpoint-settings`.
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

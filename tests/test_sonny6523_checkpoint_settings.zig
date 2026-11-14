@@ -106,3 +106,52 @@ test "SONNY-6523 (6): the deferred-mode interval counts from the adapter's open,
     // And it is due once the interval has passed since the open.
     try std.testing.expect(try adapter.maybeCheckpoint(1_000_000_000, 60_000, monoNs() + 61 * std.time.ns_per_s));
 }
+
+test "SONNY-6523 (6): a failing light checkpoint is counted and logged once per cause" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    const store = try graph_store.initGlobalStore(allocator, data_dir);
+    defer graph_store.deinitGlobalStore();
+    defer execution.cleanupCatalogInstance();
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    try store.createGraph(G);
+    const labels = [_][]const u8{"L"};
+    for (0..10) |_| _ = try store.createNodeWithGraph(&labels, G);
+    try adapter.checkpointAllLight();
+
+    const failures0 = adapter.checkpointFailuresTotal();
+    const logs0 = adapter.checkpointFailureErrorLogs();
+    try std.testing.expect(try obstructFreeStore(allocator, data_dir, true) > 0);
+    // The pass reports a graph whose engine checkpoint failed and carries on
+    // with the others: it returns no error, so only the count shows it.
+    for (0..6) |_| {
+        _ = try store.createNodeWithGraph(&labels, G); // something to checkpoint
+        try adapter.checkpointAllLight();
+    }
+    _ = try obstructFreeStore(allocator, data_dir, false);
+    std.debug.print("SONNY-6523 (6): 6 light checkpoints with the graph's bitmap save failing: counted {d}, logged at ERROR {d} time(s)\n", .{ adapter.checkpointFailuresTotal() - failures0, adapter.checkpointFailureErrorLogs() - logs0 });
+    try std.testing.expectEqual(@as(u64, 6), adapter.checkpointFailuresTotal() - failures0);
+    try std.testing.expectEqual(@as(u64, 1), adapter.checkpointFailureErrorLogs() - logs0);
+
+    // The failures end: the next checkpoint succeeds and the count stays.
+    try adapter.checkpointAllLight();
+    try std.testing.expectEqual(@as(u64, 6), adapter.checkpointFailuresTotal() - failures0);
+}
+
+test "SONNY-6523 (6): the checkpoint failure log reports a new cause, a repeat after the interval, and the recovery" {
+    var l: gsa.CheckpointFailureLog = .{};
+    const t0: i64 = 1_000_000;
+    try std.testing.expect(l.noteFailure(error.IsDir, t0) == .first);
+    try std.testing.expect(l.noteFailure(error.IsDir, t0 + 1000) == .suppressed);
+    try std.testing.expect(l.noteFailure(error.IsDir, t0 + 2000) == .suppressed);
+    try std.testing.expect(l.noteFailure(error.NoSpaceLeft, t0 + 3000) == .first);
+    try std.testing.expect(l.noteFailure(error.NoSpaceLeft, t0 + 3000 + gsa.checkpoint_failure_log_interval_ms) == .repeated);
+    try std.testing.expectEqual(@as(u64, 5), l.consecutive);
+    try std.testing.expectEqual(@as(?u64, 5), l.noteSuccess());
+    try std.testing.expectEqual(@as(?u64, null), l.noteSuccess());
+}
