@@ -13315,6 +13315,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6498_errors_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6498_errors_step = b.step("test-sonny6498-swallowed-errors", "Run SONNY-6498 item 3 regression (division by zero, integer overflow and a type error in a function argument fail the statement through every executor path that swallowed them: inline property maps, hop and variable-length WHEREs, comma-pattern aggregates and grouping keys, chained aggregates, OPTIONAL MATCH, shortestPath: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6498_errors_step.dependOn(&run_sonny6498_errors_tests.step);
+    // SONNY-6525 item 1: a correlated IN subquery reads the outer row. See tests/test_sonny6525_correlated_subquery.zig.
+    const sonny6525_corr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_correlated_subquery.zig"), .target = target, .optimize = optimize });
+    sonny6525_corr_test_mod.addImport("geode", root_mod);
+    sonny6525_corr_test_mod.addImport("logging", logging_mod);
+    sonny6525_corr_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_corr_tests = b.addTest(.{ .root_module = sonny6525_corr_test_mod });
+    const run_sonny6525_corr_tests = b.addRunArtifact(sonny6525_corr_tests);
+    shardDep(test_step, &run_sonny6525_corr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6525_corr_step = b.step("test-sonny6525-correlated-subquery", "Run SONNY-6525 item 1 regression (an IN / NOT IN subquery that names a variable of the row around it reads that row's value, in WHERE and RETURN, two levels deep, with a pattern variable of the outer row constraining the subquery's pattern; an uncorrelated one runs once per statement, not per row: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6525_corr_step.dependOn(&run_sonny6525_corr_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });

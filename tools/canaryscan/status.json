@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:16:38.636606249Z",
+  "generated_at": "2026-11-14T00:23:14.598331194Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85820,6 +85820,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6525-CORRELATED-SUBQUERY",
+      "features": [
+        {
+          "feature": "SubqueryEvaluation",
+          "aspect": "Correlation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_correlated_subquery.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_correlated_subquery.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93393,7 +93412,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4927
+      "TESTED": 4928
     },
     "by_aspect": {
       "2PC": 3,
@@ -94096,6 +94115,7 @@
       "CoreTests": 1,
       "CoreType": 1,
       "Correlated": 1,
+      "Correlation": 1,
       "CorruptLineRefused": 1,
       "CorruptPageRecoveryLatency": 2,
       "Cos": 1,
