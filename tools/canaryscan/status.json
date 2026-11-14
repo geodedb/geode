@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:23:02.944815861Z",
+  "generated_at": "2026-11-14T01:24:54.613431954Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85806,6 +85806,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6523-FAILED-CREATE-COUNT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_failed_create_count.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED",
       "features": [
         {
@@ -93454,7 +93473,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4931
+      "TESTED": 4932
     },
     "by_aspect": {
       "2PC": 3,
@@ -96546,7 +96565,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 342,
+      "Regression": 343,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
