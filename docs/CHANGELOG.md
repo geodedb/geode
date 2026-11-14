@@ -2298,6 +2298,14 @@
 
 ### Fixed
 
+- **`CREATE GRAPH TYPE` takes a type keyword as a field type (SONNY-6517
+  item 2).** `CREATE GRAPH TYPE T AS { x STRING }` was refused: the lexer
+  reads STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME,
+  TIMESTAMP and DURATION as keywords and `parseFieldDefinitions` took only
+  an identifier (ISO/IEC 39075:2024 18.6 <property type>, 18.9 <value
+  type>). A wrong token there now names what a field type is.
+  `test-sonny6511-graph-type-string-field` is green and in the aggregate
+  (removed from `not_in_aggregate_steps` and KNOWN_TEST_ISSUES).
 - **Built-in functions raise their argument errors; only a NULL argument
   gives NULL (SONNY-6518 item 1, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1,
   20.22 <numeric value function>, 20.24 <character string function>. The

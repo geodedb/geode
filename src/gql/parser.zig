@@ -7376,8 +7376,17 @@ pub const Parser = struct {
             const field_name = self.cur.lexeme;
             self.advance();
 
-            // Field type (required)
-            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            // Field type (required). SONNY-6517 item 2: ISO/IEC 39075:2024
+            // 18.6 <property type> takes a <property value type> (18.7), a
+            // <value type> (18.9), which names the predefined types with
+            // reserved words (STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME,
+            // DATETIME, TIMESTAMP, DURATION), which the lexer reads as
+            // keywords: they were refused, and only a type name the lexer does
+            // not know (`text`, `int`) parsed.
+            switch (self.cur.kind) {
+                .identifier, .STRING, .INTEGER, .BOOLEAN, .FLOAT, .DECIMAL, .DATE, .TIME, .DATETIME, .TIMESTAMP, .DURATION => {},
+                else => return self.unexpected("expected a field type (a type name such as STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME, TIMESTAMP or DURATION)"),
+            }
             const type_name = self.cur.lexeme;
             self.advance();
 

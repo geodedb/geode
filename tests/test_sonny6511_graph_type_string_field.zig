@@ -1,4 +1,4 @@
-// SONNY-6511 item 6 (deferred, intentionally red): `CREATE GRAPH TYPE` fields
+// SONNY-6511 item 6, fixed by SONNY-6517 item 2: `CREATE GRAPH TYPE` fields
 // typed with a type keyword.
 //
 // `CREATE GRAPH TYPE T AS { x STRING }` is refused with UnexpectedToken: the
@@ -7,12 +7,9 @@
 // (src/gql/parser.zig) accepts only an `.identifier` token as the field
 // type, so only types the lexer does not know (`text`, `int`) parse.
 //
-// The fix belongs to src/gql/parser.zig, which another lane is changing in
-// this sweep: in parseFieldDefinitions, accept those type-keyword tokens
-// as the type name (`type_name = self.cur.lexeme`) where it checks
-// `self.cur.kind != .identifier`. Until then this file stays out of the
-// aggregate (not_in_aggregate_steps, docs/KNOWN_TEST_ISSUES.md); register it
-// through shardDep in the commit that fixes the parser.
+// parseFieldDefinitions now takes those type-keyword tokens as the type
+// name (ISO/IEC 39075:2024 18.6 <property type>, 18.9 <value type>); the
+// step runs in the aggregate.
 
 const std = @import("std");
 const geode = @import("geode");
@@ -38,6 +35,9 @@ test "SONNY-6511: CREATE GRAPH TYPE takes STRING and the other type keywords as 
     try expectFieldType("CREATE GRAPH TYPE T AS { x STRING }", "x", "STRING");
     try expectFieldType("CREATE GRAPH TYPE T AS { n INTEGER, b BOOLEAN }", "b", "BOOLEAN");
     try expectFieldType("CREATE GRAPH TYPE T AS { f FLOAT, d DATE }", "d", "DATE");
+    // SONNY-6517 item 2: the other single-keyword value types.
+    try expectFieldType("CREATE GRAPH TYPE T AS { a DECIMAL, b TIME, c DATETIME }", "c", "DATETIME");
+    try expectFieldType("CREATE GRAPH TYPE T AS { t TIMESTAMP, u DURATION }", "u", "DURATION");
 }
 
 test "SONNY-6511: control: a field type the lexer does not know already parses" {
