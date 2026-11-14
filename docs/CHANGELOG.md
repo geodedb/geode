@@ -2438,6 +2438,31 @@
 
 ### Fixed
 
+- **The statements after a FOR read its whole table, and a chain's last
+  RETURN DISTINCT reads every row (SONNY-6555 item 7, BREAKING: results
+  change).** ISO/IEC 39075:2024 14.8: a FOR extends the working table, a
+  record per element of each incoming record's list, and the statements
+  after it read that table as a whole (14.3, 14.11, 14.9). A FOR whose body
+  reads ran the body once per element (`statement_handlers.executeForBody`),
+  so `FOR x IN [1, 1, 2] MATCH (z) WHERE z.k = x RETURN count(*)` gave one
+  count per element and the body's WITH DISTINCT, WITH ... ORDER BY ...
+  LIMIT, RETURN DISTINCT and RETURN ... ORDER BY ... LIMIT each read one
+  element's rows; after a part (`MATCH (z) WITH z FOR x IN z.l MATCH ...`)
+  the chain ran the FOR part per row binding nothing and returned one empty
+  row per row. Such a body now runs as the rest of a chain whose part before
+  it is the FOR's table (`query_execution.runReadForBody`, through
+  `continueChain`, the SONNY-6540 stage logic). A body that writes still
+  runs once per element (geode#876). Also: a chain's last RETURN DISTINCT
+  after a part run per row (`MATCH (z) WITH z MATCH (z)-->(y) RETURN
+  DISTINCT z.g`) was applied to each row's rows alone; it now reads every
+  row, before the ORDER BY and window. A CALL subquery reaches no later
+  stage (`CALL { } WITH` does not parse; `CALL { } MATCH ... WITH` is
+  0A000). `test-sonny2683-return-shapes` pinned the per-element grouping
+  (`FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) ... HAVING c > 7` as
+  a|10, a|10, b|10, b|10); it now expects a|20, b|20, c|10, the tenant-scoped
+  session included (the FOR statement makes its context the active one, as
+  `executeQueryWithContext` does, so the per-row parts read its tenant
+  scope). Regression: `zig build test-sonny6555-for-chain-stage`.
 - **A function called with the wrong number of arguments is 42000 (SONNY-6555
   item 5, BREAKING: GQLSTATE changes).** ISO/IEC 39075:2024 4.7.3 step 4: a
   source that matches no production, or violates a Syntax Rule, fails with

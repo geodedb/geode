@@ -687,6 +687,10 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     // projects (and aggregates over) all of the loop's rows at once.
     const body = for_stmt.body orelse
         return executeForReturn(allocator, for_stmt, with_result.columns, with_result.rows, context);
+    // SONNY-6555 item 7: a body that reads runs over the FOR's whole working
+    // table: every row of the WITH (only the first was read), its stages
+    // (an aggregate, DISTINCT, ORDER BY, SKIP / LIMIT) over all of them.
+    if (readsOnlyBody(body)) return @import("query_execution.zig").runReadForBody(allocator, for_stmt, body, with_result.columns, with_result.rows, context);
 
     // geode#876: a composed body (CREATE / MERGE / MATCH ... SET) runs once per
     // element with the WITH bindings still in scope. We expect only one row
@@ -804,6 +808,63 @@ fn freeForTable(allocator: std.mem.Allocator, table: ForTable) void {
     for (table.rows) |row| allocator.free(row);
     allocator.free(table.rows);
     allocator.free(table.columns);
+}
+
+// CANARY: REQ=REQ-SONNY-6555-FOR-CHAIN-STAGE; FEATURE="ForStatement"; ASPECT=ReadBodyOverWholeTable; STATUS=TESTED; TEST=tests/test_sonny6555_for_chain_stage.zig; OWNER=engine; UPDATED=2026-11-14
+/// SONNY-6555 item 7: the working table every FOR header of `for_stmt`
+/// extends from `in_columns` / `in_rows` (ISO/IEC 39075:2024 14.8: a record
+/// per element of each incoming record's list), as a result the chain
+/// executor reads as the part before the FOR's body: its column names and
+/// row arrays are its own, its values are borrowed (`owns_value_memory`
+/// false).
+pub fn forTableResult(
+    allocator: std.mem.Allocator,
+    for_stmt: ast.ForStatement,
+    in_columns: []const []const u8,
+    in_rows: []const []Value,
+    context: ExecutionContext,
+) !ExecutionResult {
+    var table = ForTable{ .columns = in_columns, .rows = in_rows };
+    var owns_table = false;
+    defer if (owns_table) freeForTable(allocator, table);
+    const first = ast.ForLoop{
+        .variable = for_stmt.variable,
+        .collection = for_stmt.collection,
+        .ordinality_var = for_stmt.ordinality_var,
+        .offset_var = for_stmt.offset_var,
+    };
+    for (0..1 + for_stmt.nested.len) |i| {
+        const header = if (i == 0) first else for_stmt.nested[i - 1];
+        const next = try expandForTable(allocator, header, table, context);
+        if (owns_table) freeForTable(allocator, table);
+        table = next;
+        owns_table = true;
+    }
+    const columns = try allocator.alloc([]const u8, table.columns.len);
+    var filled: usize = 0;
+    errdefer {
+        for (columns[0..filled]) |c| allocator.free(c);
+        allocator.free(columns);
+    }
+    for (table.columns, columns) |c, *o| {
+        o.* = try allocator.dupe(u8, c);
+        filled += 1;
+    }
+    // The rows move to the result; the column-name slice is freed.
+    allocator.free(table.columns);
+    owns_table = false;
+    return ExecutionResult{
+        .columns = columns,
+        .rows = @constCast(table.rows),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+/// SONNY-6555 item 7: whether a FOR's body runs over the FOR's whole working
+/// table (`query_execution.runReadForBody`): a body that reads. A body that
+/// writes still runs once per element (geode#876).
+fn readsOnlyBody(body: *const ast.Query) bool {
+    return !@import("../query/query_traits.zig").isQueryMutating(body);
 }
 
 /// A FOR's SKIP or LIMIT: the literal, else the named parameter's value.
@@ -938,6 +999,15 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     // once per element instead of projecting a RETURN. An empty collection
     // therefore writes nothing (zero iterations).
     if (for_stmt.body) |body| {
+        // SONNY-6555 item 7: a body that reads runs over the FOR's whole
+        // working table (one empty row in), not once per element: its
+        // aggregate, DISTINCT, ORDER BY, SKIP / LIMIT read every element's
+        // rows (ISO/IEC 39075:2024 14.8, 14.11).
+        if (readsOnlyBody(body)) {
+            var no_values = [_]Value{};
+            const one_row = [_][]Value{&no_values};
+            return @import("query_execution.zig").runReadForBody(allocator, for_stmt, body, &.{}, &one_row, context);
+        }
         // Evaluate the collection expression with the request params in scope
         // so a `$param` collection (FOR..IN parameter-bound list) resolves to
         // the bound value instead of Null.

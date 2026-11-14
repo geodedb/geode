@@ -54,6 +54,7 @@ const write_shape = @import("write_shape.zig");
 // SONNY-3144: an UNWIND before a write runs its part once per element, as a
 // FOR body does.
 const statement_handlers = @import("statement_handlers.zig");
+const result_utils = @import("result_utils.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const freeColumnNames = match_operations.freeColumnNames;
 
@@ -112,10 +113,18 @@ fn refuseChainedWrites(q: ast.Query) error{WriteClauseNotApplied}!void {
 /// RETURN once per row of `prev`, binding nothing from its list (`MATCH (n)
 /// WITH n FOR x IN n.list RETURN x` returned one NULL per node), or, with an
 /// aggregate, over `prev`'s rows instead of the loop's.
+///
+/// SONNY-6555 item 7: a FOR whose body reads runs that body over the FOR's
+/// whole table (`runReadForBody`); the chain ran the FOR part per row of
+/// `prev`, binding nothing (one empty row per row of `prev`).
 fn forAfterPart(allocator: std.mem.Allocator, next: ast.Query, prev: ExecutionResult, context: ExecutionContext) !?ExecutionResult {
     const fr = next.for_statement orelse return null;
-    if (fr.body != null or next.next_query != null) return null;
-    var result = try statement_handlers.executeForReturn(allocator, fr.*, prev.columns, prev.rows, context);
+    if (next.next_query != null) return null;
+    if (fr.body) |body| if (query_traits.isQueryMutating(body)) return null;
+    var result = if (fr.body) |body|
+        try runReadForBody(allocator, fr.*, body, prev.columns, prev.rows, context)
+    else
+        try statement_handlers.executeForReturn(allocator, fr.*, prev.columns, prev.rows, context);
     // The rows may hold `prev`'s values: its graph entities go with them,
     // and values it owns stay allocated (as the chain's other paths leave
     // them). Its columns and row slices are freed. SONNY-6498: `prev` stays
@@ -129,6 +138,29 @@ fn forAfterPart(allocator: std.mem.Allocator, next: ast.Query, prev: ExecutionRe
     spent.owned_graph_entities = null;
     releasePart(allocator, &spent);
     return result;
+}
+
+// CANARY: REQ=REQ-SONNY-6555-FOR-CHAIN-STAGE; FEATURE="ForStatement"; ASPECT=ReadBodyOverWholeTable; STATUS=TESTED; TEST=tests/test_sonny6555_for_chain_stage.zig; OWNER=engine; UPDATED=2026-11-14
+/// SONNY-6555 item 7: a FOR whose body reads, over the rows reaching it
+/// (`in_columns` / `in_rows`). ISO/IEC 39075:2024 14.8: the FOR extends the
+/// working table, a record per element of each incoming record's list; the
+/// statements after it read that table as a whole (14.3, 14.11). The body
+/// is the rest of a chain whose part before it is the FOR's table
+/// (`statement_handlers.forTableResult`), so it runs as `continueChain`
+/// runs any part: a WITH that aggregates, is DISTINCT or windowed reads
+/// every row (`chainStageRows`), a last RETURN aggregates over all of them
+/// (`chainFinalAggregate`), its DISTINCT, ORDER BY and window apply to all.
+/// The body ran once per element (`executeForBody`), each of those over one
+/// element's rows, and after a WITH it read only the WITH's first row.
+/// The statement's context is the active one while it runs, as
+/// `executeQueryWithContext` makes it: the per-row parts read the session's
+/// tenant scope from it (without it a tenant-scoped FOR statement read every
+/// tenant's nodes).
+pub fn runReadForBody(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, body: *ast.Query, in_columns: []const []const u8, in_rows: []const []Value, context: ExecutionContext) anyerror!ExecutionResult {
+    const prev_ctx = execution.pushActiveContext(&context);
+    defer execution.popActiveContext(prev_ctx);
+    const table = try statement_handlers.forTableResult(allocator, for_stmt, in_columns, in_rows, context);
+    return continueChain(allocator, table, body, context);
 }
 
 /// SONNY-3046: move the graph entities `src` tracks into `dst`, which then
@@ -786,6 +818,10 @@ fn continueChain(allocator: std.mem.Allocator, current_result_in: ExecutionResul
     while (final_query.next_query) |next| {
         final_query = next.*;
     }
+    // SONNY-6555 item 7: the last RETURN's DISTINCT is over every row of
+    // the chain (ISO/IEC 39075:2024 14.11), before its ORDER BY and window
+    // (14.9); each row's part applied it to that row's rows alone.
+    if (final_query.ret.distinct) try result_utils.applyDistinct(allocator, &result);
     if (final_query.order_by) |order| {
         // SONNY-2811: a key that fails to evaluate fails the sort (and the
         // errdefer above frees the result).
