@@ -2306,6 +2306,12 @@
   type>). A wrong token there now names what a field type is.
   `test-sonny6511-graph-type-string-field` is green and in the aggregate
   (removed from `not_in_aggregate_steps` and KNOWN_TEST_ISSUES).
+- **`WITH *, item` is refused with a message naming the rule (SONNY-6525
+  item 3).** ISO/IEC 39075:2024 14.11 <return statement body> is `*` or a
+  list of items, never both, so `WITH *, n.k AS k` and `RETURN *, n` stay
+  refused (42000), now with "`*` is the whole projection list ..."
+  instead of "expected token 'RETURN', got 'comma'". Regression: `zig
+  build test-sonny6525-star-items`.
 - **Built-in functions raise their argument errors; only a NULL argument
   gives NULL (SONNY-6518 item 1, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1,
   20.22 <numeric value function>, 20.24 <character string function>. The

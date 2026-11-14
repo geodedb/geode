@@ -3804,6 +3804,9 @@ pub const Parser = struct {
             // Create a special marker using Ident with "*" to signal executor to return all bindings
             const star_expr = ast.Expr{ .Ident = .{ .orig = "*", .cnf = "*" } };
             try out.append(self.arena.allocator(), .{ .expr = star_expr, .alias = null });
+            // SONNY-6525 item 3: ISO/IEC 39075:2024 14.11 <return statement
+            // body> is `*` or a list of items, never both.
+            if (self.cur.kind == .comma) return self.unexpected("`*` is the whole projection list and cannot be followed by items (ISO/IEC 39075:2024 14.11 <return statement body>: `*` or a list of items); name every item instead, e.g. WITH n, n.k AS k");
             return;
         }
 
