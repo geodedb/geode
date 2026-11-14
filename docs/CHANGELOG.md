@@ -2298,6 +2298,19 @@
 
 ### Fixed
 
+- **A replayed create of a node the node cache evicted is refused, not made
+  twice (SONNY-6528 item 3).** `GraphStore.createNodeWithId` (the Raft apply
+  of a replicated create, and every other create with a given id) decided
+  whether the id existed by asking the node cache, which is bounded
+  (`GEODE_NODE_CACHE_ENTRIES`, default 1,000,000): a node it had evicted, or
+  one not read back since a restart, was not found, and the create wrote a
+  second engine record under the same public id. A restarted cluster member
+  re-applying its committed log duplicated every such node on disk (200
+  re-applied creates on a 16-entry cache: 400 engine records live, 600 after
+  a restart and a second replay). The engine-backed create now also checks
+  the durable IdMaps and answers `NodeAlreadyExists`, which the apply treats
+  as the idempotent no-op it is. Regression: `zig build
+  test-sonny6528-evicted-node-create`.
 - **The storage corruption errors say what happened and what to do
   (SONNY-6528 item 5).** `DataCorruption`, `ChecksumMismatch` and
   `InvalidData` (a read that found a graph's stored data damaged, and every

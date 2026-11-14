@@ -6222,6 +6222,19 @@ pub const GraphStore = struct {
         // adapter slot. See cluster_replication.applyNodeCreatePayload.
         try self.ensureGraph(graph_name);
         if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
+        // CANARY: REQ=REQ-SONNY-6528-EVICTED-NODE-CREATE; FEATURE="StorageIntegrity"; ASPECT=DurableExistenceCheck; STATUS=TESTED; TEST=tests/test_sonny6528_evicted_node_create.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (3): the node cache is bounded (GEODE_NODE_CACHE_ENTRIES);
+        // a node it evicted, or one not read back since a restart, is not in
+        // it. The durable IdMaps (the graph was hydrated above) know every
+        // persisted id: without this a replayed create made a second engine
+        // record under the same public id. Only an engine-backed create
+        // writes one; an in-memory re-create (undo) keeps the cache check.
+        if (persist_adapter) {
+            if (self.resolveNodeGraphSlot(node_id)) |existing| {
+                self.unpinIdMap(existing.map);
+                return error.NodeAlreadyExists;
+            }
+        }
 
         // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
         // DEFAULT_TENANT_ID. createNodeWithId is used by replication / WAL
