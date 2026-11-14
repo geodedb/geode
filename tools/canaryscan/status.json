@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T09:16:07.735793852Z",
+  "generated_at": "2026-11-14T09:27:04.293373383Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79287,6 +79287,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6567-GRPC-STREAM-IDS",
+      "features": [
+        {
+          "feature": "GrpcTransport",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -84389,7 +84408,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4183
+      "TESTED": 4184
     },
     "by_aspect": {
       "2PC": 3,
@@ -87187,7 +87206,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 360,
+      "Regression": 361,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

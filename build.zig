@@ -10753,6 +10753,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6547_hs_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6547_hs_step = b.step("test-sonny6547-apply-hydration-stall", "Run SONNY-6547 item 4 regression (in-process 3-node cluster: a replicated create on a graph not hydrated yet, proposed while a reader holds the graph's lock, never keeps the leader's Raft inner_mutex for an election timeout; the create applies)");
     sonny6547_hs_step.dependOn(&run_sonny6547_hs_tests.step);
+    // SONNY-6567 (1): every RPC on one gRPC connection rides its own HTTP/2
+    // stream (a real server with a plaintext gRPC listener).
+    const sonny6567_gs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_grpc_stream_ids.zig"), .target = target, .optimize = optimize });
+    sonny6567_gs_test_mod.link_libc = true;
+    sonny6567_gs_test_mod.addImport("geode", root_mod);
+    sonny6567_gs_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6567_gs_test_mod.addImport("schema", schema_mod);
+    sonny6567_gs_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6567_gs_test_mod.addImport("logging", logging_mod);
+    const sonny6567_gs_tests = b.addTest(.{ .root_module = sonny6567_gs_test_mod });
+    const run_sonny6567_gs_tests = b.addRunArtifact(sonny6567_gs_tests);
+    spawnsBuiltGeode(sonny6567_gs_tests);
+    shardDep(test_step, &run_sonny6567_gs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_gs_step = b.step("test-sonny6567-grpc-stream-ids", "Run SONNY-6567 item 1 regression against a real server with a plaintext gRPC listener: a HELLO, eight Execute RPCs, a response far larger than the connection flow-control window and one more Execute all succeed on ONE connection (each RPC on its own odd, increasing HTTP/2 stream id); a multi-statement --file over gRPC succeeds; the stream-id allocator refuses to wrap");
+    sonny6567_gs_step.dependOn(&run_sonny6567_gs_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
