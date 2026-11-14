@@ -1832,6 +1832,19 @@ pub const ManagedGraph = struct {
     /// `markGraphQuarantined`, never cleared for the process lifetime. Every
     /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
     quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
+    /// SONNY-6528 (1): held by a Raft apply for each replicated write to this
+    /// graph (`beginReplicatedApply`) and by a checkpoint of it right after
+    /// it takes `rwlock` EXCLUSIVE (`checkpointOneGraph`). The apply cannot
+    /// take `rwlock`: it runs on the Raft tick thread under the Raft node's
+    /// `inner_mutex`, and a request on the leader holds its graph's `rwlock`
+    /// while it proposes (taking `inner_mutex`). Lock order: `rwlock` ->
+    /// this; the apply never takes `rwlock` while it holds this.
+    replicated_apply_mutex: std.Io.Mutex = .init,
+    /// SONNY-6528 (1): the thread holding `replicated_apply_mutex` for an
+    /// apply (`StorageAdapter.currentThreadTag`), 0 when none. A checkpoint
+    /// the apply itself starts (its hydration's persist-on-complete) does
+    /// not wait for it.
+    replicated_apply_holder: std.atomic.Value(u64) = .init(0),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -4214,6 +4227,26 @@ pub const StorageAdapter = struct {
             self.allocator.free(kv.key);
         }
         return self.getOrCreateGraphLocked(name);
+    }
+
+    /// SONNY-6528 (1): a Raft apply of one replicated write to `graph_name`
+    /// (`raft_apply.applyGraphMutation`) holds the graph's
+    /// `replicated_apply_mutex` for the write: a checkpoint of the graph
+    /// waits for it, as it waits for every local writer through `rwlock`.
+    /// The graph is pinned until `endReplicatedApply`. Errors as
+    /// `pinOrCreateGraph` (a graph dropped since the store opened:
+    /// GraphNotFound).
+    pub fn beginReplicatedApply(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        const mg = try self.pinOrCreateGraph(graph_name);
+        mg.replicated_apply_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        return mg;
+    }
+
+    pub fn endReplicatedApply(self: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.replicated_apply_holder.store(0, .release);
+        mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.unpinGraph(mg);
     }
 
     /// SONNY-6523: the graph's first-touch hydration failed with `err`
@@ -10126,6 +10159,14 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlock(io_cp);
             return .ok;
         }
+        // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=CheckpointWaitsForApply; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (1): and for the Raft apply's writes, which hold no
+        // `rwlock` (`replicated_apply_mutex`), unless this checkpoint runs
+        // inside one on its own thread. Taken before any other lock this
+        // checkpoint takes under `rwlock`.
+        const apply_excluded = mg.replicated_apply_holder.load(.acquire) != currentThreadTag();
+        if (apply_excluded) mg.replicated_apply_mutex.lockUncancelable(io_cp);
+        defer if (apply_excluded) mg.replicated_apply_mutex.unlock(io_cp);
         // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
         // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
         // checkpoint so a restart loads the derived indexes without a rebuild.

@@ -2298,6 +2298,21 @@
 
 ### Fixed
 
+- **A checkpoint of a graph waits for a Raft apply's write to it (SONNY-6528
+  item 1).** A checkpoint takes the graph's rwlock exclusively to drain its
+  writers before it writes the shard manifests, the label index and the
+  dirty pages; every local writer holds that lock, but the Raft apply of a
+  replicated write (`raft_apply.applyGraphMutation`, which creates nodes
+  through `createNodeWithId` -> `StorageAdapter.createNode` and sets
+  properties, deletes and updates) held none, so on a cluster member a
+  checkpoint ran in the middle of an apply's node create (forced in the
+  regression: the full checkpoint completed between the engine counting the
+  node and writing its record). The apply cannot take the rwlock (it runs
+  under the Raft node's `inner_mutex`, which a leader's request takes while
+  it holds its graph's rwlock to propose), so each replicated write now
+  holds a per-graph `replicated_apply_mutex`, and a checkpoint takes it
+  right after the rwlock. Regression: `zig build
+  test-sonny6528-apply-checkpoint-exclusion`.
 - **A quarantined graph refuses reads to in-process callers too (SONNY-6528
   item 4).** SONNY-6523 made the QUIC and gRPC handlers refuse a program on
   a quarantined graph (REQ-GQL-028: its hydration found its store damaged).
