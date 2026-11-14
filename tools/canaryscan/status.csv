@@ -313,15 +313,15 @@ REQ-AUTH-ROLE-001,RoleAssignment,Idempotent,TESTED,src/security/user_management.
 REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,src/security/user_management.zig,assignRole_missing_user_returns_unauthenticated,,security,2026-05-11
 REQ-AUTH-ROLE-002,BuiltinRoleHardening,Validation,TESTED,src/execution/auth_dispatch.zig,isBuiltinRoleName_recognizes_all_variants,,security,2026-05-11
 REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,src/security/user_management.zig,,,security,2026-02-24
-REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,src/cli/security/session_storage.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,TESTED,src/cli/main.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
-REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,TESTED,src/cli/main.zig,tests/session_storage_integration_test.zig,,security,2026-11-14
+REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
+REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
+REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
+REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,TESTED,src/cli/main.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,TESTED,src/cli/main.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-AUTH-STATE-DEFAULTS-001,AuthState,ProductionGuard,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
 REQ-AUTH-TOKEN-001,AuthToken,Testing,TESTED,src/cli/main.zig,TestCANARY_REQ_AUTH_TOKEN_001,,cli,2025-10-14
 REQ-AUTH-TOKEN-001,AuthToken,TokenValidation,IMPL,tests/test_gap_0193_batch2_testing.zig,,,cli,2026-11-12
@@ -5342,6 +5342,13 @@ REQ-SONNY-6544-DSN-USERINFO,DSN credentials,RedactionTable,TESTED,tests/test_son
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,AbsoluteHomeOnly,TESTED,src/cli/security/home_dir.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,RelativeHomeRefused,TESTED,tests/test_sonny6544_relative_home.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-MCP-COMPLETION,MCPCompletion,CompleteResultShape,TESTED,tests/test_sonny6544_mcp_completion.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
+REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE,DataDirLock,RelativeXdgAndHomeIgnored,TESTED,tests/test_sonny6551_relative_state_home.zig,tests/test_sonny6551_relative_state_home.zig,,storage,2026-11-14
+REQ-SONNY-6551-DSN-QUERY-CREDENTIALS,DSN credentials,QueryParameterCredentials,TESTED,tests/test_sonny6551_dsn_query_credentials.zig,tests/test_sonny6551_dsn_query_credentials.zig,,cli,2026-11-14
+REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,AbsoluteHistoryPathOnly,TESTED,src/client/repl/repl_config.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14
+REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,NoCredentialsInHistory,TESTED,src/client/repl/repl_history.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14
+REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,NoCredentialsNoUnsafePath,TESTED,tests/test_sonny6551_repl_history.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14
+REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile,TESTED,tests/test_sonny6551_saved_session.zig,,,security,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

@@ -1061,17 +1061,24 @@ pub fn getDataDirOverride() ?[]const u8 {
 ///   2. `$HOME/.local/state/geode`
 ///   3. `$TMPDIR/geode-<uid>` (TMPDIR when absolute, else `/tmp`; per-user,
 ///      so two uids never collide), checked by `privateUserTmpDir`.
+///
+/// SONNY-6551: XDG_STATE_HOME and HOME count only when they are absolute
+/// paths. The XDG Base Directory specification says a relative value is
+/// invalid and must be ignored, and a relative HOME put the data directory
+/// (HMAC key included) under whatever directory the server started in. An
+/// explicit relative `--data-dir` is unaffected (it is resolved to an
+/// absolute path, SONNY-6499).
 pub fn defaultDataDir(allocator: std.mem.Allocator) ![]u8 {
     if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
         defer allocator.free(xdg_state_home);
-        if (xdg_state_home.len > 0) {
+        if (xdg_state_home.len > 0 and std.fs.path.isAbsolute(xdg_state_home)) {
             return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
         }
     } else |_| {}
 
     if (getEnvVarOwned(allocator, "HOME")) |home| {
         defer allocator.free(home);
-        if (home.len > 1) {
+        if (home.len > 1 and std.fs.path.isAbsolute(home)) {
             return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
         }
     } else |_| {}

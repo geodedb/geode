@@ -302,7 +302,6 @@ pub const entries = [_]Entry{
     .{ .path = "tests/nightly_freshness_pre_warn.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'std' has no member named 'ChildProcess'" },
     .{ .path = "tests/nightly_governance_aggregate.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'std' has no member named 'ChildProcess'" },
     .{ .path = "tests/profile_allocator_sums.zig", .reason = "TODO(SONNY-6542): fails when run (stale assertion or product bug, untriaged): profile: per-op bytes_alloc sum equals memory.total_alloc_bytes -> FAIL (TestUnexpectedResult)" },
-    .{ .path = "tests/session_storage_integration_test.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'posix' has no member named 'getenv'" },
     .{ .path = "tests/simple_json_bench.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: struct 'array_list.Aligned(u64,null)' has no member named 'init'" },
     .{ .path = "tests/status_json_hash_integrity.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'fs' has no member named 'cwd'" },
     .{ .path = "tests/test_2pc_distributed.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: expected 2 argument(s), found 1" },

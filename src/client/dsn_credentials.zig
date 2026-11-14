@@ -83,6 +83,52 @@ pub fn decodeUserinfo(allocator: std.mem.Allocator, userinfo: []const u8) Error!
     return .{ .username = username, .password = password };
 }
 
+/// SONNY-6551: the credentials of a DSN's query parameters (docs/DSN.md,
+/// "Query Parameter Credentials"): `username` or `user`, `password` or
+/// `pass`, percent-decoded like the userinfo (`+` is a literal plus). The
+/// last occurrence of a key wins. `deinit` zeroes them before freeing.
+pub const QueryCredentials = struct {
+    username: ?[]u8 = null,
+    password: ?[]u8 = null,
+
+    pub fn deinit(self: *QueryCredentials, allocator: std.mem.Allocator) void {
+        freeSecret(allocator, self.username);
+        freeSecret(allocator, self.password);
+        self.* = .{};
+    }
+};
+
+fn freeSecret(allocator: std.mem.Allocator, value: ?[]u8) void {
+    if (value) |v| {
+        std.crypto.secureZero(u8, v);
+        allocator.free(v);
+    }
+}
+
+/// Read the credential parameters of `rest` (`Authority.rest`: empty, or
+/// starting with `/`, `?` or `#`); other parameters are skipped.
+pub fn decodeQueryCredentials(allocator: std.mem.Allocator, rest: []const u8) Error!QueryCredentials {
+    var out: QueryCredentials = .{};
+    errdefer out.deinit(allocator);
+    const q = std.mem.indexOfScalar(u8, rest, '?') orelse return out;
+    const end = std.mem.indexOfScalarPos(u8, rest, q, '#') orelse rest.len;
+    var params = std.mem.splitScalar(u8, rest[q + 1 .. end], '&');
+    while (params.next()) |param| {
+        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
+        const key = param[0..eq];
+        const slot: *?[]u8 = if (std.mem.eql(u8, key, "username") or std.mem.eql(u8, key, "user"))
+            &out.username
+        else if (std.mem.eql(u8, key, "password") or std.mem.eql(u8, key, "pass"))
+            &out.password
+        else
+            continue;
+        const value = try percentDecode(allocator, param[eq + 1 ..]);
+        freeSecret(allocator, slot.*);
+        slot.* = value;
+    }
+    return out;
+}
+
 /// RFC 3986 §2.1 percent-decoding. The caller owns the result.
 pub fn percentDecode(allocator: std.mem.Allocator, text: []const u8) Error![]u8 {
     const out = try allocator.alloc(u8, text.len);

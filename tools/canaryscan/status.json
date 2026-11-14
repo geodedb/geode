@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:36:45.48328795Z",
+  "generated_at": "2026-11-14T07:59:42.223331192Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -5233,7 +5233,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5252,7 +5252,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5271,7 +5271,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5290,7 +5290,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5309,7 +5309,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "src/cli/security/session_storage.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5328,7 +5328,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "src/cli/security/session_storage.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5347,7 +5347,7 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "src/cli/security/session_storage.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5366,7 +5366,7 @@
             "src/cli/main.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -5385,7 +5385,7 @@
             "src/cli/main.zig"
           ],
           "tests": [
-            "tests/session_storage_integration_test.zig"
+            "tests/test_sonny6551_saved_session.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -83867,6 +83867,111 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE",
+      "features": [
+        {
+          "feature": "DataDirLock",
+          "aspect": "RelativeXdgAndHomeIgnored",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6551_relative_state_home.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_relative_state_home.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6551-DSN-QUERY-CREDENTIALS",
+      "features": [
+        {
+          "feature": "DSN credentials",
+          "aspect": "QueryParameterCredentials",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6551_dsn_query_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_dsn_query_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6551-REPL-HISTORY-SECRETS",
+      "features": [
+        {
+          "feature": "REPL history",
+          "aspect": "AbsoluteHistoryPathOnly",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_config.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_repl_history.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "REPL history",
+          "aspect": "NoCredentialsInHistory",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_history.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_repl_history.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "REPL history",
+          "aspect": "NoCredentialsNoUnsafePath",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6551_repl_history.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_repl_history.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6551-SAVED-SESSION-FILE",
+      "features": [
+        {
+          "feature": "LocalSessionStorage",
+          "aspect": "OneWriterOneReaderSafeFile",
+          "status": "TESTED",
+          "files": [
+            "src/cli/security/session_storage.zig",
+            "tests/test_sonny6551_saved_session.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6551_saved_session.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -91068,7 +91173,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4265
+      "TESTED": 4271
     },
     "by_aspect": {
       "2PC": 3,
@@ -91098,6 +91203,7 @@
       "Abort": 1,
       "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
+      "AbsoluteHistoryPathOnly": 1,
       "AbsoluteHomeOnly": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
@@ -93277,6 +93383,8 @@
       "NoAutoCreate": 1,
       "NoBorrowedReads": 1,
       "NoCatalog": 1,
+      "NoCredentialsInHistory": 1,
+      "NoCredentialsNoUnsafePath": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
       "NoDeadRemotePath": 1,
       "NoDeadWalWrapperOrFalseTestedMarkers": 1,
@@ -93425,6 +93533,7 @@
       "OneRowPerPath": 1,
       "OneScanPerBatch": 1,
       "OneSetPath": 1,
+      "OneWriterOneReaderSafeFile": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
@@ -93939,6 +94048,7 @@
       "QueryOptimizer": 1,
       "QueryOptions": 1,
       "QueryOptionsField": 1,
+      "QueryParameterCredentials": 1,
       "QueryParsing": 1,
       "QueryPerformance": 2,
       "QueryPlanCacheEvictVarianceEnvelope": 1,
@@ -94102,6 +94212,7 @@
       "RelationshipMergeEndpointLookup": 1,
       "RelativeDataDirAndRefusalCleanup": 1,
       "RelativeHomeRefused": 1,
+      "RelativeXdgAndHomeIgnored": 1,
       "ReleaseAtStatement": 1,
       "ReleaseSafe": 1,
       "RemainingCategories": 1,
