@@ -928,17 +928,16 @@ fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
     } else if (std.mem.startsWith(u8, dsn, "grpc://")) {
         rest = dsn["grpc://".len..];
         use_grpc = true;
-    } else if (std.mem.startsWith(u8, dsn, "http://") or
-        std.mem.startsWith(u8, dsn, "https://") or
-        std.mem.startsWith(u8, dsn, "tcp://"))
-    {
-        std.debug.print("Error: unsupported DSN scheme. Use quic:// or grpc://\n", .{});
+    } else if (if (std.mem.indexOf(u8, dsn, "://")) |sep| std.mem.indexOfAny(u8, dsn[0..sep], "/?@") == null else false) {
+        // SONNY-6531: any other scheme (http, https, tcp, ...), in the
+        // MCP path's words; the DSN is not echoed (it may carry a password).
+        zig_quic_bridge.printEndpointError(error.UnsupportedScheme);
         return null;
     }
     // else: no scheme, treat as host:port with QUIC default
 
     if (rest.len == 0) {
-        std.debug.print("Error: DSN missing host\n", .{});
+        zig_quic_bridge.printEndpointError(error.InvalidDSN);
         return null;
     }
 
@@ -962,7 +961,7 @@ fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
     }
 
     if (rest.len == 0) {
-        std.debug.print("Error: DSN missing host after credentials\n", .{});
+        zig_quic_bridge.printEndpointError(error.InvalidDSN);
         return null;
     }
 
@@ -2027,8 +2026,8 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
     // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
     // first colon and ignored anything after the port.
-    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3142) catch {
-        printInvalidServerAddress(stderr, server_addr);
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3142) catch |err| {
+        printInvalidServerAddress(stderr, err);
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     const host = server_hp.host;
@@ -2371,8 +2370,8 @@ fn executeBatchQueries(
     // Parse server address
     // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
     // first colon and ignored anything after the port.
-    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch {
-        printInvalidServerAddress(stderr, server_addr);
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch |err| {
+        printInvalidServerAddress(stderr, err);
         return error.InvalidAddress;
     };
     const host = server_hp.host;
@@ -3117,8 +3116,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
 
     // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
     // first colon and ignored anything after the port.
-    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch {
-        printInvalidServerAddress(stderr, server_addr);
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch |err| {
+        printInvalidServerAddress(stderr, err);
         return error.InvalidAddress;
     };
     const host = server_hp.host;
@@ -4011,6 +4010,14 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (parsed.graph) |g| graph = g;
     }
 
+    // SONNY-6531: refuse a malformed --server / --dsn address before the
+    // REPL starts, with the MCP path's message (the REPL reported a bare
+    // "REPL error: InvalidAddress"). The address is not echoed.
+    _ = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+
     // Issue #387: Validate that if one of username/password is provided, both must be
     if ((username != null) != (password != null)) {
         std.debug.print("Error: Both --username/-U and --password/-P must be provided for authentication\n", .{});
@@ -4298,19 +4305,24 @@ const hello_decode = geode.hello_decode;
 const AuthResult = hello_decode.AuthResult;
 
 /// SONNY-6487: the one message for a `--server` address the shared grammar
-/// refuses.
-fn printInvalidServerAddress(stderr: std.Io.File, server_addr: []const u8) void {
+/// refuses. SONNY-6531: it is the MCP path's message for the same fault
+/// (`zig_quic_bridge.endpointErrorMessage`), and the address is not echoed:
+/// with `--dsn` it came from a DSN, which may carry a password.
+fn printInvalidServerAddress(stderr: std.Io.File, err: anyerror) void {
+    const why = zig_quic_bridge.endpointErrorMessage(err) orelse "Invalid Geode server address (docs/DSN.md)";
     var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: invalid server address '{s}' (expected host:port, [ipv6]:port or :port; port 1-65535, port 0 cannot be dialled)\n", .{server_addr}) catch "Error: invalid server address (expected host:port, [ipv6]:port or :port; port 1-65535, port 0 cannot be dialled)\n";
+    const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{why}) catch "Error: Invalid Geode server address (docs/DSN.md)\n";
     stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
 }
 
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool, ca_cert: ?[]const u8) !AuthResult {
-    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
-        std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
-        return error.InvalidAddress;
+    // SONNY-6531: the MCP path's message for the fault; the caller exits
+    // without a second line that echoes the address.
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return error.InvalidServerAddress;
     };
 
     // Create QUIC client connection via the shared Zig client library.
@@ -4495,6 +4507,8 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
                 std.debug.print("Error: Invalid username or password\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             },
+            // SONNY-6531: connectToServer printed what is wrong with --server.
+            error.InvalidServerAddress => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => {
                 std.debug.print("Error: Failed to connect to server '{s}': {s}\n", .{ server, @errorName(err) });
                 std.debug.print("Check server address and network connectivity\n", .{});

@@ -75,6 +75,35 @@ pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPo
     };
 }
 
+/// SONNY-6494/6531: what is wrong with a server address or endpoint DSN, in
+/// words a user can act on; null when `err` is not about the address. The
+/// one mapping for every client entry point: `geode mcp` (tools, resources,
+/// `--endpoint` at startup, through `src/mcp/client.zig`) and the CLI's
+/// `--server` / `--dsn` (`geode query`, `shell`, `auth login`, `backup
+/// create`, `restore`, `migrate run`). It covers geode-client-zig's DSN
+/// errors (v0.3.16 parses with geode's grammar, docs/DSN.md), the shared
+/// grammar's own (`parseHostPort`: `InvalidAddress`, and `InvalidPort`
+/// including geode's port-0 refusal) and the dial-time refusals. The address
+/// itself is never part of the message: a DSN may carry a password.
+pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.InvalidDSN, error.InvalidAddress => "Invalid Geode endpoint DSN: the host must be a name, an IPv4 address or a bracketed IPv6 address ([::1]), optionally followed by :port (docs/DSN.md)",
+        error.InvalidPort => "Invalid Geode endpoint DSN: the port must be 1-65535, written as 1-5 digits; port 0 cannot be dialled (docs/DSN.md)",
+        error.UnsupportedScheme => "Invalid Geode endpoint DSN: unsupported scheme; use quic:// or grpc:// (docs/DSN.md)",
+        error.InputTooLong => "Invalid Geode endpoint DSN: a credential or parameter value is too long",
+        error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
+        error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
+        else => null,
+    };
+}
+
+/// SONNY-6531: print `endpointErrorMessage(err)` as a CLI error line on
+/// stderr (a generic line for an error the mapping does not know).
+pub fn printEndpointError(err: anyerror) void {
+    const why = endpointErrorMessage(err) orelse "Invalid Geode server address (docs/DSN.md)";
+    std.debug.print("Error: {s}\n", .{why});
+}
+
 const isIpv6Literal = host_port.isIpv6Literal;
 
 /// An IPv6 literal with a `%zone`, bracketed or not.
