@@ -1660,7 +1660,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,963
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18184
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18194
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2385
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1389
@@ -1807,7 +1807,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18193
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18203
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1692
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1944
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1038
@@ -1819,7 +1819,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7650
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18205
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18215
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -3755,8 +3755,8 @@ REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,FlakePin,TESTED,,,exec
 REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,Regression,TESTED,,,execution,2026-04-16,tests/test_count_nodes_pushdown_perf.zig,1
 REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,SourceAudit,TESTED,,,execution,2026-04-16,tests/test_count_nodes_pushdown_audit.sh,5
 REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,StoreCount,TESTED,,,execution,2026-04-16,src/graph_store.zig,9671
-REQ-PERF-DELETE-005,Execution,AdapterDeleteSnapshotElision,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,140
-REQ-PERF-DELETE-006,Execution,RelationshipDeleteEndpointLookup,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,229
+REQ-PERF-DELETE-005,Execution,AdapterDeleteSnapshotElision,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,98
+REQ-PERF-DELETE-006,Execution,RelationshipDeleteEndpointLookup,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,188
 REQ-PERF-DIAG-RUNTIME-METRICS,RuntimeMetricsHelper,CounterRegistry,TESTED,,,perf,2026-04-25,tests/test_runtime_metrics.zig,7
 REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,TESTED,,,build,2026-06-11,build.zig,1200
 REQ-PERF-DRR-SCHED-001,DRRScheduler,StreamFairness,TESTED,,,transport,2026-01-30,src/transport/stream_scheduler.zig,3
@@ -3827,13 +3827,11 @@ REQ-PERF-MEMORY-OPT-001,Performance,MemoryOptimization,TESTED,,,perf,2026-01-16,
 REQ-PERF-MERGE-001,IndexRebuild,DeferredRebuild,IMPL,,,engine,2026-04-10,src/index/index_manager.zig,62
 REQ-PERF-MERGE-001,MergeThroughput,BulkInsert,BENCHED,,,perf,2026-04-09,benchmarks/benchmark_merge_throughput.zig,4
 REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,,,build,2026-04-09,build.zig,5630
-REQ-PERF-MERGE-002,Execution,IndexRebuild,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,36
-REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,98
+REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,53
 REQ-PERF-MERGE-004,Execution,AdapterMergeVarianceEnvelope,BENCHED,,,engine,2026-04-08,tests/benchmark_merge_adapter_variance.zig,16
-REQ-PERF-MERGE-006,Execution,RelationshipMergeEndpointLookup,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,186
+REQ-PERF-MERGE-006,Execution,RelationshipMergeEndpointLookup,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,144
 REQ-PERF-MERGE-007,Execution,RelationshipMergeAdjacencyEnvelope,BENCHED,,,engine,2026-04-08,tests/benchmark_merge_adapter_variance.zig,142
-REQ-PERF-MERGE-007,IndexRebuild,RebuildMutex,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,278
-REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,315
+REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig,237
 REQ-PERF-MERGE-NO-SNAPSHOT-CLONE,MergeStatementIsMutating,Regression,TESTED,,,performance,2026-06-21,tests/test_merge_query_is_mutating.zig,28
 REQ-PERF-METRICS-001,RuntimeMetrics,RegistryInit,TESTED,,,server,2026-06-11,src/server/main.zig,3129
 REQ-PERF-MMAP-001,MemoryMappedIO,Performance,TESTED,,,performance,2026-06-11,src/performance/memory_mapped_io.zig,53

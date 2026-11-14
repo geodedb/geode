@@ -2298,6 +2298,20 @@
 
 ### Fixed
 
+- **`tests/test_gap_0511_regression.zig` runs again (SONNY-6528 item 6).**
+  `tests/all_tests.zig` imported it, but nothing compiled it (it used std
+  APIs Zig 0.16 removed). Its MERGE and DELETE cases (node and relationship
+  MERGE and DELETE take no read snapshot and no label scan; DELETE finds
+  its nodes through the exact property index, MERGE through the MERGE
+  property index since GAP-0894, which the old exact-lookup count no
+  longer saw) and its `commitDeferRebuilds` case had no live counterpart;
+  they are ported and run as `zig build test-gap0511-regression`. Two cases were dropped as superseded and covered
+  by live steps: the per-transaction vector-index rebuild (an indexed write
+  is an incremental insert since geode#875:
+  `test-geode875-incremental-index`) and the sequential
+  `rebuildAdvancedIndex` case (the function is gone; the rebuild mutex is
+  covered by `test-vector-index-reader-quiescence`,
+  `test-sonny6421-index-maintenance`, `test-geode875-nonblocking-backfill`).
 - **Writes to the security graph exclude each other and its checkpoint
   (SONNY-6528 item 2).** The `__geode_security` records (users, roles,
   permissions, policies, grants, the HMAC chain root) were written with no

@@ -164,9 +164,6 @@ const _test_gql_conformance_rq = @import("test_gql_conformance_rq.zig");
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 
-// GAP-0511 fix test
-const _gap_0511 = @import("test_gap_0511_regression.zig");
-
 // dsn_graph_binding.yml race regression — createGraph idempotency under
 // concurrent callers (TOCTOU between vtable getOrCreate + in-memory put).
 const _create_graph_race = @import("test_create_graph_race_regression.zig");

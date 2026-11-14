@@ -10232,6 +10232,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6528_sw_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6528_sw_step = b.step("test-sonny6528-security-write-exclusion", "Run SONNY-6528 item 2 regression (a permission record create and a full checkpoint of __geode_security started while a role record's node create is in flight do not complete until it is done)");
     sonny6528_sw_step.dependOn(&run_sonny6528_sw_tests.step);
+    // SONNY-6528 (6): GAP-0511 adapter-backed MERGE / DELETE (no snapshot, no
+    // label scan) and commitDeferRebuilds; imported only by all_tests.zig
+    // before, so never compiled.
+    const gap0511_reg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_0511_regression.zig"), .target = target, .optimize = optimize });
+    gap0511_reg_test_mod.addImport("geode", root_mod);
+    const gap0511_reg_tests = b.addTest(.{ .root_module = gap0511_reg_test_mod });
+    const run_gap0511_reg_tests = b.addRunArtifact(gap0511_reg_tests);
+    shardDep(test_step, &run_gap0511_reg_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0511_reg_step = b.step("test-gap0511-regression", "Run GAP-0511 regressions (node and relationship MERGE and DELETE resolve their nodes through the exact property index with no read snapshot and no label scan; commitDeferRebuilds leaves queued advanced-index rebuilds for the separate flush)");
+    gap0511_reg_step.dependOn(&run_gap0511_reg_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.
