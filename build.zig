@@ -8323,6 +8323,23 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step(spec[1], spec[2]).dependOn(&run_tests.step);
     }
+    // SONNY-6550: geode.dsn_credentials is geode-client-zig's config.redact
+    // (one implementation, exact-size decoding), connect refuses port 0 on
+    // a Config built in code, endpointErrorMessage names a timeout and a
+    // fragment, and --dsn decodes its graph path.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6550_dsn_rules.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6550-dsn-rules", "Run SONNY-6550 regression (geode.dsn_credentials is geode-client-zig's config.redact and decodes a credential into one exact-size allocation; a client Config built in code with port 0 is refused by connect; endpointErrorMessage names an out-of-range timeout and a DSN fragment; geode query --dsn percent-decodes the graph path against a real server)").dependOn(&run_tests.step);
+    }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig (std-only).
     {
         const dsn_mod = b.createModule(.{ .root_source_file = b.path("src/client/dsn_credentials.zig"), .target = target, .optimize = optimize });

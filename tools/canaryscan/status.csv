@@ -5313,6 +5313,7 @@ REQ-SONNY-6544-DSN-USERINFO,DSN credentials,RedactionTable,TESTED,tests/test_son
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,AbsoluteHomeOnly,TESTED,src/cli/security/home_dir.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,RelativeHomeRefused,TESTED,tests/test_sonny6544_relative_home.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-MCP-COMPLETION,MCPCompletion,CompleteResultShape,TESTED,tests/test_sonny6544_mcp_completion.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
+REQ-SONNY-6550-DSN-RULES,DSN credentials,OneImplementation,TESTED,tests/test_sonny6550_dsn_rules.zig,tests/test_sonny6550_dsn_rules.zig,,cli,2026-11-14
 REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE,DataDirLock,RelativeXdgAndHomeIgnored,TESTED,tests/test_sonny6551_relative_state_home.zig,tests/test_sonny6551_relative_state_home.zig,,storage,2026-11-14
 REQ-SONNY-6551-DSN-QUERY-CREDENTIALS,DSN credentials,QueryParameterCredentials,TESTED,tests/test_sonny6551_dsn_query_credentials.zig,tests/test_sonny6551_dsn_query_credentials.zig,,cli,2026-11-14
 REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,AbsoluteHistoryPathOnly,TESTED,src/client/repl/repl_config.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14

@@ -137,6 +137,34 @@ fn shell(dsn: []const u8) !Run {
     }, "RETURN 41 + 1 AS x;\n", 60);
 }
 
+/// SONNY-6550: `geode mcp --stdio` with `dsn` as its endpoint, answering a
+/// `tools/call query` (the session ends when stdin closes). The answer to
+/// the query is `mcp_answer`.
+fn mcpQuery(dsn: []const u8) !Run {
+    return runGeode(&.{ geode_test_bin.geode_exe, "mcp", "--stdio", "--no-auth", "--endpoint", dsn },
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"sonny6550-dsn","version":"1.0"}}}
+        \\{"jsonrpc":"2.0","method":"notifications/initialized"}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"query":"RETURN 6550 * 7 AS x"}}}
+        \\
+    , 60);
+}
+
+const mcp_answer = "45850";
+
+fn expectMcpAnswered(r: Run, label: []const u8) !void {
+    if (r.code == null or r.code.? != 0 or !r.has(mcp_answer)) {
+        r.dump(label);
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn expectMcpRefused(r: Run, label: []const u8) !void {
+    if (r.has(mcp_answer) or !r.has("\"isError\":true")) {
+        r.dump(label);
+        return error.TestUnexpectedResult;
+    }
+}
+
 fn expectAnswered(r: Run, label: []const u8) !void {
     if (r.code == null or r.code.? != 0 or !r.has("42")) {
         r.dump(label);
@@ -236,6 +264,92 @@ test "SONNY-6551 (5): a userinfo credential takes precedence over the query para
         defer r.deinit();
         try r.expectNoCredential("query, wrong query password");
         try expectRefused(r, "query, wrong query password");
+    }
+    // SONNY-6550: an empty userinfo user name counts as absent, so the
+    // query parameter's user name is used with the userinfo password.
+    {
+        const dsn = try std.fmt.allocPrint(a, "quic://:" ++ password_encoded ++ "@{s}?user=geode", .{server.addr()});
+        defer a.free(dsn);
+        const r = try query(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("query, empty userinfo user");
+        try expectAnswered(r, "query, empty userinfo user");
+    }
+}
+
+test "SONNY-6550: geode shell gives a userinfo credential precedence over the query parameter" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var server = try startServer();
+    defer server.stop();
+    const a = testing.allocator;
+
+    {
+        const dsn = try std.fmt.allocPrint(a, "quic://geode:" ++ password_encoded ++ "@{s}?password=" ++ wrong_encoded, .{server.addr()});
+        defer a.free(dsn);
+        const r = try shell(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("shell, userinfo over query");
+        try expectAnswered(r, "shell, userinfo over query");
+    }
+    {
+        const dsn = try std.fmt.allocPrint(a, "quic://geode:" ++ wrong_encoded ++ "@{s}?password=" ++ password_encoded, .{server.addr()});
+        defer a.free(dsn);
+        const r = try shell(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("shell, wrong userinfo");
+        try expectRefused(r, "shell, wrong userinfo");
+    }
+}
+
+// SONNY-6550: `geode mcp --endpoint` hands the DSN to geode-client-zig's
+// parseDSN, which (v0.3.17, src/config.zig parseQueryParams) lets a
+// user=/pass= query parameter overwrite the userinfo. geode re-applies the
+// userinfo, so the endpoint follows docs/DSN.md like --dsn does.
+test "SONNY-6550: the geode mcp endpoint logs in with DSN query-parameter credentials" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var server = try startServer();
+    defer server.stop();
+    const a = testing.allocator;
+
+    const forms = [_][]const u8{
+        "{s}?insecure=true&user=geode&pass=" ++ password_encoded,
+        "quic://{s}/default?insecure=true&username=geode&password=" ++ password_encoded,
+        "quic://geode@{s}?insecure=true&pass=" ++ password_encoded,
+        "quic://:" ++ password_encoded ++ "@{s}?insecure=true&user=geode",
+    };
+    inline for (forms) |form| {
+        const dsn = try std.fmt.allocPrint(a, form, .{server.addr()});
+        defer a.free(dsn);
+        const r = try mcpQuery(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("mcp " ++ form);
+        try expectMcpAnswered(r, "mcp " ++ form);
+    }
+}
+
+test "SONNY-6550: in the geode mcp endpoint a userinfo credential takes precedence over the query parameter" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var server = try startServer();
+    defer server.stop();
+    const a = testing.allocator;
+
+    // Right userinfo, wrong query password and user: the userinfo wins.
+    {
+        const dsn = try std.fmt.allocPrint(a, "quic://geode:" ++ password_encoded ++ "@{s}?insecure=true&user=nobody&password=" ++ wrong_encoded, .{server.addr()});
+        defer a.free(dsn);
+        const r = try mcpQuery(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("mcp, userinfo over query");
+        try expectMcpAnswered(r, "mcp, userinfo over query");
+    }
+    // Wrong userinfo, right query password: the userinfo still wins.
+    {
+        const dsn = try std.fmt.allocPrint(a, "quic://geode:" ++ wrong_encoded ++ "@{s}?insecure=true&pass=" ++ password_encoded, .{server.addr()});
+        defer a.free(dsn);
+        const r = try mcpQuery(dsn);
+        defer r.deinit();
+        try r.expectNoCredential("mcp, wrong userinfo");
+        try expectMcpRefused(r, "mcp, wrong userinfo");
     }
 }
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T08:19:27.343005003Z",
+  "generated_at": "2026-11-14T08:34:29.638022503Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83566,6 +83566,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6550-DSN-RULES",
+      "features": [
+        {
+          "feature": "DSN credentials",
+          "aspect": "OneImplementation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6550_dsn_rules.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6550_dsn_rules.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE",
       "features": [
         {
@@ -90872,7 +90891,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4259
+      "TESTED": 4260
     },
     "by_aspect": {
       "2PC": 3,
@@ -93219,6 +93238,7 @@
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,
+      "OneImplementation": 1,
       "OneNumericEqualityRule": 1,
       "OneReadPolicyForNodesAndEdges": 1,
       "OneRequestContextForQuicAndGrpc": 1,

@@ -26,6 +26,10 @@ const test_scratch = @import("test_scratch.zig");
 const host_msg = "Invalid Geode endpoint DSN: the host must be";
 const port_msg = "Invalid Geode endpoint DSN: the port must be 1-65535";
 const scheme_msg = "Invalid Geode endpoint DSN: unsupported scheme";
+// SONNY-6550: the same messages as the MCP path.
+const pct_msg = "Invalid Geode endpoint DSN: a % must start a %XX escape";
+const delim_msg = "Invalid Geode endpoint DSN: an @ follows the host";
+const fragment_msg = "Invalid Geode endpoint DSN: a fragment";
 
 const generic_msgs = [_][]const u8{
     "Invalid server address format",
@@ -176,6 +180,13 @@ test "SONNY-6531: query and shell name what is wrong with --dsn without echoing 
         .{ .addr = "quic://admin:s3cret-pw@[::1]3141/g", .expect = host_msg },
         .{ .addr = "quic://admin:s3cret-pw@localhost:0", .expect = port_msg },
         .{ .addr = "http://admin:s3cret-pw@localhost:3141", .expect = scheme_msg },
+        // SONNY-6550: the client library's rules (docs/DSN.md). A fragment
+        // was ignored, and the graph path was sent undecoded.
+        .{ .addr = "quic://admin:s3cret-pw@localhost:3141/g#s3cret-pw", .expect = fragment_msg },
+        .{ .addr = "quic://admin:s3cret-pw@localhost:3141/50%off", .expect = pct_msg },
+        .{ .addr = "quic://admin:s3cret-pw%G0@localhost:3141", .expect = pct_msg },
+        .{ .addr = "quic://localhost:3141?user=admin&pass=s3cret-pw%", .expect = pct_msg },
+        .{ .addr = "quic://admin:s3cret/pw@localhost:3141", .expect = delim_msg },
     };
     const dsn_commands = [_][]const []const u8{
         &.{ "query", "--dsn", "@ADDR", "--insecure-tls-skip-verify", "--no-saved-session", "--timeout", "5", "RETURN 1 AS x" },
