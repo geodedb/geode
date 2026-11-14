@@ -2438,6 +2438,19 @@
 
 ### Fixed
 
+- **A WITH takes SKIP / OFFSET before LIMIT (SONNY-6555 item 6).** ISO/IEC
+  39075:2024 14.9 `<order by and page statement>` puts the offset clause
+  (`OFFSET` or `SKIP`, 16.19) before the limit clause (16.18). A RETURN
+  accepted `ORDER BY s SKIP 1 LIMIT 2`, but a WITH, a leading WITH, a
+  UNION's trailing page and a FOR's RETURN refused it with 42000: each read
+  LIMIT, then OFFSET, and nothing after. Every page clause now goes through
+  one parser routine that takes the standard order. `LIMIT n OFFSET m` is
+  kept as a documented Geode extension (the same page; docs/GQL_COMPLIANCE.md
+  now shows the standard order); a repeated LIMIT or OFFSET is 42000. The
+  ISO conformance case named "17.4: OFFSET" was written in the extension
+  order; it now reads the standard order and the extension has its own
+  case. Regression: `zig build test-sonny6555-page-clause-order`,
+  `zig build test-iso-conformance`.
 - **`length(NULL)` and `size(NULL)` are NULL, and a string's length counts
   characters (SONNY-6555 item 4, BREAKING: results change).** ISO/IEC
   39075:2024 20.22 GR 1 b), 3 b) and 4 e): the length or cardinality of the

@@ -65,8 +65,8 @@ test "SONNY-6555 item 6: every page clause takes OFFSET/SKIP before LIMIT (ISO/I
         "WITH 1 AS y RETURN y AS x UNION RETURN 2 AS x ORDER BY x SKIP 1 LIMIT 1",
         // A RETURN (already accepted).
         "MATCH (n) RETURN n.k AS s ORDER BY s SKIP 1 LIMIT 2",
-        // FOR.
-        "FOR x IN [1, 2, 3] OFFSET 1 LIMIT 1 RETURN x",
+        // A FOR's RETURN.
+        "FOR x IN [1, 2, 3] RETURN x ORDER BY x OFFSET 1 LIMIT 1",
     };
     for (standard) |src| try expectParses(src);
 }

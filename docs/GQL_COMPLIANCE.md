@@ -1,13 +1,13 @@
 # GQL ISO/IEC 39075:2024 Compliance Guide
 
-Geode passes **106/106 cases of its ISO/IEC 39075:2024 GQL conformance suite** (parse-only scope) (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
+Geode passes **109/109 cases of its ISO/IEC 39075:2024 GQL conformance suite** (parse-only scope) (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
 
 ## 📊 Compliance Overview
 
-- **Conformance suite**: 106/106 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
+- **Conformance suite**: 109/109 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
 - **Scope**: this is the curated conformance suite, not exhaustive ISO coverage; see residual limits in this guide
-- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 106/106 verified 2026-11-13, the NEXT cases included). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
+- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 109/109 verified 2026-11-14, the NEXT and SONNY-6555 page-clause cases included). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
 - **Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
 
 ## ✅ Fully Supported Features
@@ -255,11 +255,13 @@ WITH person.name AS name, count(person) AS count
 WHERE count > 1
 RETURN name, count
 
--- Ordering and pagination
+-- Ordering and pagination (14.9: the offset clause, OFFSET or SKIP,
+-- before the limit clause; also after a WITH, a UNION and a FOR's RETURN)
 MATCH (n:Person)
 RETURN n.name, n.age
 ORDER BY n.age DESC, n.name ASC
-LIMIT 10 OFFSET 20
+OFFSET 20 LIMIT 10
+-- Geode extension: LIMIT 10 OFFSET 20 (limit first) means the same page.
 
 -- Grouping and aggregation
 MATCH (person:Person)-[:WORKS_AT]->(company:Company)
@@ -612,4 +614,4 @@ All core GQL features are now fully implemented. Future work focuses on:
 3. **Extended Compliance**: Support for future GQL standard extensions
 4. **GPU Acceleration**: Hardware-accelerated graph traversal operations
 
-Geode's 106/106 ISO conformance-suite pass rate (parse-only scope) and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.
+Geode's 109/109 ISO conformance-suite pass rate (parse-only scope) and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.
