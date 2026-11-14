@@ -5321,6 +5321,7 @@ REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,CrossGraphListingsFailClos
 REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,Regression,TESTED,tests/test_sonny6528_quarantine_in_process.zig,tests/test_sonny6528_quarantine_in_process.zig,,storage,2026-11-14
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,SecurityGraphWriteLock,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,Regression,TESTED,tests/test_sonny6528_security_write_exclusion.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6531-MCP-OWNERSHIP,MCPResultOwnership,AllocatorOwnedHandlerResults,TESTED,src/mcp/server.zig,tests/test_sonny6531_mcp_ownership.zig,,mcp,2026-11-14
 REQ-SONNY-6531-MCP-OWNERSHIP,MCPResultOwnership,EveryHandlerResultFreed,TESTED,tests/test_sonny6531_mcp_ownership.zig,tests/test_sonny6531_mcp_ownership.zig,,mcp,2026-11-14
 REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,DecideHoldsReplicatedApplyMutex,TESTED,src/distributed/txn_coordinator.zig,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,,distributed,2026-11-14
 REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,Regression,TESTED,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,,distributed,2026-11-14

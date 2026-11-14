@@ -2441,6 +2441,21 @@
   `{"completion":{"values":[],"total":0,"hasMore":false}}`. Regression
   (through `mcp.Server.processMessage`): `zig build
   test-sonny6544-mcp-completion`.
+- **`geode mcp` no longer leaks every `resources/read` response (SONNY-6531
+  item 1).** The pinned `mcp` library freed only `tools/call` results, so
+  each resource document, and the JSON it stringified for `prompts/get`
+  arguments and `completion/complete` params, stayed allocated for the life
+  of the server. `mcp` is pinned at v0.1.22, which frees the result of
+  every handler callback with the allocator given to `Server.init`; geode's
+  handlers (`src/mcp/server.zig`) now all return bytes from that allocator,
+  copying the fixed listings, prompts and empty CompleteResult instead of
+  returning literals (an invalid free under the new contract). Regression
+  (every method through `mcp.Server.processMessage` under
+  `std.testing.allocator`, with no backend, an undialable DSN, a dead
+  endpoint and a real `geode serve`, plus a real `geode mcp --stdio`
+  session): `zig build test-sonny6531-mcp-ownership`; `test-gap0516`,
+  `test-sonny6494-mcp-dsn-errors` and `test-sonny6544-mcp-completion` now
+  run their resource and completion cases leak-checked.
 - **No test step spawns `./zig-out/bin/geode` any more, and configuration
   fails if one does (SONNY-6535).** That path holds whatever the last install
   left (built from another commit or optimize mode, or nothing: the test

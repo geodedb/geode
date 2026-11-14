@@ -228,10 +228,25 @@ pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 // =============================================================================
 // MCP Handler Implementations
 // =============================================================================
+//
+// SONNY-6531 result ownership (mcp v0.1.22, Handler "Result Ownership"):
+// every callback that returns `[]const u8` hands the slice to the server,
+// which frees it with the allocator passed to `mcp.Server.init`, after the
+// response is built, for a notification, and when building the response
+// fails. `GeodeMcpServer.init` passes `self.allocator` there, so every
+// handler below returns bytes from `self.allocator`: fixed text goes through
+// `ownedCopy`, never a literal (an invalid free). A callback that returns an
+// error hands nothing over.
+// CANARY: REQ=REQ-SONNY-6531-MCP-OWNERSHIP; FEATURE="MCPResultOwnership"; ASPECT=AllocatorOwnedHandlerResults; STATUS=TESTED; TEST=tests/test_sonny6531_mcp_ownership.zig; OWNER=mcp; UPDATED=2026-11-14
+
+/// A copy of `text` from the allocator the mcp server frees results with.
+fn ownedCopy(ctx: ?*anyopaque, text: []const u8) ![]const u8 {
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return self.allocator.dupe(u8, text);
+}
 
 fn listToolsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return tools.listTools(cursor);
+    return ownedCopy(ctx, tools.listTools(cursor));
 }
 
 fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, cancel: *const mcp.CancelToken) anyerror![]const u8 {
@@ -244,8 +259,7 @@ fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, ca
 }
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return resources.listResources(cursor);
+    return ownedCopy(ctx, resources.listResources(cursor));
 }
 
 fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
@@ -254,8 +268,7 @@ fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
 }
 
 fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
-    _ = ctx;
-    return resources.listResourceTemplates();
+    return ownedCopy(ctx, resources.listResourceTemplates());
 }
 
 // GAP-0516: Resource subscriptions are intentionally unsupported.
@@ -271,7 +284,7 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
 // "this server does not implement this method" signal. (Previously
 // we returned `error.NotImplemented`, which the MCP library maps to
 // -32603 InternalError — misleading, because it suggests a server
-// bug rather than a missing capability. See mcp.zig:2795–2807.)
+// bug rather than a missing capability. See mcp.zig:2950–2962 in v0.1.22.)
 //
 // Clients that need change tracking should poll via `readResource`.
 // When Geode gains a graph-topology event producer, swap these
@@ -279,9 +292,9 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
 //
 // KNOWN ADVERTISEMENT CAVEAT (documented, tested in
 // tests/test_gap0516_mcp_capabilities.zig and docs/MCP_SERVER.md):
-// the pinned `mcp` library (v0.1.7) hardcodes
+// the pinned `mcp` library (v0.1.22) hardcodes
 // `"resources":{"subscribe":true,...}` in its `initialize` response
-// (mcp.zig buildInitialize ~3127) and exposes no ServerOptions field
+// (mcp.zig handleInitialize ~3193) and exposes no ServerOptions field
 // to override it. Geode therefore cannot make the advertised
 // capability string match the handler behaviour without forking the
 // dependency. The authoritative, runtime-truthful contract is the
@@ -306,13 +319,11 @@ fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
 }
 
 fn listPromptsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return prompts.listPrompts(cursor);
+    return ownedCopy(ctx, prompts.listPrompts(cursor));
 }
 
 fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return prompts.getPrompt(name, args_json);
+    return ownedCopy(ctx, prompts.getPrompt(name, args_json));
 }
 
 // GAP-0516: completion/complete is optional per MCP spec §4.4.
@@ -332,10 +343,8 @@ fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) 
 pub const empty_completion = "{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}";
 
 fn completeHandler(ctx: ?*anyopaque, params_json: []const u8) anyerror![]const u8 {
-    _ = ctx;
     _ = params_json;
-    // SONNY-6531 re-pin: mcp v0.1.21 dispatches completion/complete with owned=false (never freed), so a literal is right here; v0.1.22 frees it (owned=true): return `self.allocator.dupe(u8, empty_completion)` with `self` = ctx as *GeodeMcpServer.
-    return empty_completion;
+    return ownedCopy(ctx, empty_completion);
 }
 
 // GAP-0516: logging/setLevel is optional per MCP spec §7.2.
@@ -455,10 +464,36 @@ test "GAP-0516: unsubscribeResourceHandler returns MethodNotFound (paired with s
 }
 
 test "GAP-0516: completeHandler returns an empty CompleteResult (SONNY-6544)" {
-    const result = try completeHandler(null, "{\"ref\":{\"type\":\"ref/prompt\",\"name\":\"explore_graph\"},\"argument\":{\"name\":\"graph\",\"value\":\"\"}}");
+    const allocator = std.testing.allocator;
+    const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none });
+    defer server.deinit();
+    // SONNY-6531: the result is the caller's (the mcp server frees it).
+    const result = try completeHandler(server, "{\"ref\":{\"type\":\"ref/prompt\",\"name\":\"explore_graph\"},\"argument\":{\"name\":\"graph\",\"value\":\"\"}}");
+    defer allocator.free(result);
     // A CompleteResult object, not a bare array (the dispatch-level
     // contract is tests/test_sonny6544_mcp_completion.zig).
     try std.testing.expectEqualStrings("{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}", result);
+}
+
+test "SONNY-6531: every handler returns a result from the server's allocator" {
+    const allocator = std.testing.allocator;
+    const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none });
+    defer server.deinit();
+    // std.testing.allocator panics on freeing a literal and fails on a leak.
+    const results = [_][]const u8{
+        try listToolsHandler(server, null),
+        try listResourcesHandler(server, null),
+        try listResourceTemplatesHandler(server),
+        try listPromptsHandler(server, null),
+        try getPromptHandler(server, "find_nodes", null),
+        try getPromptHandler(server, "no_such_prompt", "{}"),
+        try readResourceHandler(server, "unknown://resource"),
+        try completeHandler(server, "{}"),
+    };
+    for (results) |r| {
+        try std.testing.expect(r.len > 0);
+        allocator.free(r);
+    }
 }
 
 test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {

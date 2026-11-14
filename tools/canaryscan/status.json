@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:14:10.579871327Z",
+  "generated_at": "2026-11-14T07:31:22.460141673Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83527,6 +83527,20 @@
       "features": [
         {
           "feature": "MCPResultOwnership",
+          "aspect": "AllocatorOwnedHandlerResults",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6531_mcp_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "MCPResultOwnership",
           "aspect": "EveryHandlerResultFreed",
           "status": "TESTED",
           "files": [
@@ -91054,7 +91068,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4264
+      "TESTED": 4265
     },
     "by_aspect": {
       "2PC": 3,
@@ -91163,6 +91177,7 @@
       "AllShortestPathsFilter": 1,
       "AllShortestPathsIsolation": 1,
       "AllocOnStatementShard": 1,
+      "AllocatorOwnedHandlerResults": 1,
       "AllocatorUsage": 1,
       "AllowPolicyScope": 1,
       "AlterPolicy": 1,

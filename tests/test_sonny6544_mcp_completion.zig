@@ -71,10 +71,10 @@ test "SONNY-6544: completion/complete without params answers a CompleteResult" {
 }
 
 test "SONNY-6544: completion/complete for a prompt argument answers a CompleteResult" {
-    // The pinned mcp library (v0.1.21) stringifies `params` for this method
-    // and never frees it (fixed in v0.1.22, SONNY-6531), so this server runs
-    // on smp_allocator; the no-params test above runs leak-checked.
-    const allocator = std.heap.smp_allocator;
+    // Leak-checked: since mcp v0.1.22 (SONNY-6531) the server frees the
+    // `params` JSON it stringifies for this method and the handler result
+    // (v0.1.21 leaked the params, so this ran on smp_allocator).
+    const allocator = testing.allocator;
     const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none });
     defer server.deinit();
     try handshake(server, allocator);
@@ -88,6 +88,6 @@ test "SONNY-6544: completion/complete for a prompt argument answers a CompleteRe
     for (requests) |req| {
         const resp = (try server.server.processMessage(req)) orelse return error.UnexpectedNullResponse;
         defer allocator.free(resp);
-        try expectCompleteResult(testing.allocator, resp);
+        try expectCompleteResult(allocator, resp);
     }
 }

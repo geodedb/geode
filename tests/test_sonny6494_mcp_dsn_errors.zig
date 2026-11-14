@@ -86,12 +86,10 @@ test "SONNY-6494: MCP tools name what is wrong with a malformed endpoint DSN" {
 }
 
 test "SONNY-6494: MCP resources name what is wrong with a malformed endpoint DSN" {
-    // Not the leak-checking allocator: the pinned mcp library (v0.1.21,
-    // mcp.zig handleMethod "resources/read") returns every resource result
-    // with `.owned = false`, so the handler's response is never freed. That
-    // leak is upstream and independent of the DSN (the same as the
-    // tools/call one fixed in mcp v0.1.12).
-    const allocator = std.heap.smp_allocator;
+    // Leak-checked: since mcp v0.1.22 (SONNY-6531) the server frees every
+    // resources/read result (v0.1.21 leaked each one, so this ran on
+    // smp_allocator).
+    const allocator = std.testing.allocator;
     for (cases) |c| {
         const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none, .geode_endpoint = c.dsn });
         defer server.deinit();
