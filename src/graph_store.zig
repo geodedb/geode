@@ -4354,11 +4354,13 @@ pub const GraphStore = struct {
         return hydrateAdjFromEngine(adapter, allocator, gs_slot.graph_name, gs_slot.slot_id, .incoming);
     }
 
-    const AdjDir = enum { outgoing, incoming };
+    pub const AdjDir = enum { outgoing, incoming };
 
     /// Shared hydrate body for both directions. Owns the returned AdjList (its
     /// `list` backing array + `graph` dupe are freed by freeAdjListValue).
-    fn hydrateAdjFromEngine(
+    /// Public for its allocation-failure regression
+    /// (tests/test_sonny6540_adjacency_hydrate_oom.zig).
+    pub fn hydrateAdjFromEngine(
         adapter: *graph_storage_adapter.StorageAdapter,
         allocator: std.mem.Allocator,
         graph_name: []const u8,
