@@ -2762,6 +2762,90 @@
   1,000,000-element literal is still refused with 54000. Regression:
   `zig build test-sonny6540-vector-literal-parse` (`test-eng3922` is green
   again).
+- **A refused graph answers every statement alike over QUIC, gRPC and the
+  request handlers called in process (SONNY-6547 item 1).** Against a real
+  server, QUIC and gRPC already agreed on all 85 shapes of the regression (a
+  graph quarantined by zeroed node pages, the default one and a second one,
+  and a graph whose shard label dictionaries diverged; every read and write
+  shape of test-sonny6523-quarantine-fail-closed, first statement after a
+  restart and again): a server always installs a row-security engine, so
+  its reads go through a read snapshot that hydrates the graph first. The
+  gRPC handler called in process with no row-security engine (embedded
+  use) serves reads engine-direct and differed on 45 of 85 answers: 24 read
+  the damaged graph and answered rows (a quarantine fail-open; the
+  transport gate hydrated a graph only for a change), and 21 failed the
+  call with a handler error (the node-scan stream returned every error but
+  a limit out of the handler; the QUIC connection loop answers such an
+  error with the generic "58000 Internal Server Error"). Both transports'
+  gates now hydrate for a read too, as the executor's does (SONNY-6541
+  item 3); the node-scan stream answers a storage-integrity refusal as
+  itself; and an error a handler leaves unanswered is answered the same way
+  by both (`proto_util.unhandledErrorInfo`: a limit or a storage-integrity
+  refusal as itself, anything else 58000 "Internal Server Error"; gRPC
+  failed the call). Regression: `zig build test-sonny6547-transport-parity`
+  (real server, QUIC and gRPC, plus the gRPC handler in process). The
+  regression's gRPC client opens one connection per Execute: the test
+  client (`grpc_query_transport`) sends every Execute on HTTP/2 stream 3.
+- **SHOW GRAPHS fails when its graph listing fails (SONNY-6547 item 2).** It
+  answered an empty graph list instead (`listGraphNames(...) catch null`),
+  the defect SONNY-6541 item 4 fixed for SHOW TABLES: forced in the
+  regression by failing each of the statement's allocations in turn, two
+  of which answered zero rows. The same sweep then crashed:
+  `StorageAdapter.listGraphNames` and `GraphStore.listGraphNames` freed a
+  graph name twice when an allocation after it was added to their
+  de-duplication set failed (the insert's `errdefer` and the set's
+  `defer`); the set now borrows the names. The other listing calls of the
+  SHOW / `db.*` handlers already propagate their errors (sweep in the
+  SONNY-6547 report). Regression: `zig build
+  test-sonny6547-show-graphs-errors`.
+- **A Raft `drop_graph` apply refused because the graph is in use no longer
+  reports the graph dropped (SONNY-6547 item 3).** `GraphStore.dropGraph`
+  refuses (`ObjectInUse`) a caller that holds the graph's read lock or a
+  graph an open session transaction changed; the apply logged that, then
+  logged the graph as dropped and returned success, so the entry counted as
+  applied while the node kept the graph (every node replaying the log later
+  drops it). It now fails: the Raft node counts and logs a committed entry
+  not applied. The reported trigger, a one-voter cluster applying a drop
+  on the proposer's own thread while it holds the graph's read lock, does
+  not occur with the pinned raft library: a propose only appends, and the
+  entry commits and applies on the next tick or step, on a thread that
+  holds no graph lock; the regression runs it on a real one-voter cluster
+  (the apply waits for the proposer's read lock, then drops the graph).
+  Nothing in the server proposes a `schema_change` today (item 6).
+  Regression: `zig build test-sonny6547-single-voter-drop`.
+- **A replicated write's first hydration of its graph no longer stops the
+  Raft node (SONNY-6547 item 4).** A Raft apply runs under the node's
+  `inner_mutex`; the graph-mutation apply (and the 2PC decide apply)
+  hydrated its graph there, and a first hydration persists its products
+  with a checkpoint of the graph, which waits up to 5 s for the graph's
+  lock. With a local reader holding that lock the leader's `inner_mutex`
+  was unavailable for 6.3 s (measured: no tick, so no heartbeat, no inbound
+  message, no propose; in a real cluster longer than an election timeout).
+  The leader now hydrates an entry's graph before it proposes it, without
+  `inner_mutex` (`raft_apply.prehydrateForApply` from
+  `ClusterCoordinator.proposeWrite`), and the apply paths hydrate without
+  the completion persist (`GraphStore.ensureGraphHydratedForReplicatedApply`;
+  the next full checkpoint persists the products). Apply order is
+  unchanged. Measured after: 117-129 ms longest wait (three runs) for `inner_mutex`.
+  Remaining: on a follower, or for entries replayed after a restart, the
+  hydration scan itself (no lock wait) still runs under `inner_mutex`.
+  Regression: `zig build test-sonny6547-apply-hydration-stall`.
+- **Docs no longer claim two-phase commit or replicated DDL in cluster mode
+  (SONNY-6547 item 6).** The only server code that proposes a Raft entry is
+  `statement_proposals.zig` (through `ClusterCoordinator.proposeWrite`), and
+  it proposes `graph_mutation` entries only: no `schema_change`,
+  `config_change`, `snapshot_pointer`, `txn_prepare` or `txn_decide`. CREATE
+  / DROP GRAPH, index, constraint, policy, auth and tenant DDL are refused in
+  cluster mode (`cluster.gateUnreplicatedWrite`). The apply arms for those
+  entries (`raft_apply.zig`, `TxnCoordinator`) stay, as the tested receiving
+  side of future features, and say so. `src/distributed/twophase.zig` is
+  not compiled into the `geode` binary (no symbol of it in a Debug build;
+  only `src/lib.zig`'s re-export and tests reference it); its removal waits
+  for the `tests/all_tests.zig` cleanup (SONNY-6542), which imports its
+  unit test. Corrected: CLAUDE.md (Phase 5), docs/FEATURES_OVERVIEW.md,
+  docs/CURRENT_ARCHITECTURE.md, docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md,
+  docs/KNOWN_TEST_ISSUES.md (the coordinator IS instantiated in cluster
+  mode) and src/distributed/README.md.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

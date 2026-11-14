@@ -164,27 +164,28 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // included in the result. When principal is null (legacy/test paths)
             // all graphs are returned to preserve backward compatibility.
             const gps_mod = @import("../security/gps.zig");
-            const storage_graphs = read_store.listGraphNames(allocator) catch null;
-            if (storage_graphs) |names| {
-                defer {
-                    for (names) |name| allocator.free(name);
-                    allocator.free(names);
+            // CANARY: REQ=REQ-SONNY-6547-SHOW-GRAPHS-ERRORS; FEATURE="SHOW GRAPHS"; ASPECT=ListingErrorPropagates; STATUS=TESTED; TEST=tests/test_sonny6547_show_graphs_errors.zig; OWNER=execution; UPDATED=2026-11-14
+            // SONNY-6547 (2): a listing that fails fails the statement; it
+            // answered no rows (`catch null`), as SHOW TABLES did (SONNY-6541).
+            const names = try read_store.listGraphNames(allocator);
+            defer {
+                for (names) |name| allocator.free(name);
+                allocator.free(names);
+            }
+            for (names) |name| {
+                // GPS filter: skip graphs the principal cannot bind
+                if (context.principal) |princ| {
+                    const req_bind = gps_mod.DecisionRequest{
+                        .principal = princ,
+                        .action = .bind_graph,
+                        .resource = .{ .graph = name },
+                    };
+                    const decision = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
+                    if (decision.kind != .allow) continue;
                 }
-                for (names) |name| {
-                    // GPS filter: skip graphs the principal cannot bind
-                    if (context.principal) |princ| {
-                        const req_bind = gps_mod.DecisionRequest{
-                            .principal = princ,
-                            .action = .bind_graph,
-                            .resource = .{ .graph = name },
-                        };
-                        const decision = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
-                        if (decision.kind != .allow) continue;
-                    }
-                    var row = try allocator.alloc(Value, 1);
-                    row[0] = Value{ .Str = try allocator.dupe(u8, name) };
-                    try rows_list.append(allocator, row);
-                }
+                var row = try allocator.alloc(Value, 1);
+                row[0] = Value{ .Str = try allocator.dupe(u8, name) };
+                try rows_list.append(allocator, row);
             }
         },
         .constraints => {

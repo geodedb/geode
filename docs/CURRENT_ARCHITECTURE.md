@@ -99,7 +99,7 @@ src/keys/           - Key management
 **Distributed Systems**:
 
 ```
-src/distributed/    - Raft consensus, cluster management, 2PC (federation code removed 2026-11-11, SONNY-6279)
+src/distributed/    - Raft consensus, cluster management, replication of the documented write slice (no replicated DDL and no 2PC: nothing proposes schema_change or txn_prepare/txn_decide, SONNY-6547; federation code removed 2026-11-11, SONNY-6279)
 src/federation/     - Uncompiled router stub that returns `unsupported`
 ```
 

@@ -23,7 +23,7 @@ This document provides the implementation status for Geode as of October 2025, w
 | Query Planner | Implemented (heuristic + index selection; CBO cost estimates are advisory) | src/planner/; EXPLAIN estimate caveats per GAP-0867 resolution |
 | Storage Engine | Implemented | MVCC, WAL, src/storage/; per-step tests in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) |
 | Index System | Implemented | 6 index types including HNSW |
-| Transaction Management | Implemented (single-node; distributed 2PC wire is protobuf-gated) | Isolation-level tests; `test-txn-coordinator-2pc` self-skips pending protobuf union support |
+| Transaction Management | Implemented (single-node; no distributed transactions: nothing proposes a 2PC `txn_prepare`/`txn_decide` entry, SONNY-6547) | Isolation-level tests; `test-txn-coordinator-2pc` self-skips pending protobuf union support |
 
 ### Security Features
 

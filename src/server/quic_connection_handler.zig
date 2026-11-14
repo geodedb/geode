@@ -3926,7 +3926,9 @@ fn runStreamQueryLoopWithReader(
                 const dur_s = duration.seconds();
                 om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
                 log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
+                // SONNY-6547 (1): as gRPC answers it (`unhandledErrorInfo`).
+                const info = proto_util.unhandledErrorInfo(err);
+                sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
                 continue;
             };
             const dur_s = duration.seconds();
@@ -4589,7 +4591,8 @@ fn processFirstStreamPacket(
             const dur_s = duration.seconds();
             om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {};
+            const info = proto_util.unhandledErrorInfo(err); // SONNY-6547 (1)
+            sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{}) catch {};
             return true;
         };
         const dur_s = duration.seconds();
@@ -7923,7 +7926,10 @@ fn handleClientMessage(
             if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
                 query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
             {
-                if (graph_store.programQuarantineError(gpa, &.{lock_graph}, is_mutation)) |qerr| {
+                // SONNY-6547 (1): a read is hydrated first too (see the gRPC
+                // handler's gate): served engine-direct, it has no read
+                // snapshot to find the damage.
+                if (graph_store.programQuarantineError(gpa, &.{lock_graph}, true)) |qerr| {
                     const info = proto_util.mapError(qerr);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
@@ -8785,8 +8791,9 @@ fn handleClientMessage(
                                     // SONNY-3348 (round 19, m2): any error the
                                     // scan fails with fails its transaction.
                                     failed_in_txn = true;
-                                    if (!geode.eval.isResourceLimitError(err)) return err;
-                                    const info = proto_util.mapError(err);
+                                    // SONNY-6547 (1): and a storage-integrity
+                                    // refusal answers as itself, as a limit does.
+                                    const info = proto_util.statementErrorInfo(err) orelse return err;
                                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                                     return;
                                 };

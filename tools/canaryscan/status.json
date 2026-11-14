@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T08:44:32.131510178Z",
+  "generated_at": "2026-11-14T09:16:07.735793852Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78961,6 +78961,180 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "PrehydrateBeforePropose",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_apply_hydration_stall.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyHydratesWithoutPersist",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_apply_hydration_stall.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HydrateWithoutCompletionPersist",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_apply_hydration_stall.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6547_apply_hydration_stall.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_apply_hydration_stall.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6547-REPLICATED-DROP-IN-USE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RefusedDropFailsApply",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_single_voter_drop.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6547_single_voter_drop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_single_voter_drop.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6547-SHOW-GRAPHS-ERRORS",
+      "features": [
+        {
+          "feature": "SHOW GRAPHS",
+          "aspect": "ListingErrorPropagates",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_show_graphs_errors.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "SHOW GRAPHS",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6547_show_graphs_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_show_graphs_errors.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6547-TRANSPORT-PARITY",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "SharedHandlerErrorAnswer",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "GrpcExecuteFallbackAnswer",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6547_transport_parity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE",
       "features": [
         {
@@ -84215,7 +84389,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4172
+      "TESTED": 4183
     },
     "by_aspect": {
       "2PC": 3,
@@ -84339,6 +84513,7 @@
       "ApplyEdgeCreate": 1,
       "ApplyErrorCount": 1,
       "ApplyHoldsReplicatedApplyMutex": 1,
+      "ApplyHydratesWithoutPersist": 1,
       "ApplyKeyedCreate": 1,
       "ApplyMerge": 1,
       "ApplyMergeIntegration": 1,
@@ -85650,6 +85825,7 @@
       "GrpcCommit": 1,
       "GrpcEnforcement": 1,
       "GrpcExecuteBlock": 1,
+      "GrpcExecuteFallbackAnswer": 1,
       "GrpcExecuteIntercept": 1,
       "GrpcFallbackValidation": 1,
       "GrpcFixtureIndexManagerTeardown": 1,
@@ -85755,6 +85931,7 @@
       "HydrateCatalog": 1,
       "HydrateGpsOnly": 1,
       "HydrateUser": 1,
+      "HydrateWithoutCompletionPersist": 1,
       "Hydration": 1,
       "HydrationTolerance": 1,
       "IMPL": 9,
@@ -86007,7 +86184,7 @@
       "ListenErrorOwnership": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
-      "ListingErrorPropagates": 1,
+      "ListingErrorPropagates": 2,
       "ListsRecordsUniversal": 1,
       "LiteralParsing": 1,
       "LiteralTrue": 1,
@@ -86730,6 +86907,7 @@
       "PredictiveSkewFilter": 2,
       "PredictiveVersionCheck": 1,
       "PrefixFilter": 1,
+      "PrehydrateBeforePropose": 1,
       "Prepare": 1,
       "PreparePhase": 1,
       "PrependUseGraph": 1,
@@ -87005,10 +87183,11 @@
       "RefuseInternal": 1,
       "RefuseReserved": 1,
       "RefusedCommitOnQuicWire": 1,
+      "RefusedDropFailsApply": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 356,
+      "Regression": 360,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -87342,6 +87521,7 @@
       "SharedBackupDecode": 1,
       "SharedConnState": 1,
       "SharedCountResponseBatch": 1,
+      "SharedHandlerErrorAnswer": 1,
       "SharedModule": 1,
       "SharedPlanConcurrentHits": 1,
       "SharedPredicate": 1,

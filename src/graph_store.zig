@@ -4690,6 +4690,17 @@ pub const GraphStore = struct {
         return self.graphsContains(graph_name);
     }
 
+    /// `listGraphNames`: a copy of `name` added to `names` unless `seen`
+    /// holds it; `seen` borrows the copy. Nothing fails once the copy exists.
+    fn appendGraphNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), seen: *std.StringHashMap(void), name: []const u8) !void {
+        if (seen.contains(name)) return;
+        try seen.ensureUnusedCapacity(1);
+        try names.ensureUnusedCapacity(allocator, 1);
+        const copy = try allocator.dupe(u8, name);
+        names.appendAssumeCapacity(copy);
+        seen.putAssumeCapacityNoClobber(copy, {});
+    }
+
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
         var names = std.ArrayList([]const u8).empty;
         errdefer {
@@ -4699,14 +4710,12 @@ pub const GraphStore = struct {
             names.deinit(allocator);
         }
 
+        // SONNY-6547 (2): the set borrows the copies `names` owns (it is
+        // freed first: defers run in reverse). It owned its own copies and
+        // freed one twice when an allocation after its insert failed (the
+        // insert's `errdefer` and the set's `defer`); SHOW GRAPHS crashed.
         var seen = std.StringHashMap(void).init(allocator);
-        defer {
-            var seen_it = seen.iterator();
-            while (seen_it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            seen.deinit();
-        }
+        defer seen.deinit();
 
         if (global_adapter) |adapter| {
             const persisted_names = try adapter.listGraphNames(allocator);
@@ -4717,32 +4726,14 @@ pub const GraphStore = struct {
                 allocator.free(persisted_names);
             }
 
-            for (persisted_names) |name| {
-                const seen_key = try allocator.dupe(u8, name);
-                errdefer allocator.free(seen_key);
-                const seen_result = try seen.getOrPut(seen_key);
-                if (!seen_result.found_existing) {
-                    try names.append(allocator, try allocator.dupe(u8, name));
-                } else {
-                    allocator.free(seen_key);
-                }
-            }
+            for (persisted_names) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
         }
 
         // SONNY-3233 (round 15, F12): the registry's names copied under
         // `graphs_lock`.
         const registry = try self.graphNamesCopy(allocator);
         defer freeGraphNames(allocator, registry);
-        for (registry) |name| {
-            const seen_key = try allocator.dupe(u8, name);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, name));
-            } else {
-                allocator.free(seen_key);
-            }
-        }
+        for (registry) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
 
         return names.toOwnedSlice(allocator);
     }
@@ -13181,6 +13172,23 @@ pub const GraphStore = struct {
     /// per-graph load: the resident IdMap re-insert is idempotent and the
     /// deferred indexes are built from the engine scan.
     pub fn ensureGraphHydrated(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, true);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrateWithoutCompletionPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6547 (4): `ensureGraphHydrated` without the completion persist
+    /// (`persistHydrationProductsForGraph`), for the Raft apply paths: they
+    /// run under the Raft node's `inner_mutex`, and that persist is a
+    /// checkpoint of the graph, which waits up to 5 s for the graph's lock,
+    /// so a local request holding it stopped the whole Raft node for that
+    /// long. The products stay memory-only until the next full checkpoint
+    /// (a crash before it re-pays this hydration's scan on the next first
+    /// touch, as before the completion persist existed).
+    pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, false);
+    }
+
+    fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const entry = blk: {
             self.hydration_mutex.lockUncancelable(io);
@@ -13249,7 +13257,7 @@ pub const GraphStore = struct {
         // class), and never when the hydration was served entirely from
         // counter-current snapshots (nothing new to persist). Best-effort:
         // persist errors are logged inside and never fail the triggering query.
-        if (outcome == .rebuilt) {
+        if (persist and outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
     }
@@ -18516,11 +18524,14 @@ pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const
 /// (`takeQuarantinedReadError`).
 ///
 /// `hydrate`: a graph not hydrated yet is hydrated first, so its damage is
-/// found before the program reads or writes it. The transports pass it for a
-/// change (the write fast paths read no resident product, and wrote to a
-/// damaged store whose hydration had not run yet); their reads hydrate in
-/// the read snapshot (`snapshotUnderReadLock`) and are checked after it. The
-/// executor's gate passes it for every program (SONNY-6541 (3)).
+/// found before the program reads or writes it. The executor's gate passes
+/// it for every program (SONNY-6541 (3)), and so do the transports
+/// (SONNY-6547 (1)): they passed it for a change only (the write fast paths
+/// read no resident product, and wrote to a damaged store whose hydration had
+/// not run yet) and counted on a read's snapshot (`snapshotUnderReadLock`)
+/// to hydrate, but a read served engine-direct (no row-security engine
+/// installed: the handlers called in process) has no snapshot and answered
+/// rows from the damaged store.
 pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, hydrate: bool) ?GraphQuarantineError {
     clearQuarantinedReadError();
     const store = getPrimaryGlobalStore(allocator);

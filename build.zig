@@ -10698,6 +10698,62 @@ pub fn build(b: *std.Build) void {
     const sonny6524_step = b.step("test-sonny6524-label-dict-split", "Run SONNY-6524 regression (graphs whose shard label dictionaries disagree, in every shape older geode and graph-storage left: refused at open by default with nothing written; a shift adopted from shard 0 when GEODE_LABEL_DICT_ADOPT_SHARD0 names the graph, every node and edge on every shard keeping the label it was created with; shapes in which shard 0 lost a name refused even then; a real server keeps serving its other graphs)");
     sonny6524_step.dependOn(&run_sonny6524_tests.step);
 
+    // SONNY-6547 (1): a quarantined graph and a graph whose label
+    // dictionaries diverged answer every read and write shape with the same
+    // GQLSTATUS and message class over QUIC and gRPC (a real server).
+    const sonny6547_tp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_transport_parity.zig"), .target = target, .optimize = optimize });
+    sonny6547_tp_test_mod.link_libc = true;
+    sonny6547_tp_test_mod.addImport("geode", root_mod);
+    sonny6547_tp_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6547_tp_test_mod.addImport("schema", schema_mod);
+    sonny6547_tp_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6547_tp_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6547_tp_test_mod.addImport("logging", logging_mod);
+    const sonny6547_tp_tests = b.addTest(.{ .root_module = sonny6547_tp_test_mod });
+    const run_sonny6547_tp_tests = b.addRunArtifact(sonny6547_tp_tests);
+    spawnsBuiltGeode(sonny6547_tp_tests);
+    shardDep(test_step, &run_sonny6547_tp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6547_tp_step = b.step("test-sonny6547-transport-parity", "Run SONNY-6547 item 1 regression against a real server with QUIC and plaintext gRPC listeners: on a graph quarantined by zeroed node pages and on a graph whose shard label dictionaries diverged, every read and write shape of test-sonny6523-quarantine-fail-closed (node scans included), as the first statement after a restart and again, is refused, and QUIC, gRPC and the gRPC handler called in process with no row-security engine (the node-scan stream path) answer it with the same GQLSTATUS and message class");
+    sonny6547_tp_step.dependOn(&run_sonny6547_tp_tests.step);
+    // SONNY-6547 (2): SHOW GRAPHS fails when its graph listing fails.
+    const sonny6547_sg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_show_graphs_errors.zig"), .target = target, .optimize = optimize });
+    sonny6547_sg_test_mod.addImport("geode", root_mod);
+    const sonny6547_sg_tests = b.addTest(.{ .root_module = sonny6547_sg_test_mod });
+    const run_sonny6547_sg_tests = b.addRunArtifact(sonny6547_sg_tests);
+    shardDep(test_step, &run_sonny6547_sg_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6547_sg_step = b.step("test-sonny6547-show-graphs-errors", "Run SONNY-6547 item 2 regression (SHOW GRAPHS run in process with each of its allocations failing in turn either fails or lists every graph; it never answers a short or empty list from a failed listing)");
+    sonny6547_sg_step.dependOn(&run_sonny6547_sg_tests.step);
+    // SONNY-6547 (3): a replicated drop of a graph in use is applied once the
+    // graph is free, never reported as applied while the node keeps it.
+    const sonny6547_sv_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_single_voter_drop.zig"), .target = target, .optimize = optimize });
+    sonny6547_sv_test_mod.link_libc = true;
+    sonny6547_sv_test_mod.addImport("geode", root_mod);
+    sonny6547_sv_test_mod.addImport("schema", schema_mod);
+    sonny6547_sv_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6547_sv_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6547_sv_test_mod.addImport("logging", logging_mod);
+    sonny6547_sv_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6547_sv_tests = b.addTest(.{ .root_module = sonny6547_sv_test_mod });
+    const run_sonny6547_sv_tests = b.addRunArtifact(sonny6547_sv_tests);
+    shardDep(test_step, &run_sonny6547_sv_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6547_sv_step = b.step("test-sonny6547-single-voter-drop", "Run SONNY-6547 item 3 regression (a one-voter cluster: a drop_graph proposed by a thread holding the graph's read lock commits and applies on the tick thread once the lock is released, and the graph is gone; a drop_graph apply refused with ObjectInUse because its thread holds the graph's read lock fails instead of reporting the graph dropped)");
+    sonny6547_sv_step.dependOn(&run_sonny6547_sv_tests.step);
+    // SONNY-6547 (4): a replicated write's first hydration of its graph does
+    // not run under the Raft node's inner_mutex. In-process 3-node cluster.
+    const sonny6547_hs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_apply_hydration_stall.zig"), .target = target, .optimize = optimize });
+    sonny6547_hs_test_mod.link_libc = true;
+    sonny6547_hs_test_mod.addImport("geode", root_mod);
+    sonny6547_hs_test_mod.addImport("schema", schema_mod);
+    sonny6547_hs_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6547_hs_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6547_hs_test_mod.addImport("logging", logging_mod);
+    sonny6547_hs_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6547_hs_tests = b.addTest(.{ .root_module = sonny6547_hs_test_mod });
+    const run_sonny6547_hs_tests = b.addRunArtifact(sonny6547_hs_tests);
+    shardDep(test_step, &run_sonny6547_hs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6547_hs_step = b.step("test-sonny6547-apply-hydration-stall", "Run SONNY-6547 item 4 regression (in-process 3-node cluster: a replicated create on a graph not hydrated yet, proposed while a reader holds the graph's lock, never keeps the leader's Raft inner_mutex for an election timeout; the create applies)");
+    sonny6547_hs_step.dependOn(&run_sonny6547_hs_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the

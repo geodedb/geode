@@ -1865,7 +1865,17 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
     // session result generation this Execute installed (SONNY-1560); the push
     // loop below re-validates it after every unlocked write.
     var claimed_epoch: u64 = 0;
-    const exec_resp = try handleExecute(request_bytes, allocator, &claimed_epoch);
+    // CANARY: REQ=REQ-SONNY-6547-TRANSPORT-PARITY; FEATURE="StorageIntegrity"; ASPECT=GrpcExecuteFallbackAnswer; STATUS=TESTED; TEST=tests/test_sonny6547_transport_parity.zig; OWNER=transport; UPDATED=2026-11-14
+    // SONNY-6547 (1): an error the handler did not answer is answered as the
+    // QUIC connection loop answers it (`proto_util.unhandledErrorInfo`); it
+    // failed the call.
+    const exec_resp = handleExecute(request_bytes, allocator, &claimed_epoch) catch |err| blk: {
+        log.err("gRPC Execute failed", &.{Attr.string("error", @errorName(err))});
+        const info = proto_util.unhandledErrorInfo(err);
+        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+        defer resp.deinit(allocator);
+        break :blk try encodeMessage(allocator, resp);
+    };
     defer allocator.free(exec_resp);
 
     // SONNY-1560: probe the initial schema write the same way the page writes
@@ -3386,7 +3396,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
                 query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
             {
-                if (graph_store.programQuarantineError(allocator, &.{lock_graph}, is_mutation)) |qerr| {
+                // SONNY-6547 (1): a read is hydrated first too, as the
+                // executor's gate does (SONNY-6541 (3)): with no row-security
+                // engine installed (the handler called in process) a read is
+                // served engine-direct, with no read snapshot to find the
+                // damage, and answered rows from the damaged store.
+                if (graph_store.programQuarantineError(allocator, &.{lock_graph}, true)) |qerr| {
                     const info = proto_util.mapError(qerr);
                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                     defer resp.deinit(allocator);
@@ -3797,8 +3812,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // SONNY-3348 (round 19, m2): any error the
                                     // scan fails with fails its transaction.
                                     failed_in_txn = true;
-                                    if (!geode.eval.isResourceLimitError(err)) return err;
-                                    const info = proto_util.mapError(err);
+                                    // SONNY-6547 (1): and a storage-integrity
+                                    // refusal answers as itself, as a limit does.
+                                    const info = proto_util.statementErrorInfo(err) orelse return err;
                                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                                     defer resp.deinit(allocator);
                                     return encodeMessage(allocator, resp);

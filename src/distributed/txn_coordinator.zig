@@ -550,8 +550,9 @@ pub const TxnCoordinator = struct {
     /// (SONNY-6528 (1), `raft_apply.applyGraphMutationInner`): a checkpoint
     /// of the graph waits for it. It runs on the Raft apply thread under the
     /// node's `inner_mutex`, so it cannot take the graph's `rwlock`. The
-    /// graph is hydrated first, outside the mutex (a first hydration persists
-    /// its products with a checkpoint of the graph).
+    /// graph is hydrated first, outside the mutex, without persisting the
+    /// products (SONNY-6547 (4): that persist is a checkpoint of the graph,
+    /// which waits up to 5 s for the graph's lock under `inner_mutex`).
     fn applyOperation(self: *TxnCoordinator, op: WriteSetOp) !void {
         const op_graph = switch (op) {
             .node_op => |n| n.graph,
@@ -562,7 +563,7 @@ pub const TxnCoordinator = struct {
             error.GraphAlreadyExists => {},
             else => return err,
         };
-        self.store.ensureGraphHydrated(graph_name);
+        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
         const adapter = graph_store.getGlobalAdapter();
         const apply_mg = if (adapter) |a| try a.beginReplicatedApply(graph_name) else null;
         defer if (apply_mg) |mg| adapter.?.endReplicatedApply(mg);
@@ -601,7 +602,7 @@ pub const TxnCoordinator = struct {
                         // SILENTLY DROP this replicated property update. Hydrate
                         // the target graph first (no-op once hydrated / for a
                         // non-deferred graph) so the by-id gate sees the node.
-                        self.store.ensureGraphHydrated(graph_name);
+                        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
                         if (self.store.getNodePtr(node_op.node_id) != null) {
                             for (node_op.props) |p| {
                                 try self.store.setNodeProperty(node_op.node_id, p.key, p.value);
@@ -640,7 +641,7 @@ pub const TxnCoordinator = struct {
                         // first access, so the raw `getEdgePtr` gate would
                         // resolve null and SILENTLY DROP this replicated edge
                         // property update. Hydrate first (no-op once hydrated).
-                        self.store.ensureGraphHydrated(graph_name);
+                        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
                         if (self.store.getEdgePtr(edge_op.edge_id) != null) {
                             for (edge_op.props) |p| {
                                 try self.store.setEdgeProperty(edge_op.edge_id, p.key, p.value);

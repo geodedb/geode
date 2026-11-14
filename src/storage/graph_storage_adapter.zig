@@ -4616,36 +4616,26 @@ pub const StorageAdapter = struct {
             names.deinit(allocator);
         }
 
+        // SONNY-6547 (2): the set borrows the registry's and the engine map's
+        // names, which `mutex` keeps alive until it is freed. It owned copies
+        // and freed a copy twice when an allocation after its insert failed
+        // (the insert's `errdefer` and the set's `defer`).
         var seen = std.StringHashMap(void).init(allocator);
-        defer {
-            var seen_it = seen.iterator();
-            while (seen_it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            seen.deinit();
-        }
+        defer seen.deinit();
 
         for (self.registry.entries.items) |entry| {
-            const seen_key = try allocator.dupe(u8, entry.name);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, entry.name));
-            } else {
-                allocator.free(seen_key);
-            }
+            if ((try seen.getOrPut(entry.name)).found_existing) continue;
+            const copy = try allocator.dupe(u8, entry.name);
+            errdefer allocator.free(copy);
+            try names.append(allocator, copy);
         }
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
-            const seen_key = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, entry.key_ptr.*));
-            } else {
-                allocator.free(seen_key);
-            }
+            if ((try seen.getOrPut(entry.key_ptr.*)).found_existing) continue;
+            const copy = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(copy);
+            try names.append(allocator, copy);
         }
 
         return names.toOwnedSlice(allocator);
