@@ -84,6 +84,13 @@ pub const EvalError = error{
     // leading digits (ISO/IEC 39075 20.8 GR i i 2, 22003): CAST('1e400' AS
     // DOUBLE), CAST of a NaN or an infinity to STRING.
     NumericOutOfRange,
+    // SONNY-6518: ISO/IEC 39075:2024 20.22 GR 9 b): LN of 0 or a negative
+    // number (2201E invalid argument for natural logarithm); GR 11 b), e):
+    // POWER of 0 to a negative power or of a negative base to a power that
+    // is not whole, and SQRT of a negative number (SR 13) (2201F invalid
+    // argument for power function).
+    InvalidLogArgument,
+    InvalidPowerArgument,
     // GAP-0926: an out-of-range positional parameter ($2 with one param).
     MissingParameter,
     IdnaError,

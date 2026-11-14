@@ -41,7 +41,7 @@ const eval = @import("../eval.zig");
 /// digits. SONNY-2739: degrees(), radians() and toFloat() narrowed it with a
 /// bare `@intFromFloat`, which aborts the server past i128 (`degrees(1e33)`,
 /// `toFloat('1e400')`) and turns NaN into a garbage coefficient.
-fn roundedScale6(f: f64) EvalError!i128 {
+pub fn roundedScale6(f: f64) EvalError!i128 {
     return decimal128.checkedScaledCoeff(@round(f * 1_000_000), 1.0);
 }
 
@@ -86,6 +86,14 @@ fn textLike(value: Value) ?[]const u8 {
         .Json => |j| j,
         else => null,
     };
+}
+
+/// SONNY-6518: a text argument of a constructor: null for the null value
+/// (the result is then null); a value that is no text is 22G03 (it was
+/// NULL).
+fn textArg(value: Value) EvalError!?[]const u8 {
+    if (value == .Null) return null;
+    return textLike(value) orelse EvalError.TypeMismatch;
 }
 
 fn intLike(value: Value) ?i64 {
@@ -159,7 +167,7 @@ pub fn evalMathFunction(
 ) EvalError!?Value {
     // abs(x)
     if (std.mem.eql(u8, function_name, "abs")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             // SONNY-2769: abs(minInt) does not fit; the negation aborted
@@ -175,166 +183,198 @@ pub fn evalMathFunction(
                 const coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow;
                 return Value{ .Decimal = .{ .coeff = coeff, .scale = d.scale, .orig_scale = d.orig_scale, .orig_repr = d.orig_repr } };
             },
-            else => return Value{ .Null = {} },
+            .Double => |x| return Value{ .Double = @abs(x) },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // sqrt(x)
     if (std.mem.eql(u8, function_name, "sqrt")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| {
-                if (i < 0) return Value{ .Null = {} };
+                if (i < 0) return EvalError.InvalidPowerArgument;
                 const f = @sqrt(@as(f64, @floatFromInt(i)));
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             },
             .Decimal => |d| {
-                if (d.coeff < 0) return Value{ .Null = {} };
+                if (d.coeff < 0) return EvalError.InvalidPowerArgument;
                 const f = @sqrt(@as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))));
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             },
-            else => return Value{ .Null = {} },
+            .Double => |x| {
+                if (x < 0) return EvalError.InvalidPowerArgument;
+                return Value{ .Decimal = .{ .coeff = try roundedScale6(@sqrt(x)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // pow(base, exp)
     if (std.mem.eql(u8, function_name, "pow")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const base_arg = try eval.evalExpr(allocator, args[0].*, env);
         const exp_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const base = switch (base_arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const exponent = switch (exp_arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
+        // SONNY-6518: ISO/IEC 39075:2024 20.22 GR 11 b), e): 0 to a negative
+        // power, and a negative base to a power that is not a whole number,
+        // are 2201F (they answered NULL).
+        if (base == 0 and exponent < 0) return EvalError.InvalidPowerArgument;
+        if (base < 0 and exponent != @trunc(exponent)) return EvalError.InvalidPowerArgument;
         const result = std.math.pow(f64, base, exponent);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         const scaled = result * 1000000;
-        if (scaled < -1.7e38 or scaled > 1.7e38) return Value{ .Null = {} };
+        if (scaled < -1.7e38 or scaled > 1.7e38) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // sin(x)
     if (std.mem.eql(u8, function_name, "sin")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = @sin(val);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // cos(x)
     if (std.mem.eql(u8, function_name, "cos")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = @cos(val);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // tan(x)
     if (std.mem.eql(u8, function_name, "tan")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = @tan(val);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         const scaled = result * 1000000;
-        if (scaled < -1.7e38 or scaled > 1.7e38) return Value{ .Null = {} };
+        if (scaled < -1.7e38 or scaled > 1.7e38) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // atan(x)
     if (std.mem.eql(u8, function_name, "atan")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = std.math.atan(val);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // atan2(y, x)
     if (std.mem.eql(u8, function_name, "atan2")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const arg_y = try eval.evalExpr(allocator, args[0].*, env);
         const arg_x = try eval.evalExpr(allocator, args[1].*, env);
 
         const val_y = switch (arg_y) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const val_x = switch (arg_x) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const result = std.math.atan2(val_y, val_x);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // asin(x)
     if (std.mem.eql(u8, function_name, "asin")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
-        if (val < -1.0 or val > 1.0) return Value{ .Null = {} };
+        if (val < -1.0 or val > 1.0) return EvalError.NumericOutOfRange;
         const result = std.math.asin(val);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // acos(x)
     if (std.mem.eql(u8, function_name, "acos")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
-        if (val < -1.0 or val > 1.0) return Value{ .Null = {} };
+        if (val < -1.0 or val > 1.0) return EvalError.NumericOutOfRange;
         const result = std.math.acos(val);
-        if (std.math.isNan(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
@@ -348,79 +388,87 @@ pub fn evalMathFunction(
     // (an f64 Double would not compose with degrees()/radians(), which accept
     // Int and Decimal only).
     if (std.mem.eql(u8, function_name, "pi")) {
-        if (args.len != 0) return Value{ .Null = {} };
+        if (args.len != 0) return EvalError.InvalidArgs;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.pi * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     if (std.mem.eql(u8, function_name, "e")) {
-        if (args.len != 0) return Value{ .Null = {} };
+        if (args.len != 0) return EvalError.InvalidArgs;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.e * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
     // degrees(radians)
     if (std.mem.eql(u8, function_name, "degrees")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = val * (180.0 / std.math.pi);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = try roundedScale6(result), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
     // radians(degrees)
     if (std.mem.eql(u8, function_name, "radians")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = val * (std.math.pi / 180.0);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = try roundedScale6(result), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // log(x)
     if (std.mem.eql(u8, function_name, "log")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
-        if (val <= 0) return Value{ .Null = {} };
+        if (val <= 0) return EvalError.InvalidLogArgument;
         const result = @log(val);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // exp(x)
     if (std.mem.eql(u8, function_name, "exp")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
             .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
-            else => return Value{ .Null = {} },
+            .Double => |x| x,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const result = @exp(val);
-        if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
+        if (std.math.isNan(result) or std.math.isInf(result)) return EvalError.NumericOutOfRange;
         const scaled = result * 1000000;
-        if (scaled < -1.7e38 or scaled > 1.7e38) return Value{ .Null = {} };
+        if (scaled < -1.7e38 or scaled > 1.7e38) return EvalError.NumericOutOfRange;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // ceil(x)
     if (std.mem.eql(u8, function_name, "ceil")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
@@ -428,26 +476,32 @@ pub fn evalMathFunction(
             // `@intCast` aborted the server (`ceil(9223372036854775807.5)`), and
             // `std.math.pow(i128, 10, scale)` did past scale 38.
             .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .ceil) },
-            else => return Value{ .Null = {} },
+            // 20.22 GR 13 b) ii): an approximate number's is a whole approximate number.
+            .Double => |x| return Value{ .Double = @ceil(x) },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // floor(x)
     if (std.mem.eql(u8, function_name, "floor")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
             // SONNY-2739: see ceil.
             .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
-            else => return Value{ .Null = {} },
+            // 20.22 GR 12 b) ii).
+            .Double => |x| return Value{ .Double = @floor(x) },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-12-22
     // round(x [, precision])
     if (std.mem.eql(u8, function_name, "round")) {
-        if (args.len < 1 or args.len > 2) return Value{ .Null = {} };
+        if (args.len < 1 or args.len > 2) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
 
         var precision: i64 = 0;
@@ -455,7 +509,8 @@ pub fn evalMathFunction(
             const prec_arg = try eval.evalExpr(allocator, args[1].*, env);
             precision = switch (prec_arg) {
                 .Int => |i| i,
-                else => 0,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
         }
 
@@ -495,28 +550,31 @@ pub fn evalMathFunction(
                     return Value{ .Int = std.math.cast(i64, result) orelse return EvalError.IntegerOverflow };
                 }
             },
-            else => return Value{ .Null = {} },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
     // mod(dividend, divisor)
     if (std.mem.eql(u8, function_name, "mod")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const dividend_arg = try eval.evalExpr(allocator, args[0].*, env);
         const divisor_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const dividend = switch (dividend_arg) {
             .Int => |i| i,
-            else => return Value{ .Null = {} },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const divisor = switch (divisor_arg) {
             .Int => |i| i,
-            else => return Value{ .Null = {} },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
-        if (divisor == 0) return Value{ .Null = {} };
+        if (divisor == 0) return EvalError.DivisionByZero;
         // SONNY-2769: x mod -1 is 0; @rem(minInt, -1) was a hardware division
         // trap (SIGFPE) that killed the server.
         if (divisor == -1) return Value{ .Int = 0 };
@@ -527,13 +585,15 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
     // sign(x)
     if (std.mem.eql(u8, function_name, "sign")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const sign_value = switch (arg) {
             .Int => |i| if (i < 0) @as(i64, -1) else if (i > 0) @as(i64, 1) else @as(i64, 0),
             .Decimal => |d| if (d.coeff < 0) @as(i64, -1) else if (d.coeff > 0) @as(i64, 1) else @as(i64, 0),
-            else => return Value{ .Null = {} },
+            .Double => |x| if (x < 0) @as(i64, -1) else if (x > 0) @as(i64, 1) else @as(i64, 0),
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         return Value{ .Int = sign_value };
@@ -541,7 +601,7 @@ pub fn evalMathFunction(
 
     // random() — returns decimal in [0, 1) using cryptographically secure source
     if (std.mem.eql(u8, function_name, "random")) {
-        if (args.len != 0) return Value{ .Null = {} };
+        if (args.len != 0) return EvalError.InvalidArgs;
         var rand_bytes: [8]u8 = undefined;
         // fips-exempt: non-security GQL random() function (query evaluation, not cryptographic)
         // Zig 0.16: std.posix.getrandom removed; branch on OS.
@@ -576,26 +636,29 @@ pub fn evalStringFunction(
 ) EvalError!?Value {
     // substring(str, start [, length])
     if (std.mem.eql(u8, function_name, "substring")) {
-        if (args.len < 2) return Value{ .Null = {} };
+        if (args.len < 2 or args.len > 3) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const start_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // GQL/SQL uses 1-based indexing for substring
         const start = switch (start_arg) {
             .Int => |i| if (i < 1) 0 else @as(usize, @intCast(i - 1)),
-            else => return Value{ .Null = {} },
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         if (args.len >= 3) {
             const len_arg = try eval.evalExpr(allocator, args[2].*, env);
             const len = switch (len_arg) {
                 .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
-                else => return Value{ .Null = {} },
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             if (start >= str.len) {
@@ -614,24 +677,27 @@ pub fn evalStringFunction(
 
     // replace(str, search, replacement)
     if (std.mem.eql(u8, function_name, "replace")) {
-        if (args.len != 3) return Value{ .Null = {} };
+        if (args.len != 3) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const search_arg = try eval.evalExpr(allocator, args[1].*, env);
         const replace_arg = try eval.evalExpr(allocator, args[2].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const search = switch (search_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const replacement = switch (replace_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         if (search.len == 0) {
@@ -680,12 +746,13 @@ pub fn evalStringFunction(
 
     // trim(str)
     if (std.mem.eql(u8, function_name, "trim")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const trimmed = std.mem.trim(u8, str, " \t\n\r");
@@ -695,12 +762,13 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // ltrim(str)
     if (std.mem.eql(u8, function_name, "ltrim")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const trimmed = std.mem.trimStart(u8, str, " \t\n\r");
@@ -710,12 +778,13 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // rtrim(str)
     if (std.mem.eql(u8, function_name, "rtrim")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const trimmed = std.mem.trimEnd(u8, str, " \t\n\r");
@@ -725,18 +794,22 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // left(str, count)
     if (std.mem.eql(u8, function_name, "left")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const count = switch (len_arg) {
-            .Int => |i| if (i < 0) @as(usize, 0) else @as(usize, @intCast(i)),
-            else => return Value{ .Null = {} },
+            // SONNY-6518: ISO/IEC 39075:2024 20.24 GR 1 d): a negative length
+            // is a substring error (22011); it answered ''.
+            .Int => |i| if (i < 0) return EvalError.IndexOutOfBounds else @as(usize, @intCast(i)),
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const result_len = @min(count, str.len);
@@ -746,18 +819,22 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // right(str, count)
     if (std.mem.eql(u8, function_name, "right")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const count = switch (len_arg) {
-            .Int => |i| if (i < 0) @as(usize, 0) else @as(usize, @intCast(i)),
-            else => return Value{ .Null = {} },
+            // SONNY-6518: ISO/IEC 39075:2024 20.24 GR 1 d): a negative length
+            // is a substring error (22011); it answered ''.
+            .Int => |i| if (i < 0) return EvalError.IndexOutOfBounds else @as(usize, @intCast(i)),
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         const result_len = @min(count, str.len);
@@ -777,17 +854,19 @@ pub fn evalStringFunction(
     // Element slices alias `str`, exactly as left()/right()/substring() do; the
     // caller's allocator owns only the Value array.
     if (std.mem.eql(u8, function_name, "split")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const delim_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const delim = switch (delim_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // An empty delimiter has no well-defined split point; return the whole
@@ -815,12 +894,13 @@ pub fn evalStringFunction(
 
     // upper(str) / toupper(str)
     if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         var result = try allocator.alloc(u8, str.len);
@@ -832,12 +912,13 @@ pub fn evalStringFunction(
 
     // lower(str) / tolower(str)
     if (std.mem.eql(u8, function_name, "lower") or std.mem.eql(u8, function_name, "tolower")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         var result = try allocator.alloc(u8, str.len);
@@ -849,17 +930,19 @@ pub fn evalStringFunction(
 
     // icontains(str, substr) - case-insensitive CONTAINS
     if (std.mem.eql(u8, function_name, "icontains")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const needle_arg = try eval.evalExpr(allocator, args[1].*, env);
 
         const str_val = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const needle_val = switch (needle_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
+            .Str, .Text => |s| s,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         if (needle_val.len == 0) return Value{ .Bool = true };
@@ -1871,7 +1954,7 @@ pub fn evalAdvancedTypeFunction(
             .BigInt => |i| Value{ .Int = i },
             .Bool => |b| Value{ .Int = if (b) 1 else 0 },
             else => blk: {
-                const text = textLike(arg) orelse break :blk Value{ .Null = {} };
+                const text = (try textArg(arg)) orelse break :blk Value{ .Null = {} };
                 const parsed = std.fmt.parseInt(i64, text, 10) catch break :blk Value{ .Null = {} };
                 break :blk Value{ .Int = parsed };
             },
@@ -1887,7 +1970,7 @@ pub fn evalAdvancedTypeFunction(
             .SmallInt => |i| Value{ .Bool = i != 0 },
             .BigInt => |i| Value{ .Bool = i != 0 },
             else => blk: {
-                const text = textLike(arg) orelse break :blk Value{ .Null = {} };
+                const text = (try textArg(arg)) orelse break :blk Value{ .Null = {} };
                 if (std.ascii.eqlIgnoreCase(text, "true") or std.mem.eql(u8, text, "1")) break :blk Value{ .Bool = true };
                 if (std.ascii.eqlIgnoreCase(text, "false") or std.mem.eql(u8, text, "0")) break :blk Value{ .Bool = false };
                 break :blk Value{ .Null = {} };
@@ -1916,7 +1999,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const value_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
-        const text = textLike(value_arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(value_arg)) orelse return Value{ .Null = {} };
         const n = intLike(len_arg) orelse return Value{ .Null = {} };
         // SONNY-2769: a length outside 0..65535 aborted the server in the cast.
         const len = std.math.cast(u16, n) orelse return EvalError.InvalidArgs;
@@ -1928,7 +2011,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const value_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
-        const text = textLike(value_arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(value_arg)) orelse return Value{ .Null = {} };
         const n = intLike(len_arg) orelse return Value{ .Null = {} };
         // SONNY-2769: see char().
         const len = std.math.cast(u16, n) orelse return EvalError.InvalidArgs;
@@ -1939,14 +2022,14 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "text")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         return Value{ .Text = try allocator.dupe(u8, text) };
     }
 
     if (std.mem.eql(u8, function_name, "date")) {
         if (args.len != 1) return null;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Date(text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1954,7 +2037,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "time")) {
         if (args.len != 1) return null;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         // SONNY-2808: a time string with a zone ('10:00:00+01:00',
         // '10:00:00Z') is a zoned time and keeps its displacement (ISO/IEC
         // 39075 ZONED_TIME); the offset was dropped. One without is a local
@@ -1966,7 +2049,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "timetz")) {
         if (args.len != 1 and args.len != 2) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
 
         if (args.len == 1) {
             return Value{ .TimeTZ = datetime.TimeTZ.fromStr(text) catch return EvalError.TimeParse };
@@ -1981,7 +2064,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "timestamp")) {
         if (args.len != 1) return null;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Timestamp(text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1989,7 +2072,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "timestamptz")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.TimestampTZ(text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1997,7 +2080,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "interval")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
         return Value{
             .Interval = datetime.Interval.fromStr(text) catch |e| return switch (e) {
@@ -2030,7 +2113,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "bytea")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Bytea(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2038,7 +2121,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "json")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Json(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2046,7 +2129,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "jsonb")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Jsonb(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2054,7 +2137,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "xml")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Xml(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2062,7 +2145,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "url")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Url(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2070,7 +2153,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "domain")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Domain(allocator, text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2081,7 +2164,7 @@ pub fn evalAdvancedTypeFunction(
         }
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.UUID(text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2089,7 +2172,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "bit")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const wrapped = try normalizeBitLiteral(allocator, text);
         defer allocator.free(wrapped);
         return Value{ .BitString = bitstring.BitString.fromString(allocator, wrapped) catch return EvalError.BitParseError };
@@ -2098,7 +2181,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "varbit")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
-        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const wrapped = try normalizeBitLiteral(allocator, text);
         defer allocator.free(wrapped);
         const result = evaluator_functions.VarBit(allocator, wrapped) catch |err| return mapEvaluatorError(err);
@@ -2111,8 +2194,8 @@ pub fn evalAdvancedTypeFunction(
         const lower_arg = try eval.evalExpr(allocator, args[1].*, env);
         const upper_arg = try eval.evalExpr(allocator, args[2].*, env);
         const bounds_arg = try eval.evalExpr(allocator, args[3].*, env);
-        const base_type = textLike(base_arg) orelse return Value{ .Null = {} };
-        const bounds = textLike(bounds_arg) orelse return Value{ .Null = {} };
+        const base_type = (try textArg(base_arg)) orelse return Value{ .Null = {} };
+        const bounds = (try textArg(bounds_arg)) orelse return Value{ .Null = {} };
 
         const result = evaluator_functions.RangeValue(
             allocator,
@@ -2151,7 +2234,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const path = try eval.evalExpr(allocator, args[1].*, env);
-        const path_text = textLike(path) orelse return Value{ .Null = {} };
+        const path_text = (try textArg(path)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_get(evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2160,7 +2243,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const key = try eval.evalExpr(allocator, args[1].*, env);
-        const key_text = textLike(key) orelse return Value{ .Null = {} };
+        const key_text = (try textArg(key)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_exists(evalValueToHeapValue(doc), key_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2327,7 +2410,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const domain_arg = try eval.evalExpr(allocator, args[0].*, env);
         const suffix_arg = try eval.evalExpr(allocator, args[1].*, env);
-        const suffix_text = textLike(suffix_arg) orelse return Value{ .Null = {} };
+        const suffix_text = (try textArg(suffix_arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.domain_suffix_match(evalValueToHeapValue(domain_arg), suffix_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }

@@ -2298,6 +2298,32 @@
 
 ### Fixed
 
+- **Built-in functions raise their argument errors; only a NULL argument
+  gives NULL (SONNY-6518 item 1, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1,
+  20.22 <numeric value function>, 20.24 <character string function>. The
+  function dispatch turned any error it did not list into NULL (an
+  extension function's own error, a failed argument, an allocation
+  failure), and the numeric and string built-ins answered NULL for a value
+  of the wrong type, a wrong number of arguments and a value outside their
+  domain; the basic dispatch answered "unknown function" (42883) for a
+  heap function's error and for a date / duration / interval argument of
+  the wrong type. Now: wrong type 22G03, wrong arity 22023, `sqrt` of a
+  negative number and `pow(0, negative)` / `pow(negative, fraction)` 2201F
+  (new `InvalidPowerArgument`), `log` (LN) of a value <= 0 2201E (new
+  `InvalidLogArgument`), `log10` of one, `asin` / `acos` outside [-1, 1]
+  and a non-finite `exp` / `pow` / `tan` result 22003, `mod(x, 0)` 22012,
+  `left` / `right` of a negative length 22011 (it answered ''), a
+  constructor's text argument of another type (`date(1)`, `uuid(1)`, ...)
+  22G03, an unlisted extension error 22023 (InvalidJson 22018), and an
+  argument's own error is raised. `round(x, NULL)` is NULL (it ignored
+  the NULL). Numeric built-ins take a DOUBLE argument (`abs`, `ceil`,
+  `floor`, `sign`, `sqrt`, trig, `log`, `exp`, `pow`: it read as NULL;
+  `ceil` / `floor` of a DOUBLE give a DOUBLE, 20.22 GR 12 b ii). Still
+  open (stories): the numeric results are DECIMAL at scale 6 where ISO
+  declares an approximate number; `upper` / `lower` fold ASCII only;
+  `trim` trims whitespace, not only spaces; `left` / `right` / `substring`
+  count bytes, not characters. Regression: `zig build
+  test-sonny6518-builtin-errors`.
 - **ORDER BY after DISTINCT or an aggregate reads only what the
   projection makes (SONNY-6525 item 8, BREAKING).** ISO/IEC 39075:2024
   14.10 SR 4 c) i) 2) A) III): after a RETURN (or WITH, or FOR ... RETURN)

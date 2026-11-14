@@ -555,7 +555,9 @@ test "SONNY-2739: a typed ARRAY parameter past the decimal is refused" {
 fn checkGeo(s: *Session, f: *Failures) !void {
     // A NaN coordinate is no longer a valid LatLon (it passed both range
     // checks), so latitude() and friends no longer answer a garbage decimal
-    // (2^127 - 1) or a garbage distance (minInt(i64)).
+    // (2^127 - 1) or a garbage distance (minInt(i64)). SONNY-6518 item 1:
+    // latlon('nan,0') raises its own error (InvalidLatitude / Longitude,
+    // 22023); it degraded to NULL, which the outer function refused (22G03).
     for ([_][]const u8{
         "RETURN latitude(latlon('nan,0')) AS x",
         "RETURN longitude(latlon('0,nan')) AS x",
@@ -563,8 +565,8 @@ fn checkGeo(s: *Session, f: *Failures) !void {
         "RETURN geo_lon(latlon('0,nan')) AS x",
         "RETURN geo_bearing(latlon('nan,0'), latlon('0,0')) AS x",
         "RETURN distance_haversine(latlon('nan,0'), latlon('0,0')) AS x",
-        "RETURN altitude(latlonalt('0,0,nan')) AS x",
-    }) |q| try expectFail(s, f, q, &.{}, error.TypeMismatch);
+    }) |q| try expectFail(s, f, q, &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN altitude(latlonalt('0,0,nan')) AS x", &.{}, error.TypeMismatch);
     try expectValue(s, f, "RETURN latitude(latlon('45.5,10')) AS x", "45.500000m");
     try expectValue(s, f, "RETURN distance_haversine(latlon('0,0'), latlon('0,90')) AS x", "10007543");
     // An altitude or a coordinate past the decimal is 22003.

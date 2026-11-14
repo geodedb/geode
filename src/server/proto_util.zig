@@ -386,8 +386,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
         // No GQL number is NaN or infinite: numeric value out of range.
         error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
-        // Raised only by substring() for a start before the first character.
-        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: the start position is before the first character" },
+        // A substring error (ISO/IEC 39075:2024 20.24 GR 1 d): LEFT / RIGHT of a
+        // negative length (SONNY-6518), substring()'s start.
+        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: a negative length (LEFT, RIGHT, substring) or a start position before the first character" },
         // range() past its 10,000,000-element limit: the class the other size
         // limits use (VectorTooLarge, PropertyValueTooLarge).
         error.RangeTooLarge => .{ .code = "54000", .message = "RangeTooLarge: range() would return more than 10,000,000 elements" },
@@ -421,6 +422,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         // SONNY-6499: ISO/IEC 39075 20.8 GR i i 2 (numeric value out of range).
         error.NumericOutOfRange => .{ .code = "22003", .message = "Numeric value out of range: no value of the target type represents it" },
+        // SONNY-6518: ISO/IEC 39075:2024 20.22 GR 9 b), 11 b) e) (Table 8).
+        error.InvalidLogArgument => .{ .code = "2201E", .message = "Invalid argument for natural logarithm: the argument of LN (log) is 0 or negative" },
+        error.InvalidPowerArgument => .{ .code = "2201F", .message = "Invalid argument for power function: 0 to a negative power, a negative number to a power that is not a whole number, or the square root of a negative number" },
         // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
         // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
         // Table 8, class 22); each answered 58000 (system error).
