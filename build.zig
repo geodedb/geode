@@ -535,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6494-ipv6-query", .reason = "intentionally red TDD reproduction (SONNY-6494 item 6, KNOWN_TEST_ISSUES): geode refuses an IPv6 destination before geode-client-zig v0.3.16 could dial it; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10448,6 +10449,23 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port; geode query refuses an IPv6 server with the client-library reason)").dependOn(&run_tests.step);
     }
+    // SONNY-6494 (6), intentionally red (docs/KNOWN_TEST_ISSUES.md): the
+    // CLI's QUIC client reaches a real geode serve on [::1] now that
+    // geode-client-zig v0.3.16 dials IPv6. Not in shardDep until the fix
+    // lands; compiled by test-compile.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_ipv6_query.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6494-ipv6-query", "Run SONNY-6494 item 6 regression (geode query --server [::1]:<port>, --dsn quic://[::1]:<port> and --server ip6-localhost:<port> answer against a real geode serve listening on [::1]; an IPv6 zone is refused before dialling with the reason; skips without an IPv6 loopback)").dependOn(&run_tests.step);
+    }
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_host_port.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -12399,8 +12417,8 @@ pub fn build(b: *std.Build) void {
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
     // SONNY-3232: QUIC requests of 1 MiB, 4 MiB and the 16 MiB maximum are
-    // answered (the maximum since quic v0.1.51); one over the 16 MiB maximum is answered 54000 and its connection closed, so the
-    // client fails fast (it used to block until its 60 s writer deadline).
+    // answered (the maximum since quic v0.1.51); one over the 16 MiB maximum
+    // is answered 54000 and its connection closed, so the client fails fast (it used to block until its 60 s writer deadline).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_request_size.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
