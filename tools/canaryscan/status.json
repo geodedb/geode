@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:25:41.743541333Z",
+  "generated_at": "2026-11-14T01:27:59.03333666Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85840,6 +85840,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6525-ORDER-BY-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "OrderByAfterAggregation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_order_by_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_order_by_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6525-STATEMENT-SCOPE",
       "features": [
         {
@@ -93433,7 +93452,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4929
+      "TESTED": 4930
     },
     "by_aspect": {
       "2PC": 3,
@@ -95870,6 +95889,7 @@
       "OrPredicate": 1,
       "Orchestration": 2,
       "OrderAndPage": 1,
+      "OrderByAfterAggregation": 1,
       "OrderByAggregation": 1,
       "OrderByAndLimit": 1,
       "OrderByEnforcement": 1,
