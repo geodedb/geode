@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-BINDING; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -481,7 +482,7 @@ const Server = struct {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        var handle = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_MASTER_KEY=" ++ master_key});
+        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_MASTER_KEY=" ++ master_key});
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .addr = addr };
@@ -505,7 +506,7 @@ const Server = struct {
     fn cliQuery(self: *Server, user: []const u8, pass: []const u8, fle_role: ?[]const u8, gql: []const u8) ![]u8 {
         var argv: std.ArrayList([]const u8) = .empty;
         defer argv.deinit(testing.allocator);
-        try argv.appendSlice(testing.allocator, &.{ "./zig-out/bin/geode", "query", "-U", user, "-P", pass });
+        try argv.appendSlice(testing.allocator, &.{ geode_test_bin.geode_exe, "query", "-U", user, "-P", pass });
         if (fle_role) |r| try argv.appendSlice(testing.allocator, &.{ "--role", r });
         try argv.append(testing.allocator, gql);
         const res = try cli.runAgainstServer(testing.allocator, self.addr, argv.items);

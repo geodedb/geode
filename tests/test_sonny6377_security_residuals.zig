@@ -287,7 +287,7 @@ test "SONNY-6377 item 5: setAttribute leaves no half-built entry and keeps the o
 // 6. Security-graph writes made outside a statement survive a SIGKILL
 // ---------------------------------------------------------------------------
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 const admin_user = util.DefaultAuth.username;
 const admin_pw = util.DefaultAuth.password;
 const legacy_pw = "Amber Window Gentle Thunder Two";

@@ -1,9 +1,10 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const proto_util = @import("proto_test_util.zig");
 
 fn run(server: []const u8, gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    return cli_test_util.runAgainstServer(std.testing.allocator, server, &.{ "./zig-out/bin/geode", "query", gql });
+    return cli_test_util.runAgainstServer(std.testing.allocator, server, &.{ geode_test_bin.geode_exe, "query", gql });
 }
 
 test "INTERSECT DISTINCT basic" {

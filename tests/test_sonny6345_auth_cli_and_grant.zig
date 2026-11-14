@@ -31,7 +31,7 @@ const harness = @import("node_scan_stream_harness.zig");
 const user_mgmt = geode.user_management;
 const execution = geode.execution;
 const auth_dispatch = geode.auth_dispatch;
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 
 // ---------------------------------------------------------------------------
 // The CLI, as a subprocess

@@ -33,6 +33,7 @@
 // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -725,7 +726,7 @@ fn fastPathsKeepPlaintextOffDisk(env: []const []const u8) !void {
     {
         const addr = try util.formatAddr(allocator, port);
         defer allocator.free(addr);
-        var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, env);
+        var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, env);
         defer server.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         var admin = try util.QuicProtoClient.connect(allocator, addr);

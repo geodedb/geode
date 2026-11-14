@@ -16527,7 +16527,7 @@ pub fn build(b: *std.Build) void {
     sonny2846_wire_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2846_wire_tests = b.addTest(.{ .root_module = sonny2846_wire_test_mod });
     const run_sonny2846_wire_tests = b.addRunArtifact(sonny2846_wire_tests);
-    run_sonny2846_wire_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2846_wire_tests);
     shardDep(test_step, &run_sonny2846_wire_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2846_wire_step = b.step("test-sonny2846-unique-fast-paths-wire", "Run SONNY-2846 wire regression (spawns a server: simple CREATE, bulk MERGE, /*+BATCH*/ and USE GRAPH; MERGE fast paths answer 23505 on a UNIQUE duplicate, with group commit on and off; 8 concurrent QUIC writers of one value: exactly one wins)");
     sonny2846_wire_step.dependOn(&run_sonny2846_wire_tests.step);
@@ -16584,7 +16584,7 @@ pub fn build(b: *std.Build) void {
     sonny3241_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3241_tests = b.addTest(.{ .root_module = sonny3241_test_mod });
     const run_sonny3241_tests = b.addRunArtifact(sonny3241_tests);
-    run_sonny3241_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3241_tests);
     shardDep(test_step, &run_sonny3241_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3241_step = b.step("test-sonny3241-fast-path-parity-wire", "Run SONNY-3241 wire regression (spawns a server, group commit on and off: node MERGE with ON CREATE / ON MATCH SET beside a bare SET, also /*+BATCH*/ and USE GRAPH; MATCH ... CREATE edges over a key two nodes hold or a non-integer key; MATCH ... MERGE edges with ON CREATE SET and with relationship properties all write what the executor writes)");
     sonny3241_step.dependOn(&run_sonny3241_tests.step);
@@ -16739,7 +16739,7 @@ pub fn build(b: *std.Build) void {
     sonny6327_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6327_tests = b.addTest(.{ .root_module = sonny6327_test_mod });
     const run_sonny6327_tests = b.addRunArtifact(sonny6327_tests);
-    run_sonny6327_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6327_tests);
     shardDep(test_step, &run_sonny6327_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6327_step = b.step("test-sonny6327-fle-read-gaps", "Run SONNY-6327 regression (an encrypted edge property is read by the node FLE policy on every surface: member access, WHERE, aggregates, properties(), the wire and JSON encodings; a value that does not decrypt is an error, never the stored bytes; the FLE catalog answers under its mutex; CALL geode.fle.revokePlaintext; the QUIC write fast paths never store an encrypted field's plaintext)");
     sonny6327_step.dependOn(&run_sonny6327_tests.step);
@@ -16929,7 +16929,7 @@ pub fn build(b: *std.Build) void {
     sonny6334_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6334_tests = b.addTest(.{ .root_module = sonny6334_test_mod });
     const run_sonny6334_tests = b.addRunArtifact(sonny6334_tests);
-    run_sonny6334_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6334_tests);
     shardDep(test_step, &run_sonny6334_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6334_step = b.step("test-sonny6334-fle-authorization", "Run SONNY-6334 regression (FLE administration -- configureField, grantPlaintext, revokePlaintext, key-affecting tde.* -- is Admin only, refusals 42501 + audited, catalog unchanged; plaintext needs the FLE role in the field's list AND GPS decrypt_field; gRPC installs and clears the FLE request context like QUIC; grant/revoke/configure are audit events; a ReadWrite user cannot obtain plaintext over the executor, gRPC or QUIC)");
     sonny6334_step.dependOn(&run_sonny6334_tests.step);
@@ -16945,7 +16945,7 @@ pub fn build(b: *std.Build) void {
     sonny6341_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     const sonny6341_tests = b.addTest(.{ .root_module = sonny6341_test_mod });
     const run_sonny6341_tests = b.addRunArtifact(sonny6341_tests);
-    run_sonny6341_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6341_tests);
     shardDep(test_step, &run_sonny6341_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6341_step = b.step("test-sonny6341-fle-role-binding", "Run SONNY-6341 regression (the FLE role a session acts under is one the authenticated user holds: CALL geode.fle.grantRole/revokeRole, Admin only, audited, stored in the HMAC-chained security graph and reloaded; a HELLO naming an unheld role connects with no FLE role and is audited; grant/revoke count from the next request; auth off unchanged; QUIC, gRPC and the CLI, across a restart)");
     sonny6341_step.dependOn(&run_sonny6341_tests.step);
@@ -17720,7 +17720,7 @@ pub fn build(b: *std.Build) void {
     sonny6345_test_mod.addImport("logging", logging_mod);
     const sonny6345_tests = b.addTest(.{ .root_module = sonny6345_test_mod });
     const run_sonny6345_tests = b.addRunArtifact(sonny6345_tests);
-    run_sonny6345_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6345_tests);
     shardDep(test_step, &run_sonny6345_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6345_step = b.step("test-sonny6345-auth-cli-and-grant", "Run the SONNY-6345 regression (geode auth verify / init use the server's default data dir with no --data-dir or GEODE_DATA_DIR; verify of a store with no security graph creates nothing and exits 1; GRANT / REVOKE of a missing user is 42704; auth DDL results own their status rows)");
     sonny6345_step.dependOn(&run_sonny6345_tests.step);
@@ -17774,7 +17774,7 @@ pub fn build(b: *std.Build) void {
     sonny6359_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     const sonny6359_tests = b.addTest(.{ .root_module = sonny6359_test_mod });
     const run_sonny6359_tests = b.addRunArtifact(sonny6359_tests);
-    run_sonny6359_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6359_tests);
     shardDep(test_step, &run_sonny6359_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6359_step = b.step("test-sonny6359-auth-residuals", "Run the SONNY-6359 regression (an Admin's ALTER USER <other> SET PASSWORD over QUIC and gRPC runs as user_reset_password with the policy; user_change_password always checks the old password; auth procedure failures are GQLSTATUS errors, not 00000 'error:' rows; one passphrase word count; hasGraphGrant and the grant listings wait for auth_ddl_lock; auth verify saves and leaks nothing; in-repo script admin seeds meet the policy; spawns a server and the CLI)");
     sonny6359_step.dependOn(&run_sonny6359_tests.step);
@@ -18019,7 +18019,7 @@ pub fn build(b: *std.Build) void {
     sonny6358_test_mod.addImport("geode_auth", auth_mod);
     const sonny6358_tests = b.addTest(.{ .root_module = sonny6358_test_mod });
     const run_sonny6358_tests = b.addRunArtifact(sonny6358_tests);
-    run_sonny6358_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6358_tests);
     shardDep(test_step, &run_sonny6358_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6358_step = b.step("test-sonny6358-offline-password-hash", "Run the SONNY-6358 regression (offline geode user create / update --password store an Argon2id hash, never the password, and seal the __geode_security chain, also on a store with no auth records; the server then starts and logs the user in; spawns the CLI and a server)");
     sonny6358_step.dependOn(&run_sonny6358_tests.step);
@@ -18040,7 +18040,7 @@ pub fn build(b: *std.Build) void {
     sonny6367_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny6367_tests = b.addTest(.{ .root_module = sonny6367_test_mod });
     const run_sonny6367_tests = b.addRunArtifact(sonny6367_tests);
-    run_sonny6367_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6367_tests);
     shardDep(test_step, &run_sonny6367_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6367_step = b.step("test-sonny6367-offline-user-cli", "Run the SONNY-6367 regression (offline geode user create / update --role and assign-role give the user the built-in role and refuse any other; user list / show print the stored role; show / enable / disable of a missing user fail; user_enable / user_disable / user_set_attribute / role_create / user_import / mfa_* failures are GQLSTATUS errors; a BLAKE2b-imported user logs in over QUIC; the dead offline user stores are gone; CLAUDE.md's gql_conformance count; spawns the CLI and a server)");
     sonny6367_step.dependOn(&run_sonny6367_tests.step);
@@ -18071,7 +18071,7 @@ pub fn build(b: *std.Build) void {
     sonny3034_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3034_tests = b.addTest(.{ .root_module = sonny3034_test_mod });
     const run_sonny3034_tests = b.addRunArtifact(sonny3034_tests);
-    run_sonny3034_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3034_tests);
     shardDep(test_step, &run_sonny3034_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3034_step = b.step("test-sonny3034-rls-restrictions-durable", "Run the SONNY-3034 regression (geode.rls.add_deny_policy / add_attribute_policy restrictions and their removal survive a server restart; spawns a server)");
     sonny3034_step.dependOn(&run_sonny3034_tests.step);
@@ -18094,7 +18094,7 @@ pub fn build(b: *std.Build) void {
     sonny6369_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny6369_tests = b.addTest(.{ .root_module = sonny6369_test_mod });
     const run_sonny6369_tests = b.addRunArtifact(sonny6369_tests);
-    run_sonny6369_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6369_tests);
     shardDep(test_step, &run_sonny6369_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6369_step = b.step("test-sonny6369-query-exit-auth-residuals", "Run the SONNY-6369 regression (geode query exits 1 when the query fails; a superuser cannot be given another role; geode.rls add / remove and user_remove_attribute failures are GQLSTATUS errors and the attribute results own their rows; GQL_AUTH_DDL / gql_conformance docs; EXPLAIN POLICY reports the procedure gate, the DDL schema gates and the USE GRAPH bind check; BLAKE2b hashes become Argon2id at login, the legacy check takes Argon2id's time; spawns the CLI and a server)");
     sonny6369_step.dependOn(&run_sonny6369_tests.step);
@@ -18132,7 +18132,7 @@ pub fn build(b: *std.Build) void {
     sonny6377_sec_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny6377_sec_tests = b.addTest(.{ .root_module = sonny6377_sec_test_mod });
     const run_sonny6377_sec_tests = b.addRunArtifact(sonny6377_sec_tests);
-    run_sonny6377_sec_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6377_sec_tests);
     shardDep(test_step, &run_sonny6377_sec_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6377_sec_step = b.step("test-sonny6377-security-residuals", "Run the SONNY-6377 items 3-6 regression (one denied row does not deny the table's other rows; user_import / list_deny_policies / policy_count results own their rows and policy_count with no engine is 55000; setAttribute under allocation failure; the login hash upgrade and the ALTER USER intercepts survive a SIGKILL; spawns a server)");
     sonny6377_sec_step.dependOn(&run_sonny6377_sec_tests.step);
@@ -18148,7 +18148,7 @@ pub fn build(b: *std.Build) void {
     sonny6384_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6384_tests = b.addTest(.{ .root_module = sonny6384_test_mod });
     const run_sonny6384_tests = b.addRunArtifact(sonny6384_tests);
-    run_sonny6384_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6384_tests);
     shardDep(test_step, &run_sonny6384_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6384_step = b.step("test-sonny6384-offline-change-crash-durability", "Run the SONNY-6384 item 1 regression (after an offline geode user change, CREATE USER and ALTER USER over the wire survive a SIGKILL, the next start loads the security graph and the chain verifies; spawns the CLI and a server)");
     sonny6384_step.dependOn(&run_sonny6384_tests.step);
@@ -18210,7 +18210,7 @@ pub fn build(b: *std.Build) void {
     const sonny3122_tests = b.addTest(.{ .root_module = sonny3122_test_mod });
     spawnsBuiltGeode(sonny3122_tests);
     const run_sonny3122_tests = b.addRunArtifact(sonny3122_tests);
-    run_sonny3122_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3122_tests);
     shardDep(test_step, &run_sonny3122_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3122_step = b.step("test-sonny3122-dropped-graph-not-recreated", "Run the SONNY-3122 regression (a session on a graph another session dropped cannot write to it over gRPC or QUIC, its fast paths included; a write waiting for the lock while the graph is dropped is told it is gone; the write lock of a graph that exists nowhere creates nothing, while the default graph is still materialized; spawns a server)");
     sonny3122_step.dependOn(&run_sonny3122_tests.step);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -21,7 +22,7 @@ test "protocol hashagg spill threshold does not break execution" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         &.{"GEODE_SPILL_THRESHOLD_BYTES=1"},
     );
     defer server.deinit();

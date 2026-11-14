@@ -127,7 +127,7 @@ test "SONNY-3122: the write lock of a graph that exists nowhere is GraphNotFound
 // same lock; against a spawned server.
 // ---------------------------------------------------------------------------
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 
 fn quicExec(allocator: std.mem.Allocator, c: *util.QuicProtoClient, q: []const u8) !?[]const u8 {
     var r = try c.executeAndCollectWithTimeout(allocator, q, util.emptyParams(), 100, 30);

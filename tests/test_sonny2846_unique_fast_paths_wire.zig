@@ -14,6 +14,7 @@
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=WireRegression; STATUS=TESTED; TEST=tests/test_sonny2846_unique_fast_paths_wire.zig; OWNER=transport; UPDATED=2026-11-11
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -104,7 +105,7 @@ fn exercise(env: []const []const u8, concurrency: bool) !void {
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         env,
     );
     defer server.deinit();

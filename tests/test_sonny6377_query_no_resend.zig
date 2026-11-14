@@ -3,12 +3,14 @@
 //
 // Root cause (reproduced on fix/sonny738-security-20261111, Debug build):
 // `geode query --file` on a file over 16 KiB ships each 32 KiB chunk as one
-// program. A chunk of 400 CREATEs takes ~38 s in a Debug server (about 13
-// fdatasync calls per statement), longer than the default 30 s `--timeout`,
-// so the client's read timed out (error.Timeout) while the server was still
-// applying the chunk. executeChunkedQueries counted ANY Zig error from the
-// transport as "the server rejected the chunk" and replayed its statements one
-// by one on a new connection, so every statement landed twice:
+// program. When the client's read timed out (error.Timeout) while the server
+// was still applying the chunk (the original report saw a 400-CREATE chunk
+// outlast the default 30 s `--timeout`; measured for SONNY-6534 it takes
+// 6-10 s in a Debug server, about 2 fdatasync calls per statement, so the
+// test below stops the server mid-chunk to force the timeout),
+// executeChunkedQueries counted ANY Zig error from the transport as "the
+// server rejected the chunk" and replayed its statements one by one on a new
+// connection, so every statement landed twice:
 //
 //     Executing chunk 1-400 of 400 statements...
 //     Error executing chunk: error.Timeout

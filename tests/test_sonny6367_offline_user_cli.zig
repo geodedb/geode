@@ -45,7 +45,7 @@ const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const Role = user_mgmt.Role;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 const hmac_hex = "6c" ** 32;
 const HMAC_KEY = [_]u8{0x67} ** 32;
 
