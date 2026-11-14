@@ -6304,6 +6304,16 @@
 
 ### Removed
 
+- **`tests/benchmark_merge_adapter_variance.zig` (SONNY-6541 item 6).**
+  `tests/all_tests.zig` imported it as an unreferenced constant, so nothing
+  ever compiled it, and it could not compile (`std.time.nanoTimestamp`,
+  `std.Io.getStdErr`, both gone in Zig 0.16). Its counter assertions are
+  stale as well: MERGE resolves its node through the MERGE property index
+  since GAP-0894, which the exact-lookup counter it asserted on does not
+  count. What it checked live elsewhere: node and relationship MERGE take
+  no read snapshot and no label scan (`zig build test-gap0511-regression`),
+  and MERGE throughput (`zig build bench-merge`). Its two CANARY markers
+  (REQ-PERF-MERGE-004, REQ-PERF-MERGE-007, BENCHED) go with it.
 - **A statement or session transaction keeps its shard's WAL record batch
   (SONNY-6528 item 7).** `beginStatementTxn` and `beginSessionTxn` wrote out
   the batch `beginTxn` had opened (`releaseSpanningTxnWalBatch`), so a

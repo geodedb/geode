@@ -85,7 +85,6 @@ const _benchmark_snapshot_compaction_variance = @import("benchmark_snapshot_comp
 const _benchmark_tenant_registry_variance = @import("benchmark_tenant_registry_variance.zig");
 const _benchmark_gpu_flagger_enumeration_variance = @import("benchmark_gpu_flagger_enumeration_variance.zig");
 const _benchmark_unique_perf_variance = @import("benchmark_unique_perf_variance.zig");
-const _benchmark_merge_adapter_variance = @import("benchmark_merge_adapter_variance.zig");
 const _path_quantifier_tiebreak_stress = @import("test_path_quantifier_tiebreak_stress.zig");
 const _benchmark_snapshot_load_optimized_variance = @import("benchmark_snapshot_load_optimized_variance.zig");
 const _benchmark_path_multibranch_variance = @import("benchmark_path_multibranch_variance.zig");
