@@ -2346,6 +2346,12 @@
   restart now hydrates the graph, as a server's first read already did.
   Regression: `zig build test-sonny6541-quarantine-first-read` (in process
   and against a real server).
+- **SHOW TABLES fails when its label listing fails (SONNY-6541 item 4).** It
+  answered an empty table list instead (`catch &.{}`): forced in the
+  regression by failing each of the statement's allocations in turn, four
+  of which answered zero rows. A quarantined graph was refused only through
+  the store's separate quarantine note. Regression: `zig build
+  test-sonny6541-show-tables-errors`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
