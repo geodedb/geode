@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T05:40:04.41495358Z",
+  "generated_at": "2026-11-14T05:40:21.492839847Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -915,18 +915,18 @@
       "id": "GQL-39075-RQ-0019",
       "features": [
         {
-          "feature": "Conformance/PrivilegeViolation42000",
+          "feature": "Conformance/PrivilegeViolationClass42",
           "aspect": "SQLSTATE",
           "status": "TESTED",
           "files": [
             "tests/test_gql_conformance_rq.zig"
           ],
           "tests": [
-            "TestCANARY_GQL39075_RQ_0019_PrivilegeViolation42000"
+            "TestCANARY_GQL39075_RQ_0019_PrivilegeViolationClass42"
           ],
           "benches": [],
           "owner": "conformance",
-          "updated": "2026-02-23"
+          "updated": "2026-11-14"
         }
       ]
     },

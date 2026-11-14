@@ -54,7 +54,7 @@ GQL-39075-RQ-0017,Conformance/SessionParamPrefix,ImplDefined,TESTED,tests/test_g
 GQL-39075-RQ-0017,GQL Conformance Profile,SessionParamPrefixDeclaration,TESTED,src/conformance.zig,TestCANARY_GQL39075_RQ_0017_SessionParamPrefix,,conformance,2026-02-23
 GQL-39075-RQ-0018,Conformance/GA08DiagnosticGating,FeatureFlag,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0018_GA08DiagnosticGating,,conformance,2026-02-23
 GQL-39075-RQ-0018,GQL Feature Gating,GA08DiagnosticGating,TESTED,src/server/server_flags.zig,TestCANARY_GQL39075_RQ_0018_GA08FlagPresent,,conformance,2026-02-23
-GQL-39075-RQ-0019,Conformance/PrivilegeViolation42000,SQLSTATE,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0019_PrivilegeViolation42000,,conformance,2026-02-23
+GQL-39075-RQ-0019,Conformance/PrivilegeViolationClass42,SQLSTATE,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0019_PrivilegeViolationClass42,,conformance,2026-11-14
 GQL-39075-RQ-0020,Conformance/ConnectionLoss40003_08007,SQLSTATE,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0020_ConnectionLoss40003_08007,,conformance,2026-02-23
 GQL-39075-RQ-0021,Conformance/ImplTransactionsExplicit,GT01,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0021_ImplTransactionsAreExplicit,,conformance,2026-02-23
 GQL-39075-RQ-0022,CaseInsensitivity/FindFunction,Regression,TESTED,src/gql/language_metadata.zig,test_findFunction_is_case_insensitive,,gql,2026-04-10
