@@ -13945,6 +13945,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
     shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6555 item 6: OFFSET/SKIP before LIMIT in every page clause. See tests/test_sonny6555_page_clause_order.zig.
+    const sonny6555_page_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_page_clause_order.zig"), .target = target, .optimize = optimize });
+    sonny6555_page_mod.addImport("geode", root_mod);
+    sonny6555_page_mod.addImport("logging", logging_mod);
+    sonny6555_page_mod.link_libc = true;
+    const sonny6555_page_tests = b.addTest(.{ .root_module = sonny6555_page_mod });
+    const run_sonny6555_page_tests = b.addRunArtifact(sonny6555_page_tests);
+    shardDep(test_step, &run_sonny6555_page_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-page-clause-order", "Run SONNY-6555 item 6 regression (ISO/IEC 39075 14.9: a WITH, a leading WITH, a UNION's trailing page and FOR take OFFSET/SKIP before LIMIT; LIMIT before OFFSET stays a Geode extension; a repeated clause is 42000; the rows are paged in every session kind)").dependOn(&run_sonny6555_page_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
