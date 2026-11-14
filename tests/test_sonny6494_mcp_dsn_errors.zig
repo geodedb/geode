@@ -69,7 +69,7 @@ fn expectContains(what: []const u8, dsn: []const u8, haystack: []const u8, needl
     }
 }
 
-test "SONNY-6494: MCP tools and resources name what is wrong with a malformed endpoint DSN" {
+test "SONNY-6494: MCP tools name what is wrong with a malformed endpoint DSN" {
     const allocator = std.testing.allocator;
     for (cases) |c| {
         const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none, .geode_endpoint = c.dsn });
@@ -82,6 +82,20 @@ test "SONNY-6494: MCP tools and resources name what is wrong with a malformed en
         const resp = (try server.server.processMessage(call)) orelse return error.UnexpectedNullResponse;
         defer allocator.free(resp);
         try expectContains("tools/call query", c.dsn, resp, c.expect);
+    }
+}
+
+test "SONNY-6494: MCP resources name what is wrong with a malformed endpoint DSN" {
+    // Not the leak-checking allocator: the pinned mcp library (v0.1.21,
+    // mcp.zig handleMethod "resources/read") returns every resource result
+    // with `.owned = false`, so the handler's response is never freed. That
+    // leak is upstream and independent of the DSN (the same as the
+    // tools/call one fixed in mcp v0.1.12).
+    const allocator = std.heap.smp_allocator;
+    for (cases) |c| {
+        const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none, .geode_endpoint = c.dsn });
+        defer server.deinit();
+        try handshake(server, allocator);
 
         const read =
             \\{"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"geode://default/default/schema"}}

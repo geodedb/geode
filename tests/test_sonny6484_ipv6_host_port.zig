@@ -8,7 +8,7 @@
 // `[::1]` (brackets kept, never resolvable) and a bare `::1` gave the host
 // `:` and port 1; the MCP endpoint parser (geode-client-zig `parseDSN`) did
 // the same with a bare `::1`. A bare (unbracketed) IPv6 literal is now
-// refused, not misread.
+// refused, not misread (by geode-client-zig itself since v0.3.16).
 
 const std = @import("std");
 const bridge = @import("zig_quic_bridge");
@@ -51,6 +51,8 @@ test "SONNY-6484: parseHostPort refuses a bare IPv6 literal and malformed bracke
         "[]:3141",
         "[127.0.0.1]:3141", // brackets are for IPv6 only
         "localhost:http",
+        "localhost:0", // SONNY-6494: no server can be dialled on port 0
+        "[::1]:0",
     }) |addr| {
         if (bridge.parseHostPort(addr, 3141)) |hp| {
             std.debug.print("accepted {s} as host '{s}' port {d}\n", .{ addr, hp.host, hp.port });
@@ -59,7 +61,13 @@ test "SONNY-6484: parseHostPort refuses a bare IPv6 literal and malformed bracke
     }
 }
 
-test "SONNY-6484: checkDsnHost refuses a DSN whose host is a bare IPv6 literal" {
+test "SONNY-6484: the MCP endpoint DSN parser refuses a bare IPv6 host" {
+    // SONNY-6494: geode's own pre-check (checkDsnHost) is gone; the MCP
+    // endpoint goes straight to geode-client-zig's parseDSN, which since
+    // v0.3.16 refuses an unbracketed IPv6 host itself.
+    const parseDSN = bridge.zig_client.config.parseDSN;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     for ([_][]const u8{
         "localhost",
         "localhost:3141",
@@ -72,7 +80,7 @@ test "SONNY-6484: checkDsnHost refuses a DSN whose host is a bare IPv6 literal" 
         "quic://[fe80::1%eth0]:3141",
         "localhost:3141?hello_name=a:b:c",
     }) |dsn| {
-        bridge.checkDsnHost(dsn) catch |err| {
+        _ = parseDSN(arena.allocator(), dsn) catch |err| {
             std.debug.print("refused {s}: {s}\n", .{ dsn, @errorName(err) });
             return err;
         };
@@ -85,6 +93,6 @@ test "SONNY-6484: checkDsnHost refuses a DSN whose host is a bare IPv6 literal" 
         "grpc://[::1",
         "quic://[::1]x",
     }) |dsn| {
-        try std.testing.expectError(error.InvalidAddress, bridge.checkDsnHost(dsn));
+        try std.testing.expectError(error.InvalidDSN, parseDSN(arena.allocator(), dsn));
     }
 }

@@ -7,7 +7,8 @@ const mcp = @import("mcp");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-038; FEATURE="JSON Library Migration"; ASPECT=MCPTools; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const json_lib = @import("json");
 
-const GeodeClient = @import("client.zig").GeodeClient;
+const mcp_client = @import("client.zig");
+const GeodeClient = mcp_client.GeodeClient;
 const lsp = @import("lsp.zig");
 
 // CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=ToolsThreading; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-21
@@ -164,8 +165,8 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: 
     const endpoint_str = endpoint orelse "localhost:3141";
 
     // Create client and execute query
-    const client = GeodeClient.init(allocator, endpoint_str) catch {
-        return try formatErrorResponse(allocator, "Failed to initialize client");
+    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
     };
     defer client.deinit();
 
@@ -226,8 +227,8 @@ fn looksLikeQueryError(payload: []const u8) bool {
 fn getSchema(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
     const endpoint_str = endpoint orelse "localhost:3141";
 
-    const client = GeodeClient.init(allocator, endpoint_str) catch {
-        return try formatErrorResponse(allocator, "Failed to initialize client");
+    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
     };
     defer client.deinit();
 
@@ -249,8 +250,8 @@ fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
 
     const endpoint_str = endpoint orelse "localhost:3141";
 
-    const client = GeodeClient.init(allocator, endpoint_str) catch {
-        return try formatErrorResponse(allocator, "Failed to initialize client");
+    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
     };
     defer client.deinit();
 
@@ -265,8 +266,8 @@ fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
 fn listCatalogs(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
     const endpoint_str = endpoint orelse "localhost:3141";
 
-    const client = GeodeClient.init(allocator, endpoint_str) catch {
-        return try formatErrorResponse(allocator, "Failed to initialize client");
+    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
     };
     defer client.deinit();
 
@@ -291,8 +292,8 @@ fn listGraphs(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []
 
     const endpoint_str = endpoint orelse "localhost:3141";
 
-    const client = GeodeClient.init(allocator, endpoint_str) catch {
-        return try formatErrorResponse(allocator, "Failed to initialize client");
+    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
     };
     defer client.deinit();
 

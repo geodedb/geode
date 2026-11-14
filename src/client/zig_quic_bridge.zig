@@ -63,8 +63,12 @@ fn initClientWithInsecureSetting(
 /// host `:` port 1.
 /// SONNY-6487: the grammar is `host_port.split` (shared by every address
 /// parser); a port that is not 1-5 digits is `error.InvalidPort`.
+/// SONNY-6494: so is port 0 here. The grammar accepts it because a listener
+/// takes 0 as "any free port", but no server can be dialled on it (the send
+/// failed with a bare `Unexpected`).
 pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPort {
     const hp = try host_port.split(addr, default_port);
+    if (hp.port == 0) return error.InvalidPort;
     return .{
         .host = if (hp.host.len == 0) "127.0.0.1" else hp.host,
         .port = hp.port,
@@ -73,46 +77,24 @@ pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPo
 
 const isIpv6Literal = host_port.isIpv6Literal;
 
+/// An IPv6 literal with a `%zone`, bracketed or not.
+pub fn isZonedIpv6(host: []const u8) bool {
+    const bare = if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host[1 .. host.len - 1] else host;
+    return isIpv6Literal(bare) and std.mem.indexOfScalar(u8, bare, '%') != null;
+}
+
 /// SONNY-6494: the grammar accepts an IPv6 zone (`[fe80::1%eth0]:3141`), but
 /// the quic dialler cannot parse one, so geode-client-zig refuses it with
 /// `error.Ipv6ZoneUnsupported` when it connects. Refuse it here, before a
 /// client is built, and say why.
 fn refuseIpv6Zone(host: []const u8) error{Ipv6ZoneUnsupported}!void {
-    const bare = if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host[1 .. host.len - 1] else host;
-    if (!isIpv6Literal(bare) or std.mem.indexOfScalar(u8, bare, '%') == null) return;
+    if (!isZonedIpv6(host)) return;
     if (!@import("builtin").is_test) std.debug.print(
         "Error: '{s}' is an IPv6 address with a zone; the CLI's QUIC client cannot dial a " ++
             "zoned address. Use a global or loopback IPv6 address, an IPv4 address, or a host name.\n",
         .{host},
     );
     return error.Ipv6ZoneUnsupported;
-}
-
-/// SONNY-6484: refuse a DSN whose host is an unbracketed IPv6 literal
-/// (`::1`, `quic://2001:db8::1/g`) or has malformed brackets, before it
-/// reaches geode-client-zig's `parseDSN`, which splits an unbracketed host
-/// on its last colon (`::1` became host `:` port 1). The host part is
-/// located the way `parseDSN` locates it: after `scheme://` and, with a
-/// scheme, after the first `@`; up to the first `?`, then the first `/`
-/// outside brackets. A bracketed host must be an IPv6 literal (zone
-/// allowed) followed by nothing or `:port`.
-pub fn checkDsnHost(dsn: []const u8) error{InvalidAddress}!void {
-    var rest = dsn;
-    if (std.mem.indexOf(u8, rest, "://")) |scheme_end| {
-        rest = rest[scheme_end + 3 ..];
-        if (std.mem.indexOfScalar(u8, rest, '@')) |at| rest = rest[at + 1 ..];
-    }
-    if (std.mem.indexOfScalar(u8, rest, '?')) |q| rest = rest[0..q];
-    if (rest.len > 0 and rest[0] == '[') {
-        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return error.InvalidAddress;
-        if (!isIpv6Literal(rest[1..close])) return error.InvalidAddress;
-        const after = rest[close + 1 ..];
-        const port_end = std.mem.indexOfScalar(u8, after, '/') orelse after.len;
-        if (port_end != 0 and after[0] != ':') return error.InvalidAddress;
-        return;
-    }
-    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| rest = rest[0..slash];
-    if (std.mem.count(u8, rest, ":") > 1) return error.InvalidAddress;
 }
 
 /// How `initClient` treats the server's certificate (SONNY-6448).

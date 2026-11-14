@@ -1099,6 +1099,15 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(1);
     }
 
+    // SONNY-6494: a malformed --endpoint DSN is refused here, saying what is
+    // wrong, instead of every tool call later failing with "Failed to
+    // initialize client". The DSN is not echoed: it may carry a password.
+    if (endpoint) |ep| geode_mcp.client.checkEndpoint(allocator, ep) catch |err| {
+        const why = geode_mcp.client.endpointErrorMessage(err) orelse @errorName(err);
+        std.debug.print("Error: --endpoint: {s}\n", .{why});
+        std.process.exit(2);
+    };
+
     // SEC-08: Also check GEODE_MCP_TOKEN env var as fallback for bearer token
     if (bearer_token == null) {
         bearer_token = posixGetenv("GEODE_MCP_TOKEN");

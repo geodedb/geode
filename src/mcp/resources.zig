@@ -7,7 +7,8 @@ const build_options = @import("build_options");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-042; FEATURE="JSON Library Migration"; ASPECT=MCPResources; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const json_lib = @import("json");
 
-const GeodeClient = @import("client.zig").GeodeClient;
+const mcp_client = @import("client.zig");
+const GeodeClient = mcp_client.GeodeClient;
 
 // MCP Resource Response Types for JSON Library encoding
 const McpResourceResponse = struct {
@@ -49,8 +50,8 @@ pub fn readResource(allocator: std.mem.Allocator, endpoint: ?[]const u8, uri: []
 
 /// Read schema resource from Geode server
 fn readSchemaResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
-    const client = GeodeClient.init(allocator, endpoint) catch {
-        return try formatResourceError(allocator, "Failed to connect to Geode server");
+    const client = GeodeClient.init(allocator, endpoint) catch |err| {
+        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 
@@ -65,8 +66,8 @@ fn readSchemaResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]con
 
 /// Read stats resource from Geode server
 fn readStatsResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
-    const client = GeodeClient.init(allocator, endpoint) catch {
-        return try formatResourceError(allocator, "Failed to connect to Geode server");
+    const client = GeodeClient.init(allocator, endpoint) catch |err| {
+        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 
@@ -79,8 +80,8 @@ fn readStatsResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]cons
 
 /// Read config resource from Geode server
 fn readConfigResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
-    const client = GeodeClient.init(allocator, endpoint) catch {
-        return try formatResourceError(allocator, "Failed to connect to Geode server");
+    const client = GeodeClient.init(allocator, endpoint) catch |err| {
+        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 

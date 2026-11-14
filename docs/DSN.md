@@ -2,7 +2,7 @@
 
 **Version**: 1.1.0
 **Status**: Official Specification
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-11-13
 
 This document defines the official DSN (Data Source Name) format for Geode client libraries. All client implementations MUST conform to this specification.
 
@@ -81,9 +81,36 @@ Refused with `InvalidAddress`, never reinterpreted:
 - a port that is not 1-5 digits or is above 65535 (empty, `http`, `+80`,
   `3_141`, `70000`). No parser replaces a bad port with a default any more
   (`--listen` used to fall back to 3141, `--audit-syslog` to 514,
-  `GEODE_CLUSTER_PORT` to 4242); the MCP endpoint DSN still goes through
-  geode-client-zig's lenient `parseDSN`, which falls back to the default
-  port for such a port.
+  `GEODE_CLUSTER_PORT` to 4242, and, before geode-client-zig v0.3.16, the
+  lenient `parseDSN` behind the MCP endpoint to 3141).
+
+**Port 0.** The grammar accepts `0`: for a listener (`geode serve --listen :0`) it
+means "any free port". A client cannot
+dial it, so every client address refuses it: `--server` and `--dsn` (CLI),
+and the MCP endpoint DSN. geode-client-zig's `parseDSN` itself parses
+`host:0` as port 0; geode checks it before building a client. (A client
+port 0 used to fail at the first send with a bare `Unexpected`.)
+
+**How the MCP endpoint reports a bad DSN** (`geode mcp --endpoint`,
+SONNY-6494). geode-client-zig v0.3.16 parses the DSN with this grammar and
+names the fault; geode turns each error into a message (the DSN itself is
+never echoed, since it may carry a password). `geode mcp` refuses a bad
+`--endpoint` at startup (exit 2, `Error: --endpoint: <message>`); a tool
+call answers `Error: <message>` (`isError: true`) and a resource read
+`{"error": "<message>"}`:
+
+| Error | Cause | Message starts with |
+|-------|-------|---------------------|
+| `InvalidDSN` | unbracketed IPv6 host, text after `]` other than `:port`, brackets around a non-IPv6 host, empty host | `Invalid Geode endpoint DSN: the host must be ...` |
+| `InvalidPort` | port not 1-5 digits, above 65535, or 0 | `Invalid Geode endpoint DSN: the port must be 1-65535 ...` |
+| `UnsupportedScheme` | a scheme other than `quic://` / `grpc://` | `Invalid Geode endpoint DSN: unsupported scheme ...` |
+| `InputTooLong` | a percent-decoded credential or parameter over the client's limit | `Invalid Geode endpoint DSN: a credential or parameter value is too long` |
+| `Ipv6ZoneUnsupported` | an IPv6 address with a zone (`[fe80::1%eth0]`) | `Invalid Geode endpoint DSN: an IPv6 address with a zone ...` |
+| `InsecureTlsRefused` | `insecure=true` under production posture (SONNY-6453) | `Refused: the endpoint DSN sets insecure=true ...` |
+
+Any other failure (the server cannot be reached, TLS, authentication)
+keeps the generic `Failed to initialize client` / `Failed to connect to
+Geode server` or the transport error's name.
 
 `geode serve --listen` also takes `<port>` or `:<port>` (0.0.0.0) and a host
 without a port (port 3141; `--listen localhost` used to bind

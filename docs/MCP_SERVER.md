@@ -121,6 +121,18 @@ under production conditions (a release build or `GEODE_ENV=production`)
 unless `GEODE_ALLOW_INSECURE_TLS=1` is set, and logged as a warning on
 stderr whenever it is accepted.
 
+### Backend endpoint DSN errors
+
+`geode mcp --endpoint <dsn>` checks the DSN at startup and refuses a
+malformed one (exit 2, `Error: --endpoint: <message>`; the DSN is not
+echoed). A tool call or resource read on a server whose endpoint is
+malformed answers with the same message instead of a generic failure. The
+host must be a name, an IPv4 address or a bracketed IPv6 address
+(`quic://[::1]:3141`, IPv6 servers are reachable since geode-client-zig
+v0.3.16); the port 1-65535 (0 is refused); the scheme `quic://` or
+`grpc://`. See [DSN.md](DSN.md#ipv6-addresses) for the error table
+(SONNY-6494).
+
 ## Verification
 
 - `zig build test-gap0516` — drives the real MCP dispatch:

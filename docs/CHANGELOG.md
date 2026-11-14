@@ -2298,6 +2298,25 @@
 
 ### Fixed
 
+- **A malformed MCP endpoint DSN says what is wrong (SONNY-6494;
+  geode-client-zig v0.3.16).** The client library now parses a DSN with
+  geode's host:port grammar and names the fault (`InvalidDSN`,
+  `InvalidPort`, `UnsupportedScheme`), but geode's MCP tools answered every
+  such endpoint with `Error: Failed to initialize client`, its resources
+  with `Failed to connect to Geode server`, and `geode mcp --endpoint
+  <bad DSN>` started anyway. `src/mcp/client.zig` maps each error to a
+  message (docs/DSN.md, "How the MCP endpoint reports a bad DSN"); the
+  tools and resources return it, and **`geode mcp` now refuses a bad
+  `--endpoint` at startup** (exit 2, `Error: --endpoint: <message>`; the
+  DSN is not echoed because it may carry a password). geode's own
+  `checkDsnHost` pre-check is removed: the library refuses an unbracketed
+  IPv6 host itself (the error is now `InvalidDSN`, was `InvalidAddress`).
+  **Port 0 is refused for every client address** (`--server`, `--dsn`, the
+  MCP endpoint): the grammar keeps accepting it for listeners, where it
+  means "any free port", but a client dialling it failed at the first send
+  with a bare `Unexpected`. An IPv6 zone in the MCP endpoint is refused
+  with its reason. Regression: `zig build test-sonny6494-mcp-dsn-errors`.
+
 - **The CLI reaches IPv6 servers (SONNY-6494 item 6; geode-client-zig
   v0.3.16).** `geode query`, `geode shell`, `geode backup` and the other
   QUIC CLI commands refused every IPv6 destination with
