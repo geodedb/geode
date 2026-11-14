@@ -16705,19 +16705,25 @@ pub fn build(b: *std.Build) void {
     // reached by a running test, filtered by their fully qualified names
     // (src/lib.zig test "sonny6511-lib: inline test roots" keeps the files in
     // discovery).
-    const sonny6511_lib_inline_tests = b.addTest(.{ .name = "sonny6511-lib-inline", .root_module = root_mod, .filters = &.{
-        "sonny6511-lib:",
-        "security.multi_graph_security.test.",
-        "client.quic_query_runner.test.",
-        "client.repl.spinner.test.",
-        "performance.memory_mapped_io.test.",
-        "ml.graph_embeddings.test.",
-        "planner.cost_calibration.test.",
-        "planner.pipeline.test.",
-        "graph.community_louvain.test.",
-        "graph.community_label_propagation.test.",
-        "graph.containers.lfu.test.",
-    } });
+    const sonny6511_lib_inline_tests = b.addTest(.{
+        .name = "sonny6511-lib-inline",
+        .root_module = root_mod,
+        .filters = &.{
+            "sonny6511-lib:",
+            "security.multi_graph_security.test.",
+            "client.quic_query_runner.test.",
+            "client.repl.spinner.test.",
+            "performance.memory_mapped_io.test.",
+            "ml.graph_embeddings.test.",
+            "planner.cost_calibration.test.",
+            "planner.pipeline.test.",
+            "graph.community_louvain.test.",
+            "graph.community_label_propagation.test.",
+            "graph.containers.lfu.test.",
+            // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
+            "planner.test.",
+        },
+    });
     const run_sonny6511_lib_inline_tests = b.addRunArtifact(sonny6511_lib_inline_tests);
     shardDep(test_step, &run_sonny6511_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6511-lib-inline", "Run SONNY-6511 item 1: the inline tests of multi-graph security, the shared query runner, the shell spinner, memory-mapped I/O, graph embeddings, planner cost calibration and plan selection, and the community-detection and LFU modules tests use").dependOn(&run_sonny6511_lib_inline_tests.step);

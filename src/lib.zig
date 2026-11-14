@@ -977,6 +977,8 @@ test "sonny6511-lib: inline test roots" {
     _ = @import("graph/community_louvain.zig");
     _ = @import("graph/community_label_propagation.zig");
     _ = @import("graph/containers/lfu.zig");
+    // SONNY-6517 item 3: the planner's own inline tests.
+    _ = @import("planner.zig");
 }
 
 test "sonny6494-lib: inline test roots" {
