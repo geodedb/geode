@@ -1809,6 +1809,18 @@ pub const Quarantine = enum(u8) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION; FEATURE="GQL Auth DDL Persistence"; ASPECT=SecurityGraphWriteLock; STATUS=TESTED; TEST=tests/test_sonny6528_security_write_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+/// SONNY-6528 (2): what `StorageAdapter.holdSecurityGraphForWrite` took;
+/// `release` lets it go (a no-op when it took nothing).
+pub const SecurityWriteHold = struct {
+    adapter: ?*StorageAdapter = null,
+    mg: ?*ManagedGraph = null,
+
+    pub fn release(self: SecurityWriteHold) void {
+        if (self.mg) |mg| self.adapter.?.releaseGraphWriteLock(mg);
+    }
+};
+
 /// SONNY-6523: refuse a write to a quarantined graph before it reaches the
 /// engine. The graph's hydration found its store damaged (REQ-GQL-028); a
 /// write would build on it, and its WAL records would be replayed onto it.
@@ -4249,6 +4261,26 @@ pub const StorageAdapter = struct {
         self.unpinGraph(mg);
     }
 
+    /// SONNY-6528 (2): a write to the `__geode_security` graph holds the
+    /// graph's write lock (rwlock EXCLUSIVE) for the engine operation. The
+    /// security graph is written through `UserStorageBackend` and the auth
+    /// graph manager, by the auth and policy DDL (under `auth_ddl_lock`) and
+    /// by the login-state, password and legacy-hash writes (under no common
+    /// lock), and none of them held a lock of the graph's: two of them wrote
+    /// its shards at once (`GraphEngine.allocNode` and the page writes are
+    /// not synchronized), and a checkpoint of the graph, which drains its
+    /// writers by taking that lock, did not wait for them. No user statement
+    /// runs on the security graph, so nothing else writes it under its lock.
+    /// Taken last: the caller may hold any auth lock and its session graph's
+    /// lock, and nothing is acquired while it is held but the store's leaf
+    /// mutexes. A nested write on the same thread holds nothing more.
+    /// Every other graph: a no-op.
+    pub fn holdSecurityGraphForWrite(self: *StorageAdapter, mg: *const ManagedGraph) !SecurityWriteHold {
+        if (!std.mem.eql(u8, mg.name, graph_store.SECURITY_GRAPH_NAME)) return .{};
+        if (self.threadHoldsGraphWriteLock(mg.name)) return .{};
+        return .{ .adapter = self, .mg = try self.acquireGraphWriteLock(mg.name) };
+    }
+
     /// SONNY-6523: the graph's first-touch hydration failed with `err`
     /// (`GraphStore.ensureGraphHydrated`): its store is damaged, and every
     /// write to it is refused from now on (`refuseQuarantinedWrite`). A graph
@@ -4614,6 +4646,8 @@ pub const StorageAdapter = struct {
         // after it waits for this pin before freeing the graph.
         const mg = try self.pinOrCreateGraph(graph_name);
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
@@ -6723,6 +6757,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
 
@@ -6836,6 +6872,8 @@ pub const StorageAdapter = struct {
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
@@ -6918,6 +6956,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
         if (currentStatementTxnForGraph(graph_name)) |s| {
@@ -7048,6 +7088,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7134,6 +7176,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7215,6 +7259,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -8968,6 +9014,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
@@ -11938,6 +11986,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (adding a label re-indexes the node's properties under the new label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11971,6 +12021,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (removing a label drops the node's postings under that label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -12017,6 +12069,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
                 const from_shard = mg.shardEngineForNode(from_id);

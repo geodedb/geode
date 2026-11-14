@@ -2298,6 +2298,18 @@
 
 ### Fixed
 
+- **Writes to the security graph exclude each other and its checkpoint
+  (SONNY-6528 item 2).** The `__geode_security` records (users, roles,
+  permissions, policies, grants, the HMAC chain root) were written with no
+  lock of the graph's. The auth and policy DDL hold `auth_ddl_lock`, but the
+  login-state write after a failed login, the password and legacy-hash
+  writes do not, so two engine writers could work on the graph's shards at
+  once, and a checkpoint of the graph did not wait for them (both forced in
+  the regression: a permission record create, and a full checkpoint,
+  completed inside a role record's node create). Every storage-adapter write
+  to the security graph now holds the graph's write lock for the engine
+  operation (`StorageAdapter.holdSecurityGraphForWrite`). Regression: `zig
+  build test-sonny6528-security-write-exclusion`.
 - **A checkpoint of a graph waits for a Raft apply's write to it (SONNY-6528
   item 1).** A checkpoint takes the graph's rwlock exclusively to drain its
   writers before it writes the shard manifests, the label index and the
