@@ -4,7 +4,7 @@
 
 ## Overview
 
-Geode is a single-tenant graph database with strong ISO/IEC 39075:2024 GQL alignment — 96/96 named cases in its ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
+Geode is a single-tenant graph database with strong ISO/IEC 39075:2024 GQL alignment — 106/106 named cases in its ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
 
 ## Directory Structure
 
@@ -86,7 +86,7 @@ docs/
 
 - **Local test baseline**: see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical; expected ~175/179 named `zig build test-*` steps pass)
 - **Integration (geodetestlab)**: fresh harness run owed; last dated snapshot ~97% (1644/1688, historical)
-- **ISO conformance suite**: 96/96 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 21/21 (`zig build test-gql-conformance`)
+- **ISO conformance suite**: 106/106 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 21/21 (`zig build test-gql-conformance`)
 - **5,937 CANARY Markers** (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
 ### Known Issues

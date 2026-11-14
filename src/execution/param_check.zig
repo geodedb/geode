@@ -25,6 +25,9 @@
 //! - SONNY-3318, a path variable on an OPTIONAL MATCH after the first
 //!   pattern (0A000, `OptionalPathVariable`): no executor binds it (`count(p)`
 //!   answered 0 of the paths matched).
+//! - SONNY-6496, variable scope after a projection (42000,
+//!   `VariableNotInScope`): after a WITH or NEXT only the variables it
+//!   projects are in scope (scope_check.zig).
 //!
 //! The walk goes over the whole statement like the write walk
 //! (write_walk.zig): iteratively, and by reflection over every AST type, so
@@ -35,11 +38,13 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const Value = @import("../value_types.zig").Value;
+const scope_check = @import("scope_check.zig");
 
 /// What the checks refuse (the module doc has each one): `MissingParameter`
 /// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G0M),
-/// `InvalidWindowParameter` (22G03) and `OptionalPathVariable` (0A000).
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern };
+/// `InvalidWindowParameter` (22G03), `OptionalPathVariable` (0A000) and
+/// `VariableNotInScope` (42000).
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern, VariableNotInScope };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET). `values`: the supplied parameters' values (empty:
@@ -50,7 +55,7 @@ pub fn checkProgram(program: *const ast.Program, supplied: []const []const u8, v
 
 pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, values: []const Value) Error!void {
     var sfa = std.heap.stackFallback(4096, std.heap.smp_allocator);
-    var c = Collector{ .alloc = sfa.get() };
+    var c = Collector{ .alloc = sfa.get(), .vars = scope_check.Checker.init(std.heap.smp_allocator) };
     defer c.deinit();
     c.push(.stmt, stmt);
     while (c.stack.pop()) |item| {
@@ -72,6 +77,12 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
             },
             .query => {
                 const q: *const ast.Query = @ptrCast(@alignCast(item.ptr));
+                // SONNY-6496: the query and the parts chained after it, in
+                // the scope each starts with (once per query).
+                if (!c.out_of_scope) c.vars.checkQuery(q) catch |err| switch (err) {
+                    error.VariableNotInScope => c.out_of_scope = true,
+                    error.OutOfMemory => c.failed = true,
+                };
                 c.visitFields(ast.Query, q);
             },
             .expr => {
@@ -92,6 +103,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
     }
+    if (c.out_of_scope) return error.VariableNotInScope;
     // CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=InvalidWindowValue; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
     // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter the
     // request supplies is a non-negative integer. Any other value (-1, 2.0,
@@ -225,8 +237,12 @@ const Collector = struct {
     optional_path: bool = false,
     /// SONNY-3245: a CREATE or INSERT pattern breaks ISO 16.5.
     invalid_insert: bool = false,
+    /// SONNY-6496: the projection-scope check, and whether it refused.
+    vars: scope_check.Checker,
+    out_of_scope: bool = false,
 
     fn deinit(c: *Collector) void {
+        c.vars.deinit();
         c.stack.deinit(c.alloc);
         c.used.deinit(c.alloc);
         c.windows.deinit(c.alloc);

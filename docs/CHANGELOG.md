@@ -2508,6 +2508,136 @@
   change:** those queries return their NULL rows; a non-NFC string column
   is no longer index-served (slower, correct). Regression:
   `zig build test-sonny6499-orderby-fastpath-nulls`.
+- **EXPLAIN plans the start the planned read takes (SONNY-6496 item 4,
+  partial).** A single directed hop whose tail pattern is more selective
+  than its head starts from the tail and walks the hop backwards (Bug B);
+  PROFILE's scan collected the tail's nodes while EXPLAIN planned the
+  head's scan and the forward expand (`MATCH (a:H)-[:R]->(b:T {k: 2})`:
+  `LabelScan(est 5) ExpandOut` for 5 heads, the run started from 1 tail).
+  `planned_read_runtime.startsFromTail` now decides for both, so EXPLAIN
+  plans `LabelScan(est 3) ExpandIn` and PROFILE traces the same operators.
+  A multi-property inline map's seed key is chosen by the same function
+  (`chooseStartSeed`) for EXPLAIN and the run. Still open: PROFILE version 1
+  (the legacy executor's payload) does not report the exact-index seek the
+  legacy executor takes. Regression: `zig build test-sonny6496-explain-start`.
+- **FOR at the start of a subquery runs; DELETE ... RETURN ... ORDER BY /
+  LIMIT runs; CALL there and MERGE ... CREATE are refused with 0A000
+  (SONNY-6496 item 3).** Each was a syntax error (42000). A FOR may start
+  the query of an IN / NOT IN subquery or a CTE body (ISO/IEC 39075:2024
+  14.8 <for statement> is a <simple query statement>); it runs once over
+  the incoming row, as `WITH * FOR ...`, through the executor's existing
+  FOR-after-WITH path. `MATCH ... DELETE ... RETURN ... ORDER BY | SKIP |
+  LIMIT` is parsed as the query form (the DELETE statement form has no
+  page), which deletes every matched row and pages only the RETURN. A CALL
+  of a named procedure at the start of a subquery or a CTE body, and a
+  statement-level `MERGE ... CREATE`, are refused with
+  `UnsupportedQueryShape` (0A000) naming the shape, before anything runs:
+  no executor runs them. Regression: `zig build test-sonny6496-subquery-forms`.
+- **The write step keeps the scan's node copy (SONNY-6498 item 4).**
+  `match_operations.stabilizeValue` boxed again (`getNodePtrForScan`) a
+  node the scan had already boxed, one more detached copy per written row,
+  held until the graph's next checkpoint and charged to the write budget.
+  `GraphStore.isScanBox` answers in constant time (a set of the detached
+  boxes, kept with `scan_hydrated_nodes` under its leaf mutex) and such a
+  node is kept. Measured over 32 rows (in-memory): one SET group 3.00 ->
+  2.00 copies per row (1038 -> 705 bytes), two SET groups 4.00 -> 3.00
+  (1694 -> 1281), a node every row writes 4.03 -> 2.03 (1464 -> 736).
+  Regression: `zig build test-sonny3148-write-step-amplification` (bounds
+  2.0 / 3.0 / 3.5).
+- **An expression that fails fails the statement on every executor path
+  (SONNY-6498 item 3, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1: an
+  exception raised while a value expression is evaluated is the
+  statement's. About forty legacy-executor sites caught it instead: a comma
+  pattern's property map that read another pattern's variable matched
+  nothing (`MATCH (n), (t {k: n.k / 0})` answered no rows), its grouping
+  key and non-aggregated items were NULL, its aggregates skipped the row
+  whose argument failed; the chained-part aggregates (`... WITH n WITH n.g
+  AS g, sum(n.k / 0) AS s`) summed 0 and grouped a failing key as NULL; a
+  hop or variable-length WHERE was false; a shortestPath or EXISTS / COUNT
+  pattern whose inline property or WHERE failed matched (or counted)
+  anyway; the shared projection (`execution.zig` `evalGroupedExpr`) kept a
+  "tolerance" that read a failing GROUP BY key or grouped item as NULL and a
+  failing HAVING as false. Each now raises the error (22012, 22003, a type
+  error ...). The planned read declines a comma pattern whose property map
+  reads another pattern's variable (it filtered each chain with no variable
+  bound, so `MATCH (n), (t {k: n.k})` matched nothing even when valid). The
+  chained-part and comma-pattern aggregates use the shared
+  `computeGroupAggregation` (every value type and DISTINCT; they folded
+  integers only, so sum / avg / min / max over doubles or strings were
+  NULL) and the evaluator's arithmetic over aggregates (division by zero
+  was NULL); the nested chain's final aggregate is `chainFinalAggregate`
+  (it ignored the part's pattern and the statement's parameters). Kept,
+  because the predicate is evaluated again where it counts: the WHERE
+  pushdown pre-filter, the seek-key and selectivity precomputations, the
+  write pre-checks. What a newly raising site computes is lent from the
+  statement's scratch arena, and its rows and names are freed on the error.
+  `pattern_helpers.computeAggregationForGroup` was dead code and is
+  removed. Regression: `zig build test-sonny6498-swallowed-errors`.
+- **Temporaries a predicate, a CTE or a standalone WITH computes are freed
+  (SONNY-6496 item 2).** A list literal, a map, a string or any other value
+  a WHERE, a FILTER or a pattern's property map computed was allocated on
+  the result allocator and never freed (once per row, every executor:
+  `match_operations.zig`, `planned_read_runtime.zig`, the WHERE-equality
+  start seed). It is lent from the statement's scratch arena now
+  (`value_utilities.lentAllocator`), as projected items already were. A
+  CTE's body results, each recursive iteration's working set and the CTE's
+  value (bound for the whole statement) are the scratch's too; they leaked.
+  The standalone `WITH ... FOR` / `WITH ... RETURN` path frees the WITH's
+  rows (never freed on the FOR path), builds its one empty input row on the
+  stack (it was allocated and dropped), lends its RETURN items and frees its
+  result on an error. Regression: `zig build test-sonny6496-query-leaks`
+  (leak-checked, with and without a scratch arena, four session kinds;
+  `tests/statement_leak_harness.zig` now installs the execution callbacks a
+  subquery needs, as every server does).
+- **A statement whose allocation fails frees what it built, on every
+  executor (SONNY-6498 item 1).** With its N-th allocation failing, for
+  every N, 64 of the 68 runs of `test-sonny6297-allocation-failure-sweep`
+  (17 statement shapes x the in-memory, persisted, tenant-scoped and RLS
+  sessions) leaked. Fixed at each site: the chained-part executors
+  (`query_execution.zig` `executeQueryChain`, `executeQueryChainWithBindings`,
+  `forAfterPart`) now collect the parts' rows in `ChainRows`, which owns
+  them and the part results in flight (they were freed by hand, only on
+  success); `adoptEntities` merges atomically; the planned read adopts each
+  materialized node and relationship into the result's tracker as it is
+  made (`OwnedGraphEntities.adoptNode` / `adoptEdge`) and builds its result
+  with `bindingResult`, its rows freed on any error; `buildPlanIfSupported`
+  and `ensureBinding` keep every slice and copied name owned; EXPLAIN,
+  PROFILE and `db.labels()` build their results with
+  `result_utils.ResultBuilder` (the legacy EXPLAIN's cells and step texts
+  were never freed, even on success); the variable-length `PathIterator`
+  frees a path it cloned or dequeued; the legacy traversals free a row, an
+  environment or a seed binding they could not keep; a group key moves
+  from its writer without a lost copy; the MERGE RETURN, the bound-variable
+  RETURN and the tenant tag list free what they made. The planned read's
+  hops read the engine's own edge slice (`getOutgoingEdges` /
+  `getIncomingEdges`): the type-erased `expandOut` boxed it and leaked it
+  when the box could not be allocated (graph_storage 0.4.13
+  `interface.zig` `sliceToEdgeIterator`). The sweep is green on every shape
+  and session (about 40 s) and runs in the aggregate now. Regression:
+  `zig build test-sonny6297-allocation-failure-sweep`.
+- **After WITH or NEXT only the projected variables are in scope
+  (SONNY-6496 item 1, BREAKING).** A reference to a variable the WITH (or
+  the RETURN before a NEXT) does not project read NULL on every executor:
+  `MATCH (n) WITH n.k AS k RETURN n.t` answered NULL rows, `... WITH n.k AS
+  k WHERE n.t = 'a'` no rows, `count(n)` 0, and a later `MATCH (m) WHERE
+  m.k = n.k` nothing. ISO/IEC 39075:2024 20.12 SR 8 requires the incoming
+  working record to have a field of the referenced name, and 4.7.3 4) e)
+  answers the violation with 42000; Geode now refuses such a statement with
+  `VariableNotInScope` (42000) before anything runs, in every clause after
+  the projection (WHERE, RETURN, ORDER BY, aggregates, GROUP BY, HAVING, a
+  later MATCH's property map or WHERE, SET / REMOVE / DELETE / CREATE /
+  MERGE, FOR, CALL ... YIELD, IN subqueries and comprehensions). The check
+  is one pass of the statement walk every transport and entry point runs
+  (`param_check` -> `scope_check.zig`), so the in-memory, persisted,
+  tenant-scoped and RLS-policy sessions refuse the same statements. In
+  scope stay the projected names, `WITH *`, variables a later MATCH, FOR,
+  UNWIND, CALL ... YIELD, CALL { } or inline LET binds, parameters, and
+  comprehension / quantifier / pattern-comprehension locals; ORDER BY after
+  RETURN reads the RETURN's aliases and the variables before it (14.10 SR
+  4 c) i) 2) A) III) 1)). Also: `WITH *` followed by its part's RETURN
+  passes every variable on (it passed none, so `MATCH (n) WITH * RETURN
+  n.t` was NULL). Before the first projection of a statement nothing new is
+  checked. Regression: `zig build test-sonny6496-with-scope`.
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a

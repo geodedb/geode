@@ -512,6 +512,45 @@ test "ISO Let: Chained WITH clauses" {
 }
 
 // ============================================================================
+// Additional Compliance Tests: NEXT (linear composition)
+// ISO/IEC 39075:2024 9.2 <procedure body>: `<statement> NEXT [<yield
+// clause>] <statement>` (Feature GQ20); the result table of the statement
+// before NEXT is the working table of the one after it (9.2 GR 4), narrowed
+// by the <yield clause> (16.14). SONNY-6496 item 5. Parse-only: what the
+// statements answer is pinned in tests/test_sonny6343_next_and_call.zig, and
+// the scope after NEXT in tests/test_sonny6496_with_scope.zig.
+// CANARY: REQ=REQ-GQL-ISO-NEXT-001; FEATURE="ISOLinearComposition"; ASPECT=Next; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-13
+// ============================================================================
+
+test "ISO Next: RETURN NEXT RETURN" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS name NEXT RETURN name");
+}
+
+test "ISO Next: three statements" {
+    try expectParseOk("RETURN 1 AS a NEXT RETURN a + 1 AS b NEXT RETURN b * 10 AS c");
+}
+
+test "ISO Next: NEXT then MATCH" {
+    try expectParseOk("MATCH (n:Person) RETURN n.age AS age NEXT MATCH (m:Person) WHERE m.age > age RETURN m.name AS name");
+}
+
+test "ISO Next: ORDER BY and LIMIT before NEXT" {
+    try expectParseOk("MATCH (n:Person) RETURN n.age AS age ORDER BY age DESC LIMIT 3 NEXT RETURN age");
+}
+
+test "ISO Next: NEXT YIELD" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS name, n.age AS age NEXT YIELD age AS years RETURN years");
+}
+
+test "ISO Next: NEXT inside a subquery" {
+    try expectParseOk("MATCH (n:Person) WHERE n.age IN (MATCH (m:Person) RETURN m.age AS a ORDER BY a LIMIT 1 NEXT RETURN a) RETURN n.name");
+}
+
+test "ISO Next: NEXT with no result table before it is refused" {
+    try expectParseErr("MATCH (n:Person) SET n.seen = true NEXT RETURN 1 AS one");
+}
+
+// ============================================================================
 // Additional Compliance Tests: Schema / Catalog
 // CANARY: REQ=REQ-GQL-ISO-CATALOG-001; FEATURE="ISOCatalog"; ASPECT=SchemaManagement; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================

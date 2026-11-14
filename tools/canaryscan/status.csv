@@ -141,7 +141,6 @@ REQ-AGG-COLLECT-001,Aggregation,CollectAggregation,TESTED,tests/test_gap_0193_ba
 REQ-AGG-COLLECT-001,AggregationFunctions,COLLECT,TESTED,src/execution/aggregation_evaluation.zig,geodetestlab/specs/gql_query_comprehensive.yml,,aggregation,2025-12-22
 REQ-AGG-COLLECT-001,AggregationFunctions,Collect,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15
 REQ-AGG-COLLECT-003,AggregationFunctions,COLLECT_NULL_SKIP,TESTED,src/execution/aggregation_evaluation.zig,geodetestlab/specs/gql_query_comprehensive.yml,,aggregation,2025-12-28
-REQ-AGG-COLLECT-004,AggregationFunctions,COLLECT_GROUP,TESTED,src/execution/pattern_helpers.zig,geodetestlab/specs/gql_query_comprehensive.yml,,engine,2025-12-28
 REQ-AGG-COLLECT-004,ShellTestVerification,AggregationCollect,TESTED,tests/test_gap_analysis_january_2026.zig,test_gap_analysis_january_2026.zig,,engine,2026-01-15
 REQ-AGG-SUM-001,AggregationFunctions,Sum,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15
 REQ-AGGREGATION-AVG-002,AvgAggregation,FloatSupport,TESTED,src/execution/aggregation_evaluation.zig,geodetestlab/specs/geode_functions_comprehensive.yml,,engine,2026-01-09
@@ -655,7 +654,6 @@ REQ-COUNT-DISTINCT-BINDING-001,CountDistinct,Binding,TESTED,tests/test_shell_req
 REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,TESTED,src/execution/aggregation_evaluation.zig,tests/test_bug731_aggregates_vectors.zig,,aggregation,2026-07-31
 REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,TESTED,src/execution/aggregation_evaluation.zig,tests/test_bug731_aggregates_vectors.zig,,engine,2026-07-31
 REQ-COUNT-DISTINCT-GROUP-001,CountDistinct,GroupBy,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
-REQ-COUNT-DISTINCT-GROUP-001,CountDistinctGroupAggregation,GroupAggregation,TESTED,src/execution/pattern_helpers.zig,tests/test_bug731_aggregates_vectors.zig,,engine,2026-07-31
 REQ-CRYPTO-RANDOM-001,CryptographicKeyGeneration,SECURITY,TESTED,src/types/cryptographic.zig,TestCANARY_REQ_CRYPTO_RANDOM_001,,security,2026-01-11
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,src/eval.zig,geodetestlab/specs/geode_functions_comprehensive.yml,,eval,2026-01-09
 REQ-DATE-INTERVAL-001,DateIntervalArithmetic,Addition,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15
@@ -2492,6 +2490,7 @@ REQ-GQL-ISO-CONFORM-001,ISOConformanceEvidence,TestSuite,TESTED,tests/gql_iso_co
 REQ-GQL-ISO-EXPR-001,ISOExpressions,Operators,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-LET-001,ISOLetBinding,VariableScoping,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-NEGATIVE-001,ISOSyntaxValidation,ErrorDetection,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
+REQ-GQL-ISO-NEXT-001,ISOLinearComposition,Next,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-11-13
 REQ-GQL-ISO-SEC-10-001,ISODataDefinition,DDL,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-11-001,ISOTransactions,Transactions,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-12-001,ISOFunctions,BuiltinFunctions,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
@@ -2580,7 +2579,6 @@ REQ-GQL-MULTIHOP-GROUPBY-001,MultiHopGroupBy,Execution,TESTED,src/execution/matc
 REQ-GQL-MULTIHOP-REGRESSION-001,MultiHopRegression,SegfaultPrevention,TESTED,tests/test_multihop_regression.zig,,,engine,2026-04-02
 REQ-GQL-MULTINODE-AGG-001,MultiNodeAggregation,Computation,TESTED,src/execution/match_operations.zig,geodetestlab/specs/gql_query_comprehensive.yml,,engine,2025-12-26
 REQ-GQL-MULTINODE-COUNTDISTINCT-001,GQLAggregation,MultiNodeCountDistinct,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
-REQ-GQL-MULTINODE-COUNTDISTINCT-001,MultiNodeCountDistinct,Aggregation,TESTED,src/execution/match_operations.zig,tests/test_bug731_aggregates_vectors.zig,,engine,2026-07-31
 REQ-GQL-MULTINODE-GROUPBY-001,MultiNode,GroupBy,IMPL,tests/test_gap_0193_batch2_engine.zig,,,engine,2026-11-12
 REQ-GQL-MULTINODE-GROUPBY-001,MultiNodeGroupBy,Execution,TESTED,src/execution/match_operations.zig,geodetestlab/specs/gql_query_comprehensive.yml,,engine,2025-12-26
 REQ-GQL-MULTINODE-PROPVARREF-001,PropertyPatternVariableReference,MultiMatch,EXEMPT,src/execution/match_operations.zig,,,engine,2025-12-26
@@ -2613,7 +2611,6 @@ REQ-GQL-OPTIONAL-MATCH-002,OptionalMatchParsing,ChainMarking,TESTED,src/gql/pars
 REQ-GQL-OPTIONAL-MATCH-003,OptionalMatchAfterWhere,ParserSupport,TESTED,src/gql/parser.zig,tests/test_sonny3184_optional_match_distinct_call.zig,,parser,2026-11-11
 REQ-GQL-OPTIONAL-MATCH-003,OptionalMatchExecution,LeftOuterJoin,TESTED,src/execution/pattern_helpers.zig,geodetestlab/specs/gql_pattern_matching_comprehensive.yml,,execution,2025-12-22
 REQ-GQL-OPTIONAL-MATCH-HOP-001,OptionalMatchWithHops,Dispatch,TESTED,src/execution/pattern_helpers.zig,geodetestlab/specs/gql_pattern_matching_comprehensive.yml,,execution,2026-01-29
-REQ-GQL-OPTIONAL-MATCH-WITH-002,OptionalMatchWithAggregation,AggregationComputation,TESTED,src/execution/pattern_helpers.zig,geodetestlab/specs/gql_pattern_matching_comprehensive.yml,,engine,2025-12-23
 REQ-GQL-OPTIONAL-NODE-ONLY-003,OptionalMatchNodeOnlyDispatch,QueryDispatch,TESTED,src/execution/pattern_helpers.zig,geodetestlab/specs/gql_pattern_matching_comprehensive.yml,,execution,2025-12-26
 REQ-GQL-OPTIONAL-REQUIRED-CHAIN-001,GQLOptionalMatch,RequiredChain,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
 REQ-GQL-OPTIONAL-REQUIRED-CHAIN-002,GQLOptionalMatch,ChainOrder,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
@@ -5452,6 +5449,17 @@ REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,Regression,TESTE
 REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,Regression,TESTED,tests/test_sonny6492_checkpoint_free_store_crash.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,StaleFreeStoreRebuild,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-6494-AUDIT-FAILCLOSED,CLI Audit Configuration,FailClosed,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6494_audit_failclosed.zig,,audit,2026-11-13
+REQ-SONNY-6496-EXPLAIN-TAIL-START,EXPLAIN,PlanMatchesRunStart,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6496_explain_start.zig,,engine,2026-11-13
+REQ-SONNY-6496-EXPLAIN-TAIL-START,EXPLAIN,Regression,TESTED,tests/test_sonny6496_explain_start.zig,tests/test_sonny6496_explain_start.zig,,engine,2026-11-13
+REQ-SONNY-6496-QUERY-LEAKS,ExecutionResultOwnership,ComputedTemporaries,TESTED,tests/test_sonny6496_query_leaks.zig,tests/test_sonny6496_query_leaks.zig,,execution,2026-11-13
+REQ-SONNY-6496-SUBQUERY-FORMS,LinearComposition,SubqueryStart,TESTED,src/gql/parser.zig,tests/test_sonny6496_subquery_forms.zig,,parser,2026-11-13
+REQ-SONNY-6496-SUBQUERY-FORMS,LinearComposition,SubqueryStart,TESTED,tests/test_sonny6496_subquery_forms.zig,,,parser,2026-11-13
+REQ-SONNY-6496-WITH-SCOPE,LinearComposition,ProjectionScope,TESTED,tests/test_sonny6496_with_scope.zig,tests/test_sonny6496_with_scope.zig,,engine,2026-11-13
+REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,ChainParts,TESTED,src/execution/query_execution.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,execution,2026-11-13
+REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,PlannedReadRows,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,execution,2026-11-13
+REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,ResultBuilder,TESTED,src/execution/result_utils.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,execution,2026-11-13
+REQ-SONNY-6498-EVAL-ERRORS-RAISE,ExpressionEvaluation,ErrorsFailStatement,TESTED,tests/test_sonny6498_swallowed_errors.zig,tests/test_sonny6498_swallowed_errors.zig,,engine,2026-11-13
+REQ-SONNY-6498-SCAN-BOX-CHECK,WriteStep,NoReboxing,TESTED,src/graph_store.zig,tests/test_sonny3148_write_step_amplification.zig,,engine,2026-11-13
 REQ-SONNY-6499-CAST-MATRIX,TypeCasting,StandardCastMatrix,TESTED,tests/test_sonny6499_cast_matrix.zig,tests/test_sonny6499_cast_matrix.zig,,eval,2026-11-13
 REQ-SONNY-6499-EXEC-ORDER-NFC,UnicodeOrderBy,ExecTextFallbackNfc,TESTED,tests/test_sonny6499_exec_order_nfc.zig,tests/test_sonny6499_exec_order_nfc.zig,,unicode,2026-11-13
 REQ-SONNY-6499-GQLSTATE-RESIDUALS,ErrorMapping,DataExceptionGqlstatusResiduals,TESTED,src/server/proto_util.zig,tests/test_sonny6499_gqlstate_residuals.zig,,engine,2026-11-13

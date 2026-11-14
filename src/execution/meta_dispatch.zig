@@ -19,6 +19,7 @@
 // CANARY: REQ=GAP-0531; FEATURE="DB/DBMS Introspection Procedures"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_meta_procedures.zig; OWNER=execution; UPDATED=2026-04-10
 
 const std = @import("std");
+const result_utils = @import("result_utils.zig");
 const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
@@ -157,22 +158,12 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "label");
-
-    const rows = try allocator.alloc([]Value, sorted.items.len);
-    for (sorted.items, 0..) |lbl, i| {
-        const row = try allocator.alloc(Value, 1);
-        row[0] = .{ .Str = try allocator.dupe(u8, lbl) };
-        rows[i] = row;
-    }
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-        .owns_value_memory = true,
-    };
+    // SONNY-6498: built so that a failed allocation frees what was made.
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("label");
+    for (sorted.items) |lbl| try b.textRow(&.{lbl});
+    return b.finish();
 }
 
 // ===========================================================================

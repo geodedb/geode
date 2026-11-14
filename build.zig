@@ -537,7 +537,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6297-allocation-failure-sweep", .reason = "intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): statement shapes still leak on allocation-failure paths; compiled by test-compile; register it through shardDep in the commit that makes every shape clean" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -12715,10 +12714,8 @@ pub fn build(b: *std.Build) void {
     sonny6297_sweep_test_mod.addImport("rls_types", rls_types_mod);
     const sonny6297_sweep_tests = b.addTest(.{ .root_module = sonny6297_sweep_test_mod });
     const run_sonny6297_sweep_tests = b.addRunArtifact(sonny6297_sweep_tests);
-    // Intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): kept
-    // out of `shardDep` and compiled by test-compile until every shape is
-    // leak-free under allocation failure.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6297_sweep_tests.step);
+    // SONNY-6498 item 1: every shape is leak-free under allocation failure.
+    shardDep(test_step, &run_sonny6297_sweep_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6297_sweep_step = b.step("test-sonny6297-allocation-failure-sweep", "Run SONNY-6297 allocation-failure sweep (every representative statement shape with its N-th allocation failing, N = 0, 1, ...: no leak, no crash, OutOfMemory answered as OutOfMemory, on the four session kinds)");
     sonny6297_sweep_step.dependOn(&run_sonny6297_sweep_tests.step);
     const sonny3126_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3126_list_projection_leaks.zig"), .target = target, .optimize = optimize });
@@ -13268,6 +13265,56 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6343_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6343_step = b.step("test-sonny6343-next-and-call", "Run SONNY-6343 regression (ISO NEXT: the result table of the statement before it continues as the next statement's working table, with ORDER BY, LIMIT, aggregates, DISTINCT and a YIELD clause; NEXT with no result table or after a UNION, and every inline CALL { } form other than a statement-level CALL { } followed by WITH, WHERE or RETURN, is refused with 0A000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6343_step.dependOn(&run_sonny6343_tests.step);
+    // SONNY-6496 item 1: after WITH / NEXT only the projected variables are in scope. See tests/test_sonny6496_with_scope.zig.
+    const sonny6496_scope_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_with_scope.zig"), .target = target, .optimize = optimize });
+    sonny6496_scope_test_mod.addImport("geode", root_mod);
+    sonny6496_scope_test_mod.addImport("logging", logging_mod);
+    sonny6496_scope_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_scope_tests = b.addTest(.{ .root_module = sonny6496_scope_test_mod });
+    const run_sonny6496_scope_tests = b.addRunArtifact(sonny6496_scope_tests);
+    shardDep(test_step, &run_sonny6496_scope_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_scope_step = b.step("test-sonny6496-with-scope", "Run SONNY-6496 regression (after WITH and NEXT only the projected variables are in scope: a reference to any other variable, in WHERE, RETURN, ORDER BY, an aggregate, a later MATCH, a subquery, a FOR or a write clause, is refused with 42000 before anything runs; projected names, WITH *, later MATCH / FOR / YIELD bindings, parameters and comprehension locals stay in scope: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6496_scope_step.dependOn(&run_sonny6496_scope_tests.step);
+    // SONNY-6496 item 2: computed temporaries are freed. See tests/test_sonny6496_query_leaks.zig.
+    const sonny6496_leaks_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_query_leaks.zig"), .target = target, .optimize = optimize });
+    sonny6496_leaks_test_mod.addImport("geode", root_mod);
+    sonny6496_leaks_test_mod.addImport("logging", logging_mod);
+    sonny6496_leaks_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_leaks_tests = b.addTest(.{ .root_module = sonny6496_leaks_test_mod });
+    const run_sonny6496_leaks_tests = b.addRunArtifact(sonny6496_leaks_tests);
+    shardDep(test_step, &run_sonny6496_leaks_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_leaks_step = b.step("test-sonny6496-query-leaks", "Run SONNY-6496 item 2 regression (a list literal or an inline map in a WHERE or a property map, the standalone WITH ... FOR / WITH ... RETURN path, an IN (WITH ... FOR ...) subquery, CTE bodies and a recursive CTE free what they compute: leak-checked, with and without a scratch arena, in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6496_leaks_step.dependOn(&run_sonny6496_leaks_tests.step);
+    // SONNY-6496 item 3: FOR / CALL at the start of a subquery, DELETE ... ORDER BY, MERGE ... CREATE. See tests/test_sonny6496_subquery_forms.zig.
+    const sonny6496_forms_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_subquery_forms.zig"), .target = target, .optimize = optimize });
+    sonny6496_forms_test_mod.addImport("geode", root_mod);
+    sonny6496_forms_test_mod.addImport("logging", logging_mod);
+    sonny6496_forms_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_forms_tests = b.addTest(.{ .root_module = sonny6496_forms_test_mod });
+    const run_sonny6496_forms_tests = b.addRunArtifact(sonny6496_forms_tests);
+    shardDep(test_step, &run_sonny6496_forms_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_forms_step = b.step("test-sonny6496-subquery-forms", "Run SONNY-6496 item 3 regression (a FOR at the start of an IN subquery or a CTE body runs; a CALL of a named procedure there is refused with 0A000; DELETE ... RETURN ... ORDER BY ... LIMIT runs; MERGE ... CREATE is refused with 0A000 and writes nothing: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6496_forms_step.dependOn(&run_sonny6496_forms_tests.step);
+    // SONNY-6496 item 4: EXPLAIN plans the tail start the run takes. See tests/test_sonny6496_explain_start.zig.
+    const sonny6496_explain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_explain_start.zig"), .target = target, .optimize = optimize });
+    sonny6496_explain_test_mod.addImport("geode", root_mod);
+    sonny6496_explain_test_mod.addImport("logging", logging_mod);
+    sonny6496_explain_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_explain_tests = b.addTest(.{ .root_module = sonny6496_explain_test_mod });
+    const run_sonny6496_explain_tests = b.addRunArtifact(sonny6496_explain_tests);
+    shardDep(test_step, &run_sonny6496_explain_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_explain_step = b.step("test-sonny6496-explain-start", "Run SONNY-6496 item 4 regression (EXPLAIN plans the start the planned read takes: a single directed hop with a more selective tail starts from the tail and walks the hop backwards, as PROFILE traces it)");
+    sonny6496_explain_step.dependOn(&run_sonny6496_explain_tests.step);
+    // SONNY-6498 item 3: an expression that fails fails the statement. See tests/test_sonny6498_swallowed_errors.zig.
+    const sonny6498_errors_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6498_swallowed_errors.zig"), .target = target, .optimize = optimize });
+    sonny6498_errors_test_mod.addImport("geode", root_mod);
+    sonny6498_errors_test_mod.addImport("logging", logging_mod);
+    sonny6498_errors_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6498_errors_tests = b.addTest(.{ .root_module = sonny6498_errors_test_mod });
+    const run_sonny6498_errors_tests = b.addRunArtifact(sonny6498_errors_tests);
+    shardDep(test_step, &run_sonny6498_errors_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6498_errors_step = b.step("test-sonny6498-swallowed-errors", "Run SONNY-6498 item 3 regression (division by zero, integer overflow and a type error in a function argument fail the statement through every executor path that swallowed them: inline property maps, hop and variable-length WHEREs, comma-pattern aggregates and grouping keys, chained aggregates, OPTIONAL MATCH, shortestPath: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6498_errors_step.dependOn(&run_sonny6498_errors_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });

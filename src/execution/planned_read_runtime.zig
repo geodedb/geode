@@ -362,15 +362,20 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, first_node, q.where_clause))
+            // SONNY-6496 item 4: the start the run takes (`startsFromTail`):
+            // the scan of the tail and the hop walked backwards, as PROFILE
+            // reports them. The bindings keep the pattern's order.
+            const from_tail = if (graph_store.getGlobalAdapter()) |adapter| startsFromTail(adapter, graph_name, chain, context.query_param_names, context.query_param_values, allocator) else false;
+            const start_node = if (from_tail) chain.hops[0].right else first_node;
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, start_node, q.where_clause))
                 .IndexSeek
-            else if (first_node.labels.len > 0)
+            else if (start_node.labels.len > 0)
                 .LabelScan
             else
                 .AllNodesScan;
             try ops.append(allocator, .{
                 .kind = scan_kind,
-                .est_rows = try estimateScanRows(allocator, graph_name, first_node),
+                .est_rows = try estimateScanRows(allocator, graph_name, start_node),
             });
 
             for (chain.hops, 0..) |hop, hop_idx| {
@@ -379,7 +384,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
                     .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
                 });
                 try ops.append(allocator, .{
-                    .kind = switch (hop.rel.dir) {
+                    .kind = switch (if (from_tail) flipRelDir(hop.rel.dir) else hop.rel.dir) {
                         .right => .ExpandOut,
                         .left => .ExpandIn,
                         .undirected => .ExpandEither,
@@ -432,14 +437,22 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         }
     }
 
+    // SONNY-6498: each slice is freed if a later one cannot be made (the
+    // names leaked when the kinds' slice failed, and so on down).
+    const plan_kinds = try binding_kinds.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_kinds);
+    const plan_ops = try ops.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_ops);
+    const plan_hops = try hop_bindings.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_hops);
     return Plan{
         .graph_name = graph_name,
         .binding_names = try binding_names.toOwnedSlice(allocator),
-        .binding_kinds = try binding_kinds.toOwnedSlice(allocator),
-        .ops = try ops.toOwnedSlice(allocator),
+        .binding_kinds = plan_kinds,
+        .ops = plan_ops,
         .execution_mode = execution_mode,
         .root_index = root_index,
-        .hops = try hop_bindings.toOwnedSlice(allocator),
+        .hops = plan_hops,
         .optional_join = optional_join,
         .var_length_endpoint = var_length_endpoint,
     };
@@ -851,7 +864,7 @@ fn estimatePatternSelectivity(
     for (props) |prop| {
         if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
         if (!graph_store.shouldIndexProperty(prop.key)) continue;
-        const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
         const pv: graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| .{ .String = s },
             .Int => |i| .{ .Int = i },
@@ -867,6 +880,29 @@ fn estimatePatternSelectivity(
     return best_len;
 }
 
+// CANARY: REQ=REQ-SONNY-6496-EXPLAIN-TAIL-START; FEATURE="EXPLAIN"; ASPECT=PlanMatchesRunStart; STATUS=TESTED; TEST=tests/test_sonny6496_explain_start.zig; OWNER=engine; UPDATED=2026-11-13
+/// Bug B / SONNY-6496 item 4: whether `executePatternQuery` starts `chain`
+/// from its tail: a single directed hop whose tail pattern is more selective
+/// than its head. EXPLAIN (`buildPlanIfSupported`) asks the same question,
+/// so its plan starts where the run does; it described the head while
+/// PROFILE reported the tail.
+fn startsFromTail(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    chain: ast.Chain,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    allocator: std.mem.Allocator,
+) bool {
+    if (chain.hops.len != 1) return false;
+    const hop = chain.hops[0];
+    if (hop.rel.dir == .undirected) return false;
+    if (!adapter.graphExists(graph_name)) return false;
+    const head_sel = estimatePatternSelectivity(adapter, graph_name, hop.left, param_names, param_values, allocator);
+    const tail_sel = estimatePatternSelectivity(adapter, graph_name, hop.right, param_names, param_values, allocator);
+    return tail_sel < head_sel;
+}
+
 fn executePatternQuery(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -880,6 +916,8 @@ fn executePatternQuery(
     const chain = q.match.chains[0];
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
@@ -907,13 +945,7 @@ fn executePatternQuery(
     };
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -924,17 +956,7 @@ fn executePatternQuery(
     //   - hop.rel.dir != .undirected (undirected: unchanged path)
     //   - tail strictly more selective than head
     // All other cases take the existing seeded_from_tail==false path unchanged.
-    const seeded_from_tail: bool = sel: {
-        if (chain.hops.len == 1) {
-            const hop = chain.hops[0];
-            if (hop.rel.dir != .undirected) {
-                const head_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.left, param_names, param_values, allocator);
-                const tail_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.right, param_names, param_values, allocator);
-                if (tail_sel < head_sel) break :sel true;
-            }
-        }
-        break :sel false;
-    };
+    const seeded_from_tail = startsFromTail(adapter, plan.graph_name, chain, param_names, param_values, allocator);
     const start_pattern = if (seeded_from_tail)
         chain.hops[0].right
     else if (chain.head) |head|
@@ -1005,14 +1027,8 @@ fn executePatternQuery(
         }
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1084,13 +1100,8 @@ fn materializeNodeOnlyRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-    var local_edges = std.ArrayList(*graph_store.Edge).empty;
-    defer local_edges.deinit(allocator);
-
     const node = try materializeNode(allocator, plan.graph_name, node_slot);
-    try local_nodes.append(allocator, node);
+    try owned_entities.adoptNode(node);
 
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
@@ -1109,12 +1120,12 @@ fn materializeNodeOnlyRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |tracked_node| {
-        try owned_entities.trackNode(tracked_node);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 // ---------------------------------------------------------------------------
@@ -1148,17 +1159,13 @@ fn executeOptionalLeftOuter(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -1262,14 +1269,8 @@ fn executeOptionalLeftOuter(
         }
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1382,16 +1383,16 @@ fn emitOptionalLeftOuterRow(
 
     if (plan.root_index) |idx| {
         const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
-        try owned_entities.trackNode(root_node);
+        try owned_entities.adoptNode(root_node);
         main_values[idx] = Value{ .Node = root_node };
     }
     for (plan.hops, 0..) |hop_binding, hop_idx| {
         const edge = try materializeEdge(allocator, graph_name, edge_steps[hop_idx]);
-        try owned_entities.trackEdge(edge);
+        try owned_entities.adoptEdge(edge);
         main_values[hop_binding.rel_index] = Value{ .Edge = edge };
 
         const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
-        try owned_entities.trackNode(right_node);
+        try owned_entities.adoptNode(right_node);
         main_values[hop_binding.right_index] = Value{ .Node = right_node };
     }
 
@@ -1409,9 +1410,9 @@ fn emitOptionalLeftOuterRow(
         }
 
         const opt_edge = try materializeEdge(allocator, graph_name, edge);
-        try owned_entities.trackEdge(opt_edge);
+        try owned_entities.adoptEdge(opt_edge);
         const opt_node = try materializeNodeForBinding(allocator, graph_name, edge.next_slot, projection_plan, oj.right_index);
-        try owned_entities.trackNode(opt_node);
+        try owned_entities.adoptNode(opt_node);
 
         const binding_values = try allocator.alloc(Value, plan.binding_names.len);
         defer allocator.free(binding_values);
@@ -1428,9 +1429,12 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try rows.append(allocator, row);
+        try appendRow(allocator, rows, row);
         emitted += 1;
     }
 
@@ -1448,9 +1452,12 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try rows.append(allocator, row);
+        try appendRow(allocator, rows, row);
     }
 }
 
@@ -1508,7 +1515,7 @@ const VarLenExec = struct {
             return;
         }
         const endpoint_node = try materializeNode(self.allocator, self.graph_name, endpoint_slot);
-        try self.owned_entities.trackNode(endpoint_node);
+        try self.owned_entities.adoptNode(endpoint_node);
 
         const binding_values = try self.allocator.alloc(Value, self.plan.binding_names.len);
         defer self.allocator.free(binding_values);
@@ -1525,9 +1532,12 @@ const VarLenExec = struct {
             .exec_context = @constCast(&self.context),
         };
         const row = try buildBindingRow(self.allocator, self.q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            self.allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try self.rows.append(self.allocator, row);
+        try appendRow(self.allocator, self.rows, row);
     }
 
     fn cloneNodeSet(self: *VarLenExec, src: *const std.AutoHashMapUnmanaged(u64, void)) !std.AutoHashMapUnmanaged(u64, void) {
@@ -1551,7 +1561,7 @@ const VarLenExec = struct {
     fn runSeed(self: *VarLenExec, seed_slot: u64) !void {
         if (sessionIsRestricted(self.context)) return error.RestrictedSessionOnPlannedRead;
         const seed_node = try materializeNode(self.allocator, self.graph_name, seed_slot);
-        try self.owned_entities.trackNode(seed_node);
+        try self.owned_entities.adoptNode(seed_node);
 
         var queue: std.ArrayList(VarLenBfsItem) = .empty;
         var front: usize = 0;
@@ -1579,6 +1589,9 @@ const VarLenExec = struct {
 
             var current = queue.items[front];
             front += 1;
+            // SONNY-6498: the dequeued path's node set, when expanding it
+            // fails (the queue's defer frees only what is still queued).
+            errdefer current.node_set.deinit(self.allocator);
             const depth = current.depth;
 
             // At max depth: never expand further. Emit if depth>=min_len
@@ -1642,17 +1655,13 @@ fn executeVarLengthEndpoint(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -1702,14 +1711,8 @@ fn executeVarLengthEndpoint(
         try exec.runSeed(seed_slot);
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1840,16 +1843,13 @@ fn materializeMultiChainRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
     for (binding_values) |*v| v.* = .{ .Null = {} };
 
     for (slot_ids, binding_indices) |slot_id, bind_idx| {
         const node = try materializeNode(allocator, plan.graph_name, slot_id);
-        try local_nodes.append(allocator, node);
+        try owned_entities.adoptNode(node);
         if (bind_idx < binding_values.len) {
             binding_values[bind_idx] = .{ .Node = node };
         }
@@ -1865,12 +1865,12 @@ fn materializeMultiChainRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |n| {
-        try owned_entities.trackNode(n);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 fn nestedLoopCartesian(
@@ -1914,20 +1914,13 @@ fn executeMultiChainHashJoin(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        // Release the tracker only after the last fallible step: a failed
-        // toOwnedSlice would otherwise run the errdefer on a freed tracker
-        // (same order as the other three early-return sites).
-        const empty_result = ExecutionResult{
-            .columns = col_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = col_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -2078,14 +2071,8 @@ fn executeMultiChainHashJoin(
         try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, &rows, owned_entities, slot_combo, 0, materialize_cap);
     }
 
-    const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = col_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = col_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) owned_entities.deinit();
     return result;
 }
@@ -2598,28 +2585,23 @@ fn materializePathRow(
     owned_entities: *OwnedGraphEntities,
     projection_plan: ?[]const BindingProjection,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-    var local_edges = std.ArrayList(*graph_store.Edge).empty;
-    defer local_edges.deinit(allocator);
-
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
     for (binding_values) |*value| value.* = Value{ .Null = {} };
 
     if (plan.root_index) |idx| {
         const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
-        try local_nodes.append(allocator, root_node);
+        try owned_entities.adoptNode(root_node);
         binding_values[idx] = Value{ .Node = root_node };
     }
 
     for (plan.hops, 0..) |hop_binding, hop_idx| {
         const edge = try materializeEdge(allocator, graph_name, edge_steps[hop_idx]);
-        try local_edges.append(allocator, edge);
+        try owned_entities.adoptEdge(edge);
         binding_values[hop_binding.rel_index] = Value{ .Edge = edge };
 
         const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
-        try local_nodes.append(allocator, right_node);
+        try owned_entities.adoptNode(right_node);
         binding_values[hop_binding.right_index] = Value{ .Node = right_node };
     }
 
@@ -2633,15 +2615,12 @@ fn materializePathRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |node| {
-        try owned_entities.trackNode(node);
-    }
-    for (local_edges.items) |edge| {
-        try owned_entities.trackEdge(edge);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 /// Route to the right materialize variant based on this binding's
@@ -2767,7 +2746,7 @@ fn chooseStartSeed(
             // a non-indexed key is meaningless — skip it and try the next prop.
             // No-op when lean mode is off (shouldIndexProperty is then true for all).
             if (!graph_store.shouldIndexProperty(prop.key)) continue;
-            const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+            const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
             const pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| .{ .String = s },
                 .Int => |i| .{ .Int = i },
@@ -2795,7 +2774,7 @@ fn chooseStartSeed(
             .param_values = param_values,
             .allocator = allocator,
         };
-        const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch return null;
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), extracted.value.*, prop_env) catch return null;
         const seed_pv: graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| graph_store.PropertyValue{ .String = s },
             // SONNY-2807: `=` compares numbers by exact value, as the
@@ -2975,9 +2954,10 @@ fn collectHopEdges(
 
     switch (dir) {
         .right => {
-            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
-            defer out.deinit();
-            while (try out.next()) |entry| {
+            // SONNY-6498: the engine's slice (`getOutgoingEdges`).
+            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(out);
+            for (out) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = node_slot,
@@ -2989,9 +2969,9 @@ fn collectHopEdges(
             }
         },
         .left => {
-            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
-            defer incoming.deinit();
-            while (try incoming.next()) |entry| {
+            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(incoming);
+            for (incoming) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = entry.neighbor,
@@ -3007,9 +2987,10 @@ fn collectHopEdges(
             var seen = std.AutoHashMap(u64, void).init(allocator);
             defer seen.deinit();
 
-            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
-            defer out.deinit();
-            while (try out.next()) |entry| {
+            // SONNY-6498: the engine's slice (`getOutgoingEdges`).
+            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(out);
+            for (out) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{
@@ -3022,9 +3003,9 @@ fn collectHopEdges(
                 });
             }
 
-            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
-            defer incoming.deinit();
-            while (try incoming.next()) |entry| {
+            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(incoming);
+            for (incoming) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{
@@ -3359,6 +3340,33 @@ fn buildBindingColumns(
     return .{ .columns = columns.columns, .buffer = columns.buffer };
 }
 
+// CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=PlannedReadRows; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6498: the rows read and the binding columns as a result. On a
+/// failed allocation nothing leaves `rows` (the caller frees them); the
+/// columns and the rows' slice leaked when the second allocation failed.
+fn bindingResult(allocator: std.mem.Allocator, plan: *const Plan, q: *const ast.Query, rows: *std.ArrayList([]Value), entities: ?*OwnedGraphEntities) !ExecutionResult {
+    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+    errdefer {
+        allocator.free(column_result.buffer);
+        allocator.free(column_result.columns);
+    }
+    return .{
+        .columns = column_result.columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .column_buffer = column_result.buffer,
+        .owned_graph_entities = entities,
+    };
+}
+
+/// SONNY-6498: `row` appended to `rows`, freed when it cannot be.
+fn appendRow(allocator: std.mem.Allocator, rows: *std.ArrayList([]Value), row: []Value) !void {
+    rows.append(allocator, row) catch |err| {
+        allocator.free(row);
+        return err;
+    };
+}
+
 fn buildBindingRow(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -3367,6 +3375,7 @@ fn buildBindingRow(
 ) ![]Value {
     const total_values = binding_values.len + q.inline_let_bindings.len;
     const row = try allocator.alloc(Value, total_values);
+    errdefer allocator.free(row);
 
     for (binding_values, 0..) |value, idx| {
         row[idx] = value;
@@ -3437,8 +3446,8 @@ fn applyResultFilters(
             .allocator = allocator,
             .exec_context = @constCast(&context),
         };
-        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
-        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(allocator, expr, env)) else true;
+        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
+        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
     }
     for (result.rows, keep) |row, k| {
         if (k) filtered_rows.appendAssumeCapacity(row) else allocator.free(row);
@@ -3626,14 +3635,18 @@ fn ensureBinding(
                 return idx;
             }
         }
-        try names.append(allocator, try allocator.dupe(u8, name));
-        try kinds.append(allocator, kind);
+        // SONNY-6498: both lists grow first, so the copy is never dropped.
+        try names.ensureUnusedCapacity(allocator, 1);
+        try kinds.ensureUnusedCapacity(allocator, 1);
+        names.appendAssumeCapacity(try allocator.dupe(u8, name));
+        kinds.appendAssumeCapacity(kind);
         return names.items.len - 1;
     }
 
-    const generated = try std.fmt.allocPrint(allocator, "__planned_{s}_{d}", .{ prefix, ordinal });
-    try names.append(allocator, generated);
-    try kinds.append(allocator, kind);
+    try names.ensureUnusedCapacity(allocator, 1);
+    try kinds.ensureUnusedCapacity(allocator, 1);
+    names.appendAssumeCapacity(try std.fmt.allocPrint(allocator, "__planned_{s}_{d}", .{ prefix, ordinal }));
+    kinds.appendAssumeCapacity(kind);
     return names.items.len - 1;
 }
 
@@ -3989,6 +4002,13 @@ fn isAllSimpleNodeMultiChain(q: *const ast.Query) bool {
     for (q.match.chains) |chain| {
         if (chain.is_optional or chain.is_shortest or chain.path_mode != .walk) return false;
         if (chain.hops.len > 0) return false;
+        // SONNY-6498: a property value that reads another chain's variable
+        // (`MATCH (n), (t {k: n.k})`) is the legacy executor's: each chain's
+        // start slots are filtered here with no variable bound, so the value
+        // read NULL and the chain matched nothing (an error in it was lost).
+        if (chain.head) |head| if (head.props) |props| for (props) |prop| {
+            if (pattern_helpers.containsVariableReference(prop.value.*)) return false;
+        };
     }
     return true;
 }

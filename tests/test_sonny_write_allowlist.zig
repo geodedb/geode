@@ -573,7 +573,9 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (q:Q) DELETE q CREATE (w:W)", .refused = syntax },
     .{ .write = "MATCH (q:Q) WHERE q.i = 0 DETACH DELETE q CREATE (w:W {i: q.i})", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 MERGE (m:M {g: n.g})", .refused = syntax },
-    .{ .write = "MERGE (m:M {g: 'z'}) CREATE (m)-[:T]->(z:Z)", .refused = syntax },
+    // SONNY-6496 item 3: refused with 0A000 naming the shape (it was a
+    // syntax error).
+    .{ .write = "MERGE (m:M {g: 'z'}) CREATE (m)-[:T]->(z:Z)", .refused = error.UnsupportedQueryShape },
     .{ .write = "MATCH (n:G) WHERE n.i >= 8 SET n.x = 1 WITH n MATCH (n)-[:R]->(x:X) SET x.x = 1", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 WITH n SET n.y = 2", .refused = syntax },
     .{ .write = "MERGE (m:M {g: 'z'}) WITH m SET m.k = 1", .refused = syntax },
@@ -673,7 +675,9 @@ const refused_cases = [_]Case{
     .{ .write = "WITH nosuch AS k MATCH (n:G) WHERE n.i = k SET n.x = 1", .refused = refused },
     .{ .write = "WITH nosuch AS l UNWIND l AS u CREATE (:U {u: u})", .refused = refused },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.y = nosuch", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = refused },
+    // SONNY-6496: n is not in scope after `WITH n AS m` (ISO/IEC 39075
+    // 20.12 SR 8): refused with 42000 before the write shape is checked.
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = error.VariableNotInScope },
     // SONNY-3367 (round 4b-1c): a value (a WITH expression's alias, a FOR
     // variable) named as a node pattern is refused as a variable-kind
     // conflict (42000), before the write shape is checked.

@@ -2487,6 +2487,11 @@ pub const GraphStore = struct {
     // Guarded by `scan_hydrated_mutex` (leaf lock: never held across another
     // lock or an engine read).
     scan_hydrated_nodes: std.ArrayList(*Node) = .empty,
+    // SONNY-6498 item 4: the boxes in `scan_hydrated_nodes`, by address, so
+    // `isScanBox` answers in constant time whether a node pointer is already
+    // a detached box (stable until the grace boundary). Guarded by
+    // `scan_hydrated_mutex`, and kept in step with the list.
+    scan_box_set: std.AutoHashMapUnmanaged(usize, void) = .empty,
     scan_hydrated_mutex: std.Io.Mutex = std.Io.Mutex.init,
     next_node_id: u64,
     next_edge_id: u64,
@@ -4085,14 +4090,20 @@ pub const GraphStore = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         mut.scan_hydrated_mutex.lockUncancelable(io);
         defer mut.scan_hydrated_mutex.unlock(io);
-        mut.scan_hydrated_nodes.append(mut.allocator, box) catch {
+        adopt: {
+            mut.scan_box_set.ensureUnusedCapacity(mut.allocator, 1) catch break :adopt;
+            mut.scan_hydrated_nodes.append(mut.allocator, box) catch break :adopt;
+            mut.scan_box_set.putAssumeCapacity(@intFromPtr(box), {});
+            break :adopt;
+        }
+        if (mut.scan_box_set.get(@intFromPtr(box)) == null) {
             // Cannot adopt the box (OOM): free it and report a miss rather
             // than leak. The caller degrades to the pre-fix "row dropped"
             // behavior only under allocator exhaustion.
             freeNodeValue(mut.allocator, box);
             mut.allocator.destroy(box);
             return null;
-        };
+        }
         // GAP (write-path OOM, 2026-07-04): detached boxes live until the
         // per-graph grace boundary — for a write-carrying O(label) scan on a
         // cold store this is exactly the unbounded resident growth that OOM'd
@@ -4194,6 +4205,7 @@ pub const GraphStore = struct {
         var w: usize = 0;
         for (self.scan_hydrated_nodes.items) |box| {
             if (std.mem.eql(u8, box.graph_name, graph_name)) {
+                _ = self.scan_box_set.remove(@intFromPtr(box));
                 freeNodeValue(self.allocator, box);
                 self.allocator.destroy(box);
             } else {
@@ -4216,6 +4228,21 @@ pub const GraphStore = struct {
         }
         self.scan_hydrated_nodes.deinit(self.allocator);
         self.scan_hydrated_nodes = .empty;
+        self.scan_box_set.deinit(self.allocator);
+        self.scan_box_set = .empty;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6498-SCAN-BOX-CHECK; FEATURE="WriteStep"; ASPECT=NoReboxing; STATUS=TESTED; TEST=tests/test_sonny3148_write_step_amplification.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-6498 item 4: whether `node` is one of this store's detached scan
+    /// boxes (`getNodePtrForScan`), which stays valid until the graph's grace
+    /// boundary. Constant time (a hash set under the leaf
+    /// `scan_hydrated_mutex`).
+    pub fn isScanBox(self: *const GraphStore, node: *const Node) bool {
+        const mut: *GraphStore = @constCast(self);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mut.scan_hydrated_mutex.lockUncancelable(io);
+        defer mut.scan_hydrated_mutex.unlock(io);
+        return mut.scan_box_set.contains(@intFromPtr(node));
     }
 
     /// GAP-ENT-0023 P3 (review I1): existence + EXACT-tenant verification for

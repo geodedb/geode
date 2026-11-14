@@ -5,7 +5,7 @@
 Geode is a single-tenant graph database server with strong ISO GQL alignment. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
 **Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
-**ISO Conformance Suite**: 96/96 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+**ISO Conformance Suite**: 106/106 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 **Test Baseline**: local per-step baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical); a fresh geodetestlab harness run is owed — the prior ~97% (1644/1688) is a dated historical snapshot
 **CANARY Markers**: 5,937 governance markers (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
@@ -377,7 +377,7 @@ Index use is rule-based (see 4.3).
 
 **Planning Phases**:
 
-1. **Parse**: GQL → AST (96/96 named ISO conformance-suite cases; parse-only scope)
+1. **Parse**: GQL → AST (106/106 named ISO conformance-suite cases; parse-only scope)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
 4. **Enumerate**: Generate alternative plans

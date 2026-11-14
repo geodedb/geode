@@ -8,7 +8,7 @@ GAP-0901 (repo-side global-init fixed; the gRPC end-to-end blocker GAP-0893
 was re-diagnosed as geode-side and FIXED 2026-08-25), GAP-0902 (stream-hygiene + apply-path pinned; live server-crash
 reproduction owed to the managed-server harness), and the retained sub-items of
 GAP-0923(a) / GAP-0926 (rejecting them would break legitimate queries — see
-each entry). ISO conformance 96/96, executed `gql_conformance` 21/21 (T1–T20 plus the `ZZ_cleanup` teardown), migration
+each entry). ISO conformance 106/106, executed `gql_conformance` 21/21 (T1–T20 plus the `ZZ_cleanup` teardown), migration
 suite 76/76, and all touched-subsystem suites remain green.
 
 Source: black-box spec-coverage expansion of the Geode test harness

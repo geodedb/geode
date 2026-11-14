@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T23:42:54.795634674Z",
+  "generated_at": "2026-11-14T00:16:38.636606249Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -2293,20 +2293,6 @@
     {
       "id": "REQ-AGG-COLLECT-004",
       "features": [
-        {
-          "feature": "AggregationFunctions",
-          "aspect": "COLLECT_GROUP",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-28"
-        },
         {
           "feature": "ShellTestVerification",
           "aspect": "AggregationCollect",
@@ -11064,20 +11050,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "CountDistinctGroupAggregation",
-          "aspect": "GroupAggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "tests/test_bug731_aggregates_vectors.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-07-31"
         }
       ]
     },
@@ -37580,6 +37552,25 @@
       ]
     },
     {
+      "id": "REQ-GQL-ISO-NEXT-001",
+      "features": [
+        {
+          "feature": "ISOLinearComposition",
+          "aspect": "Next",
+          "status": "TESTED",
+          "files": [
+            "tests/gql_iso_conformance.zig"
+          ],
+          "tests": [
+            "test-iso-conformance"
+          ],
+          "benches": [],
+          "owner": "compliance",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-ISO-SEC-10-001",
       "features": [
         {
@@ -39021,20 +39012,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiNodeCountDistinct",
-          "aspect": "Aggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "tests/test_bug731_aggregates_vectors.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-07-31"
         }
       ]
     },
@@ -39591,25 +39568,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-WITH-002",
-      "features": [
-        {
-          "feature": "OptionalMatchWithAggregation",
-          "aspect": "AggregationComputation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -85576,6 +85534,182 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6496-EXPLAIN-TAIL-START",
+      "features": [
+        {
+          "feature": "EXPLAIN",
+          "aspect": "PlanMatchesRunStart",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_explain_start.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EXPLAIN",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_explain_start.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_explain_start.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6496-QUERY-LEAKS",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ComputedTemporaries",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_query_leaks.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_query_leaks.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6496-SUBQUERY-FORMS",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "SubqueryStart",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig",
+            "tests/test_sonny6496_subquery_forms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_subquery_forms.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6496-WITH-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "ProjectionScope",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_with_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_with_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6498-ERROR-PATH-OWNERSHIP",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ChainParts",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "PlannedReadRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ResultBuilder",
+          "status": "TESTED",
+          "files": [
+            "src/execution/result_utils.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6498-EVAL-ERRORS-RAISE",
+      "features": [
+        {
+          "feature": "ExpressionEvaluation",
+          "aspect": "ErrorsFailStatement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6498_swallowed_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6498_swallowed_errors.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6498-SCAN-BOX-CHECK",
+      "features": [
+        {
+          "feature": "WriteStep",
+          "aspect": "NoReboxing",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3148_write_step_amplification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6499-CAST-MATRIX",
       "features": [
         {
@@ -93259,7 +93393,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4920
+      "TESTED": 4927
     },
     "by_aspect": {
       "2PC": 3,
@@ -93356,9 +93490,9 @@
       "AggregateWithoutMatch": 1,
       "AggregatesInsideItems": 1,
       "AggregatesThroughSharedProjection": 1,
-      "Aggregation": 6,
+      "Aggregation": 5,
       "AggregationCollect": 1,
-      "AggregationComputation": 3,
+      "AggregationComputation": 2,
       "AggregationEdgeTraversal": 1,
       "AggregationFiltering": 1,
       "AggregationHelpers": 1,
@@ -93629,7 +93763,6 @@
       "CLIParsing": 1,
       "CLI_ARGS": 1,
       "COLLECT": 1,
-      "COLLECT_GROUP": 1,
       "COLLECT_NULL_SKIP": 1,
       "CREATE": 1,
       "CRUD_OPERATIONS": 1,
@@ -93705,6 +93838,7 @@
       "ChainLimit": 1,
       "ChainMarking": 1,
       "ChainOrder": 1,
+      "ChainParts": 1,
       "ChainProcessing": 1,
       "ChainVariable": 1,
       "ChainVerification": 2,
@@ -93860,6 +93994,7 @@
       "Computation": 1,
       "ComputationalOperation": 2,
       "ComputeAggregation": 1,
+      "ComputedTemporaries": 1,
       "ConcurrencyPerf": 1,
       "ConcurrencySafety": 1,
       "ConcurrencyStressVariance": 2,
@@ -94416,6 +94551,7 @@
       "ErrorReporting": 1,
       "ErrorTesting": 1,
       "ErrorTypeReexport": 1,
+      "ErrorsFailStatement": 1,
       "EscalationPrevention": 1,
       "EstimatorApi": 1,
       "EstimatorPrimitives": 2,
@@ -94831,7 +94967,7 @@
       "GraphsMutex": 1,
       "GreyCardinal": 1,
       "GroupAccumulatorOwnership": 1,
-      "GroupAggregation": 2,
+      "GroupAggregation": 1,
       "GroupBy": 5,
       "GroupByPatterns": 1,
       "GroupByVerification": 1,
@@ -95509,6 +95645,7 @@
       "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
+      "Next": 1,
       "NextAsWithChain": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
@@ -95555,6 +95692,7 @@
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,
       "NoPrincipalUnauthenticated": 1,
+      "NoReboxing": 1,
       "NoReplayAfterSend": 1,
       "NoResendAfterSend": 1,
       "NoRetainedNodeCopies": 1,
@@ -95938,12 +96076,14 @@
       "PlanJoinReorderDiversity": 1,
       "PlanJoinReorderVarianceEnvelope": 1,
       "PlanMatchesExecutorSeek": 1,
+      "PlanMatchesRunStart": 1,
       "PlanMissSingleFlight": 1,
       "PlanSelectionIntegration": 1,
       "PlanSelectionPipelineAdoption": 1,
       "PlanSelectionPipelineVarianceEnvelope": 1,
       "PlanSelectionVarianceEnvelope": 1,
       "PlannedFinalProjection": 1,
+      "PlannedReadRows": 1,
       "PlannedRuntimeDeclinesWrites": 1,
       "Planner": 7,
       "PlannerAdaptiveBiasApplication": 1,
@@ -96081,6 +96221,7 @@
       "ProgramWriteLock": 1,
       "ProgressPrintedOncePerStep": 1,
       "ProgressTracking": 2,
+      "ProjectionScope": 1,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
       "PromptSigintCheck": 1,
@@ -96341,7 +96482,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 340,
+      "Regression": 341,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -96432,6 +96573,7 @@
       "RestartSameMeaning": 1,
       "RestoreDataIntegrity": 1,
       "RestoresAdjacencyEntriesFromMirror": 1,
+      "ResultBuilder": 1,
       "ResultGuard": 1,
       "ResultSerialization": 1,
       "ResultStreaming": 2,
@@ -96939,6 +97081,7 @@
       "SubqueryParameters": 1,
       "SubqueryParsing": 1,
       "SubqueryPatterns": 1,
+      "SubqueryStart": 1,
       "Subtraction": 1,
       "SuccessfulLogin": 1,
       "Sum": 1,

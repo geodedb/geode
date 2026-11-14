@@ -7,7 +7,7 @@
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 Memory-safe user storage with proper deep-copy patterns; open security gaps tracked in [GAP_ANALYSIS.md](GAP_ANALYSIS.md)
 > **GPU Status**: ✅ **Vulkan/CUDA headers properly configured** in NixOS environment
-> **GQL Compliance**: ✅ 96/96 named ISO conformance-suite cases (`zig build test-iso-conformance`; parse-only scope)
+> **GQL Compliance**: ✅ 106/106 named ISO conformance-suite cases (`zig build test-iso-conformance`; parse-only scope)
 
 ---
 

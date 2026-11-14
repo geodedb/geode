@@ -171,7 +171,6 @@ const containsVariableReference = pattern_helpers.containsVariableReference;
 const matchesLabels = pattern_helpers.matchesLabels;
 const matchesEdgeProperties = pattern_helpers.matchesEdgeProperties;
 const getWithExpressionName = pattern_helpers.getWithExpressionName;
-const computeAggregationForGroup = pattern_helpers.computeAggregationForGroup;
 const whereExprReferencesVar = pattern_helpers.whereExprReferencesVar;
 const propertyValueToValue = pattern_helpers.propertyValueToValue;
 
@@ -3044,8 +3043,9 @@ pub fn groupByAggregateFastPath(
                     try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
                     key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
                 }
-                var key_list = key_aw.toArrayList();
-                const group_key = try key_list.toOwnedSlice(ga);
+                // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                // failed copy left them in a list nothing freed).
+                const group_key = try key_aw.toOwnedSlice();
 
                 // Upsert group
                 if (groups.getPtr(group_key) == null) {
@@ -3149,8 +3149,9 @@ pub fn groupByAggregateFastPath(
                 try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
                 key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
             }
-            var key_list = key_aw.toArrayList();
-            const group_key = try key_list.toOwnedSlice(ga);
+            // SONNY-6498: the writer keeps the bytes until they are a slice (a
+            // failed copy left them in a list nothing freed).
+            const group_key = try key_aw.toOwnedSlice();
 
             // Upsert group
             if (groups.getPtr(group_key) == null) {
@@ -4514,7 +4515,7 @@ fn seekMultiNodeCandidate(
         // Only equality on a key the exact index actually covers is seekable.
         if (!graph_store.shouldIndexProperty(prop.key)) continue;
 
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        const expected = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, env) catch continue;
         const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
         defer property_value_codec.freePropertyValue(allocator, pv);
         if (pv == .Null) continue;
@@ -4690,7 +4691,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             const node_val = propertyValueToValue(node_prop_val);
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
                                 break;
@@ -4748,7 +4749,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             const node_val = propertyValueToValue(node_prop_val);
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
                                 break;
@@ -4798,6 +4799,15 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Generate Cartesian product of all matching nodes
     // GAP-0220 FIX: Use try for proper error propagation
     var rows = std.ArrayList([]Value).empty;
+    // SONNY-6498: the names and the rows, until the result holds them (a
+    // property value, a key or an item that fails fails the statement).
+    var parts_owned = true;
+    errdefer if (parts_owned) {
+        for (rows.items) |r| allocator.free(r);
+        rows.deinit(allocator);
+        for (columns) |c| allocator.free(c);
+        allocator.free(columns);
+    };
 
     // Recursive function to generate combinations
     const Context = struct {
@@ -4844,7 +4854,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             for (props) |prop| {
                                 // Only check properties that have variable references
                                 if (containsVariableReference(prop.value.*)) {
-                                    const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                    // SONNY-6498: a value that fails fails the statement (it was NULL).
+                                    const expected_val = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env);
                                     if (node.properties.get(prop.key)) |node_prop_val| {
                                         const node_val = propertyValueToValue(node_prop_val);
                                         if (!valuesEqual(node_val, expected_val)) {
@@ -4861,7 +4872,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate WHERE clause
                 if (self.q.where_clause) |where_expr| {
-                    const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                    const where_result = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), where_expr, env);
                     const passes = switch (where_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -4996,7 +5007,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (self.q.where_clause) |where_expr| {
-                            const where_result = try eval.evalExpr(self.allocator, where_expr, env);
+                            const where_result = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), where_expr, env);
                             const passes = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -5016,7 +5027,13 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (node_pattern.props) |props| {
                                     for (props) |prop| {
                                         if (containsVariableReference(prop.value.*)) {
-                                            const expected_val = eval.evalExpr(self.allocator, prop.value.*, env) catch Value{ .Null = {} };
+                                            // SONNY-6498: as above; the combination's names and values are this
+                                            // frame's until the group takes them.
+                                            const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch |err| {
+                                                self.allocator.free(env_names);
+                                                self.allocator.free(env_values);
+                                                return err;
+                                            };
                                             if (node.properties.get(prop.key)) |node_prop_val| {
                                                 const node_val = propertyValueToValue(node_prop_val);
                                                 if (!valuesEqual(node_val, expected_val)) {
@@ -5041,12 +5058,18 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
                         for (self.group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
+                            // SONNY-6498: a key that fails fails the statement (it grouped as NULL).
+                            const key_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), key_expr, env) catch |err| {
+                                self.allocator.free(env_names);
+                                self.allocator.free(env_values);
+                                return err;
+                            };
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
                         }
-                        var key_list = key_aw.toArrayList();
-                        const group_key = try key_list.toOwnedSlice(self.allocator);
+                        // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                        // failed copy left them in a list nothing freed).
+                        const group_key = try key_aw.toOwnedSlice();
 
                         // Add to group
                         if (self.binding_groups.getPtr(group_key)) |group_list| {
@@ -5100,14 +5123,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (group_envs.len == 0) continue;
 
                 var row = try allocator.alloc(Value, items.len);
+                errdefer allocator.free(row);
 
                 for (items, 0..) |item, i| {
                     if (isAggregationExpr(item.expr)) {
                         // Compute aggregation over all rows in group
-                        row[i] = try computeMultiNodeAggregation(allocator, item.expr, group_envs);
+                        row[i] = try computeMultiNodeAggregation(value_utilities.lentAllocator(allocator), item.expr, group_envs);
                     } else {
                         // Use first row's value for non-aggregated expressions
-                        row[i] = eval.evalExpr(allocator, item.expr, group_envs[0]) catch Value{ .Null = {} };
+                        // (SONNY-6498: an item that fails fails the statement).
+                        row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, group_envs[0]);
                     }
                 }
 
@@ -5123,14 +5148,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         .rows = try rows.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
     };
+    parts_owned = false;
+    errdefer result.deinit(allocator);
 
-    if (q.order_by) |order| {
-        sortRows(allocator, &result, order) catch |err| {
-            // SONNY-2811: a key that fails to evaluate fails the sort.
-            result.deinit(allocator);
-            return err;
-        };
-    }
+    // SONNY-2811: a key that fails to evaluate fails the sort.
+    if (q.order_by) |order| try sortRows(allocator, &result, order);
 
     if (q.ret.distinct) {
         try applyDistinct(allocator, &result);
@@ -5143,97 +5165,15 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 /// SONNY-3189: one integer link of an aggregate expression (`count(n) + 1`):
 /// Int op Int, NULL otherwise, and NULL for a division by zero. An overflow
 /// is `IntegerOverflow`, as the evaluator's; it was a panic.
-fn aggregateArithStep(op: ast.BinOp, left: Value, right: Value) error{IntegerOverflow}!Value {
-    if (left != .Int or right != .Int) return Value{ .Null = {} };
-    return switch (op) {
-        .Sub => Value{ .Int = std.math.sub(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Add => Value{ .Int = std.math.add(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Mul => Value{ .Int = std.math.mul(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Div => if (right.Int == 0)
-            Value{ .Null = {} }
-        else if (left.Int == std.math.minInt(i64) and right.Int == -1)
-            error.IntegerOverflow
-        else
-            Value{ .Int = @divTrunc(left.Int, right.Int) },
-        else => Value{ .Null = {} },
-    };
-}
-
+// SONNY-6498: the shared aggregate (`execution.computeGroupAggregation`:
+// every value type, DISTINCT, an argument that fails fails the statement,
+// ISO/IEC 39075 19.1 GR 1); this fold skipped a row whose argument failed
+// and kept integers only (sum, avg, min, max over doubles or strings was
+// NULL). Arithmetic over aggregates is the evaluator's (`eval.evalBinary`):
+// division by zero is 22012, not NULL.
 fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_envs: []const Env) !Value {
     switch (expr) {
-        .Call => |call| {
-            if (call.callee.* == .Ident) {
-                const func_name = call.callee.Ident.orig;
-
-                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
-                    if (call.args.len == 1 and call.args[0].* == .Ident and std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
-                        return Value{ .Int = @intCast(group_envs.len) };
-                    }
-                    // COUNT(expr) - count non-null values
-                    var count: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val != .Null) count += 1;
-                    }
-                    return Value{ .Int = count };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
-                    // COUNT(DISTINCT expr) - count distinct non-null values.
-                    // docs/@BUGS_731.md bug 6b: converged onto the shared
-                    // DistinctSet; this site had no boolean, edge or decimal
-                    // handling of its own.
-                    var distinct = distinct_set.DistinctSet.init(allocator);
-                    defer distinct.deinit();
-
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        _ = try distinct.add(val);
-                    }
-                    return Value{ .Int = @intCast(distinct.count()) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
-                    var sum: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        // SONNY-2769: checked; `+=` aborted the server past i64.
-                        if (val == .Int) sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                    }
-                    return Value{ .Int = sum };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
-                    var sum: i64 = 0;
-                    var count: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                            count += 1;
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    // avg() is a mean — never integer-divide (gql_conformance T16).
-                    return Value{ .Double = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    var min: ?i64 = null;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (min == null or val.Int < min.?) min = val.Int;
-                        }
-                    }
-                    if (min) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    var max: ?i64 = null;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (max == null or val.Int > max.?) max = val.Int;
-                        }
-                    }
-                    if (max) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                }
-            }
-        },
+        .Call => return envGroupAggregation(allocator, expr, group_envs),
         .Binary => |bin| {
             // Handle expressions like d.budget - sum(e.salary)
             // SONNY-3189: a left-deep chain with a loop, not one recursion
@@ -5256,19 +5196,32 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             while (i > 0) {
                 i -= 1;
                 const right = try computeMultiNodeAggregation(allocator, links.items[i].right.*, group_envs);
-                const next = try aggregateArithStep(links.items[i].op, acc, right);
-                acc = next;
+                acc = try eval.evalBinary(allocator, links.items[i].op, acc, right);
             }
             return acc;
         },
         else => {
             // For non-aggregation expressions, use first row
             if (group_envs.len > 0) {
-                return eval.evalExpr(allocator, expr, group_envs[0]) catch Value{ .Null = {} };
+                return eval.evalExpr(allocator, expr, group_envs[0]);
             }
         },
     }
     return Value{ .Null = {} };
+}
+
+/// SONNY-6498: aggregate `expr` (a call) over `envs`, rows that all bind the
+/// same names, by the shared aggregate.
+pub fn envGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
+    var sfa = std.heap.stackFallback(64 * @sizeOf([]const Value), allocator);
+    const la = sfa.get();
+    const rows = try la.alloc([]const Value, envs.len);
+    defer la.free(rows);
+    for (envs, rows) |env, *r| r.* = env.values;
+    const names: []const []const u8 = if (envs.len > 0) envs[0].names else &.{};
+    const pn: []const []const u8 = if (envs.len > 0) envs[0].param_names else &.{};
+    const pv: []const Value = if (envs.len > 0) envs[0].param_values else &.{};
+    return execution.computeGroupAggregation(allocator, expr, rows, names, pn, pv);
 }
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=NodeCache; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
@@ -6234,6 +6187,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     if (seeded) {
         try refuseUnjoinableBoundElement(q, param_names, param_values);
         var seed = MatchBinding.init(allocator);
+        // SONNY-6498: the seed, until the bindings hold it.
+        var seed_owned = true;
+        errdefer if (seed_owned) seed.deinit();
         var resolvable = true;
         for (q.match.chains, 0..) |chain, ci| {
             if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
@@ -6267,6 +6223,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             }
         }
         if (resolvable) try bindings.append(allocator, seed) else seed.deinit();
+        seed_owned = false;
     }
 
     const first_chain = q.match.chains[0];
@@ -6868,7 +6825,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
         // Evaluate WHERE clause (the join applied it already, SONNY-3368)
         if (!where_in_join) if (q.where_clause) |where_expr| {
-            const where_result = eval.evalExpr(allocator, where_expr, env) catch |err| {
+            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
                 if (execution.isQueryLevelEvalError(err)) return err;
                 continue;
             };
@@ -6880,7 +6837,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         };
         // SONNY-3386: the FILTER, when the join did not apply it.
         if (!where_in_join) if (q.filter_clause) |filter_expr| {
-            if (!filterPasses(try eval.evalExpr(allocator, filter_expr, env))) continue;
+            if (!filterPasses(try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env))) continue;
         };
 
         // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="MultiChainRelationshipMatch"; ASPECT=SetClauses; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:248; OWNER=execution; UPDATED=2026-07-31
@@ -7236,10 +7193,9 @@ fn executeVariableLengthPathTraversal(
                         .param_values = param_values,
                         .allocator = allocator,
                     };
-                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                        passes_props = false;
-                        break;
-                    };
+                    // SONNY-6498: a value that fails fails the statement (the
+                    // node did not match).
+                    const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                     if (!valuesEqual(node_val, prop_val)) {
                         passes_props = false;
                         break;
@@ -7319,7 +7275,7 @@ fn executeVariableLengthPathTraversal(
 
         // Evaluate WHERE clause if present
         if (where_clause) |where_expr| {
-            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
             const passes_where = switch (where_result) {
                 .Bool => |b| b,
                 .Null => false,
@@ -7345,7 +7301,7 @@ fn executeVariableLengthPathTraversal(
 
         // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
         if (filter_clause) |filter_expr| {
-            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+            const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
             const passes_filter = switch (filter_result) {
                 .Bool => |b| b,
                 .Null => false,
@@ -7412,7 +7368,11 @@ fn executeVariableLengthPathTraversal(
         // too; see `releaseEnvBuffers`.
         releaseEnvBuffers(allocator, row, stack_env_values[0..env_idx]);
 
-        try rows.append(allocator, row);
+        // SONNY-6498: the row, when the list cannot take it.
+        rows.append(allocator, row) catch |err| {
+            allocator.free(row);
+            return err;
+        };
     }
 }
 
@@ -7731,10 +7691,8 @@ fn executeSingleHopEdgeTraversal(
                             .param_values = param_values,
                             .allocator = allocator,
                         };
-                        const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                            passes_props = false;
-                            break;
-                        };
+                        // SONNY-6498: a value that fails fails the statement.
+                        const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                         if (!valuesEqual(node_val, prop_val)) {
                             passes_props = false;
                             break;
@@ -7798,7 +7756,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Evaluate WHERE clause if present
             if (where_clause) |where_expr| {
-                const where_result = try eval.evalExpr(allocator, where_expr, env);
+                const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                 const passes_where = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
@@ -7816,7 +7774,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
             if (filter_clause) |filter_expr| {
-                const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                 const passes_filter = switch (filter_result) {
                     .Bool => |b| b,
                     .Null => false,
@@ -7950,7 +7908,11 @@ fn executeSingleHopEdgeTraversal(
             // path (`RETURN p`, a WITH row) keeps them.
             if (path_alive) releaseEnvBuffers(allocator, row, &.{Value{ .Path = .{ .nodes = path_nodes_buf, .edges = path_edges_buf } }});
 
-            try rows.append(allocator, row);
+            // SONNY-6498: the row, when the list cannot take it.
+            rows.append(allocator, row) catch |err| {
+                allocator.free(row);
+                return err;
+            };
         }
     }
 }
@@ -8249,6 +8211,16 @@ fn readBindings(
     return .{ .rows = rows, .items = items };
 }
 
+/// SONNY-6498: a copy of `name` appended to `names`, freed if the append
+/// fails.
+fn appendOwnedName(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {
+    const owned = try allocator.dupe(u8, name);
+    names.append(allocator, owned) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+}
+
 // CANARY: REQ=REQ-SONNY-3140-WITH-STAGE; FEATURE="WriteStep"; ASPECT=WithStageRows; STATUS=TESTED; TEST=tests/test_sonny3139_write_shapes.zig; OWNER=engine; UPDATED=2026-09-27
 /// SONNY-3140, SONNY-3141, SONNY-3142: the rows a WITH after the MATCH
 /// keeps, for a write after it. The write executors read them here, and each
@@ -8336,7 +8308,7 @@ fn readWithStageRows(
         var kept: usize = 0;
         for (rows.rows, keep) |row, *k| {
             const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
-            k.* = switch (try eval.evalExpr(allocator, where_expr, env)) {
+            k.* = switch (try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env)) {
                 .Bool => |b| b,
                 else => false,
             };
@@ -8748,7 +8720,12 @@ pub fn stabilizeBindings(allocator: std.mem.Allocator, rows: *ExecutionResult) !
 pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
     const store = graph_store.getGlobalStore(allocator);
     switch (value.*) {
-        .Node => |node| value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
+        // SONNY-6498 item 4: a node the scan boxed already is stable until
+        // the grace boundary; boxing it again was one more copy per written
+        // row (the SONNY-3148 remainder).
+        .Node => |node| if (!store.isScanBox(node)) {
+            value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+        },
         .Edge => |edge| value.* = .{ .Edge = try boxEdge(allocator, rows, edge) },
         .List => |items| for (items) |*item| try stabilizeValue(allocator, rows, item),
         .Map => |map| {
@@ -8757,7 +8734,9 @@ pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, valu
         },
         .Path => |path| {
             // The executors allocate a path's arrays for the row.
-            for (@constCast(path.nodes)) |*node| node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+            for (@constCast(path.nodes)) |*node| {
+                if (!store.isScanBox(node.*)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+            }
             for (@constCast(path.edges)) |*edge| edge.* = try boxEdge(allocator, rows, edge.*);
         },
         else => {},
@@ -9564,7 +9543,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            // SONNY-6498: a WHERE that fails fails the statement (it was false).
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                return err;
+                            };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9655,7 +9639,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
+                            // SONNY-6498: a WHERE that fails fails the statement (it was false).
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                return err;
+                            };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9690,7 +9679,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .param_values = param_values,
                                 .allocator = allocator,
                             };
-                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                            // SONNY-6498: an item that fails fails the statement.
+                            row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, base_env);
                         } else {
                             row[i] = Value{ .Null = {} };
                         }
@@ -9761,7 +9751,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     .param_values = param_values,
                                     .allocator = allocator,
                                 };
-                                const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                                 if (!valuesEqual(node_val, prop_val)) {
                                     passes_props = false;
                                     break;
@@ -9832,7 +9822,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                         .param_values = param_values,
                                         .allocator = allocator,
                                     };
-                                    const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                                    const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                                     if (!valuesEqual(node_val, prop_val)) {
                                         passes_right_props = false;
                                         break;
@@ -10020,7 +10010,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .param_values = param_values,
                                 .allocator = allocator,
                             };
-                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
                             if (!valuesEqual(node_val, prop_val)) {
                                 passes_props = false;
                                 break;
@@ -10055,7 +10045,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Evaluate WHERE clause if present
                 if (q.where_clause) |where_expr| {
                     const passes_where = blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
@@ -10070,7 +10060,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate FILTER clause if present
                 if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -10341,7 +10331,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .param_values = param_values,
                     .allocator = allocator,
                 };
-                if (eval.evalExpr(allocator, prop.value.*, prop_env)) |expected_val| {
+                if (eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env)) |expected_val| {
                     const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
                         .Str => |s| graph_store.PropertyValue{ .String = s },
                         .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -10461,7 +10451,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             // Convert PropertyValue to Value for comparison
                             const node_val = propertyValueToValue(node_prop_val);
                             // Evaluate expected value from pattern (with access to parameters)
-                            const expected_val = try eval.evalExpr(allocator, prop.value.*, prop_env);
+                            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 props_match = false;
                                 break;
@@ -10502,7 +10492,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 if (match_variable) |var_name| {
                     env_names = try allocator.alloc([]const u8, 1);
-                    env_values = try allocator.alloc(Value, 1);
+                    // SONNY-6498: the names, when the values cannot be had.
+                    env_values = allocator.alloc(Value, 1) catch |err| {
+                        allocator.free(env_names);
+                        return err;
+                    };
                     env_names[0] = var_name;
                     env_values[0] = Value{ .Node = node };
                 }
@@ -10528,7 +10522,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (q.where_clause) |where_expr| {
                     // Skip WHERE at MATCH level when WITH clause exists - post-WITH WHERE will handle it
                     const passes_where = if (has_with) true else blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
+                        const where_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env);
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
@@ -10547,7 +10541,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
                 if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                    const filter_result = try eval.evalExpr(value_utilities.lentAllocator(allocator), filter_expr, env);
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -10645,7 +10639,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Create extended environment with both matched variables and inline LET bindings
                 if (inline_let_bindings.len > 0) {
                     var all_names = try allocator.alloc([]const u8, env_names.len + inline_let_names.items.len);
-                    var all_values = try allocator.alloc(Value, env_values.len + inline_let_values.items.len);
+                    var all_values = allocator.alloc(Value, env_values.len + inline_let_values.items.len) catch |err| {
+                        allocator.free(all_names);
+                        return err;
+                    };
 
                     // Copy original env
                     for (env_names, 0..) |name, idx| {
@@ -10681,6 +10678,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Otherwise, evaluate RETURN expressions directly
                 var row: []Value = undefined;
 
+                // SONNY-6498: the extended environment, when its row cannot
+                // be had.
+                var extended_live = inline_let_bindings.len > 0;
+                errdefer if (extended_live) {
+                    allocator.free(extended_env.names);
+                    allocator.free(extended_env.values);
+                };
                 if (q.with_clause != null) {
                     // Build row with matched variables for WITH clause processing
                     row = try allocator.alloc(Value, extended_env.values.len);
@@ -10697,6 +10701,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 } else {
                     // Explicit RETURN clause - evaluate RETURN expressions directly
                     row = try allocator.alloc(Value, items.len);
+                    errdefer allocator.free(row);
                     // SONNY-6449: the rows borrow what the items compute, so
                     // it is the statement's scratch arena's
                     // (`value_utilities.lentAllocator`); on `allocator` it
@@ -10704,21 +10709,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const lent = value_utilities.lentAllocator(allocator);
                     for (items, 0..) |item, i| {
                         // Evaluate expression with node and inline LET bindings in environment
-                        row[i] = eval.evalExpr(lent, item.expr, extended_env) catch |err| {
-                            allocator.free(row);
-                            if (inline_let_bindings.len > 0) {
-                                allocator.free(extended_env.names);
-                                allocator.free(extended_env.values);
-                            }
-                            return err;
-                        };
+                        row[i] = try eval.evalExpr(lent, item.expr, extended_env);
                     }
                 }
 
                 // Free extended environment memory
-                if (inline_let_bindings.len > 0) {
+                if (extended_live) {
                     allocator.free(extended_env.names);
                     allocator.free(extended_env.values);
+                    extended_live = false;
                 }
 
                 // env_names/env_values are released by this iteration's
@@ -10726,7 +10725,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // so there is nothing left to guard against here.
                 // CANARY: REQ=REQ-MEM-FIX-001; FEATURE="MemorySafety"; ASPECT=DoubleFreeFix; STATUS=TESTED; TEST=tests/test_create_vector_value_leak.zig; OWNER=execution; UPDATED=2026-09-01
 
-                try rows.append(allocator, row);
+                rows.append(allocator, row) catch |err| {
+                    allocator.free(row);
+                    return err;
+                };
             }
         }
 
@@ -10736,7 +10738,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             for (items, 0..) |_, i| {
                 null_row[i] = Value{ .Null = {} };
             }
-            try rows.append(allocator, null_row);
+            rows.append(allocator, null_row) catch |err| {
+                allocator.free(null_row);
+                return err;
+            };
         }
 
         // If WITH clause exists OR no RETURN clause, determine columns from matched variables
@@ -10755,6 +10760,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // GAP-0220 FIX: Use try for proper error propagation
             var col_list = std.ArrayList([]const u8).empty;
             defer col_list.deinit(allocator);
+            // SONNY-6498: the names copied so far, on an error.
+            errdefer for (col_list.items) |col| allocator.free(col);
 
             if (has_relationship) {
                 // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="WithClauseRelationshipVars"; ASPECT=ColumnOrder; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=execution; UPDATED=2026-07-31
@@ -10763,15 +10770,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // `length(path)` through a WITH) and rel/right cannot transpose.
                 const layout = RelEnvLayout.init(left_node_var, rel_var, right_node_var, chain_path_var);
                 for (layout.names[0..layout.len]) |v| {
-                    try col_list.append(allocator, try allocator.dupe(u8, v));
+                    try appendOwnedName(allocator, &col_list, v);
                 }
             } else {
-                if (match_variable) |v| try col_list.append(allocator, try allocator.dupe(u8, v));
+                if (match_variable) |v| try appendOwnedName(allocator, &col_list, v);
             }
 
             // Add inline LET bindings if present
             for (inline_let_bindings) |binding| {
-                try col_list.append(allocator, try allocator.dupe(u8, binding.variable));
+                try appendOwnedName(allocator, &col_list, binding.variable);
             }
 
             columns = try col_list.toOwnedSlice(allocator);
@@ -10835,7 +10842,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .param_values = param_values,
                         .allocator = allocator,
                     };
-                    const where_val = try eval.evalExpr(allocator, where_expr, where_env);
+                    const where_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, where_env);
                     k.* = switch (where_val) {
                         .Bool => |b| b,
                         .Null => false,

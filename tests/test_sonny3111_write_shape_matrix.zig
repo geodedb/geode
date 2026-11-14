@@ -59,8 +59,10 @@ const cases = [_]Case{
     .{ .q = "MATCH p = (:S2a {i: 2})-[:R3111]->(:S2b) DETACH DELETE p", .err = refused },
     // S24: a label SET on a relationship variable.
     .{ .q = "MATCH (:S2a)-[r:R3111]->() SET r:L24", .err = refused },
-    // S10: MERGE with CREATE is still a syntax error.
-    .{ .q = "MERGE (a:S10 {k: 1}) CREATE (:S10c {k: 2})", .err = error.UnexpectedToken },
+    // S10: MERGE with CREATE.
+    // SONNY-6496 item 3: refused with 0A000 naming the shape (it was a
+    // syntax error); nothing is written either way.
+    .{ .q = "MERGE (a:S10 {k: 1}) CREATE (:S10c {k: 2})", .err = error.UnsupportedQueryShape },
 
     // Nothing of the refused statements was written.
     .{ .q = "MATCH (q:S1) RETURN count(*) AS c", .want = &.{"2"} },

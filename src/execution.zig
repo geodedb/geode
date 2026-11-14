@@ -873,6 +873,26 @@ pub const OwnedGraphEntities = struct {
         try self.edges.append(self.allocator, edge);
     }
 
+    /// SONNY-6498: track `node`, made for this tracker, destroying it when
+    /// it cannot be tracked: a node materialized for a row is never left
+    /// unowned when the row cannot be built (the row builders tracked their
+    /// nodes only after the row was in its list, and leaked them on any
+    /// failure before).
+    pub fn adoptNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
+        self.nodes.append(self.allocator, node) catch |err| {
+            if (self.destroy_node) |destroy| destroy(self.allocator, node) else self.allocator.destroy(node);
+            return err;
+        };
+    }
+
+    /// As `adoptNode`, for a relationship.
+    pub fn adoptEdge(self: *OwnedGraphEntities, edge: *graph_store.Edge) !void {
+        self.edges.append(self.allocator, edge) catch |err| {
+            if (self.destroy_edge) |destroy| destroy(self.allocator, edge) else self.allocator.destroy(edge);
+            return err;
+        };
+    }
+
     /// Release the tracked entities AND the tracker itself (always
     /// heap-allocated by `init`). SONNY-2394: this used to leave the tracker
     /// allocated, so every call site that only called deinit() -- each planned
@@ -3543,6 +3563,8 @@ pub const VariableLengthPath = struct {
 
     fn clone(self: *const VariableLengthPath, allocator: std.mem.Allocator) !VariableLengthPath {
         var new_path = VariableLengthPath.init(allocator);
+        // SONNY-6498: what was copied, when the rest cannot be.
+        errdefer new_path.deinit(allocator);
         try new_path.nodes.appendSlice(allocator, self.nodes.items);
         try new_path.edges.appendSlice(allocator, self.edges.items);
         // Clone the membership sets
@@ -3649,6 +3671,8 @@ pub const PathIterator = struct {
 
         // Seed the BFS queue with the start node
         var initial_path = VariableLengthPath.init(allocator);
+        // SONNY-6498: until the queue holds it.
+        errdefer initial_path.deinit(allocator);
         try initial_path.nodes.append(allocator, start_node_id);
         try initial_path.node_set.put(allocator, start_node_id, {});
         try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
@@ -3777,6 +3801,9 @@ pub const PathIterator = struct {
         depth: u32,
     ) !void {
         var new_path = try current_path.clone(self.allocator);
+        // SONNY-6498: until the queue holds it or it is freed below.
+        var new_path_live = true;
+        errdefer if (new_path_live) new_path.deinit(self.allocator);
         try new_path.edges.append(self.allocator, edge_id);
         try new_path.edge_set.put(self.allocator, edge_id, {});
         try new_path.nodes.append(self.allocator, next_node_id);
@@ -3788,14 +3815,19 @@ pub const PathIterator = struct {
 
         if (meets_min) {
             // Path qualifies - add a clone to pending results
-            const result_path = try new_path.clone(self.allocator);
-            try self.pending_results.append(self.allocator, result_path);
+            var result_path = try new_path.clone(self.allocator);
+            self.pending_results.append(self.allocator, result_path) catch |err| {
+                result_path.deinit(self.allocator);
+                return err;
+            };
         }
 
         // Continue expanding if we haven't reached max length
         if (!reached_max) {
             try self.queue.append(self.allocator, .{ .path = new_path, .depth = new_depth });
+            new_path_live = false;
         } else {
+            new_path_live = false;
             new_path.deinit(self.allocator);
         }
     }
@@ -3812,6 +3844,7 @@ pub const PathIterator = struct {
         if (self.pending_zero_path) {
             self.pending_zero_path = false;
             var zero_path = VariableLengthPath.init(self.allocator);
+            errdefer zero_path.deinit(self.allocator);
             try zero_path.nodes.append(self.allocator, self.start_node_id);
             try zero_path.node_set.put(self.allocator, self.start_node_id, {});
             return zero_path;
@@ -3840,11 +3873,15 @@ pub const PathIterator = struct {
             // Dequeue first item (BFS order) - O(1) via front-index
             const current = self.queueDequeue();
             var current_path = current.path;
+            // SONNY-6498: the dequeued path, when expanding it fails.
+            var current_live = true;
+            errdefer if (current_live) current_path.deinit(self.allocator);
             const depth = current.depth;
 
             // If we've reached max_len, don't expand further
             if (self.max_len) |max| {
                 if (depth >= max) {
+                    current_live = false;
                     if (depth >= self.min_len) {
                         return current_path;
                     } else {
@@ -3897,6 +3934,7 @@ pub const PathIterator = struct {
             }
 
             // Clean up the current path (we've cloned it for any expansions)
+            current_live = false;
             current_path.deinit(self.allocator);
 
             // If we found qualifying paths this expansion, yield the first one (O(1) dequeue)
@@ -4381,29 +4419,19 @@ fn resolveGroupByKeyThroughAlias(
 
 // CANARY: REQ=REQ-GROUPED-UNKNOWN-FUNCTION; FEATURE="GroupedProjection"; ASPECT=UnknownFunctionEscapes; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
 /// Evaluate one expression of a grouped query (projection item, GROUP BY key or
-/// HAVING predicate) with the path's long-standing tolerance for per-group
-/// evaluation failures — EXCEPT for an unknown function, which escapes.
+/// HAVING predicate).
 ///
 /// GROUPED-UNKNOWN-FUNCTION: every one of these sites used a blanket
-/// `catch -> NULL` so a cell that cannot be computed for THIS group still gets
-/// a value. That also swallowed `error.UnknownFunction`, so
-///
-///     MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k
-///
-/// came back as a full, successful result set with a NULL column, while the
-/// identical ungrouped `RETURN banana(n.v)` raised undefined_function
-/// (SQLSTATE 42883, src/server/proto_util.zig). An unknown function is a static
-/// defect in the query text, not a per-group evaluation failure: it cannot
-/// depend on which rows landed in the group, and it must be reported the same
-/// way in both shapes. SONNY-2675: the other query-level errors
-/// (`isQueryLevelEvalError`: a missing positional parameter, a refusal, OOM)
-/// escape the same way. Every other error keeps collapsing to the caller's
-/// fallback, so the six aggregates and ordinary scalar functions are untouched.
-fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallback: Value) !Value {
-    return eval.evalExpr(allocator, expr, env) catch |err| {
-        if (isQueryLevelEvalError(err)) return err;
-        return fallback;
-    };
+/// `catch -> NULL`, so `MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k`
+/// came back as a full result with a NULL column while the ungrouped
+/// `RETURN banana(n.v)` raised 42883; the query-level errors then escaped
+/// (SONNY-2675). SONNY-6498 item 3: so does every other error. ISO/IEC 39075
+/// 19.1 GR 1: an exception raised evaluating a value expression is the
+/// statement's; a division by zero, an overflow or a type error in a key, an
+/// item or a HAVING grouped its rows as NULL, or dropped the group, and the
+/// statement answered success.
+fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Value {
+    return eval.evalExpr(allocator, expr, env);
 }
 
 /// A projection over groups: its items, and its GROUP BY keys resolved
@@ -4530,7 +4558,7 @@ const HavingFilter = struct {
                 // scratch arena's (`value_utilities.lentAllocator`).
                 .aggregate => |agg| try computeGroupAggregation(value_utilities.lentAllocator(allocator), agg, group_rows, input_columns, self.param_names, self.param_values),
                 // Every row of the group shares its key.
-                .key => |key| try evalGroupedExpr(value_utilities.lentAllocator(allocator), key, key_env, Value{ .Null = {} }),
+                .key => |key| try evalGroupedExpr(value_utilities.lentAllocator(allocator), key, key_env),
             };
         }
         return self.evaluate(allocator, self.names, self.values);
@@ -4557,7 +4585,7 @@ const HavingFilter = struct {
             .param_values = self.param_values,
             .allocator = allocator,
         };
-        const result = try evalGroupedExpr(value_utilities.lentAllocator(allocator), self.expr, env, Value{ .Bool = false });
+        const result = try evalGroupedExpr(value_utilities.lentAllocator(allocator), self.expr, env);
         return switch (result) {
             .Bool => |b| b,
             else => false,
@@ -4667,7 +4695,7 @@ const GroupedItems = struct {
             else if (group_rows.len == 0)
                 Value{ .Null = {} }
             else
-                try evalGroupedExpr(scratch, item.expr, first_env, Value{ .Null = {} });
+                try evalGroupedExpr(scratch, item.expr, first_env);
         }
         // After every other item: a lifted item reads their columns.
         for (self.lifted, row) |plan, *cell| {
@@ -4699,7 +4727,7 @@ const GroupedItems = struct {
             .column => |i| row[i],
             .aggregate => |agg| try computeGroupAggregation(scratch, agg, group_rows, self.input_columns, self.param_names, self.param_values),
             // Every row of the group shares its key.
-            .key => |key| try evalGroupedExpr(scratch, key, key_env, Value{ .Null = {} }),
+            .key => |key| try evalGroupedExpr(scratch, key, key_env),
         };
         const env = Env{
             .names = plan.slot_names,
@@ -4960,12 +4988,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             // s`) to its underlying expression before evaluating against the
             // input row (`keys`, above).
             for (keys) |key_expr| {
-                const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env, Value{ .Null = {} });
+                const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env);
                 // SONNY-2675: the key's typed canonical encoding.
                 try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
-            var key_buf = key_aw.toArrayList();
-            const group_key = try key_buf.toOwnedSlice(allocator);
+            // SONNY-6498: the writer keeps the bytes until they are a slice (a
+            // failed copy left them in a list nothing freed).
+            const group_key = try key_aw.toOwnedSlice();
 
             // Add row to its group
             // SONNY-6297: on a failed allocation the key and a new group's
@@ -5037,13 +5066,14 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     const key_writer = &key_aw.writer;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env, Value{ .Null = {} });
+                            const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env);
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }
                     }
-                    var key_buf = key_aw.toArrayList();
-                    const group_key = try key_buf.toOwnedSlice(allocator);
+                    // SONNY-6498: the writer keeps the bytes until they are a slice (a
+                    // failed copy left them in a list nothing freed).
+                    const group_key = try key_aw.toOwnedSlice();
                     try addToGroup(allocator, &groups, &group_keys_list, group_key, input_row);
                 }
 
