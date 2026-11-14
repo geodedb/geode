@@ -399,14 +399,13 @@ pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
 // CLI login ownership contract is reachable from a test binary.
 pub const hello_decode = @import("client/hello_decode.zig");
 
-// Standalone community-detection routines over an in-memory adjacency list
-// and an LFU cache. Only tests use them (tests/e2e_graph_algos_new.zig and
-// fuzz/targets/lfu_cache_fuzz.zig); the server's algo.louvain and
-// algo.labelPropagation procedures run src/execution/centrality_algorithms.zig.
-// SONNY-6511 removed the rest of src/graph/ (37 files no build compiled or ran).
+// An LFU cache; only tests use it (fuzz/targets/lfu_cache_fuzz.zig).
+// SONNY-6511 removed the rest of src/graph/ (37 files no build compiled or
+// ran). SONNY-6540 item 10 removed its standalone Louvain and label
+// propagation, which only tests/e2e_graph_algos_new.zig called: the
+// algo.louvain and algo.labelPropagation procedures run
+// src/execution/centrality_algorithms.zig.
 pub const graph = struct {
-    pub const community_louvain = @import("graph/community_louvain.zig");
-    pub const community_label_propagation = @import("graph/community_label_propagation.zig");
     pub const containers = struct {
         pub const lfu = @import("graph/containers/lfu.zig");
     };
@@ -974,8 +973,6 @@ test "sonny6511-lib: inline test roots" {
     _ = @import("ml/graph_embeddings.zig");
     _ = @import("planner/cost_calibration.zig");
     _ = @import("planner/pipeline.zig");
-    _ = @import("graph/community_louvain.zig");
-    _ = @import("graph/community_label_propagation.zig");
     _ = @import("graph/containers/lfu.zig");
     // SONNY-6517 item 3: the planner's own inline tests.
     _ = @import("planner.zig");

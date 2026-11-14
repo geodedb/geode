@@ -6,8 +6,9 @@
 //
 // Two fixtures:
 //   1. Two directed 3-cycles ("triangles") joined by a single bridge edge —
-//      the canonical community-detection fixture (mirrors
-//      tests/e2e_graph_algos_new.zig, which covers the library level).
+//      the canonical community-detection fixture (it mirrored
+//      tests/e2e_graph_algos_new.zig, which tested a standalone library copy
+//      removed by SONNY-6540 item 10; this file covers the procedures).
 //      a→b→c→a   d→e→f→d   bridge c→d
 //   2. The 8-person social network published in
 //      docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md — every expected output printed

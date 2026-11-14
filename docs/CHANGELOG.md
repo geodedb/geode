@@ -6195,6 +6195,17 @@
 
 ### Removed
 
+- **Dead code: the standalone Louvain and label propagation (SONNY-6540
+  item 10).** `src/graph/community_louvain.zig` and
+  `src/graph/community_label_propagation.zig` were called only by their own
+  inline tests and `tests/e2e_graph_algos_new.zig`; `CALL algo.louvain` and
+  `CALL algo.labelPropagation` run `src/execution/centrality_algorithms.zig`
+  (`test-gap0883`). Removed with that test file. Also corrected
+  `docs/kb/VARIANCE_ENVELOPES.md` (the two calibration envelopes listed as
+  tightened to CV 0.20 / p95 2.50 have no such thresholds; the structural-key
+  collision benchmark is compiled by no step) and annotated
+  `docs/performance/2026-04-20-query-bench/FINAL.md` (the AST cache does not
+  use `structural_key.zig`).
 - **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
   `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
   no query: nothing outside `planner.zig` named them except 17 test and

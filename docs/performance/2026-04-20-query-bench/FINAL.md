@@ -134,7 +134,7 @@ Evidence is the row at `variant/scenario_name/measurement` in `baseline/bench-qu
 
 - **Signal:** `bench-query-planner` measures parse p50 37 µs vs plan p50 ≤ 1 µs → **parser is ~100× more expensive than planner** across all shapes.
 - **Why:** full tokenize-parse-validate pipeline runs on every query. The server's `SharedQueryOptimizer` caches planning but does NOT cache parsing — every connection re-parses identical queries on every request.
-- **Fix:** structural-key AST cache keyed on query hash → pre-parsed `ast.Program`. Integrate into `executeProgramWithContext` entrance so cache hit bypasses lexer+parser. Already-built pieces: `src/planner/structural_key.zig`.
+- **Fix:** structural-key AST cache keyed on query hash → pre-parsed `ast.Program`. Integrate into `executeProgramWithContext` entrance so cache hit bypasses lexer+parser. Already-built pieces: `src/planner/structural_key.zig`. (SONNY-6540, 2026-11-14: not so. The AST cache that landed, `SharedAstCache` (GAP-0810, `query_ast_cache`), keys on the `(query_text, opts)` pair; `structural_key.zig` derives a key from a query's MATCH pattern shape and is used by its benchmark and `planner/pipeline.zig`'s inline tests only.)
 - **Expected win:** 1.5-5× on high-QPS point-read traffic (parse is ~85 µs of every point_read_inline's ~190 µs p50 on small — 45% of the wall).
 
 ### 7. CREATE is 2.5× slower than DELETE (`create_single` vs `delete_single`)

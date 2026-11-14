@@ -6820,12 +6820,6 @@ pub fn build(b: *std.Build) void {
     const e2e_cbo_v0_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_cbo_v0.zig"), .target = target, .optimize = optimize }) });
     e2e_cbo_v0_test.root_module.addImport("geode", root_mod);
     test_e2e_step.dependOn(&e2e_cbo_v0_test.step);
-    const e2e_graph_algos_new_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_graph_algos_new.zig"), .target = target, .optimize = optimize }) });
-    e2e_graph_algos_new_test.root_module.addImport("geode", root_mod);
-    // GAP-0863a: actually RUN these tests (pure in-memory community-detection
-    // assertions, no server) instead of compile-only like the stub-era wiring.
-    const run_e2e_graph_algos_new_test = b.addRunArtifact(e2e_graph_algos_new_test);
-    test_e2e_step.dependOn(&run_e2e_graph_algos_new_test.step);
 
     // October 2025 feature integration tests
     const october_2025_integration_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_october_2025_features_integration.zig"), .target = target, .optimize = optimize }) });
@@ -16813,8 +16807,6 @@ pub fn build(b: *std.Build) void {
             "ml.graph_embeddings.test.",
             "planner.cost_calibration.test.",
             "planner.pipeline.test.",
-            "graph.community_louvain.test.",
-            "graph.community_label_propagation.test.",
             "graph.containers.lfu.test.",
             // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
             "planner.test.",
