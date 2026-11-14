@@ -10236,6 +10236,27 @@ pub fn build(b: *std.Build) void {
     const sonny6491ob_step = b.step("test-sonny6491-orderby-label-intern", "Run SONNY-6491 follow-up regression (an ORDER BY on a label no node has yet, then CREATE: the label is counted and listed by db.labels() after a SIGKILL and after a clean shutdown of a real server, nodes of further new labels on other shards are each found under their own label after a restart with all 16 shard dictionaries agreeing on every id; createOrderedIndex names an unseen label on every shard and durably; the ORDER BY auto-build trigger names no label)");
     sonny6491ob_step.dependOn(&run_sonny6491ob_tests.step);
 
+    // SONNY-6524: graphs whose shard label dictionaries disagree (graph-storage
+    // 0.4.15 refuses them at open): every shape older geode and graph-storage
+    // left, built with the engine calls that left it; refused by default and
+    // nothing written; a shift adopted from shard 0 on the operator's request
+    // with every node and edge keeping its label; shapes in which shard 0 lost
+    // a name refused even then; a real server keeps serving its other graphs.
+    const sonny6524_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6524_label_dict_split.zig"), .target = target, .optimize = optimize });
+    sonny6524_test_mod.link_libc = true;
+    sonny6524_test_mod.addImport("geode", root_mod);
+    sonny6524_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6524_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6524_test_mod.addImport("schema", schema_mod);
+    sonny6524_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6524_tests = b.addTest(.{ .root_module = sonny6524_test_mod });
+    const run_sonny6524_tests = b.addRunArtifact(sonny6524_tests);
+    spawnsBuiltGeode(sonny6524_tests);
+    // Intentionally red until the fix (docs/KNOWN_TEST_ISSUES.md): not in shardDep yet.
+    if (g_test_compile_step) |c| c.dependOn(&sonny6524_tests.step);
+    const sonny6524_step = b.step("test-sonny6524-label-dict-split", "Run SONNY-6524 regression (graphs whose shard label dictionaries disagree, in every shape older geode and graph-storage left: refused at open by default with nothing written; a shift adopted from shard 0 when GEODE_LABEL_DICT_ADOPT_SHARD0 names the graph, every node and edge on every shard keeping the label it was created with; shapes in which shard 0 lost a name refused even then; a real server keeps serving its other graphs)");
+    sonny6524_step.dependOn(&run_sonny6524_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
