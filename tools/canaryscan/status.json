@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:31:55.849685377Z",
+  "generated_at": "2026-11-14T01:34:52.733408474Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85810,6 +85810,20 @@
       "features": [
         {
           "feature": "MultiGraphIsolation",
+          "aspect": "OneScanPerBatch",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93506,7 +93520,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4934
+      "TESTED": 4935
     },
     "by_aspect": {
       "2PC": 3,
@@ -95919,6 +95933,7 @@
       "OneResolver": 1,
       "OneResourceRule": 1,
       "OneRowPerPath": 1,
+      "OneScanPerBatch": 1,
       "OneSetPath": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,

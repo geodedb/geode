@@ -2413,6 +2413,9 @@ const HydrationEntry = struct {
     failure: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(QuarantineCause.unknown)),
 };
 
+/// SONNY-6523 (7): keys DROP GRAPH collects per scan of a shared map.
+const drop_purge_batch: usize = 256;
+
 /// SONNY-6523 (7): scans of the shared graph-keyed maps DROP GRAPH has made
 /// (`purgeGraphKeyedIndexes`), for the regression test.
 var g_drop_graph_map_scans = std.atomic.Value(u64).init(0);
@@ -3211,66 +3214,74 @@ pub const GraphStore = struct {
     /// never touched. Allocation-free (a re-scan after each removal), like
     /// `removeHydrationCounterContributionsForGraph`; removing an entry moves
     /// no other entry, so other graphs' posting pointers stay valid.
+    // CANARY: REQ=REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR; FEATURE="MultiGraphIsolation"; ASPECT=OneScanPerBatch; STATUS=TESTED; TEST=tests/test_sonny6523_drop_graph_purge.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6523 (7): remove from `map` every entry whose key `matches`
+    /// `graph_name`, collecting up to `drop_purge_batch` keys per scan of the
+    /// map. DROP GRAPH scanned each shared map from its start once per key it
+    /// removed (O(keys of every graph) per removed key: quadratic in the
+    /// dropped graph's label and relationship-type count). `release` frees
+    /// what a removed entry owns. Allocates nothing.
+    fn removeGraphKeyed(
+        map: anytype,
+        graph_name: []const u8,
+        comptime matches: fn ([]const u8, []const u8) bool,
+        allocator: std.mem.Allocator,
+        comptime release: fn (std.mem.Allocator, @TypeOf(map.*).KV) void,
+    ) void {
+        var batch: [drop_purge_batch][]const u8 = undefined;
+        while (true) {
+            _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
+            var n: usize = 0;
+            var it = map.iterator();
+            while (it.next()) |e| {
+                if (!matches(e.key_ptr.*, graph_name)) continue;
+                batch[n] = e.key_ptr.*;
+                n += 1;
+                if (n == batch.len) break;
+            }
+            for (batch[0..n]) |key| {
+                if (map.fetchRemove(key)) |kv| release(allocator, kv);
+            }
+            if (n < batch.len) return;
+        }
+    }
+
+    fn graphTenantKeyMatchesGraph(key: []const u8, graph_name: []const u8) bool {
+        return std.mem.eql(u8, graphTenantKeyGraph(key), graph_name);
+    }
+
     fn purgeGraphKeyedIndexes(self: *GraphStore, graph_name: []const u8) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         {
             self.label_index_mutex.lockUncancelable(io);
             defer self.label_index_mutex.unlock(io);
-            while (true) {
-                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
-                var victim: ?[]const u8 = null;
-                var it = self.label_index.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (self.label_index.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(&self.label_index, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "label_index").KV) void {
+                    a.free(kv.key);
                     var posting = kv.value;
-                    posting.deinit(self.allocator);
+                    posting.deinit(a);
                 }
-            }
+            }.release);
         }
         {
             self.label_count_rwlock.lockUncancelable(io);
             defer self.label_count_rwlock.unlock(io);
-            while (true) {
-                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
-                var victim: ?[]const u8 = null;
-                var it = self.label_counts_by_graph.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
+            removeGraphKeyed(&self.label_counts_by_graph, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "label_counts_by_graph").KV) void {
+                    a.free(kv.key);
                 }
-                const key = victim orelse break;
-                if (self.label_counts_by_graph.fetchRemove(key)) |kv| self.allocator.free(kv.key);
-            }
+            }.release);
         }
         {
             self.edge_type_index_lock.lockUncancelable(io);
             defer self.edge_type_index_lock.unlock(io);
-            while (true) {
-                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
-                var victim: ?[]const u8 = null;
-                var it = self.edge_type_index.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (self.edge_type_index.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(&self.edge_type_index, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "edge_type_index").KV) void {
+                    a.free(kv.key);
                     var list = kv.value;
-                    list.deinit(self.allocator);
+                    list.deinit(a);
                 }
-            }
+            }.release);
         }
         {
             self.nodes_by_graph_mutex.lockUncancelable(io);
@@ -14091,21 +14102,11 @@ pub const GraphStore = struct {
         {
             self.edge_type_count_rwlock.lockUncancelable(io);
             defer self.edge_type_count_rwlock.unlock(io);
-            while (true) {
-                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
-                var victim: ?[]const u8 = null;
-                var it = self.edge_type_counts_by_graph.iterator();
-                while (it.next()) |e| {
-                    if (graphLabelKeyMatchesGraph(e.key_ptr.*, graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
+            removeGraphKeyed(&self.edge_type_counts_by_graph, graph_name, graphLabelKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: @FieldType(GraphStore, "edge_type_counts_by_graph").KV) void {
+                    a.free(kv.key);
                 }
-                const key = victim orelse break;
-                if (self.edge_type_counts_by_graph.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
-                }
-            }
+            }.release);
         }
         self.perf_c_refcount_mutex.lockUncancelable(io);
         defer self.perf_c_refcount_mutex.unlock(io);
@@ -14115,25 +14116,15 @@ pub const GraphStore = struct {
             &self.label_properties_by_tenant,
         };
         for (outers) |outer| {
-            while (true) {
-                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
-                var victim: ?[]const u8 = null;
-                var it = outer.iterator();
-                while (it.next()) |e| {
-                    if (std.mem.eql(u8, graphTenantKeyGraph(e.key_ptr.*), graph_name)) {
-                        victim = e.key_ptr.*;
-                        break;
-                    }
-                }
-                const key = victim orelse break;
-                if (outer.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
+            removeGraphKeyed(outer, graph_name, graphTenantKeyMatchesGraph, self.allocator, struct {
+                fn release(a: std.mem.Allocator, kv: std.StringHashMap(std.StringHashMap(usize)).KV) void {
+                    a.free(kv.key);
                     var inner = kv.value;
                     var iit = inner.iterator();
-                    while (iit.next()) |ie| self.allocator.free(ie.key_ptr.*);
+                    while (iit.next()) |ie| a.free(ie.key_ptr.*);
                     inner.deinit();
                 }
-            }
+            }.release);
         }
     }
 

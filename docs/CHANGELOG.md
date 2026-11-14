@@ -2342,6 +2342,13 @@
   test-sonny6523-failed-create-count` (each create path, failed by a
   directory at every shard's `labels.dict.tmp`; 25 live records instead of
   24 after the failure and 27 instead of 26 after a restart, before).
+- **DROP GRAPH no longer takes time quadratic in the graph's label and
+  relationship-type count (SONNY-6523 item 7).** Removing a graph's entries
+  from the label postings, the label and relationship-type counts and the
+  per-tenant introspection maps (shared by every graph) scanned each map
+  from its start once per key removed. It now removes up to 256 keys per
+  scan. Regression: `zig build test-sonny6523-drop-graph-purge` (a graph
+  with 600 labels and 599 relationship types: 11 map scans, 1206 before).
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20
