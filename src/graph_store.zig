@@ -4698,6 +4698,17 @@ pub const GraphStore = struct {
         return self.graphsContains(graph_name);
     }
 
+    /// `listGraphNames`: a copy of `name` added to `names` unless `seen`
+    /// holds it; `seen` borrows the copy. Nothing fails once the copy exists.
+    fn appendGraphNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), seen: *std.StringHashMap(void), name: []const u8) !void {
+        if (seen.contains(name)) return;
+        try seen.ensureUnusedCapacity(1);
+        try names.ensureUnusedCapacity(allocator, 1);
+        const copy = try allocator.dupe(u8, name);
+        names.appendAssumeCapacity(copy);
+        seen.putAssumeCapacityNoClobber(copy, {});
+    }
+
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
         var names = std.ArrayList([]const u8).empty;
         errdefer {
@@ -4707,14 +4718,12 @@ pub const GraphStore = struct {
             names.deinit(allocator);
         }
 
+        // SONNY-6547 (2): the set borrows the copies `names` owns (it is
+        // freed first: defers run in reverse). It owned its own copies and
+        // freed one twice when an allocation after its insert failed (the
+        // insert's `errdefer` and the set's `defer`); SHOW GRAPHS crashed.
         var seen = std.StringHashMap(void).init(allocator);
-        defer {
-            var seen_it = seen.iterator();
-            while (seen_it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            seen.deinit();
-        }
+        defer seen.deinit();
 
         if (global_adapter) |adapter| {
             const persisted_names = try adapter.listGraphNames(allocator);
@@ -4725,32 +4734,14 @@ pub const GraphStore = struct {
                 allocator.free(persisted_names);
             }
 
-            for (persisted_names) |name| {
-                const seen_key = try allocator.dupe(u8, name);
-                errdefer allocator.free(seen_key);
-                const seen_result = try seen.getOrPut(seen_key);
-                if (!seen_result.found_existing) {
-                    try names.append(allocator, try allocator.dupe(u8, name));
-                } else {
-                    allocator.free(seen_key);
-                }
-            }
+            for (persisted_names) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
         }
 
         // SONNY-3233 (round 15, F12): the registry's names copied under
         // `graphs_lock`.
         const registry = try self.graphNamesCopy(allocator);
         defer freeGraphNames(allocator, registry);
-        for (registry) |name| {
-            const seen_key = try allocator.dupe(u8, name);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, name));
-            } else {
-                allocator.free(seen_key);
-            }
-        }
+        for (registry) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
 
         return names.toOwnedSlice(allocator);
     }

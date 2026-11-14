@@ -2506,6 +2506,18 @@
   (real server, QUIC and gRPC, plus the gRPC handler in process). The
   regression's gRPC client opens one connection per Execute: the test
   client (`grpc_query_transport`) sends every Execute on HTTP/2 stream 3.
+- **SHOW GRAPHS fails when its graph listing fails (SONNY-6547 item 2).** It
+  answered an empty graph list instead (`listGraphNames(...) catch null`),
+  the defect SONNY-6541 item 4 fixed for SHOW TABLES: forced in the
+  regression by failing each of the statement's allocations in turn, two
+  of which answered zero rows. The same sweep then crashed:
+  `StorageAdapter.listGraphNames` and `GraphStore.listGraphNames` freed a
+  graph name twice when an allocation after it was added to their
+  de-duplication set failed (the insert's `errdefer` and the set's
+  `defer`); the set now borrows the names. The other listing calls of the
+  SHOW / `db.*` handlers already propagate their errors (sweep in the
+  SONNY-6547 report). Regression: `zig build
+  test-sonny6547-show-graphs-errors`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
