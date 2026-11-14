@@ -2298,6 +2298,14 @@
 
 ### Fixed
 
+- **`MemoryMappedFile` says what it is; its tests write in a temporary
+  directory (SONNY-6517 item 5, partial).** The type's doc claimed
+  zero-copy memory-mapped I/O; it reads the whole file into a heap buffer,
+  and no server path uses it (the docs already said so, SONNY-6511). Its
+  inline tests wrote `test_mmap.dat` and `test_array.dat`, and
+  `benchmarkMemoryMappedIO` `benchmark_mmap_test.dat`, into the working
+  directory; the tests now use `std.testing.tmpDir`, and the benchmark
+  takes the scratch file's path from its caller (API change).
 - **Orphan test, fuzz and benchmark files: run or removed (SONNY-6517
   items 3, 4).** `tests/test_gql_conformance_rq.zig` and
   `tests/e2e_multi_graph_security.zig` were unreferenced `all_tests.zig`

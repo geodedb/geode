@@ -56,9 +56,12 @@ const Allocator = std.mem.Allocator;
 // (zig build test-gap0875), and the write numbers are measured (previously
 // copied verbatim from the read totals).
 
-/// High-performance memory-mapped file I/O system for large dataset access
-/// Addresses file I/O bottlenecks by providing zero-copy access to persistent data
-/// Memory-mapped file wrapper with platform-specific optimizations
+/// SONNY-6517 item 5: despite its name, NOT a memory mapping. `init` reads
+/// the whole file into a heap buffer (`mapping`), `writeAt` changes that
+/// buffer and `sync` writes it back. No server path uses it (exported by
+/// `src/lib.zig`, run by its own tests and `test-gap0875`); the server's
+/// memory-mapped files are the id map and the hydration snapshot
+/// (`src/storage/id_map.zig`, `hydration_snapshot.zig`).
 pub const MemoryMappedFile = struct {
     file: std.Io.File,
     mapping: []u8,
@@ -295,9 +298,11 @@ pub fn MemoryMappedArray(comptime T: type) type {
 // (getEndPos, seekTo, writeAll, sync()) and did not compile, and nothing but
 // their own inline tests and an unbuilt test file named them.
 
-/// Benchmark memory-mapped file performance
-pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations: u32) !struct { mmap_read_ns: u64, regular_read_ns: u64, mmap_write_ns: u64, regular_write_ns: u64, mmap_advantage: f64 } {
-    const test_file = "benchmark_mmap_test.dat";
+/// Compare `MemoryMappedFile` (a heap copy of the file, see above) with
+/// reading the file, on a scratch file at `test_file` (created, then
+/// deleted). SONNY-6517 item 5: the caller names the file; it was
+/// `benchmark_mmap_test.dat` in the working directory.
+pub fn benchmarkMemoryMappedIO(allocator: Allocator, test_file: []const u8, file_size: u64, iterations: u32) !struct { mmap_read_ns: u64, regular_read_ns: u64, mmap_write_ns: u64, regular_write_ns: u64, mmap_advantage: f64 } {
     const io = std.Io.Threaded.global_single_threaded.io();
 
     // Create test file
@@ -406,8 +411,11 @@ const testing = std.testing;
 test "Memory-mapped file basic operations" {
     const allocator = testing.allocator;
 
-    const test_file = "test_mmap.dat";
-    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), test_file) catch {};
+    // SONNY-6517 item 5: in a temporary directory (it was the working one).
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const test_file = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/test_mmap.dat", .{tmp.sub_path});
+    defer allocator.free(test_file);
 
     const test_data = "Hello, memory-mapped world!";
 
@@ -440,8 +448,11 @@ test "Memory-mapped file basic operations" {
 test "Memory-mapped array functionality" {
     const allocator = testing.allocator;
 
-    const test_file = "test_array.dat";
-    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), test_file) catch {};
+    // SONNY-6517 item 5: in a temporary directory (it was the working one).
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const test_file = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/test_array.dat", .{tmp.sub_path});
+    defer allocator.free(test_file);
 
     // Create test file with array of u32 values
     const test_data = [_]u32{ 1, 2, 3, 4, 5 };
@@ -469,8 +480,13 @@ test "Memory-mapped array functionality" {
 test "Performance benchmark basic functionality" {
     const allocator = testing.allocator;
 
-    // Run a small benchmark to ensure it works
-    const results = try benchmarkMemoryMappedIO(allocator, 1024, 2);
+    // Run a small benchmark to ensure it works (SONNY-6517 item 5: in a
+    // temporary directory).
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const test_file = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/benchmark_mmap_test.dat", .{tmp.sub_path});
+    defer allocator.free(test_file);
+    const results = try benchmarkMemoryMappedIO(allocator, test_file, 1024, 2);
 
     // Basic validation - just ensure we get reasonable results
     try testing.expect(results.mmap_read_ns > 0);

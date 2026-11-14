@@ -141,7 +141,12 @@ test "GAP-0875: benchmarkMemoryMappedIO write numbers are measured, not copied f
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const res = try mmio.benchmarkMemoryMappedIO(allocator, 64 * 1024, 3);
+    // SONNY-6517 item 5: the scratch file in a temporary directory.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/benchmark_mmap_test.dat", .{tmp.sub_path});
+    defer allocator.free(path);
+    const res = try mmio.benchmarkMemoryMappedIO(allocator, path, 64 * 1024, 3);
     try std.testing.expect(res.mmap_read_ns > 0);
     try std.testing.expect(res.regular_read_ns > 0);
     try std.testing.expect(res.mmap_write_ns > 0);
