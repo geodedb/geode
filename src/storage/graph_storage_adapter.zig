@@ -3600,28 +3600,6 @@ fn threadTxnOn(mg: *const ManagedGraph) bool {
 /// Adapter mutation methods consult this to decide whether to batch into an
 /// existing transaction or spin their own (the R7 behaviour).  Priority:
 /// 1. per-statement txn (R8), 2. session txn (R9).
-// CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=UnbatchedSpanningTxn; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-13
-/// SONNY-2978: give back the shard WAL record batch (GAP-0900) that
-/// `beginTxn` opened for the engine transaction `txn_id` of `mg`, before
-/// anything is logged in it. Its page images are then written to the log
-/// as they are made, like any other transaction's.
-///
-/// A batched transaction's images are numbered when made but written only
-/// at its commit, and recovery replays the log in written order. A
-/// statement or session engine transaction stays open across many adapter
-/// calls, and some of them commit their own engine transaction on its shard
-/// (a REMOVE, a DELETE, an edge-property REMOVE, any change on a shard the
-/// statement transaction is not on that later gets one). Batched, the
-/// spanning transaction's older image of a page they share reached the log
-/// after theirs, and after a crash undid their committed change. Only
-/// `beginStatementTxnForShard` (group commit) keeps its batch: its worker
-/// writes only its own shard (REQ-QUIC-HC-016), and no writer holds the
-/// graph's write lock while the batch is open (SONNY-3029).
-fn releaseSpanningTxnWalBatch(mg: *ManagedGraph, txn_id: gs.TxnId) !void {
-    const shard = mg.engine.shards[shardedTxnShard(txn_id)];
-    try shard.txn_manager.wal.flushBatchFor(shardedTxnLocal(txn_id));
-}
-
 pub fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
     if (t_current_statement_txn) |txn| {
         if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
@@ -12469,15 +12447,15 @@ pub const StorageAdapter = struct {
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SpanningTxnKeepsWalBatch; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (7): the transaction keeps the shard WAL record batch
+        // `beginTxn` opened (GAP-0900), though it spans adapter calls that
+        // commit their own transactions on its shard. Its images reach the
+        // log at its commit, after those transactions' newer ones; recovery
+        // (graph-storage 0.4.14, SONNY-6473) applies per page only the
+        // highest-LSN committed image, so the late older image no longer
+        // undoes their committed change after a crash (SONNY-2978).
         const txn_id = try mg.engine.beginTxn();
-        // SONNY-2978: the statement's transaction must not hold its shard's
-        // WAL batch across the adapter calls it spans.
-        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
-            // error-policy: A — nothing was logged in it; the abort record
-            // is best-effort, recovery treats an unfinished txn as aborted.
-            mg.engine.abortTxn(txn_id) catch {};
-            return err;
-        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,
@@ -12553,15 +12531,8 @@ pub const StorageAdapter = struct {
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // SONNY-6528 (7): keeps its WAL batch, as `beginStatementTxn`.
         const txn_id = try mg.engine.beginTxn();
-        // SONNY-2978: the session's transaction must not hold its shard's
-        // WAL batch across the adapter calls it spans.
-        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
-            // error-policy: A — nothing was logged in it; the abort record
-            // is best-effort, recovery treats an unfinished txn as aborted.
-            mg.engine.abortTxn(txn_id) catch {};
-            return err;
-        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,

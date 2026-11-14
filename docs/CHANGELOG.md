@@ -5878,6 +5878,18 @@
 
 ### Removed
 
+- **A statement or session transaction keeps its shard's WAL record batch
+  (SONNY-6528 item 7).** `beginStatementTxn` and `beginSessionTxn` wrote out
+  the batch `beginTxn` had opened (`releaseSpanningTxnWalBatch`), so a
+  transaction spanning many adapter calls logged its page images one write
+  at a time: with graph-storage before 0.4.14 its late-written older image
+  of a page could follow a newer committed one and undo it after a crash
+  (SONNY-2978). graph-storage 0.4.14 (pinned here) applies per page only the
+  highest-LSN committed image (SONNY-6473), so the release is removed.
+  Evidence: `zig build test-sonny2978-overlapping-engine-txn-crash` passed
+  five runs out of five without it; `zig build
+  test-sonny6492-edge-prop-image-cost` reports the same WAL bytes per SET
+  before and after (8342 / 24826 B), in both sync modes.
 - **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
   `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
   `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)
