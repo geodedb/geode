@@ -7,8 +7,8 @@ const std = @import("std");
 const ast = @import("gql/ast.zig");
 const planner = @import("planner.zig");
 const printer = @import("gql/print.zig");
-const canonical_string = @import("unicode/canonical_string.zig");
 const eval = @import("eval.zig");
+const return_and_sorting = @import("execution/return_and_sorting.zig");
 const eval_extended = @import("eval_extended.zig");
 const graph_store = @import("graph_store.zig");
 const stdx = std;
@@ -172,28 +172,27 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
             if (a_is_null or b_is_null) {
                 // If both null, stable tie-break
                 if (a_is_null and b_is_null) return a < b;
-                // If only one is null, use nulls_policy
+                // CANARY: REQ=REQ-SONNY-6518-EXEC-ORDER; FEATURE="StandaloneExec"; ASPECT=ReferenceOrder; STATUS=TESTED; TEST=tests/test_sonny6518_exec_order.zig; OWNER=engine; UPDATED=2026-11-13
+                // SONNY-6518 item 3: the server's full sort
+                // (`return_and_sorting`): NULLS FIRST unless NULLS LAST, in
+                // either direction. The default was last ascending and first
+                // descending.
                 const np = sc.nulls_policy orelse ast.OrderBy.NullsPolicy.default;
-                if (np == .first) return a_is_null;
-                if (np == .last) return !a_is_null;
-                // Default: nulls last for ASC, first for DESC (common SQL default)
-                if (sc.desc) return !a_is_null; // DESC: nulls first
-                return !b_is_null; // ASC: nulls last
+                const nulls_first = np != .last;
+                return if (a_is_null) nulls_first else !nulls_first;
             }
-            const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch {
-                // Fallback to lexicographic stringify on error.Invalid
-                // P2-3: Use provided allocator instead of page_allocator
-                const tmp_ally = sc.allocator;
-                const sa = printer.stringifyExprAlloc(tmp_ally, ra.key, .{}) catch return a < b;
-                defer tmp_ally.free(sa);
-                const sb = printer.stringifyExprAlloc(tmp_ally, rb.key, .{}) catch return a < b;
-                defer tmp_ally.free(sb);
-                // Unicode-aware ORDER BY comparison: by the NFC forms' bytes.
+            const cmp = planner.compareTemporalForOrder(ra.key, rb.key, sc.ctx) catch blk: {
                 // CANARY: REQ=REQ-GQL-UNICODE-010; FEATURE="UnicodeOrderBy"; ASPECT=CompareNfc; STATUS=TESTED; TEST=tests/test_sonny6499_exec_order_nfc.zig; OWNER=unicode; UPDATED=2026-11-13
-                // SONNY-6499: `canonical_string`, the order the full ORDER BY
-                // uses (SONNY-3055); `nfcNormalize` knew é and É only.
-                const ord = canonical_string.orderNoAlloc(sa, sb);
-                if (sc.desc) return ord == .gt else return ord == .lt;
+                // SONNY-6518 item 3: any other key by the server's reference
+                // comparison of the keys' values (numbers by exact value,
+                // strings by their NFC forms, SONNY-3055 / SONNY-6499). Keys
+                // were compared as their printed text, so '10' < '9'.
+                var arena = std.heap.ArenaAllocator.init(sc.allocator);
+                defer arena.deinit();
+                const env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = arena.allocator() };
+                const va = eval.evalExpr(arena.allocator(), ra.key, env) catch return a < b;
+                const vb = eval.evalExpr(arena.allocator(), rb.key, env) catch return a < b;
+                break :blk return_and_sorting.compareValuesWithNullsPolicy(va, vb, .default);
             };
             if (sc.desc) {
                 if (cmp == 0) return a < b; // stable tie-breaker

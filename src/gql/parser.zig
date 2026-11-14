@@ -1322,7 +1322,10 @@ pub const Parser = struct {
 
                 // Try to detect MATCH...DELETE pattern
                 self.advance(); // Skip MATCH
-                _ = self.parseGraphPattern() catch {
+                _ = self.parseGraphPattern() catch |look_err| {
+                    // SONNY-6517 item 1: an allocation failure is the
+                    // parse's, not a reason to try the other form.
+                    if (look_err == error.OutOfMemory) return error.OutOfMemory;
                     // If pattern parsing fails, restore and parse as query
                     self.lx.* = saved_pos;
                     self.cur = saved_cur;
@@ -1333,7 +1336,9 @@ pub const Parser = struct {
                 // Check for optional WHERE
                 if (self.cur.kind == .WHERE) {
                     self.advance();
-                    _ = self.parseOrExpr() catch {};
+                    _ = self.parseOrExpr() catch |look_err| {
+                        if (look_err == error.OutOfMemory) return error.OutOfMemory;
+                    };
                 }
 
                 // Check if DELETE or DETACH DELETE follows
@@ -3804,6 +3809,9 @@ pub const Parser = struct {
             // Create a special marker using Ident with "*" to signal executor to return all bindings
             const star_expr = ast.Expr{ .Ident = .{ .orig = "*", .cnf = "*" } };
             try out.append(self.arena.allocator(), .{ .expr = star_expr, .alias = null });
+            // SONNY-6525 item 3: ISO/IEC 39075:2024 14.11 <return statement
+            // body> is `*` or a list of items, never both.
+            if (self.cur.kind == .comma) return self.unexpected("`*` is the whole projection list and cannot be followed by items (ISO/IEC 39075:2024 14.11 <return statement body>: `*` or a list of items); name every item instead, e.g. WITH n, n.k AS k");
             return;
         }
 
@@ -4497,7 +4505,10 @@ pub const Parser = struct {
                         self.advance();
                         const ap = try self.arena.allocator().create(ast.Expr);
                         const unicode = @import("../unicode/unicode_tables.zig");
-                        const cnf = unicode.caseFoldToUpper(self.arena.allocator(), star_token.lexeme) catch star_token.lexeme;
+                        const cnf = unicode.caseFoldToUpper(self.arena.allocator(), star_token.lexeme) catch |fold_err| switch (fold_err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            else => star_token.lexeme,
+                        };
                         ap.* = .{ .Ident = .{ .orig = star_token.lexeme, .cnf = cnf } };
                         try args.append(self.arena.allocator(), ap);
                     } else {
@@ -4733,7 +4744,10 @@ pub const Parser = struct {
                 self.advance();
                 // Create CNF representation for identifiers
                 const unicode = @import("../unicode/unicode_tables.zig");
-                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch |fold_err| switch (fold_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => tkn.lexeme,
+                };
                 break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
             },
             .string_lit => blk: {
@@ -4999,7 +5013,10 @@ pub const Parser = struct {
                     // The execution engine will interpret this as returning the target node
                     const unicode = @import("../unicode/unicode_tables.zig");
                     const synthetic_name = "__pattern_target__";
-                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), synthetic_name) catch synthetic_name;
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), synthetic_name) catch |fold_err| switch (fold_err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => synthetic_name,
+                    };
                     map_expr_v = .{ .Ident = .{ .orig = synthetic_name, .cnf = cnf } };
                 }
                 const mp = try self.arena.allocator().create(ast.Expr);
@@ -5022,7 +5039,10 @@ pub const Parser = struct {
                     self.advance();
                     // Create CNF representation for identifiers
                     const unicode = @import("../unicode/unicode_tables.zig");
-                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch |fold_err| switch (fold_err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => tkn.lexeme,
+                    };
                     break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
                 }
                 // Not an identifier or keyword, return error
@@ -6740,7 +6760,10 @@ pub const Parser = struct {
         @memcpy(items[0..pattern_items.len], pattern_items);
         const unicode = @import("../unicode/unicode_tables.zig");
         for (lets, items[pattern_items.len..]) |let, *item| {
-            const cnf = unicode.caseFoldToUpper(a, let.variable) catch let.variable;
+            const cnf = unicode.caseFoldToUpper(a, let.variable) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => let.variable,
+            };
             item.* = .{ .expr = .{ .Ident = .{ .orig = let.variable, .cnf = cnf } }, .alias = null };
         }
         return items;
@@ -6767,7 +6790,10 @@ pub const Parser = struct {
         const unicode = @import("../unicode/unicode_tables.zig");
         const items = try a.alloc(ast.ReturnItem, names.items.len);
         for (names.items, items) |name, *item| {
-            const cnf = unicode.caseFoldToUpper(a, name) catch name;
+            const cnf = unicode.caseFoldToUpper(a, name) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => name,
+            };
             item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = null };
         }
         return items;
@@ -7376,8 +7402,17 @@ pub const Parser = struct {
             const field_name = self.cur.lexeme;
             self.advance();
 
-            // Field type (required)
-            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            // Field type (required). SONNY-6517 item 2: ISO/IEC 39075:2024
+            // 18.6 <property type> takes a <property value type> (18.7), a
+            // <value type> (18.9), which names the predefined types with
+            // reserved words (STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME,
+            // DATETIME, TIMESTAMP, DURATION), which the lexer reads as
+            // keywords: they were refused, and only a type name the lexer does
+            // not know (`text`, `int`) parsed.
+            switch (self.cur.kind) {
+                .identifier, .STRING, .INTEGER, .BOOLEAN, .FLOAT, .DECIMAL, .DATE, .TIME, .DATETIME, .TIMESTAMP, .DURATION => {},
+                else => return self.unexpected("expected a field type (a type name such as STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME, TIMESTAMP or DURATION)"),
+            }
             const type_name = self.cur.lexeme;
             self.advance();
 

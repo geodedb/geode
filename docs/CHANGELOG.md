@@ -2477,6 +2477,206 @@
   applies. Stalls of long transfers under heavy CPU load that remain in the
   library are tracked as SONNY-6522.
 
+- **`MemoryMappedFile` says what it is; its tests write in a temporary
+  directory (SONNY-6517 item 5, partial).** The type's doc claimed
+  zero-copy memory-mapped I/O; it reads the whole file into a heap buffer,
+  and no server path uses it (the docs already said so, SONNY-6511). Its
+  inline tests wrote `test_mmap.dat` and `test_array.dat`, and
+  `benchmarkMemoryMappedIO` `benchmark_mmap_test.dat`, into the working
+  directory; the tests now use `std.testing.tmpDir`, and the benchmark
+  takes the scratch file's path from its caller (API change).
+- **Orphan test, fuzz and benchmark files: run or removed (SONNY-6517
+  items 3, 4).** `tests/test_gql_conformance_rq.zig` and
+  `tests/e2e_multi_graph_security.zig` were unreferenced `all_tests.zig`
+  constants that never ran (their CANARY markers said TESTED). They are
+  named steps now: `test-e2e-multi-graph-security` (stale `User` and
+  `EnvironmentInfo` fields fixed) passes in the aggregate;
+  `test-gql-conformance-rq` passes 23 of 24 and stays out of the
+  aggregate: RQ-0019 finds the gql dependency's `status.privilegeViolation`
+  answering 42501 where ISO/IEC 39075 names 42000 (KNOWN_TEST_ISSUES).
+  Removed, as they name removed code and no build compiled them:
+  `tests/test_feature_completion.zig` (`src/graph/builtin_algorithms.zig`),
+  `fuzz/fuzz_distributed_features.zig` and
+  `benchmarks/benchmark_distributed_features.zig` (`lib.planner_wcoj`,
+  `lib.graph.leiden`, `std.rand`), `tests/memory_mapped_io_validation.zig`
+  (`std.fs.cwd`, the removed `ChunkedMemoryMap`). `src/planner.zig`'s 14
+  inline tests are ported and run by `test-sonny6511-lib-inline`; they
+  found two defects in its `PathExpand` operator (managed ArrayLists; a
+  result whose edge ids it had freed), both fixed.
+- **substring, left and right count characters; substring's start follows
+  the 1-based rule (SONNY-6518 item 5, BREAKING).** ISO/IEC 39075:2024
+  20.24 LEFT / RIGHT take the first / last NC characters; Geode's
+  `substring(str, start [, length])` (an extension, 1-based as documented)
+  now takes the characters at positions start .. start + length - 1 that
+  the string has, the rule of SQL's <character substring function>
+  (ISO/IEC 9075-2). Changes: `substring('abc', 0, 1)` is '' (was 'a'),
+  `substring('abc', 0, 2)` 'a' (was 'ab'), `substring('abc', -1, 3)` 'a'
+  (was 'abc'), a negative length 22011 (was ''); multi-byte characters
+  count as one (`left('日本語', 2)` is '日本': it answered half a
+  character). Regression: `zig build test-sonny6518-substring-positions`.
+- **toFloat, toInteger, toBoolean and toString are the CAST of their
+  target (SONNY-6518 item 2, BREAKING).** They answer what `CAST(x AS
+  FLOAT / INTEGER / BOOLEAN / STRING)` answers (ISO/IEC 39075:2024 20.8,
+  the SONNY-6499 matrix), value and exception; none is documented as a
+  lenient "try" conversion. Changes: `toFloat` / `toDouble` give a
+  DOUBLE (was a DECIMAL at scale 6: `toFloat(1)` was 1.000000);
+  `toInteger(-1.5)` is -1 (CAST truncates; it floored to -2);
+  `toInteger(' 42 ')`, `toInteger('1e3')` and `toBoolean(' FALSE ')` read
+  the trimmed literal (were NULL); text that is no literal of the target
+  (`toInteger('abc')`, `toFloat('abc')`, `toBoolean('yes')`) is 22018 and
+  an out-of-range integer text 22003 (were NULL); a type CAST does not
+  convert (`toFloat(true)`) is 22G03 (was NULL); `toString(true)` is
+  'TRUE' (was 'true'), `toString(date(...))` its ISO text (was ''); a
+  wrong arity is 22023 (was NULL). The evaluator's `InvalidFormat` (a text
+  that does not parse) maps to 22018, not 22G03. `call_handlers.castValue`
+  is the one CAST body both paths run. Regression: `zig build
+  test-sonny6518-conversion-functions`.
+- **An aggregating WITH after the first part groups and aggregates
+  (SONNY-6525 item 4, BREAKING).** `MATCH (z) WITH z WITH z.g AS g,
+  sum(z.k) AS s WITH g, s RETURN g, s`: a part chained by its implicit
+  RETURN keeps its items there, and the chain executor
+  (`query_execution.executeQueryChain`) looked for an aggregating WITH in
+  `with_clause` only, so it projected that part per row: no grouping, and
+  every aggregate NULL. It now finds it (`projectionItems`) and groups its
+  rows; the groups are keyed by `distinct_set.writeGroupKeyPart` as at
+  every other grouping site (they were `formatValue` text, under which 1
+  and '1', 'null' and NULL were one group), and the keys and aggregates
+  read the statement's `$` parameters (they read NULL). Regression: `zig
+  build test-sonny6525-with-group-keys`.
+- **The `gql` tool's ORDER BY orders as the server does (SONNY-6518 item
+  3, BREAKING).** `src/exec.zig` `stableOrderByTemporal` compared every
+  non-temporal key by its printed text (10 before 9, -1 after 1) and put
+  NULLs last ascending and first descending. Keys are now compared by the
+  server's reference comparison (`return_and_sorting.compareValuesWithNullsPolicy`:
+  numbers by exact value across INT and DECIMAL, strings by their NFC
+  forms) with NULLS FIRST by default in either direction, as the server's
+  full sort. Regression: `zig build test-sonny6518-exec-order`.
+- **An allocation failure while parsing is OutOfMemory, not a syntax error
+  (SONNY-6517 item 1, BREAKING for the status code).** `parseGqlOutcome`
+  (`src/lib.zig`), the parse entry of the QUIC and gRPC servers, the LSP
+  and the `gql` tool, answered every parser error as a refused statement
+  with `parseErrorCode`'s SQLSTATE, and 42000 for one it does not list:
+  a request that ran out of memory while parsing was told its statement
+  was a syntax error, and the LSP published it as an error diagnostic. It
+  now returns `error.OutOfMemory` (the LSP request fails with it). The
+  parser's own fallbacks no longer swallow it either: the MATCH ... DELETE
+  look-ahead (which re-parsed the other form) and an identifier's case
+  fold (which kept the unfolded name). The servers answer OutOfMemory with
+  SQLSTATE 53200 out_of_memory (`proto_util.mapError`), as the read and
+  write budgets do; it fell through to 58000. The LSP allocation-failure
+  test is back to `std.testing.checkAllAllocationFailures` (it allowed an
+  error diagnostic). Regressions: `zig build test-sonny6517-parse-oom`,
+  `test-lsp`. `test-eng3922`'s 58000 guard now uses an error no arm names.
+- **`CREATE GRAPH TYPE` takes a type keyword as a field type (SONNY-6517
+  item 2).** `CREATE GRAPH TYPE T AS { x STRING }` was refused: the lexer
+  reads STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME,
+  TIMESTAMP and DURATION as keywords and `parseFieldDefinitions` took only
+  an identifier (ISO/IEC 39075:2024 18.6 <property type>, 18.9 <value
+  type>). A wrong token there now names what a field type is.
+  `test-sonny6511-graph-type-string-field` is green and in the aggregate
+  (removed from `not_in_aggregate_steps` and KNOWN_TEST_ISSUES).
+- **`WITH *, item` is refused with a message naming the rule (SONNY-6525
+  item 3).** ISO/IEC 39075:2024 14.11 <return statement body> is `*` or a
+  list of items, never both, so `WITH *, n.k AS k` and `RETURN *, n` stay
+  refused (42000), now with "`*` is the whole projection list ..."
+  instead of "expected token 'RETURN', got 'comma'". Regression: `zig
+  build test-sonny6525-star-items`.
+- **Built-in functions raise their argument errors; only a NULL argument
+  gives NULL (SONNY-6518 item 1, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1,
+  20.22 <numeric value function>, 20.24 <character string function>. The
+  function dispatch turned any error it did not list into NULL (an
+  extension function's own error, a failed argument, an allocation
+  failure), and the numeric and string built-ins answered NULL for a value
+  of the wrong type, a wrong number of arguments and a value outside their
+  domain; the basic dispatch answered "unknown function" (42883) for a
+  heap function's error and for a date / duration / interval argument of
+  the wrong type. Now: wrong type 22G03, wrong arity 22023, `sqrt` of a
+  negative number and `pow(0, negative)` / `pow(negative, fraction)` 2201F
+  (new `InvalidPowerArgument`), `log` (LN) of a value <= 0 2201E (new
+  `InvalidLogArgument`), `log10` of one, `asin` / `acos` outside [-1, 1]
+  and a non-finite `exp` / `pow` / `tan` result 22003, `mod(x, 0)` 22012,
+  `left` / `right` of a negative length 22011 (it answered ''), a
+  constructor's text argument of another type (`date(1)`, `uuid(1)`, ...)
+  22G03, an unlisted extension error 22023 (InvalidJson 22018), and an
+  argument's own error is raised. `round(x, NULL)` is NULL (it ignored
+  the NULL). Numeric built-ins take a DOUBLE argument (`abs`, `ceil`,
+  `floor`, `sign`, `sqrt`, trig, `log`, `exp`, `pow`: it read as NULL;
+  `ceil` / `floor` of a DOUBLE give a DOUBLE, 20.22 GR 12 b ii). Still
+  open (stories): the numeric results are DECIMAL at scale 6 where ISO
+  declares an approximate number; `upper` / `lower` fold ASCII only;
+  `trim` trims whitespace, not only spaces; `left` / `right` / `substring`
+  count bytes, not characters. Regression: `zig build
+  test-sonny6518-builtin-errors`.
+- **ORDER BY after DISTINCT or an aggregate reads only what the
+  projection makes (SONNY-6525 item 8, BREAKING).** ISO/IEC 39075:2024
+  14.10 SR 4 c) i) 2) A) III): after a RETURN (or WITH, or FOR ... RETURN)
+  that is DISTINCT or aggregates, a sort key may reference only the names
+  the projection makes; with GROUP BY, also the grouping keys' variables;
+  a variable inside an aggregate function of a sort key reads the incoming
+  record (IV). Geode accepted any incoming variable there and sorted the
+  rows by a value no row holds: `RETURN DISTINCT n.g AS g ORDER BY n.k`,
+  `RETURN count(*) AS c ORDER BY n.k`, `WITH DISTINCT n.g AS g ORDER BY n.k
+  ...`. They are refused with 42000 (VariableNotInScope) before anything
+  runs (`scope_check.orderKeys`). A sort key that is one of the projected
+  expressions (`RETURN DISTINCT n.g ORDER BY n.g`, `RETURN DISTINCT x AS y
+  ORDER BY x`) stays accepted: it reads that column. Regression: `zig build
+  test-sonny6525-order-by-scope`.
+- **A reference to a variable nothing binds is refused in every clause
+  (SONNY-6525 item 2, BREAKING).** ISO/IEC 39075:2024 20.12 SR 8: the
+  incoming working record of a reference has a field of its name, and a
+  statement starts with an empty record; a violation is a Syntax Rule's,
+  42000 (4.7.3). SONNY-6496 refused such a reference only after a WITH or
+  NEXT; before the first projection it read NULL: `MATCH (n) RETURN m`
+  answered a NULL row per node, `MATCH (n) WHERE m.k = 1` no rows,
+  `count(m)` 0, `RETURN m` one NULL row, a UNION arm or a statement-level
+  FOR the same, a WHERE read a RETURN alias as NULL, and a bare name read
+  the request parameter of that name (`WHERE n.k = lo` with `$lo`
+  supplied: write `$lo`). `scope_check.checkStatement` now starts every
+  statement's queries (a query, UNION / INTERSECT / EXCEPT arms, FOR,
+  CREATE / INSERT / MERGE / DELETE statements) with nothing in scope, from
+  the statement walk every transport runs before executing, so nothing is
+  written. Still accepted: forward references inside one MATCH's pattern
+  list, OPTIONAL MATCH, pattern predicates' own variables, path variables,
+  FOR / CALL { } / YIELD bindings, aliases in ORDER BY, `*`, `$`
+  parameters. Not checked (scope coming in unknown): CTE bodies, the
+  statement after VALUES, the columns of a CALL with no YIELD. Corrected
+  tests: 13 refused write shapes of `test-sonny-write-allowlist` that name
+  an unbound variable (`DELETE q` with no MATCH, `SET ... nn.y`, `nosuch`)
+  and the C1 case of `test-sonny-write-allowlist-r4-transport`, 10 refused
+  write shapes of `test-sonny3139-write-shapes` (`SET y.k`, `REMOVE m.t`,
+  a HAVING naming `nope`), 6 HAVING / WHERE-after-RETURN cases of
+  `test-sonny2675-aggregate-semantics` and 2 of
+  `test-sonny2675-grouped-having` (`nosuchalias`, `nosuch`), and the GROUP
+  BY `nosuch` case of `test-gap0914` now expect 42000 VariableNotInScope
+  instead of the write shape's refusal (WriteClauseNotApplied / 0A000),
+  42703 (UnknownHavingReference) or UnknownGroupKey, still with nothing
+  written; and `HAVING count(*) > lim` with `$lim` supplied (SONNY-2675
+  accepted a parameter named without its `$` there) is refused as an
+  unbound variable: write `$lim`. The
+  VariableNotInScope message names both rules. Regression: `zig build
+  test-sonny6525-statement-scope`.
+- **A correlated IN / NOT IN subquery reads the outer row; an uncorrelated
+  one runs once per statement (SONNY-6525 item 1, BREAKING).** The subquery
+  of `x IN (MATCH ... RETURN ...)` ran without the row around it, so an
+  outer variable it named read NULL on every executor: `MATCH (n) WHERE n.k
+  IN (MATCH (m) WHERE m.t = n.t RETURN m.k)` returned no rows and the NOT
+  IN form kept every row (ISO/IEC 39075:2024 20.12 SR 8: the name is the
+  incoming record's field). Each variable of the row the subquery mentions
+  is now bound for it (`evaluator_adapter.runSubquery`); two levels deep
+  the innermost reads the outermost row. A subquery whose own MATCH (or
+  UNWIND, FOR, LET) binds a variable of the outer row would have to join
+  with the row (14.4 SR 5 c), GR 1), which no executor does: it is refused
+  with 0A000 (it matched afresh and answered every row). A subquery that
+  mentions no variable of the row, nor a parameter a nested scope bound,
+  runs once per statement that changes nothing and every row reads that
+  result (`execution/subquery_cache.zig`; it ran once per row). An error
+  inside a subquery now raises its own GQLSTATUS (a data exception was
+  0A000). EXISTS { } and COUNT { } already read the outer row; a CALL { }
+  after a MATCH stays refused (SONNY-6343). Also fixed: the planned read's
+  WHERE freed its dropped rows before the kept rows' slice was made, so a
+  failed allocation there freed them twice. Regressions: `zig build
+  test-sonny6525-correlated-subquery`, two subquery shapes added to
+  `test-sonny6297-allocation-failure-sweep`.
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

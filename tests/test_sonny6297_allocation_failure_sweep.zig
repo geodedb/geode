@@ -50,6 +50,10 @@ pub const shapes = [_][]const u8{
     "MATCH (n:A {i: 0}) SET n.t = n.s || '-x' RETURN n.t",
     "MATCH (n:A {i: 0}) REMOVE n.t RETURN n.s",
     "MERGE (m:M {k: 1}) ON CREATE SET m.s = 'c' ON MATCH SET m.s = 'm' RETURN m.s",
+    // SONNY-6525: a correlated IN subquery (run per row, on the row) and an
+    // uncorrelated one (run once, its result kept for the statement).
+    "MATCH (z:Z) WHERE z.k IN (MATCH (y:Z) WHERE y.g = z.g RETURN y.k) RETURN z.k",
+    "MATCH (z:Z) WHERE z.k IN (MATCH (y:Z) WHERE y.g = 0 RETURN y.k) RETURN z.k",
     // PROFILE, EXPLAIN.
     "PROFILE MATCH (n:A) RETURN n.s",
     "EXPLAIN MATCH (n:A) RETURN n.s",

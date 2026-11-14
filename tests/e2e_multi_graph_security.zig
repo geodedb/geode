@@ -169,7 +169,7 @@ test "GraphSecurityContext - superuser has all permissions" {
         .created_at = 0,
         .updated_at = 0,
         .last_login = null,
-        .email = null,
+        .email = "",
         .attributes = std.StringHashMap([]const u8).init(allocator),
     };
     defer user.attributes.deinit();
@@ -184,7 +184,8 @@ test "GraphSecurityContext - superuser has all permissions" {
             .ip_address = "127.0.0.1",
             .user_agent = "test",
             .timestamp = 0,
-            .geo_location = null,
+            .location = null,
+            .device_id = null,
         },
     };
 
@@ -210,7 +211,7 @@ test "GraphSecurityContext - normal user needs graph context" {
         .created_at = 0,
         .updated_at = 0,
         .last_login = null,
-        .email = null,
+        .email = "",
         .attributes = std.StringHashMap([]const u8).init(allocator),
     };
     defer user.attributes.deinit();
@@ -226,7 +227,8 @@ test "GraphSecurityContext - normal user needs graph context" {
             .ip_address = "127.0.0.1",
             .user_agent = "test",
             .timestamp = 0,
-            .geo_location = null,
+            .location = null,
+            .device_id = null,
         },
     };
 

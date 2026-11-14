@@ -386,8 +386,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
         // No GQL number is NaN or infinite: numeric value out of range.
         error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
-        // Raised only by substring() for a start before the first character.
-        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: the start position is before the first character" },
+        // A substring error (ISO/IEC 39075:2024 20.24 GR 1 d): LEFT / RIGHT of a
+        // negative length (SONNY-6518), substring()'s start.
+        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: a negative length (LEFT, RIGHT, substring) or a start position before the first character" },
         // range() past its 10,000,000-element limit: the class the other size
         // limits use (VectorTooLarge, PropertyValueTooLarge).
         error.RangeTooLarge => .{ .code = "54000", .message = "RangeTooLarge: range() would return more than 10,000,000 elements" },
@@ -421,6 +422,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
         // SONNY-6499: ISO/IEC 39075 20.8 GR i i 2 (numeric value out of range).
         error.NumericOutOfRange => .{ .code = "22003", .message = "Numeric value out of range: no value of the target type represents it" },
+        // SONNY-6518: ISO/IEC 39075:2024 20.22 GR 9 b), 11 b) e) (Table 8).
+        error.InvalidLogArgument => .{ .code = "2201E", .message = "Invalid argument for natural logarithm: the argument of LN (log) is 0 or negative" },
+        error.InvalidPowerArgument => .{ .code = "2201F", .message = "Invalid argument for power function: 0 to a negative power, a negative number to a power that is not a whole number, or the square root of a negative number" },
         // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
         // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
         // Table 8, class 22); each answered 58000 (system error).
@@ -442,7 +446,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // graph). A syntax error, refused before anything runs.
         // SONNY-3245: ISO/IEC 39075:2024 16.5 <insert graph pattern>.
         error.InvalidInsertPattern => .{ .code = "42000", .message = "Invalid CREATE / INSERT pattern: a variable a MATCH bound, or one declared earlier in the pattern, takes no label or property (use SET), and an inserted relationship points left or right and has one type (ISO/IEC 39075 16.5)" },
-        error.VariableNotInScope => .{ .code = "42000", .message = "Variable not in scope: after WITH (or NEXT) only the variables it projects are in scope; project the variable in the WITH, or bind it again with MATCH (ISO/IEC 39075 20.12 SR 8)" },
+        error.VariableNotInScope => .{ .code = "42000", .message = "Variable not in scope: a reference names a variable nothing before it binds (a MATCH, FOR, CALL ... YIELD or LET of the statement), or one a WITH (or NEXT) does not project; bind or project it, or write a parameter as $name (ISO/IEC 39075 20.12 SR 8)" },
         error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path), or names a variable that holds a value (a WITH expression's alias, a FOR variable); name each element with a variable of its own" },
         // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
         // is no non-negative integer read as "no window" (every row).
@@ -692,6 +696,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // reopens it. A storage corruption error from the build is reported
         // as itself (58000 ChecksumMismatch / DataCorruption / InvalidData).
         error.GraphQuarantined => .{ .code = "58000", .message = "GraphQuarantined: the graph's indexes could not be loaded from storage, so it is quarantined and refuses reads and writes; see the server log, then restart the server to retry" },
+        // SONNY-6517 item 1: an allocation failure (a parse's included, which
+        // was answered as a syntax error) is SQLSTATE 53200 out_of_memory
+        // (class 53, insufficient resources), as the read and write budgets
+        // are; it fell through to 58000.
+        error.OutOfMemory => .{ .code = "53200", .message = "OutOfMemory: the server could not allocate the memory this request needs. Retry, or narrow the request" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

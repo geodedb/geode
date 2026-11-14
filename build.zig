@@ -535,7 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-gql-conformance-rq", .reason = "red on a gql dependency defect (SONNY-6517 item 4, KNOWN_TEST_ISSUES): gql 0.1.21 status.privilegeViolation answers 42501 where ISO/IEC 39075 names access rule violations 42000 (RQ-0019); 23/24 pass; compiled by test-compile; register it through shardDep in the commit that pins a gql release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -12915,6 +12915,38 @@ pub fn build(b: *std.Build) void {
     const run_sonny6499_cast_tests = b.addRunArtifact(sonny6499_cast_tests);
     shardDep(test_step, &run_sonny6499_cast_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6499-cast-matrix", "Run SONNY-6499 item 2 regression (CAST per ISO/IEC 39075 20.8: a DOUBLE casts to its approximate numeric literal and back, an approximate target gives a DOUBLE, a stored DOUBLE converts, text is trimmed and read as a numeric literal, no cell answers a silent NULL)").dependOn(&run_sonny6499_cast_tests.step);
+    // SONNY-6518 item 1: built-in functions raise their argument errors; NULL in is NULL out. See tests/test_sonny6518_builtin_errors.zig.
+    const sonny6518_builtin_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_builtin_errors.zig"), .target = target, .optimize = optimize });
+    sonny6518_builtin_mod.addImport("geode", root_mod);
+    sonny6518_builtin_mod.addImport("logging", logging_mod);
+    const sonny6518_builtin_tests = b.addTest(.{ .root_module = sonny6518_builtin_mod });
+    const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
+    shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
+    // SONNY-6518 item 3: the gql tool's ORDER BY orders as the server's full sort. See tests/test_sonny6518_exec_order.zig.
+    const sonny6518_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_exec_order.zig"), .target = target, .optimize = optimize });
+    sonny6518_exec_mod.addImport("geode", root_mod);
+    sonny6518_exec_mod.addImport("logging", logging_mod);
+    const sonny6518_exec_tests = b.addTest(.{ .root_module = sonny6518_exec_mod });
+    const run_sonny6518_exec_tests = b.addRunArtifact(sonny6518_exec_tests);
+    shardDep(test_step, &run_sonny6518_exec_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-exec-order", "Run SONNY-6518 item 3 regression (src/exec.zig stableOrderByTemporal: numbers by value across INT and DECIMAL, NULLS FIRST by default in either direction, as the server's full sort)").dependOn(&run_sonny6518_exec_tests.step);
+    // SONNY-6518: see tests/test_sonny6518_conversion_functions.zig.
+    const sonny6518_conversion_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_conversion_functions.zig"), .target = target, .optimize = optimize });
+    sonny6518_conversion_mod.addImport("geode", root_mod);
+    sonny6518_conversion_mod.addImport("logging", logging_mod);
+    const sonny6518_conversion_tests = b.addTest(.{ .root_module = sonny6518_conversion_mod });
+    const run_sonny6518_conversion_tests = b.addRunArtifact(sonny6518_conversion_tests);
+    shardDep(test_step, &run_sonny6518_conversion_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-conversion-functions", "Run SONNY-6518 item 2 regression (toFloat / toInteger / toBoolean / toString answer the value and the exception of CAST to FLOAT / INTEGER / BOOLEAN / STRING, ISO/IEC 39075 20.8: text that is no literal of the target is 22018, a type Table 4 does not convert is 22G03)").dependOn(&run_sonny6518_conversion_tests.step);
+    // SONNY-6518: see tests/test_sonny6518_substring_positions.zig.
+    const sonny6518_substring_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_substring_positions.zig"), .target = target, .optimize = optimize });
+    sonny6518_substring_mod.addImport("geode", root_mod);
+    sonny6518_substring_mod.addImport("logging", logging_mod);
+    const sonny6518_substring_tests = b.addTest(.{ .root_module = sonny6518_substring_mod });
+    const run_sonny6518_substring_tests = b.addRunArtifact(sonny6518_substring_tests);
+    shardDep(test_step, &run_sonny6518_substring_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-substring-positions", "Run SONNY-6518 item 5 regression (substring's 1-based start position follows SQL's character substring rule: positions start .. start + length - 1 that exist; a negative length is 22011; substring, left and right count characters, not bytes)").dependOn(&run_sonny6518_substring_tests.step);
 
     // SONNY-6499 (5): the exec ORDER BY text fallback orders strings by NFC.
     const sonny6499_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_exec_order_nfc.zig"), .target = target, .optimize = optimize });
@@ -13068,8 +13100,31 @@ pub fn build(b: *std.Build) void {
     sonny6511_gt_mod.addImport("geode", root_mod);
     const sonny6511_gt_tests = b.addTest(.{ .root_module = sonny6511_gt_mod });
     const run_sonny6511_gt_tests = b.addRunArtifact(sonny6511_gt_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6511_gt_tests.step);
-    b.step("test-sonny6511-graph-type-string-field", "Run SONNY-6511 item 6 red reproduction (CREATE GRAPH TYPE T AS { x STRING } is refused: the parser takes only an identifier as a field type, and STRING, INTEGER, BOOLEAN, FLOAT, DATE are keywords)").dependOn(&run_sonny6511_gt_tests.step);
+    shardDep(test_step, &run_sonny6511_gt_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-graph-type-string-field", "Run SONNY-6511 item 6 / SONNY-6517 item 2 regression (CREATE GRAPH TYPE T AS { x STRING } and the other type keywords INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME, TIMESTAMP, DURATION parse as field types)").dependOn(&run_sonny6511_gt_tests.step);
+    // SONNY-6517 item 1: an allocation failure while parsing is OutOfMemory, never a syntax error. See tests/test_sonny6517_parse_oom.zig.
+    const sonny6517_oom_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6517_parse_oom.zig"), .target = target, .optimize = optimize });
+    sonny6517_oom_mod.addImport("geode", root_mod);
+    const sonny6517_oom_tests = b.addTest(.{ .root_module = sonny6517_oom_mod });
+    const run_sonny6517_oom_tests = b.addRunArtifact(sonny6517_oom_tests);
+    shardDep(test_step, &run_sonny6517_oom_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6517-parse-oom", "Run SONNY-6517 item 1 regression (parseGqlOutcome with its N-th allocation failing, every N, answers error.OutOfMemory with nothing leaked, never a refused statement (42000))").dependOn(&run_sonny6517_oom_tests.step);
+    // SONNY-6517 item 4: tests/test_gql_conformance_rq.zig was an unreferenced all_tests.zig constant (never analysed, never run).
+    const sonny6517_rq_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gql_conformance_rq.zig"), .target = target, .optimize = optimize });
+    sonny6517_rq_mod.addImport("geode", root_mod);
+    sonny6517_rq_mod.addImport("logging", logging_mod);
+    const sonny6517_rq_tests = b.addTest(.{ .root_module = sonny6517_rq_mod });
+    const run_sonny6517_rq_tests = b.addRunArtifact(sonny6517_rq_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6517_rq_tests.step);
+    b.step("test-gql-conformance-rq", "Run SONNY-6517 item 4: the ISO/IEC 39075 conformance-requirement unit tests (RQ-0001 .. RQ-0024), which all_tests.zig named but never ran").dependOn(&run_sonny6517_rq_tests.step);
+    // SONNY-6517 item 4: tests/e2e_multi_graph_security.zig was an unreferenced all_tests.zig constant (never analysed, never run).
+    const sonny6517_mgs_mod = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph_security.zig"), .target = target, .optimize = optimize });
+    sonny6517_mgs_mod.addImport("geode", root_mod);
+    sonny6517_mgs_mod.addImport("logging", logging_mod);
+    const sonny6517_mgs_tests = b.addTest(.{ .root_module = sonny6517_mgs_mod });
+    const run_sonny6517_mgs_tests = b.addRunArtifact(sonny6517_mgs_tests);
+    shardDep(test_step, &run_sonny6517_mgs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-e2e-multi-graph-security", "Run SONNY-6517 item 4: the multi-graph security end-to-end tests, which all_tests.zig named but never ran").dependOn(&run_sonny6517_mgs_tests.step);
 
     const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
     sonny2848_mod.addImport("geode", root_mod);
@@ -13374,6 +13429,52 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6498_errors_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6498_errors_step = b.step("test-sonny6498-swallowed-errors", "Run SONNY-6498 item 3 regression (division by zero, integer overflow and a type error in a function argument fail the statement through every executor path that swallowed them: inline property maps, hop and variable-length WHEREs, comma-pattern aggregates and grouping keys, chained aggregates, OPTIONAL MATCH, shortestPath: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6498_errors_step.dependOn(&run_sonny6498_errors_tests.step);
+    // SONNY-6525 item 1: a correlated IN subquery reads the outer row. See tests/test_sonny6525_correlated_subquery.zig.
+    const sonny6525_corr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_correlated_subquery.zig"), .target = target, .optimize = optimize });
+    sonny6525_corr_test_mod.addImport("geode", root_mod);
+    sonny6525_corr_test_mod.addImport("logging", logging_mod);
+    sonny6525_corr_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_corr_tests = b.addTest(.{ .root_module = sonny6525_corr_test_mod });
+    const run_sonny6525_corr_tests = b.addRunArtifact(sonny6525_corr_tests);
+    shardDep(test_step, &run_sonny6525_corr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6525_corr_step = b.step("test-sonny6525-correlated-subquery", "Run SONNY-6525 item 1 regression (an IN / NOT IN subquery that names a variable of the row around it reads that row's value, in WHERE and RETURN, two levels deep, with a pattern variable of the outer row constraining the subquery's pattern; an uncorrelated one runs once per statement, not per row: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6525_corr_step.dependOn(&run_sonny6525_corr_tests.step);
+    // SONNY-6525 item 2: a variable nothing binds is refused in every clause. See tests/test_sonny6525_statement_scope.zig.
+    const sonny6525_scope_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_statement_scope.zig"), .target = target, .optimize = optimize });
+    sonny6525_scope_test_mod.addImport("geode", root_mod);
+    sonny6525_scope_test_mod.addImport("logging", logging_mod);
+    sonny6525_scope_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_scope_tests = b.addTest(.{ .root_module = sonny6525_scope_test_mod });
+    const run_sonny6525_scope_tests = b.addRunArtifact(sonny6525_scope_tests);
+    shardDep(test_step, &run_sonny6525_scope_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6525_scope_step = b.step("test-sonny6525-statement-scope", "Run SONNY-6525 item 2 regression (a reference to a variable nothing before it binds is refused with 42000 in every clause of a statement, before any projection too: RETURN, WHERE, ORDER BY, aggregates, subqueries, property maps, FOR, UNION arms and write clauses, nothing written; pattern-list forward references, OPTIONAL MATCH, pattern predicates, path variables, FOR / CALL bindings, aliases in ORDER BY and parameters stay accepted: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6525_scope_step.dependOn(&run_sonny6525_scope_tests.step);
+    // SONNY-6525 item 8: ORDER BY after DISTINCT or an aggregate reads only the projection's names. See tests/test_sonny6525_order_by_scope.zig.
+    const sonny6525_order_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_order_by_scope.zig"), .target = target, .optimize = optimize });
+    sonny6525_order_test_mod.addImport("geode", root_mod);
+    sonny6525_order_test_mod.addImport("logging", logging_mod);
+    sonny6525_order_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_order_tests = b.addTest(.{ .root_module = sonny6525_order_test_mod });
+    const run_sonny6525_order_tests = b.addRunArtifact(sonny6525_order_tests);
+    shardDep(test_step, &run_sonny6525_order_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6525_order_step = b.step("test-sonny6525-order-by-scope", "Run SONNY-6525 item 8 regression (after a RETURN or WITH that is DISTINCT or aggregates, an ORDER BY key reads only the projected names, a projected expression, or a variable inside an aggregate; an incoming variable is refused with 42000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6525_order_step.dependOn(&run_sonny6525_order_tests.step);
+    // SONNY-6525 item 4: an intermediate aggregating WITH groups by typed keys and reads the parameters. See tests/test_sonny6525_with_group_keys.zig.
+    const sonny6525_gk_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_with_group_keys.zig"), .target = target, .optimize = optimize });
+    sonny6525_gk_mod.addImport("geode", root_mod);
+    sonny6525_gk_mod.addImport("logging", logging_mod);
+    sonny6525_gk_mod.addImport("rls_types", rls_types_mod);
+    const sonny6525_gk_tests = b.addTest(.{ .root_module = sonny6525_gk_mod });
+    const run_sonny6525_gk_tests = b.addRunArtifact(sonny6525_gk_tests);
+    shardDep(test_step, &run_sonny6525_gk_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6525-with-group-keys", "Run SONNY-6525 item 4 regression (an aggregating WITH between parts groups 1 and '1', 'null' and NULL apart and reads $parameters in its keys and aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6525_gk_tests.step);
+    // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
+    const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
+    sonny6525_star_mod.addImport("geode", root_mod);
+    const sonny6525_star_tests = b.addTest(.{ .root_module = sonny6525_star_mod });
+    const run_sonny6525_star_tests = b.addRunArtifact(sonny6525_star_tests);
+    shardDep(test_step, &run_sonny6525_star_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6525-star-items", "Run SONNY-6525 item 3 regression (ISO/IEC 39075 14.11: `*` is the whole projection; `WITH *, n.k AS k` and `RETURN *, n` are refused with 42000 and a message naming the rule; `*` alone parses)").dependOn(&run_sonny6525_star_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });
@@ -16680,19 +16781,25 @@ pub fn build(b: *std.Build) void {
     // reached by a running test, filtered by their fully qualified names
     // (src/lib.zig test "sonny6511-lib: inline test roots" keeps the files in
     // discovery).
-    const sonny6511_lib_inline_tests = b.addTest(.{ .name = "sonny6511-lib-inline", .root_module = root_mod, .filters = &.{
-        "sonny6511-lib:",
-        "security.multi_graph_security.test.",
-        "client.quic_query_runner.test.",
-        "client.repl.spinner.test.",
-        "performance.memory_mapped_io.test.",
-        "ml.graph_embeddings.test.",
-        "planner.cost_calibration.test.",
-        "planner.pipeline.test.",
-        "graph.community_louvain.test.",
-        "graph.community_label_propagation.test.",
-        "graph.containers.lfu.test.",
-    } });
+    const sonny6511_lib_inline_tests = b.addTest(.{
+        .name = "sonny6511-lib-inline",
+        .root_module = root_mod,
+        .filters = &.{
+            "sonny6511-lib:",
+            "security.multi_graph_security.test.",
+            "client.quic_query_runner.test.",
+            "client.repl.spinner.test.",
+            "performance.memory_mapped_io.test.",
+            "ml.graph_embeddings.test.",
+            "planner.cost_calibration.test.",
+            "planner.pipeline.test.",
+            "graph.community_louvain.test.",
+            "graph.community_label_propagation.test.",
+            "graph.containers.lfu.test.",
+            // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
+            "planner.test.",
+        },
+    });
     const run_sonny6511_lib_inline_tests = b.addRunArtifact(sonny6511_lib_inline_tests);
     shardDep(test_step, &run_sonny6511_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6511-lib-inline", "Run SONNY-6511 item 1: the inline tests of multi-graph security, the shared query runner, the shell spinner, memory-mapped I/O, graph embeddings, planner cost calibration and plan selection, and the community-detection and LFU modules tests use").dependOn(&run_sonny6511_lib_inline_tests.step);

@@ -330,7 +330,9 @@ test "ENG-3922 (b): the over-cap message names the vector dimension cap" {
 
 test "ENG-3922 (b) GUARD: unrelated errors still fall through to 58000" {
     // The new arm must be narrow. (Passes pre-fix and post-fix.)
-    const info = proto_util.mapError(error.OutOfMemory);
+    // SONNY-6517: OutOfMemory has an arm of its own now (53200); an error
+    // no arm names stands for "unrelated".
+    const info = proto_util.mapError(error.Unexpected);
     try testing.expectEqualStrings(GENERIC_SYSTEM_ERROR, info.code);
 }
 

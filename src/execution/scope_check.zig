@@ -22,9 +22,12 @@
 //! quantifier's variable and a pattern comprehension's, EXISTS's or COUNT's
 //! pattern variables. ORDER BY after a RETURN reads the RETURN's names and
 //! the variables before it (14.10 SR 4 c) i) 2) A) III) 1)). Parameters are
-//! never variables. Before the first projection of a statement nothing is
-//! checked here (a reference to a name nothing binds there is outside this
-//! check). Wherever the parser keeps one field for clauses on both sides of
+//! never variables. SONNY-6525 item 2: a statement starts with nothing in
+//! scope (`checkStatement`), so the same rule holds before the first
+//! projection: `MATCH (n) RETURN m` is refused (it read m as NULL). Where
+//! the scope coming in is not known (a CTE body, the statement after
+//! VALUES, the columns of a CALL with no YIELD or of an unnamed item), the
+//! references there are not checked. Wherever the parser keeps one field for clauses on both sides of
 //! a projection, the field is checked against both scopes together, so no
 //! statement is refused for a name one of them binds.
 //!
@@ -32,6 +35,7 @@
 
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
+const grouped_having = @import("grouped_having.zig");
 
 pub const Error = error{ VariableNotInScope, OutOfMemory };
 
@@ -61,7 +65,13 @@ pub const Checker = struct {
     /// The queries already checked as part of a chain or a subquery (each
     /// is walked once, in the scope it is reached in).
     covered: std.AutoHashMapUnmanaged(*const ast.Query, void) = .empty,
+    /// Statements whose scope coming in is not known (after VALUES).
+    open_statements: std.AutoHashMapUnmanaged(*const ast.Statement, void) = .empty,
     failed: bool = false,
+    /// SONNY-6525 item 8: inside a restricted sort key, the scope an
+    /// aggregate function's arguments read (the incoming record, 14.10 SR 4
+    /// c) i) 2) A) IV)).
+    agg_scope: ?Scope = null,
 
     pub fn init(backing: std.mem.Allocator) Checker {
         return .{ .arena = std.heap.ArenaAllocator.init(backing) };
@@ -82,6 +92,66 @@ pub const Checker = struct {
     pub fn checkQuery(c: *Checker, q: *const ast.Query) Error!void {
         if (c.covered.contains(q)) return;
         _ = try c.chain(q, Scope.any);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6525-STATEMENT-SCOPE; FEATURE="LinearComposition"; ASPECT=StatementScope; STATUS=TESTED; TEST=tests/test_sonny6525_statement_scope.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-6525 item 2: the queries of statement `s` start with nothing in
+    /// scope (a statement's incoming working record is empty, 14.1), so a
+    /// reference to a name nothing before it binds is refused in every
+    /// clause, not only after a projection. `MATCH (n) RETURN m` read m as
+    /// NULL. The statements that hold their own clauses (CREATE, INSERT,
+    /// MERGE, DELETE, FOR) are checked here too; any other kind is walked
+    /// as before, its queries with an unknown scope.
+    pub fn checkStatement(c: *Checker, s: *const ast.Statement) Error!void {
+        if (c.open_statements.contains(s)) return;
+        switch (s.*) {
+            // The statement after VALUES reads its columns, which are not
+            // variables this check knows.
+            .Values => |*v| if (v.next_statement) |next| try c.open_statements.put(c.alloc(), next, {}),
+            .Query => |*q| _ = try c.chain(q, empty),
+            .Union => |*u| {
+                _ = try c.chain(&u.first, empty);
+                for (u.tails) |*t| _ = try c.chain(&t.query, empty);
+            },
+            .Intersect, .Except => |*b| {
+                _ = try c.chain(&b.left, empty);
+                _ = try c.chain(&b.right, empty);
+            },
+            .For => |*f| try c.forStatement(f, empty),
+            .Create => |*cs| try c.patternStatement(cs.pattern, cs.return_clause),
+            .Insert => |*is| try c.patternStatement(is.pattern, is.return_clause),
+            .Merge => |*m| {
+                const sc = try c.bindPattern(m.pattern, empty);
+                try c.patternExprs(m.pattern, sc);
+                for (m.on_create) |*set| try c.setClause(set, sc);
+                for (m.on_match) |*set| try c.setClause(set, sc);
+            },
+            .Delete => |*d| {
+                const sc = if (d.match_clause) |p| try c.bindPattern(p, empty) else empty;
+                if (d.match_clause) |p| try c.patternExprs(p, sc);
+                if (d.where_clause) |*w| try c.expr(w, sc);
+                for (d.items) |item| switch (item) {
+                    inline else => |name| try c.ref(name, sc, null),
+                };
+                if (d.return_clause) |rc| try c.returnItems(rc, sc);
+            },
+            else => {},
+        }
+    }
+
+    const empty: Scope = .{ .open = false };
+
+    /// A CREATE or INSERT statement: its pattern binds, its property maps
+    /// and RETURN read what it binds.
+    fn patternStatement(c: *Checker, p: ast.GraphPattern, ret: ?ast.ReturnClause) Error!void {
+        const sc = try c.bindPattern(p, empty);
+        try c.patternExprs(p, sc);
+        if (ret) |rc| try c.returnItems(rc, sc);
+    }
+
+    fn returnItems(c: *Checker, rc: ast.ReturnClause, s: Scope) Error!void {
+        const with_ret = try c.merged(s, try c.names(rc.items, s));
+        for (rc.items) |*item| try c.expr(&item.expr, with_ret);
     }
 
     /// `q` and the parts chained after it, `in` in scope before `q`.
@@ -117,7 +187,7 @@ pub const Checker = struct {
         // A WITH before the part's MATCH projects first.
         const initial: ?ast.WithClause = q.initial_with orelse if (q.is_initial_with) q.with_clause else null;
         if (initial) |iw| {
-            try c.projection(iw, s);
+            try c.projection(iw, s, null);
             s = try c.project(iw.items, s);
             if (q.initial_where) |*w| try c.expr(w, s);
         }
@@ -149,7 +219,7 @@ pub const Checker = struct {
         if (post_with) |wc| {
             if (q.pre_with_where) |*w| try c.expr(w, s);
             if (q.filter_clause) |*f| try c.expr(f, s);
-            try c.projection(wc, s);
+            try c.projection(wc, s, q.withStageGroupBy());
             post = try c.project(wc.items, s);
             if (q.with_where) |*w| try c.expr(w, post);
             if (q.withStageGroupBy()) |g| for (g.keys) |*k| try c.expr(k, try c.merged(s, try c.names(wc.items, post)));
@@ -201,17 +271,77 @@ pub const Checker = struct {
             for (q.ret.items) |*item| try c.expr(&item.expr, with_ret);
             if (q.returnStageGroupBy()) |g| for (g.keys) |*k| try c.expr(k, with_ret);
             if (q.returnStageHaving()) |*h| try c.expr(h, with_ret);
-            if (q.order_by) |ob| for (ob.keys) |*k| try c.expr(&k.expr, with_ret);
+            if (q.order_by) |ob| try c.orderKeys(ob, q.ret.items, q.ret.distinct, q.returnStageGroupBy(), with_ret);
         }
         return post;
     }
 
     /// A WITH's items, ORDER BY: against `s` and the names it projects (an
     /// item may read an alias before it; its ORDER BY reads both).
-    fn projection(c: *Checker, wc: ast.WithClause, s: Scope) Error!void {
+    fn projection(c: *Checker, wc: ast.WithClause, s: Scope, group_by: ?ast.GroupBy) Error!void {
         const both = try c.merged(s, try c.names(wc.items, s));
         for (wc.items) |*item| try c.expr(&item.expr, both);
-        if (wc.order_by) |ob| for (ob.keys) |*k| try c.expr(&k.expr, both);
+        if (wc.order_by) |ob| try c.orderKeys(ob.*, wc.items, wc.distinct, group_by, both);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6525-ORDER-BY-SCOPE; FEATURE="LinearComposition"; ASPECT=OrderByAfterAggregation; STATUS=TESTED; TEST=tests/test_sonny6525_order_by_scope.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-6525 item 8: the sort keys of a projection of `items`. ISO/IEC
+    /// 39075:2024 14.10 SR 4 c) i) 2) A) III): after a projection that is
+    /// DISTINCT or aggregates (with no GROUP BY) a sort key reads only the
+    /// names the projection makes (its aliases, and a variable it passes
+    /// on); with a GROUP BY, those and the variables of the grouping keys
+    /// (III 2, 3). A variable inside an aggregate function of a sort key
+    /// reads the incoming record (IV). A sort key that is one of the
+    /// projected expressions reads that column. Any other projection's keys
+    /// read its names and `full` (III 1). A variable no projected column
+    /// holds was accepted, and sorted by whatever the executor left in it.
+    fn orderKeys(c: *Checker, ob: ast.OrderBy, items: []const ast.ReturnItem, distinct: bool, group_by: ?ast.GroupBy, full: Scope) Error!void {
+        const aggregates = for (items) |item| {
+            if (grouped_having.containsAggregate(item.expr)) break true;
+        } else false;
+        if (!distinct and group_by == null and !aggregates) {
+            for (ob.keys) |*k| try c.expr(&k.expr, full);
+            return;
+        }
+        var allowed: std.ArrayList([]const u8) = .empty;
+        for (items) |item| {
+            if (item.alias) |a| {
+                try allowed.append(c.alloc(), a);
+                continue;
+            }
+            switch (item.expr) {
+                .Ident => |id| try allowed.append(c.alloc(), id.orig),
+                else => {},
+            }
+        }
+        if (group_by) |g| for (g.keys) |*k| try c.collectRefs(k, &allowed);
+        const restricted: Scope = .{ .open = false, .names = allowed.items };
+        const prev = c.agg_scope;
+        c.agg_scope = full;
+        defer c.agg_scope = prev;
+        keys: for (ob.keys) |*k| {
+            for (items) |item| {
+                if (grouped_having.exprEql(item.expr, k.expr)) continue :keys;
+            }
+            try c.expr(&k.expr, restricted);
+        }
+    }
+
+    /// The variables `root` references (a grouping key's), into `out`.
+    fn collectRefs(c: *Checker, root: *const ast.Expr, out: *std.ArrayList([]const u8)) Error!void {
+        const Item = struct { e: *const ast.Expr, locals: ?*const Local };
+        var stack: std.ArrayList(Item) = .empty;
+        defer stack.deinit(c.alloc());
+        try stack.append(c.alloc(), .{ .e = root, .locals = null });
+        while (stack.pop()) |item| switch (item.e.*) {
+            .Ident => |id| try out.append(c.alloc(), id.orig),
+            .PropertyAccess => |p| try out.append(c.alloc(), p.object),
+            .HasLabel => |h| try out.append(c.alloc(), h.node),
+            // A subquery or pattern below a grouping key: its own names are
+            // not the key's.
+            .InSubquery, .NotInSubquery, .PatternComp, .Exists, .PatternCount, .ShortestPath => {},
+            inline else => |payload| try c.pushChildren(@TypeOf(payload), payload, null, &stack),
+        };
     }
 
     /// The scope a projection of `items` from `s` leaves.
@@ -359,7 +489,7 @@ pub const Checker = struct {
             const with_ret = try c.merged(s, try c.names(rc.items, s));
             for (rc.items) |*item| try c.expr(&item.expr, with_ret);
             if (f.group_by) |g| for (g.keys) |*k| try c.expr(k, with_ret);
-            if (f.order_by) |ob| for (ob.keys) |*k| try c.expr(&k.expr, with_ret);
+            if (f.order_by) |ob| try c.orderKeys(ob, rc.items, rc.distinct, f.group_by, with_ret);
         }
     }
 
@@ -403,7 +533,13 @@ pub const Checker = struct {
                 .Ident => |id| try c.ref(id.orig, s, locals),
                 .PropertyAccess => |p| try c.ref(p.object, s, locals),
                 .HasLabel => |h| try c.ref(h.node, s, locals),
-                .Call => |call| for (call.args) |a| try stack.append(c.alloc(), .{ .e = a, .locals = locals }),
+                .Call => |call| {
+                    // SONNY-6525 item 8: see `orderKeys`.
+                    const arg_scope: ?Scope = if (c.agg_scope != null and grouped_having.isAggregateCall(item.e.*)) c.agg_scope else null;
+                    for (call.args) |a| {
+                        if (arg_scope) |as| try c.exprIn(a, as, locals) else try stack.append(c.alloc(), .{ .e = a, .locals = locals });
+                    }
+                },
                 .ListComprehension => |lc| {
                     try stack.append(c.alloc(), .{ .e = lc.source, .locals = locals });
                     const inner = try c.local(lc.variable, locals);

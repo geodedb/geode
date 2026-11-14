@@ -101,7 +101,6 @@ const _canary_migration_engine_new = @import("canary_migration_engine_new_tests.
 
 // Newly added feature scaffold tests (security, FTS, parallel exec, CBO, graph algos)
 const _e2e_security_tde_mfa = @import("e2e_security_tde_mfa.zig");
-const _e2e_multi_graph_security = @import("e2e_multi_graph_security.zig");
 const _e2e_fts_advanced = @import("e2e_fts_advanced.zig");
 const _e2e_parallel_execution = @import("e2e_parallel_execution.zig");
 const _e2e_cbo_v0 = @import("e2e_cbo_v0.zig");
@@ -159,7 +158,6 @@ const _test_materialized_views = @import("test_materialized_views.zig");
 const _test_materialized_views_integration = @import("test_materialized_views_integration.zig");
 
 // GQL ISO/IEC 39075:2024 Conformance Requirements tests (RQ-0001 through RQ-0024)
-const _test_gql_conformance_rq = @import("test_gql_conformance_rq.zig");
 
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.

@@ -76,6 +76,7 @@ const order_key_columns = @import("execution/order_key_columns.zig");
 // SONNY-3139: the pre-dispatch write-shape validator and its executor table.
 pub const write_shape = @import("execution/write_shape.zig");
 pub const write_walk = @import("execution/write_walk.zig");
+pub const subquery_cache = @import("execution/subquery_cache.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 const result_utils = @import("execution/result_utils.zig");
 // SONNY-2696: the query's scratch arena (GAP-0755), for a lifted item's
@@ -1657,6 +1658,15 @@ fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Pro
             result.deinit(allocator);
         }
 
+        // SONNY-6525: a statement that changes nothing runs each uncorrelated
+        // expression subquery once (`execution/subquery_cache.zig`).
+        var sub_cache = subquery_cache.Cache.init(allocator, current_context.query_param_names, current_context.query_param_values);
+        const reads_only = !write_walk.statementWrites(&program.statements[stmt_idx], .{ .calls = .any });
+        const prev_cache = if (reads_only) subquery_cache.install(&sub_cache) else subquery_cache.install(null);
+        defer {
+            subquery_cache.restore(prev_cache);
+            sub_cache.deinit();
+        }
         last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
             // GAP-0917: a failure inside an active transaction marks it
             // FAILED — subsequent statements are rejected (see above) instead

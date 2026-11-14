@@ -170,6 +170,9 @@ pub const Case = struct {
     params: []const Param = &.{},
     /// The expected column names, when the case checks them.
     columns: ?[]const []const u8 = null,
+    /// SONNY-6525: how many times the statement runs an expression
+    /// subquery (`execution.subquery_cache.runCount`), when the case checks.
+    subquery_runs: ?u64 = null,
 };
 
 const Failures = struct {
@@ -211,6 +214,7 @@ fn runCase(s: *Session, f: *Failures, c: Case) !void {
         s.ctx.query_param_values = &.{};
     }
     var got_columns: []const []const u8 = &.{};
+    const runs_before = execution.subquery_cache.runCount();
     const got: ?[]const []const u8 = blk: {
         const prev = query_arena.pushScratchAllocator(scratch.allocator());
         defer query_arena.popScratchAllocator(prev);
@@ -236,6 +240,10 @@ fn runCase(s: *Session, f: *Failures, c: Case) !void {
         break :blk rows;
     };
     if (gpa.deinit() == .leak) try f.add("[{s}] {s}: leaked memory", .{ @tagName(s.mode), c.q });
+    if (c.subquery_runs) |want_runs| {
+        const runs = execution.subquery_cache.runCount() - runs_before;
+        if (runs != want_runs) try f.add("[{s}] {s}: expected {d} subquery runs, got {d}", .{ @tagName(s.mode), c.q, want_runs, runs });
+    }
     const rows = got orelse return;
     if (c.err) |want| {
         try f.add("[{s}] {s}: expected error {s}, got {d} rows {{{s}}}", .{ @tagName(s.mode), c.q, @errorName(want), rows.len, try std.mem.join(aa, " | ", rows) });

@@ -296,9 +296,10 @@ fn checkMode(mode: Mode) !void {
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN count(*) AS c GROUP BY n HAVING n.i >= 22", &.{ "1", "1", "1" });
 
     // A name that is neither a column nor a binding is refused (it was NULL,
-    // GAP-0926's silent-accept, which dropped every group).
-    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.UnknownHavingReference);
-    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.UnknownHavingReference);
+    // GAP-0926's silent-accept, which dropped every group); SONNY-6525 item
+    // 2: by the statement's scope check (42000), before the HAVING's 42703.
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.VariableNotInScope);
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.VariableNotInScope);
 
     // Refused: an input column that is neither grouped, projected nor
     // aggregated (42803), also through a WITH and over the one aggregate

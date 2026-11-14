@@ -1639,15 +1639,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const eval_ext = @import("eval_extended.zig");
 
             // Initialize registry
-            var registry = eval_ext.initFunctionRegistry(allocator) catch {
-                break :blk_call .{ .Null = {} };
-            };
+            // SONNY-6518: an allocation failure is the statement's (it was NULL).
+            var registry = eval_ext.initFunctionRegistry(allocator) catch return EvalError.OutOfMemory;
             defer registry.deinit();
 
             // Convert function name to lowercase for lookup
-            var lowercase_name = allocator.alloc(u8, function_name.len) catch {
-                break :blk_call .{ .Null = {} };
-            };
+            var lowercase_name = allocator.alloc(u8, function_name.len) catch return EvalError.OutOfMemory;
             defer allocator.free(lowercase_name);
 
             for (function_name, 0..) |c, i| {
@@ -1670,9 +1667,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Look up function in extended registry
             if (registry.get(lowercase_name)) |func| {
                 // Convert arguments from AST to ExtValue
-                var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch {
-                    break :blk_call .{ .Null = {} };
-                };
+                var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch return EvalError.OutOfMemory;
                 defer allocator.free(args);
                 var initialized_args: usize = 0;
                 defer {
@@ -1690,15 +1685,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // short-circuits the whole call to NULL instead of raising
                     // the error the bare call now raises. Only the same
                     // "genuine invalid input" error set the func-result handler
-                    // below propagates is re-raised; anything else (benign)
-                    // still collapses to NULL to preserve NULL-propagation.
-                    const arg_value = evalExpr(allocator, arg.*, env) catch |err| {
-                        if (isPropagatableEvalError(err)) return err;
-                        break :blk_call .{ .Null = {} };
-                    };
-                    args[i] = valueToExtValue(allocator, arg_value) catch {
-                        break :blk_call .{ .Null = {} };
-                    };
+                    // below propagates was re-raised. SONNY-6518: every error
+                    // an argument raises is the statement's (ISO/IEC
+                    // 39075:2024 19.1 GR 1); NULL propagation is a NULL
+                    // argument's, not a failed one's.
+                    const arg_value = try evalExpr(allocator, arg.*, env);
+                    args[i] = valueToExtValue(allocator, arg_value) catch |err| return builtinError(err);
                     initialized_args += 1;
                 }
 
@@ -1753,8 +1745,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         // type error so the caller gets a diagnostic.
                         return EvalError.TypeMismatch;
                     }
-                    // For other errors, fall back to null
-                    break :blk_call .{ .Null = {} };
+                    // SONNY-6518: any other error is raised (it was NULL).
+                    return builtinError(err);
                 }
             }
 
@@ -1818,8 +1810,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // refused for want of the session's row visibility.
                     return EvalError.EvaluatorNotInitialized;
                 }
-                // For other errors, fall back to null
-                break :blk_call .{ .Null = {} };
+                // SONNY-6518: any other error is raised (it was NULL).
+                return builtinError(err);
             };
 
             if (result) |val| {
@@ -1883,37 +1875,19 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // strings only (`1.5 IN (MATCH ... RETURN 1.5)` was false, and NOT IN
         // kept rows it should drop), and a NULL value was NULL even for an
         // empty result, where `NULL IN []` is FALSE.
+        // SONNY-6525: the subquery runs on the row `env` holds (a correlated
+        // one per row; an uncorrelated one once per statement).
         .InSubquery => |isq| {
             const v = try evalExpr(allocator, isq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, isq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return inRows(allocator, v, result.rows);
+            return inRows(allocator, v, result.result.rows);
         },
         .NotInSubquery => |nisq| {
             const v = try evalExpr(allocator, nisq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, nisq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return switch (try inRows(allocator, v, result.rows)) {
+            return switch (try inRows(allocator, v, result.result.rows)) {
                 .Bool => |b| .{ .Bool = !b },
                 else => .{ .Null = {} },
             };
@@ -4401,7 +4375,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         std.ascii.eqlIgnoreCase(function_name, "rand"))
     {
         if (args.len != 0) return null;
-        const result = evaluator_functions.random_val(allocator) catch return null;
+        const result = evaluator_functions.random_val(allocator) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
@@ -4501,7 +4475,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             // SONNY-2808: a malformed string (or one with a zone: a local
@@ -4527,11 +4502,12 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             const datetime_module = @import("types/datetime.zig");
-            const d = datetime_module.Date.fromStr(str) catch return null;
+            const d = datetime_module.Date.fromStr(str) catch return EvalError.TimeParse;
 
             // Return Date directly for proper type matching in arithmetic operations
             return Value{ .Date = d };
@@ -4563,7 +4539,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             const datetime_module = @import("types/datetime.zig");
@@ -4585,7 +4562,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
             .Str => |s| s,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // Parse ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
@@ -4618,19 +4596,22 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // 30 days and days to 86 400 seconds). This matches the natural reading
     // of "the longer duration contains the shorter".
     //
-    // Both helpers fail closed (return null) on a non-Interval argument so
-    // bad input does not surface as a true/false answer.
+    // Both helpers refuse a non-Interval argument (22G03, SONNY-6518; they
+    // answered NULL) so bad input does not surface as a true/false answer;
+    // a NULL argument gives NULL.
     if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps") or std.ascii.eqlIgnoreCase(function_name, "interval_contains")) {
         if (args.len != 2) return null;
         const a_val = try evalExpr(allocator, args[0].*, env);
         const b_val = try evalExpr(allocator, args[1].*, env);
         const a_iv = switch (a_val) {
             .Interval => |iv| iv,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const b_iv = switch (b_val) {
             .Interval => |iv| iv,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // Canonicalised total micro-seconds: months → 30 days, days → 86_400 s.
@@ -4773,19 +4754,19 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle common string functions
     if (std.ascii.eqlIgnoreCase(function_name, "length")) {
-        const result = evaluator_functions.length_chars(heap_first_arg) catch return null;
+        const result = evaluator_functions.length_chars(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "upper")) {
-        const result = evaluator_functions.upper(allocator, heap_first_arg) catch return null;
+        const result = evaluator_functions.upper(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "lower")) {
-        const result = evaluator_functions.lower(allocator, heap_first_arg) catch return null;
+        const result = evaluator_functions.lower(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "trim")) {
-        const result = evaluator_functions.trim(allocator, heap_first_arg) catch return null;
+        const result = evaluator_functions.trim(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "abs")) {
-        const result = evaluator_functions.abs_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.abs_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "sqrt")) {
         const result = evaluator_functions.sqrt_val(heap_first_arg) catch |err| {
@@ -4799,25 +4780,25 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "ceil")) {
-        const result = evaluator_functions.ceil_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.ceil_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "floor")) {
-        const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.floor_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "pow") or std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return null;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
-        const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch return null;
+        const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "sin")) {
-        const result = evaluator_functions.sin_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.sin_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "cos")) {
-        const result = evaluator_functions.cos_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.cos_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "tan")) {
-        const result = evaluator_functions.tan_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.tan_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "asin")) {
         const result = evaluator_functions.asin_val(heap_first_arg) catch |err| {
@@ -4857,27 +4838,35 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // log10(x) = log(x) / log(10)
         switch (first_arg) {
             .Int => |i| {
-                if (i <= 0) return Value{ .Null = {} };
+                if (i <= 0) return EvalError.NumericOutOfRange;
                 const f: f64 = @floatFromInt(i);
                 const log10_result = @log10(f);
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
             .Decimal => |d| {
                 const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                if (f <= 0) return Value{ .Null = {} };
+                if (f <= 0) return EvalError.NumericOutOfRange;
                 const log10_result = @log10(f);
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
-            else => return Value{ .Null = {} },
+            .Double => |f| {
+                if (f <= 0) return EvalError.NumericOutOfRange;
+                return Value{ .Decimal = .{ .coeff = try call_handlers.roundedScale6(@log10(f)), .scale = 6 } };
+            },
+            // SONNY-6518: 20.22 SR 12 (LOG(10, x)), GR 8 a), b): NULL is
+            // NULL, x <= 0 is 22003, a value that is no number 22G03 (each
+            // answered NULL).
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     } else if (std.ascii.eqlIgnoreCase(function_name, "exp")) {
-        const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.exp_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        const result = evaluator_functions.type_val(heap_first_arg) catch return null;
+        const result = evaluator_functions.type_val(heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "tostring")) {
-        const result = evaluator_functions.toString_val(allocator, heap_first_arg) catch return null;
+        const result = evaluator_functions.toString_val(allocator, heap_first_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
         const result = evaluator_functions.toInteger_val(heap_first_arg) catch |err| {
@@ -5031,18 +5020,18 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             if (args.len >= 3) {
                 const third_arg = try evalExpr(allocator, args[2].*, env);
                 const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
+                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch |err| return call_handlers.mapEvaluatorError(err);
                 return heapValueToEvalValue(result);
             } else {
                 // Two-argument substring from start to end
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, null) catch return null;
+                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, null) catch |err| return call_handlers.mapEvaluatorError(err);
                 return heapValueToEvalValue(result);
             }
         } else if (std.ascii.eqlIgnoreCase(function_name, "replace")) {
             if (args.len >= 3) {
                 const third_arg = try evalExpr(allocator, args[2].*, env);
                 const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.replace(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
+                const result = evaluator_functions.replace(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch |err| return call_handlers.mapEvaluatorError(err);
                 return heapValueToEvalValue(result);
             }
         } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
@@ -5364,6 +5353,34 @@ fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) Ev
         if (try inStep(allocator, value, item, &unknown)) return .{ .Bool = true };
     }
     return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// SONNY-6518: the error a built-in function's failure raises. An error of
+/// the evaluator's own set keeps its identity; an allocation failure is
+/// OutOfMemory; malformed JSON text is 22018; any other failure of an
+/// argument value is 22023 (invalid parameter value). The dispatch turned
+/// every error it did not list into NULL (ISO/IEC 39075:2024 19.1 GR 1: an
+/// exception is the statement's).
+fn builtinError(err: anyerror) EvalError {
+    inline for (@typeInfo(EvalError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return @field(EvalError, e.name);
+    }
+    return switch (err) {
+        error.InvalidJson => EvalError.JsonInvalid,
+        else => EvalError.InvalidArgs,
+    };
+}
+
+/// The error an expression subquery's failure raises. SONNY-3251: a limit
+/// keeps its identity (54001, 53200, 57014); SONNY-6525: so does any error
+/// an expression raises (a data exception in the subquery is the
+/// statement's, ISO/IEC 39075:2024 19.1 GR 1). Any other failure (a shape
+/// the executors refuse) is 0A000.
+fn subqueryError(err: anyerror) EvalError {
+    inline for (@typeInfo(EvalError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return @field(EvalError, e.name);
+    }
+    return error.Unsupported;
 }
 
 /// `value IN (subquery)`: the first value of each row, as `inValues` does

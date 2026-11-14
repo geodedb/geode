@@ -14,6 +14,7 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const value_types = @import("../value_types.zig");
+const subquery_cache = @import("subquery_cache.zig");
 
 /// Re-export common types for convenience
 pub const Value = value_types.Value;
@@ -56,9 +57,32 @@ pub const ExecutionCallbacks = struct {
         return self.executeQueryWithContextFn(allocator, q, context);
     }
 
-    /// Convenience wrapper: Execute query with environment-scoped context
-    pub fn executeQueryWithEnv(self: ExecutionCallbacks, allocator: std.mem.Allocator, q: ast.Query, env: Env) !ExecutionResult {
-        // Try env.exec_context first, then fall back to getActiveContext()
+    /// The rows of an expression subquery: owned, or the statement cache's.
+    pub const SubqueryRows = struct {
+        result: ExecutionResult,
+        /// The statement's subquery cache holds it (`subquery_cache`).
+        cached: bool,
+
+        pub fn deinit(self: *SubqueryRows, allocator: std.mem.Allocator) void {
+            if (!self.cached) self.result.deinit(allocator);
+        }
+    };
+
+    // CANARY: REQ=REQ-SONNY-6525-CORRELATED-SUBQUERY; FEATURE="SubqueryEvaluation"; ASPECT=Correlation; STATUS=TESTED; TEST=tests/test_sonny6525_correlated_subquery.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-6525 item 1: run the subquery of `x IN (...)` / `x NOT IN
+    /// (...)` on the row `env` holds. It ran without the row, so an outer
+    /// variable it names read NULL: `MATCH (n) WHERE n.k IN (MATCH (m) WHERE
+    /// m.t = n.t RETURN m.k)` returned no rows (ISO/IEC 39075:2024 20.12 SR
+    /// 8: the name is the incoming record's field). Each variable of the row
+    /// it mentions is bound for it as an identifier the executors resolve
+    /// (`Env.get` reads a subquery's own bindings first, so they are seen
+    /// first). An outer variable its own MATCH (or UNWIND, FOR, LET) binds
+    /// again would have to join with the row (14.4 SR 5 c), GR 1), which no
+    /// executor does: refused with 0A000 rather than matched afresh. So is a
+    /// variable whose name a parameter of another value has. A subquery
+    /// that mentions no variable of the row, nor a parameter a nested scope
+    /// bound, runs once per statement that changes nothing (`subquery_cache`).
+    pub fn runSubquery(self: ExecutionCallbacks, allocator: std.mem.Allocator, q: *const ast.Query, env: Env) !SubqueryRows {
         const ctx_ptr: *anyopaque = if (env.exec_context) |ptr|
             ptr
         else if (parent_execution.getActiveContext()) |active_ctx|
@@ -66,6 +90,16 @@ pub const ExecutionCallbacks = struct {
         else
             return error.Unsupported;
         const ctx: *ExecutionContext = @ptrCast(@alignCast(ctx_ptr));
+        const cache = subquery_cache.current();
+
+        var own_names: ?subquery_cache.Names = null;
+        defer if (own_names) |*n| n.deinit(allocator);
+        const cache_entry = if (cache) |c| try c.entry(q) else null;
+        const names: *const subquery_cache.Names = if (cache_entry) |e| &e.names else blk: {
+            own_names = try subquery_cache.mentionedNames(allocator, q);
+            break :blk &own_names.?;
+        };
+
         // CANARY: REQ=REQ-SONNY-3248-LET-SCOPE; FEATURE="ParameterBinding"; ASPECT=SubqueryParameters; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
         // SONNY-3248 (round 4b-1b review I-E): the subquery (`x IN (MATCH
         // ...)`) sees the parameters the expression around it sees: the
@@ -73,28 +107,64 @@ pub const ExecutionCallbacks = struct {
         // (`env`'s). It ran with the context's, the request's alone, so an
         // outer `LET $x` read null (and `param_check` refused it), while an
         // EXISTS body, evaluated with `env`, read it.
-        if (env.param_names.len == 0) return self.executeQueryWithContext(allocator, q, ctx.*);
-        var names: std.ArrayList([]const u8) = .empty;
-        defer names.deinit(allocator);
-        var values: std.ArrayList(Value) = .empty;
-        defer values.deinit(allocator);
-        try names.appendSlice(allocator, ctx.query_param_names);
-        try values.appendSlice(allocator, ctx.query_param_values);
+        var param_names: std.ArrayList([]const u8) = .empty;
+        defer param_names.deinit(allocator);
+        var param_values: std.ArrayList(Value) = .empty;
+        defer param_values.deinit(allocator);
+        // The row's variables it mentions, first.
+        var outer: usize = 0;
+        for (env.names, env.values) |name, value| {
+            if (!names.has(name)) continue;
+            const seen = for (param_names.items) |n| {
+                if (std.mem.eql(u8, n, name)) break true;
+            } else false;
+            if (seen) continue;
+            if (names.binds(name)) return error.UnsupportedQueryShape;
+            try param_names.append(allocator, name);
+            try param_values.append(allocator, value);
+            outer += 1;
+        }
+        try param_names.appendSlice(allocator, ctx.query_param_names);
+        try param_values.appendSlice(allocator, ctx.query_param_values);
         for (env.param_names, env.param_values) |name, value| {
-            for (names.items, 0..) |existing, i| {
+            for (param_names.items[outer..], outer..) |existing, i| {
                 if (std.mem.eql(u8, existing, name)) {
-                    values.items[i] = value;
+                    param_values.items[i] = value;
                     break;
                 }
             } else {
-                try names.append(allocator, name);
-                try values.append(allocator, value);
+                try param_names.append(allocator, name);
+                try param_values.append(allocator, value);
             }
         }
+        // A parameter of the name of a variable it reads, of another value:
+        // `$n` and `n` would read one binding.
+        var correlated = outer > 0;
+        for (param_names.items[outer..], param_values.items[outer..]) |name, value| {
+            for (param_names.items[0..outer], param_values.items[0..outer]) |var_name, var_value| {
+                if (std.mem.eql(u8, var_name, name) and !subquery_cache.sameValue(var_value, value)) return error.UnsupportedQueryShape;
+            }
+            if (!names.has(name)) continue;
+            const constant = if (cache) |c| c.isRequestParam(name, value) else false;
+            if (constant) continue;
+            correlated = true;
+            // A name a nested scope bound (a FOR's, an initial WITH's) that
+            // its own MATCH binds again.
+            if (names.binds(name)) return error.UnsupportedQueryShape;
+        }
+
+        if (!correlated) if (cache_entry) |e| {
+            if (e.result) |r| return .{ .result = r, .cached = true };
+        };
         var sub_ctx = ctx.*;
-        sub_ctx.query_param_names = names.items;
-        sub_ctx.query_param_values = values.items;
-        return self.executeQueryWithContext(allocator, q, sub_ctx);
+        sub_ctx.query_param_names = param_names.items;
+        sub_ctx.query_param_values = param_values.items;
+        subquery_cache.noteRun();
+        if (!correlated) if (cache_entry) |e| {
+            e.result = try self.executeQueryWithContext(cache.?.allocator, q.*, sub_ctx);
+            return .{ .result = e.result.?, .cached = true };
+        };
+        return .{ .result = try self.executeQueryWithContext(allocator, q.*, sub_ctx), .cached = false };
     }
 
     /// Convenience wrapper: Find shortest path

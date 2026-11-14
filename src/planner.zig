@@ -67,8 +67,8 @@ pub const PathExpand = struct {
         pub fn init(allocator: std.mem.Allocator) BFSState {
             return .{
                 .visited = std.AutoHashMap(u64, void).init(allocator),
-                .queue = std.ArrayList(QueueItem).init(allocator),
-                .results = std.ArrayList(PathResult).init(allocator),
+                .queue = .empty,
+                .results = .empty,
                 .allocator = allocator,
             };
         }
@@ -158,7 +158,11 @@ pub const PathExpand = struct {
             }
         }.lessThan);
 
-        return try allocator.dupe(PathResult, state.results.items);
+        // SONNY-6517 item 3: the caller owns the results and their edge ids
+        // (it frees both); `state.deinit` freed the edge ids too.
+        const out = try allocator.dupe(PathResult, state.results.items);
+        state.results.clearRetainingCapacity();
+        return out;
     }
 };
 
@@ -412,9 +416,9 @@ test "planner: time compare invalid across zone mismatch" {
 
 // Adaptive planner heuristic tests
 test "planner: heuristic index on equality predicate" {
-    var left_expr = ast.Expr{ .Ident = "a" };
+    var left_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var right_expr = ast.Expr{ .Int = 1 };
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &left_expr, .right = &right_expr } };
@@ -424,14 +428,14 @@ test "planner: heuristic index on equality predicate" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, "INDEX"));
 }
 
 test "planner: no index without equality predicate" {
-    var left_expr = ast.Expr{ .Ident = "a" };
+    var left_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var right_expr = ast.Expr{ .Int = 1 };
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = ast.Expr{ .Binary = .{ .op = .Gt, .left = &left_expr, .right = &right_expr } };
@@ -441,12 +445,12 @@ test "planner: no index without equality predicate" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, ""));
 }
 
 test "planner: no index without where clause" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -456,12 +460,12 @@ test "planner: no index without where clause" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, ""));
 }
 
 test "planner: offset pushdown rejected without order" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -471,11 +475,11 @@ test "planner: offset pushdown rejected without order" {
     q.order_by = null;
     q.limit = null;
     q.offset = 5;
-    try std.testing.expectError(PlanError.OffsetPushdownRequiresOrder, planQuery(q, .{ .attempt_pushdown = true }));
+    try std.testing.expectError(PlanError.OffsetPushdownRequiresOrder, planQuery(std.testing.allocator, q, .{ .attempt_pushdown = true }));
 }
 
 test "planner: offset allowed with explicit order" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -483,16 +487,16 @@ test "planner: offset allowed with explicit order" {
     q.group_by = null;
     q.ret = .{ .items = &.{}, .distinct = false };
     var keys: [1]ast.OrderBy.OrderKey = undefined;
-    keys[0] = .{ .expr = .{ .Ident = "n" }, .desc = false };
+    keys[0] = .{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .desc = false };
     q.order_by = .{ .keys = keys[0..] };
     q.limit = null;
     q.offset = 5;
-    const plan = try planQuery(q, .{ .attempt_pushdown = true });
+    const plan = try planQuery(std.testing.allocator, q, .{ .attempt_pushdown = true });
     try std.testing.expect(plan.ordered);
 }
 
 test "planner: group by legality basic" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -502,15 +506,15 @@ test "planner: group by legality basic" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN n is legal
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
 }
 
 test "planner: group by illegal non-grouped return" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -520,15 +524,15 @@ test "planner: group by illegal non-grouped return" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN m (not grouped) should be illegal
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "m" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "m", .cnf = "M" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }
 
 test "planner: group by legal aggregate return" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -538,22 +542,22 @@ test "planner: group by legal aggregate return" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN n, count(m) should be legal (includes the GROUP BY key)
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var callee = ast.Expr{ .Ident = "count" };
-    var arg = ast.Expr{ .Ident = "m" };
+    var callee = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var arg = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var args = [_]*ast.Expr{&arg};
     const call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
     var items: [2]ast.ReturnItem = .{
-        .{ .expr = .{ .Ident = "n" }, .alias = null },
+        .{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null },
         .{ .expr = call, .alias = null },
     };
     q.ret = .{ .items = items[0..], .distinct = false };
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
 }
 
 test "planner: having legality" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -562,26 +566,26 @@ test "planner: having legality" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
     // HAVING count(m) > 1 allowed
-    var callee = ast.Expr{ .Ident = "count" };
-    var arg = ast.Expr{ .Ident = "m" };
+    var callee = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var arg = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var one = ast.Expr{ .Int = 1 };
     var args = [_]*ast.Expr{&arg};
     var call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
     const pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &call, .right = &one } };
     q.having = pred;
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
     // HAVING m (non-grouped identifier) illegal
-    q.having = .{ .Ident = "m" };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    q.having = .{ .Ident = .{ .orig = "m", .cnf = "M" } };
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }
 
 test "planner: group-by illegality with mixed identifiers in RETURN/HAVING" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -589,14 +593,14 @@ test "planner: group-by illegality with mixed identifiers in RETURN/HAVING" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
     // RETURN n, m -> illegal (m not grouped and not aggregate)
-    const it0 = ast.Expr{ .Ident = "n" };
-    const it1 = ast.Expr{ .Ident = "m" };
+    const it0 = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "N" } };
+    const it1 = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var items: [2]ast.ReturnItem = .{ .{ .expr = it0, .alias = null }, .{ .expr = it1, .alias = null } };
     q.ret = .{ .items = items[0..], .distinct = false };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }
 
 test "path expand: basic BFS with tie-breaking" {

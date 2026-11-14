@@ -469,15 +469,19 @@ test "SONNY-2675: an alias inside a HAVING aggregate names the item's expression
 
 fn checkUnknownNames(s: *Session, f: *Failures) !void {
     const lim: []const Param = &.{.{ .name = "lim", .value = .{ .Int = 7 } }};
-    // A parameter, named with or without its `$`.
-    try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > lim", lim, &.{ "'a', 10", "'b', 10" });
+    // A parameter is named with its `$`. SONNY-6525 item 2: a bare name is a
+    // variable reference (ISO/IEC 39075:2024 20.12 SR 8), refused with 42000
+    // when nothing binds it; it read the parameter of that name.
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > lim", lim, error.VariableNotInScope);
     try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > $lim", lim, &.{ "'a', 10", "'b', 10" });
-    // Anything else is refused: over groups, inside an aggregate, per row.
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch > 1", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch.x > 1", &.{}, error.UnknownHavingReference);
+    // Anything else is refused: over groups, inside an aggregate, per row
+    // (SONNY-6525 item 2: by the statement's scope check, 42000, before the
+    // HAVING's own 42703).
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch > 1", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch.x > 1", &.{}, error.VariableNotInScope);
 }
 
 test "SONNY-2675: a HAVING name that is no column, binding or parameter is refused" {

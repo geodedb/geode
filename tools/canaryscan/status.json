@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T04:13:18.158024643Z",
+  "generated_at": "2026-11-14T04:38:19.295018395Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -34891,25 +34891,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-BENCH",
-      "features": [
-        {
-          "feature": "Distributed Features Benchmark",
-          "aspect": "Performance",
-          "status": "TESTED",
-          "files": [
-            "benchmarks/benchmark_distributed_features.zig"
-          ],
-          "tests": [
-            "BenchmarkCANARY_Distributed"
-          ],
-          "benches": [],
-          "owner": "bench",
-          "updated": "2025-09-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-BICONNECTED-001",
       "features": [
         {
@@ -36781,25 +36762,6 @@
           "benches": [],
           "owner": "test",
           "updated": "2026-05-30"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-FUZZ",
-      "features": [
-        {
-          "feature": "Distributed Features Fuzzing",
-          "aspect": "Fuzzing",
-          "status": "TESTED",
-          "files": [
-            "fuzz/fuzz_distributed_features.zig"
-          ],
-          "tests": [
-            "FuzzCANARY_Distributed"
-          ],
-          "benches": [],
-          "owner": "fuzz",
-          "updated": "2025-09-29"
         }
       ]
     },
@@ -42675,25 +42637,6 @@
         {
           "feature": "ChainedWithAggregation",
           "aspect": "ComputeAggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/query_execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WITH-GROUP-KEY-001",
-      "features": [
-        {
-          "feature": "WithGroupKey",
-          "aspect": "FormatValue",
           "status": "TESTED",
           "files": [
             "src/execution/query_execution.zig"
@@ -85806,6 +85749,105 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6517-PARSE-OOM",
+      "features": [
+        {
+          "feature": "ParserErrors",
+          "aspect": "OutOfMemoryIdentity",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig",
+            "tests/test_sonny6517_parse_oom.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6517_parse_oom.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6518-BUILTIN-ERRORS",
+      "features": [
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "ArgumentErrors",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6518_builtin_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_builtin_errors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6518-CONVERSION-FUNCTIONS",
+      "features": [
+        {
+          "feature": "TypeConversionFunctions",
+          "aspect": "SameAsCast",
+          "status": "TESTED",
+          "files": [
+            "src/eval/call_handlers.zig",
+            "tests/test_sonny6518_conversion_functions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_conversion_functions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6518-EXEC-ORDER",
+      "features": [
+        {
+          "feature": "StandaloneExec",
+          "aspect": "ReferenceOrder",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig",
+            "tests/test_sonny6518_exec_order.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_exec_order.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6518-SUBSTRING-POSITIONS",
+      "features": [
+        {
+          "feature": "StringFunctions",
+          "aspect": "CharacterPositions",
+          "status": "TESTED",
+          "files": [
+            "src/eval/call_handlers.zig",
+            "tests/test_sonny6518_substring_positions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_substring_positions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6523-CHECKPOINT-SETTINGS",
       "features": [
         {
@@ -86008,6 +86050,105 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-CORRELATED-SUBQUERY",
+      "features": [
+        {
+          "feature": "SubqueryEvaluation",
+          "aspect": "Correlation",
+          "status": "TESTED",
+          "files": [
+            "src/execution/evaluator_adapter.zig",
+            "tests/test_sonny6525_correlated_subquery.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_correlated_subquery.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-ORDER-BY-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "OrderByAfterAggregation",
+          "status": "TESTED",
+          "files": [
+            "src/execution/scope_check.zig",
+            "tests/test_sonny6525_order_by_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_order_by_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-STAR-ITEMS",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "AsteriskProjection",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_star_items.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_star_items.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-STATEMENT-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "StatementScope",
+          "status": "TESTED",
+          "files": [
+            "src/execution/scope_check.zig",
+            "tests/test_sonny6525_statement_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_statement_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6525-WITH-GROUP-KEYS",
+      "features": [
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "TypedGroupKeys",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig",
+            "tests/test_sonny6525_with_group_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_with_group_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-13"
         }
       ]
@@ -93574,7 +93715,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4938
+      "TESTED": 4945
     },
     "by_aspect": {
       "2PC": 3,
@@ -93732,6 +93873,7 @@
       "ApplyUpdate": 1,
       "ArgParsing": 1,
       "ArgReachability": 1,
+      "ArgumentErrors": 1,
       "ArgumentErrorsEscape": 1,
       "ArithmeticRounding": 1,
       "ArmLimitRelay": 1,
@@ -93740,6 +93882,7 @@
       "AssertionTesting": 1,
       "Assertions": 1,
       "AstMissSingleFlight": 1,
+      "AsteriskProjection": 1,
       "AsyncConnection": 1,
       "AtomicCounter": 1,
       "AtomicLabelCountRefcounts": 1,
@@ -94048,6 +94191,7 @@
       "ChangeStreamMalformedSnapshotIntervalEnv": 1,
       "CharPadComparison": 1,
       "CharRepertoireDeclaration": 1,
+      "CharacterPositions": 1,
       "CheckDuplicates": 1,
       "CheckFunction": 1,
       "CheckRefused": 1,
@@ -94278,6 +94422,7 @@
       "CoreTests": 1,
       "CoreType": 1,
       "Correlated": 1,
+      "Correlation": 1,
       "CorruptLineRefused": 1,
       "CorruptPageRecoveryLatency": 2,
       "Cos": 1,
@@ -94974,7 +95119,6 @@
       "ForeachIsolation": 1,
       "ForkJoin": 1,
       "FormatString": 1,
-      "FormatValue": 1,
       "ForwardToShard": 1,
       "Foundation": 1,
       "FrameBudget": 1,
@@ -95014,7 +95158,6 @@
       "FunctionsAndProcedures": 1,
       "FutexWakeOnRelease": 1,
       "FutexWakeOnReleaseBuild": 1,
-      "Fuzzing": 1,
       "GA08DiagnosticGating": 1,
       "GG01GG02GG20-23": 1,
       "GPUFlagger": 1,
@@ -96015,6 +96158,7 @@
       "OrPredicate": 1,
       "Orchestration": 2,
       "OrderAndPage": 1,
+      "OrderByAfterAggregation": 1,
       "OrderByAggregation": 1,
       "OrderByAndLimit": 1,
       "OrderByEnforcement": 1,
@@ -96029,6 +96173,7 @@
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
       "OrdinalComparison": 1,
+      "OutOfMemoryIdentity": 1,
       "OutOfRangePositional": 1,
       "OutcomeClassification": 1,
       "OuterVariableBinding": 1,
@@ -96194,7 +96339,7 @@
       "PerThreadRole": 1,
       "PerThreadTenant": 2,
       "PerfMicrobenchmark": 1,
-      "Performance": 6,
+      "Performance": 5,
       "PerformanceBaselines": 1,
       "PerformanceBenchmarks": 1,
       "PerformanceMonitoring": 1,
@@ -96657,6 +96802,7 @@
       "RefactorBenchmark": 1,
       "RefactoredFunction": 1,
       "RefcountMaintenance": 1,
+      "ReferenceOrder": 1,
       "RefreshLogic": 1,
       "RefreshOncePerWrite": 1,
       "RefreshScheduler": 1,
@@ -96855,6 +97001,7 @@
       "SafeUnwrap": 3,
       "SafetyGuard": 1,
       "SafetyGuards": 1,
+      "SameAsCast": 1,
       "SameQuestionsAsTheGates": 1,
       "Sanitization": 1,
       "SaveFailureIsAnError": 1,
@@ -97179,6 +97326,7 @@
       "StatementOnStream": 1,
       "StatementParsing": 1,
       "StatementProposalBatch": 1,
+      "StatementScope": 1,
       "StatementScopeFailed": 1,
       "StatementScopedDimScratch": 1,
       "StatementScopedRecord": 1,
@@ -97438,6 +97586,7 @@
       "TypeSystemIsolation": 1,
       "TypeValidation": 1,
       "TypeValidators": 1,
+      "TypedGroupKeys": 1,
       "Types": 10,
       "TypesIndep": 1,
       "UbuntuVersionFallback": 1,
