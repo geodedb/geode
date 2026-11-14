@@ -2298,6 +2298,25 @@
 
 ### Fixed
 
+- **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
+  depends on a slow server (SONNY-6534).** It gave `geode query --file` a
+  4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
+  the run takes 4.3-10.7 s on one Debug host (8.7 s on ReleaseSafe: the time
+  follows disk syncs and host load, not the build), so it failed with
+  `FixtureChunkDidNotTimeOut` on a quick host. SONNY-6523 did not change
+  that time (same fdatasync/fsync counts and server CPU time before and
+  after). The test now stops the server (SIGSTOP) once it is applying the
+  chunk (its write(2) bytes rise past 16 KiB) and continues it when the
+  client has exited, so the deadline always expires after the request was
+  sent; the server then applies the whole chunk and the test still checks
+  400 nodes, exit 4 and no replay. Its gRPC case waits for the count to
+  settle (it read once, and a fresh server's first write can land after
+  that read). The file and the two other steps that import it
+  (`test-sonny6425-grpc-retry-summary`, `test-sonny6384-grpc-chunk-summary`)
+  spawn the geode this build emitted instead of `./zig-out/bin/geode`
+  (SONNY-2697), which `test-sonny6436-quic-retry-stops` and
+  `test-sonny6447-quic-retry-connect-stops` never installed. Regression:
+  `zig build test-sonny6377-query-no-resend`.
 - **A quarantined graph refuses every read and every write (SONNY-6523
   item 1).** A graph whose first-touch hydration fails (REQ-GQL-028: its
   store is damaged) is quarantined, and the executor failed a statement that
