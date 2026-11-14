@@ -2298,6 +2298,20 @@
 
 ### Fixed
 
+- **ORDER BY after DISTINCT or an aggregate reads only what the
+  projection makes (SONNY-6525 item 8, BREAKING).** ISO/IEC 39075:2024
+  14.10 SR 4 c) i) 2) A) III): after a RETURN (or WITH, or FOR ... RETURN)
+  that is DISTINCT or aggregates, a sort key may reference only the names
+  the projection makes; with GROUP BY, also the grouping keys' variables;
+  a variable inside an aggregate function of a sort key reads the incoming
+  record (IV). Geode accepted any incoming variable there and sorted the
+  rows by a value no row holds: `RETURN DISTINCT n.g AS g ORDER BY n.k`,
+  `RETURN count(*) AS c ORDER BY n.k`, `WITH DISTINCT n.g AS g ORDER BY n.k
+  ...`. They are refused with 42000 (VariableNotInScope) before anything
+  runs (`scope_check.orderKeys`). A sort key that is one of the projected
+  expressions (`RETURN DISTINCT n.g ORDER BY n.g`, `RETURN DISTINCT x AS y
+  ORDER BY x`) stays accepted: it reads that column. Regression: `zig build
+  test-sonny6525-order-by-scope`.
 - **A reference to a variable nothing binds is refused in every clause
   (SONNY-6525 item 2, BREAKING).** ISO/IEC 39075:2024 20.12 SR 8: the
   incoming working record of a reference has a field of its name, and a
@@ -2319,9 +2333,17 @@
   statement after VALUES, the columns of a CALL with no YIELD. Corrected
   tests: 13 refused write shapes of `test-sonny-write-allowlist` that name
   an unbound variable (`DELETE q` with no MATCH, `SET ... nn.y`, `nosuch`)
-  and the C1 case of `test-sonny-write-allowlist-r4-transport` now expect
-  42000 VariableNotInScope instead of the write shape's refusal
-  (WriteClauseNotApplied / 0A000), still with nothing written. The
+  and the C1 case of `test-sonny-write-allowlist-r4-transport`, 10 refused
+  write shapes of `test-sonny3139-write-shapes` (`SET y.k`, `REMOVE m.t`,
+  a HAVING naming `nope`), 6 HAVING / WHERE-after-RETURN cases of
+  `test-sonny2675-aggregate-semantics` and 2 of
+  `test-sonny2675-grouped-having` (`nosuchalias`, `nosuch`), and the GROUP
+  BY `nosuch` case of `test-gap0914` now expect 42000 VariableNotInScope
+  instead of the write shape's refusal (WriteClauseNotApplied / 0A000),
+  42703 (UnknownHavingReference) or UnknownGroupKey, still with nothing
+  written; and `HAVING count(*) > lim` with `$lim` supplied (SONNY-2675
+  accepted a parameter named without its `$` there) is refused as an
+  unbound variable: write `$lim`. The
   VariableNotInScope message names both rules. Regression: `zig build
   test-sonny6525-statement-scope`.
 - **A correlated IN / NOT IN subquery reads the outer row; an uncorrelated

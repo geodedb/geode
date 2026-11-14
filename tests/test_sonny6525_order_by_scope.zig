@@ -34,12 +34,13 @@ const cases = [_]Case{
     .{ .q = "MATCH (n:O6525) RETURN n.g AS g, count(*) AS c GROUP BY g ORDER BY n.k", .err = out_of_scope },
     .{ .q = "MATCH (n:O6525) WITH DISTINCT n.g AS g ORDER BY n.k RETURN g", .err = out_of_scope },
     .{ .q = "MATCH (n:O6525) WITH n.g AS g, collect(n.k) AS ks ORDER BY n.k RETURN g", .err = out_of_scope },
-    .{ .q = "FOR x IN [1, 2] RETURN DISTINCT x AS y ORDER BY x", .err = out_of_scope },
+    .{ .q = "FOR x IN [1, 2] RETURN DISTINCT x + 1 AS y ORDER BY x", .err = out_of_scope },
 
     // Accepted. (A RETURN that mixes aggregates and other items needs a
     // GROUP BY in Geode, GroupingError otherwise.)
     .{ .q = "MATCH (n:O6525) RETURN DISTINCT n.g AS g ORDER BY g DESC", .want = &.{ "2", "1" }, .ordered = true },
     .{ .q = "MATCH (n:O6525) RETURN DISTINCT n.g ORDER BY n.g DESC", .want = &.{ "2", "1" }, .ordered = true },
+    .{ .q = "FOR x IN [2, 1, 2] RETURN DISTINCT x AS y ORDER BY x", .want = &.{ "1", "2" }, .ordered = true },
     .{ .q = "MATCH (n:O6525) RETURN n.g AS g, count(*) AS c GROUP BY g ORDER BY c DESC, g", .want = &.{ "1, 2", "2, 1" }, .ordered = true },
     .{ .q = "MATCH (n:O6525) RETURN n.g AS g, max(n.k) AS m GROUP BY g ORDER BY max(n.k) DESC", .want = &.{ "2, 3", "1, 2" }, .ordered = true },
     .{ .q = "MATCH (n:O6525) WITH DISTINCT n.g AS g ORDER BY g RETURN g", .want = &.{ "1", "2" } },

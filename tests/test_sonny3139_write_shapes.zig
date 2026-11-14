@@ -38,6 +38,12 @@ const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
 
+// SONNY-6525 item 2: a statement that names a variable nothing binds is
+// refused with 42000 before its write shape is checked (it was the write
+// shape's WriteClauseNotApplied, or a HAVING's 42703); nothing is written
+// either way.
+const out_of_scope = error.VariableNotInScope;
+
 const Case = h.Case;
 const Check = h.Check;
 
@@ -217,9 +223,9 @@ const group_cases = [_]Case{
     // the rows the session may see: tenant_b's :G rows and the hidden one
     // (i >= 100) match the WHERE too, and stay unwritten.
     .{ .write = "MATCH (n:G) WHERE n.i >= 8 WITH n GROUP BY n HAVING count(*) = 1 SET n.x = 1", .checks = &gx(&.{ "8", "9" }) },
-    // A HAVING name that is no column is refused (42703) before anything is
-    // written.
-    .{ .write = "MATCH (n:G) WITH n GROUP BY n HAVING nope > 1 SET n.x = 1", .refused = error.UnknownHavingReference, .checks = &unchanged },
+    // A HAVING name that is no column is refused before anything is
+    // written (SONNY-6525 item 2: by the scope check, 42000; it was 42703).
+    .{ .write = "MATCH (n:G) WITH n GROUP BY n HAVING nope > 1 SET n.x = 1", .refused = out_of_scope, .checks = &unchanged },
 };
 
 test "SONNY-3142 (C4): a WITH's GROUP BY and HAVING decide the rows a write sees" {
@@ -261,7 +267,7 @@ const bypass_cases = [_]Case{
     .{ .write = "CREATE (z:Z {k: 1}) WITH z DELETE z", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "CREATE (a:A)-[r:T]->(b:B) SET r.w = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "CREATE (a:A)-[r:T {w: 1}]->(b:B) REMOVE r.w", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "CREATE (z:Z {k: 1}) SET y.k = 2", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "CREATE (z:Z {k: 1}) SET y.k = 2", .refused = out_of_scope, .checks = &unchanged },
     .{ .write = "CREATE (z:Z {k: 1}) WITH z AS w SET w.k = 2", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "FOR v IN [1, 2] CREATE (z:Z {k: v}) DELETE z", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "PROFILE CREATE (z:Z {k: 1}) DELETE z", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
@@ -304,12 +310,12 @@ const bypass_cases = [_]Case{
     .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET n.x = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i AND q.i < 2 SET n.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // A SET or REMOVE on a variable the pattern does not bind.
-    .{ .write = "MATCH (n:G) SET m.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G) SET n.x = 1, nn.y = 2", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G)-[:R]->(x:X) SET y.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G)-[:R]->(x:X)<-[:R]-(m:G) SET y.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G)-[*1..1]->(x:X) SET y.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G) REMOVE m.t", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "MATCH (n:G) SET m.x = 1 RETURN count(*) AS c", .refused = out_of_scope, .checks = &unchanged },
+    .{ .write = "MATCH (n:G) SET n.x = 1, nn.y = 2", .refused = out_of_scope, .checks = &unchanged },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X) SET y.x = 1 RETURN count(*) AS c", .refused = out_of_scope, .checks = &unchanged },
+    .{ .write = "MATCH (n:G)-[:R]->(x:X)<-[:R]-(m:G) SET y.x = 1 RETURN count(*) AS c", .refused = out_of_scope, .checks = &unchanged },
+    .{ .write = "MATCH (n:G)-[*1..1]->(x:X) SET y.x = 1 RETURN count(*) AS c", .refused = out_of_scope, .checks = &unchanged },
+    .{ .write = "MATCH (n:G) REMOVE m.t", .refused = out_of_scope, .checks = &unchanged },
     .{ .write = "MATCH (n:G) WITH n.i AS k SET k.x = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (a:G)-[r:R]->(x:X) WHERE x.j = 9 WITH r SET r:Foo", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
 };
@@ -355,13 +361,13 @@ test "SONNY-3144 (I1): UNWIND of a parameter list after a WITH, before a CREATE,
 
 const refuse_first_cases = [_]Case{
     // I2: MATCH ... CREATE refused its SET after the CREATE had run.
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) SET y.k = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) SET y.k = 1", .refused = out_of_scope, .checks = &unchanged },
     .{ .write = "MATCH (n:G)-[r*1..1]->(x:X) WHERE n.i = 5 CREATE (z:Z) SET r.k = 1", .refused = error.VariableLengthPathWrite, .checks = &unchanged },
     .{ .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 CREATE (z:Z) SET r:Foo", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) SET z.k = n", .refused = error.Unsupported, .checks = &unchanged },
     // I3: a UNION part refused after an earlier part wrote.
     .{ .write = "MATCH (n:G) SET n.x = 1 RETURN 2 AS i UNION MATCH (q:Q) WITH q MATCH (q) DELETE q RETURN 1 AS i", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G) WHERE n.i = 1 SET n.x = 1 RETURN n.i AS i UNION MATCH (q:Q) SET m.x = 1 RETURN q.i AS i", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    .{ .write = "MATCH (n:G) WHERE n.i = 1 SET n.x = 1 RETURN n.i AS i UNION MATCH (q:Q) SET m.x = 1 RETURN q.i AS i", .refused = out_of_scope, .checks = &unchanged },
     .{ .write = "MATCH (n:G) SET n.x = 1 RETURN n.i AS i UNION ALL MATCH (q:Q) WHERE q.i = 0 CREATE (z:Z) DELETE z RETURN q.i AS i", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // Both parts that write, and write what they may.
     .{ .write = "MATCH (n:G) WHERE n.i = 1 SET n.x = 1 RETURN n.i AS i UNION MATCH (q:Q) WHERE q.i = 1 SET q.x = 1 RETURN q.i AS i", .want = &.{"1"}, .checks = &.{
