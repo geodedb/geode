@@ -2298,6 +2298,21 @@
 
 ### Fixed
 
+- **Remote KMS latency stays flat on a long-lived connection, and a 16 MiB
+  QUIC request is answered (SONNY-2412, SONNY-3232; quic v0.1.51,
+  SONNY-6478/SONNY-6475).** quic v0.1.51 retires a finished stream and no
+  longer resends acknowledged STREAM data: 64 remote KMS unwraps on one
+  connection now take 11.1 ms -> 11.3 ms (1.01x; 43.7 ms -> 140.8 ms, 3.22x,
+  on v0.1.50), so `test-sonny2412-kms-latency-flat` leaves the known-issues
+  list and runs in the aggregate. The same release fixes the receive-side
+  crawl of a request larger than the 10 MiB stream window: a request of the
+  16 MiB maximum is answered (about 3.5 s, Debug server on loopback; it used
+  to take ~168 s in ReleaseSafe and did not finish in Debug), and
+  `test-sonny3232-quic-request-size` asserts it again instead of recording
+  it. The earlier advice to keep QUIC requests well under 10 MiB no longer
+  applies. Stalls of long transfers under heavy CPU load that remain in the
+  library are tracked as SONNY-6522.
+
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -5833,10 +5832,9 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
     }
     // SONNY-2412: remote KMS latency stays flat over 64 requests on one
-    // connection (perf gate: enforced when CI is unset). Intentionally RED
-    // reproduction of a quic dependency defect (docs/KNOWN_TEST_ISSUES.md):
-    // kept out of `shardDep` until a quic release with the fix is pinned;
-    // compiled by `test-compile`.
+    // connection (perf gate: enforced when CI is unset). The quic defect it
+    // reproduced (completed streams resent forever) is fixed in quic v0.1.51
+    // (SONNY-6478), so it runs in the aggregate.
     {
         const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2412_kms_latency_flat.zig"), .target = target, .optimize = optimize }) });
         tests.root_module.addImport("transport/quic", transport_quic_mod);
@@ -5846,7 +5844,7 @@ pub fn build(b: *std.Build) void {
         tests.root_module.addImport("perf_gate", perf_gate_mod);
         tests.root_module.link_libc = true;
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny2412-kms-latency-flat", "Run SONNY-2412 regression (64 remote KMS unwraps on one QUIC connection keep a flat latency: the median of the last 16 within 2x of the first 16; perf gate, enforced when CI is unset)").dependOn(&run_tests.step);
     }
 
@@ -12400,8 +12398,8 @@ pub fn build(b: *std.Build) void {
     const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351: quic v0.1.47 keeps lost STREAM data until retransmitted), one past the 16 MiB maximum is not; the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
-    // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the
-    // 16 MiB maximum is answered 54000 and its connection closed, so the
+    // SONNY-3232: QUIC requests of 1 MiB, 4 MiB and the 16 MiB maximum are
+    // answered (the maximum since quic v0.1.51); one over the 16 MiB maximum is answered 54000 and its connection closed, so the
     // client fails fast (it used to block until its 60 s writer deadline).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_request_size.zig"), .target = target, .optimize = optimize });
@@ -12414,7 +12412,7 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
+        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; the maximum-size request (16 MiB less the envelope) is answered too (quic v0.1.51, SONNY-6475); one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each)").dependOn(&run_tests.step);
     }
 
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
