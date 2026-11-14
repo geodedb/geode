@@ -66,7 +66,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
         // SONNY-3248 (round 4b-1b review I-E): it was refused (42P02), while
         // an EXISTS body's WHERE was accepted, and both read null; the
         // executor now evaluates each with the statement's parameters, its
-        // LETs among them (`evaluator_adapter.executeQueryWithEnv`).
+        // LETs among them (`evaluator_adapter.ExecutionCallbacks.runSubquery`).
         c.query_scope = item.scope;
         switch (item.kind) {
             .stmt => {

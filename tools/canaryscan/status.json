@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:23:14.598331194Z",
+  "generated_at": "2026-11-14T00:47:31.772637125Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85827,6 +85827,7 @@
           "aspect": "Correlation",
           "status": "TESTED",
           "files": [
+            "src/execution/evaluator_adapter.zig",
             "tests/test_sonny6525_correlated_subquery.zig"
           ],
           "tests": [

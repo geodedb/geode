@@ -2298,6 +2298,28 @@
 
 ### Fixed
 
+- **A correlated IN / NOT IN subquery reads the outer row; an uncorrelated
+  one runs once per statement (SONNY-6525 item 1, BREAKING).** The subquery
+  of `x IN (MATCH ... RETURN ...)` ran without the row around it, so an
+  outer variable it named read NULL on every executor: `MATCH (n) WHERE n.k
+  IN (MATCH (m) WHERE m.t = n.t RETURN m.k)` returned no rows and the NOT
+  IN form kept every row (ISO/IEC 39075:2024 20.12 SR 8: the name is the
+  incoming record's field). Each variable of the row the subquery mentions
+  is now bound for it (`evaluator_adapter.runSubquery`); two levels deep
+  the innermost reads the outermost row. A subquery whose own MATCH (or
+  UNWIND, FOR, LET) binds a variable of the outer row would have to join
+  with the row (14.4 SR 5 c), GR 1), which no executor does: it is refused
+  with 0A000 (it matched afresh and answered every row). A subquery that
+  mentions no variable of the row, nor a parameter a nested scope bound,
+  runs once per statement that changes nothing and every row reads that
+  result (`execution/subquery_cache.zig`; it ran once per row). An error
+  inside a subquery now raises its own GQLSTATUS (a data exception was
+  0A000). EXISTS { } and COUNT { } already read the outer row; a CALL { }
+  after a MATCH stays refused (SONNY-6343). Also fixed: the planned read's
+  WHERE freed its dropped rows before the kept rows' slice was made, so a
+  failed allocation there freed them twice. Regressions: `zig build
+  test-sonny6525-correlated-subquery`, two subquery shapes added to
+  `test-sonny6297-allocation-failure-sweep`.
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

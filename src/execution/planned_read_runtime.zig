@@ -3450,11 +3450,17 @@ fn applyResultFilters(
         k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
     }
     for (result.rows, keep) |row, k| {
-        if (k) filtered_rows.appendAssumeCapacity(row) else allocator.free(row);
+        if (k) filtered_rows.appendAssumeCapacity(row);
     }
-
+    // SONNY-6525: the kept rows' slice is made before any dropped row is
+    // freed: a failed allocation leaves `result` whole (it freed the dropped
+    // rows first, and the caller freed them again).
+    const kept = try filtered_rows.toOwnedSlice(allocator);
+    for (result.rows, keep) |row, k| {
+        if (!k) allocator.free(row);
+    }
     const old_rows = result.rows;
-    result.rows = try filtered_rows.toOwnedSlice(allocator);
+    result.rows = kept;
     allocator.free(old_rows);
     trace_op.rows = @intCast(result.rows.len);
     trace_op.time_ns = elapsedSince(start_ns);

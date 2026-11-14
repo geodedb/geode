@@ -134,7 +134,7 @@ pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Valu
 /// SONNY-1330 review follow-up (1330c): clause fields are NOT the only query
 /// carriers. `ast.Expr.InSubquery` / `.NotInSubquery` each hold a `*Query`
 /// parsed by the full `parseQuery` (`parser.zig`, the `IN (` branch), executed
-/// through `eval.evalExpr` -> `executeQueryWithEnv` ->
+/// through `eval.evalExpr` -> `runSubquery` ->
 /// `executeQueryWithContext` — so it can carry `set_clauses`, `create`,
 /// `merge`, `delete`, `remove`, `call`, `cte_list` and `next_query` of its own.
 /// `MATCH (n:T) WHERE n.k IN (MATCH (m:T) SET m.c = m.c + 1 RETURN m.k)

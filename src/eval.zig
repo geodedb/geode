@@ -1883,37 +1883,19 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // strings only (`1.5 IN (MATCH ... RETURN 1.5)` was false, and NOT IN
         // kept rows it should drop), and a NULL value was NULL even for an
         // empty result, where `NULL IN []` is FALSE.
+        // SONNY-6525: the subquery runs on the row `env` holds (a correlated
+        // one per row; an uncorrelated one once per statement).
         .InSubquery => |isq| {
             const v = try evalExpr(allocator, isq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, isq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return inRows(allocator, v, result.rows);
+            return inRows(allocator, v, result.result.rows);
         },
         .NotInSubquery => |nisq| {
             const v = try evalExpr(allocator, nisq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, nisq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return switch (try inRows(allocator, v, result.rows)) {
+            return switch (try inRows(allocator, v, result.result.rows)) {
                 .Bool => |b| .{ .Bool = !b },
                 else => .{ .Null = {} },
             };
@@ -5364,6 +5346,18 @@ fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) Ev
         if (try inStep(allocator, value, item, &unknown)) return .{ .Bool = true };
     }
     return if (unknown) .{ .Null = {} } else .{ .Bool = false };
+}
+
+/// The error an expression subquery's failure raises. SONNY-3251: a limit
+/// keeps its identity (54001, 53200, 57014); SONNY-6525: so does any error
+/// an expression raises (a data exception in the subquery is the
+/// statement's, ISO/IEC 39075:2024 19.1 GR 1). Any other failure (a shape
+/// the executors refuse) is 0A000.
+fn subqueryError(err: anyerror) EvalError {
+    inline for (@typeInfo(EvalError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return @field(EvalError, e.name);
+    }
+    return error.Unsupported;
 }
 
 /// `value IN (subquery)`: the first value of each row, as `inValues` does
