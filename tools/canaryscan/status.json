@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T02:56:33.602986291Z",
+  "generated_at": "2026-11-14T03:04:36.145857496Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85827,6 +85827,7 @@
           "aspect": "OutOfMemoryIdentity",
           "status": "TESTED",
           "files": [
+            "src/lib.zig",
             "tests/test_sonny6517_parse_oom.zig"
           ],
           "tests": [

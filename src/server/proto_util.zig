@@ -696,6 +696,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // reopens it. A storage corruption error from the build is reported
         // as itself (58000 ChecksumMismatch / DataCorruption / InvalidData).
         error.GraphQuarantined => .{ .code = "58000", .message = "GraphQuarantined: the graph's indexes could not be loaded from storage, so it is quarantined and refuses reads and writes; see the server log, then restart the server to retry" },
+        // SONNY-6517 item 1: an allocation failure (a parse's included, which
+        // was answered as a syntax error) is SQLSTATE 53200 out_of_memory
+        // (class 53, insufficient resources), as the read and write budgets
+        // are; it fell through to 58000.
+        error.OutOfMemory => .{ .code = "53200", .message = "OutOfMemory: the server could not allocate the memory this request needs. Retry, or narrow the request" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

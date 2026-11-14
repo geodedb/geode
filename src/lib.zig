@@ -736,6 +736,14 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = p.parseProgram() catch |parse_err| {
+        // CANARY: REQ=REQ-SONNY-6517-PARSE-OOM; FEATURE="ParserErrors"; ASPECT=OutOfMemoryIdentity; STATUS=TESTED; TEST=tests/test_sonny6517_parse_oom.zig; OWNER=parser; UPDATED=2026-11-13
+        // SONNY-6517 item 1: an allocation failure is OutOfMemory for the
+        // caller (a server answers it as one; the LSP fails the request),
+        // never a refused statement: `parseErrorCode` gave it 42000.
+        if (parse_err == error.OutOfMemory) {
+            arena.deinit();
+            return error.OutOfMemory;
+        }
         const raw_msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;

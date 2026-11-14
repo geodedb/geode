@@ -2298,6 +2298,22 @@
 
 ### Fixed
 
+- **An allocation failure while parsing is OutOfMemory, not a syntax error
+  (SONNY-6517 item 1, BREAKING for the status code).** `parseGqlOutcome`
+  (`src/lib.zig`), the parse entry of the QUIC and gRPC servers, the LSP
+  and the `gql` tool, answered every parser error as a refused statement
+  with `parseErrorCode`'s SQLSTATE, and 42000 for one it does not list:
+  a request that ran out of memory while parsing was told its statement
+  was a syntax error, and the LSP published it as an error diagnostic. It
+  now returns `error.OutOfMemory` (the LSP request fails with it). The
+  parser's own fallbacks no longer swallow it either: the MATCH ... DELETE
+  look-ahead (which re-parsed the other form) and an identifier's case
+  fold (which kept the unfolded name). The servers answer OutOfMemory with
+  SQLSTATE 53200 out_of_memory (`proto_util.mapError`), as the read and
+  write budgets do; it fell through to 58000. The LSP allocation-failure
+  test is back to `std.testing.checkAllAllocationFailures` (it allowed an
+  error diagnostic). Regressions: `zig build test-sonny6517-parse-oom`,
+  `test-lsp`. `test-eng3922`'s 58000 guard now uses an error no arm names.
 - **`CREATE GRAPH TYPE` takes a type keyword as a field type (SONNY-6517
   item 2).** `CREATE GRAPH TYPE T AS { x STRING }` was refused: the lexer
   reads STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME,
