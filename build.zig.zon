@@ -217,8 +217,16 @@
             // alone is accepted). Pins tls v0.1.27 (RFC 8446 exporter, client
             // chain completion, HKDF-Expand-Label fix). Lockstep with
             // geode-client-zig v0.3.15 (one quic module).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.50#b2f1bf1f2d524da79933e39201a82bfa1e75e465",
-            .hash = "quic-0.1.50-gBIqUWjJQQACZrQHqXXPW1FXTxQSDBXsXXHhOIVFWb7I",
+            // 2026-11-13: v0.1.51 (79cb495, SONNY-6478) — finished streams are
+            // retired (RFC 9000 section 3) and acknowledged STREAM data is no
+            // longer resent, so a long-lived connection stays flat instead of
+            // slowing down per request and sending when idle; also the
+            // large-transfer reassembly, final-size and control-frame
+            // retransmission fixes, and the failed-connect use-after-free.
+            // Same tls v0.1.27. Lockstep with geode-client-zig v0.3.16 (one
+            // quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.51#79cb4953a8e782547a8046060799281741bad786",
+            .hash = "quic-0.1.51-gBIqUWuERAAagBL8PeLquTGZ-RMwZiIl76ynriwU1huK",
         },
 
         // =======================================================================
@@ -442,8 +450,14 @@
             // endpoint into a server), so `geode query --client-cert` works
             // against an mTLS-required server. Lockstep with quic v0.1.50
             // and tls v0.1.27.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.15#6706227a3b87f01f2eb8a00b261f87bba0136edb",
-            .hash = "geode_client_zig-0.3.15-8ysbV3nOCwC5ldttZ-c08qS7k2FnCuYpJ2FS7BrX_UCR",
+            // 2026-11-13: v0.3.16 (d56dd52, SONNY-6494) — strict DSN host:port
+            // grammar (unbracketed IPv6, '[::1]3141' and bad ports are
+            // refused), the client dials IPv6 servers (binds [::]:0, brackets
+            // the address, names prefer IPv4 then fall back to IPv6), distinct
+            // client-identity errors and zeroed key copies. Lockstep with quic
+            // v0.1.51 (one quic module).
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.16#d56dd52b090f172738d73b50d1e49044a1143f17",
+            .hash = "geode_client_zig-0.3.16-8ysbV8uHDACwhQqH1Tbbo2MKjyXDWGDeY__Fu6yhHjDJ",
         },
 
         // =======================================================================
