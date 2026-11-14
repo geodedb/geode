@@ -10,6 +10,19 @@ const json_lib = @import("json");
 const mcp_client = @import("client.zig");
 const GeodeClient = mcp_client.GeodeClient;
 
+// CANARY: REQ=REQ-SONNY-6552-MCP-RESULT-SHAPES; FEATURE="MCPResultShapes"; ASPECT=ResourceResults; STATUS=TESTED; TEST=tests/test_sonny6552_mcp_result_shapes.zig; OWNER=mcp; UPDATED=2026-11-14
+// SONNY-6552: the results are the MCP 2025-11-25 objects (the revision the
+// pinned mcp library negotiates), encoded on one line by the JSON library:
+//   resources/list           -> ListResourcesResult { resources: Resource[], nextCursor? }
+//   resources/templates/list -> ListResourceTemplatesResult { resourceTemplates: ResourceTemplate[], nextCursor? }
+//   resources/read           -> ReadResourceResult { contents: TextResourceContents[] }
+// They used to be a bare array, a bare {uri,mimeType,text}, and pretty-
+// printed over many lines, which the newline-delimited stdio transport
+// cannot carry. An unknown URI is `error.ResourceNotFound`, which the
+// library answers with -32002 (resources "Error Handling"); it used to be a
+// success carrying {"error": ...}. A cursor is `error.InvalidParams`
+// (-32602): the list is one page and geode never issues one.
+
 // MCP Resource Response Types for JSON Library encoding
 const McpResourceResponse = struct {
     uri: []const u8,
@@ -17,22 +30,33 @@ const McpResourceResponse = struct {
     text: []const u8,
 };
 
-const McpResourceError = struct {
-    @"error": []const u8,
+const McpReadResourceResult = struct {
+    contents: []const McpResourceResponse,
 };
 
-/// List available resources
-/// Returns JSON array of resource definitions
-/// Static text: the server.zig handler hands the mcp server a copy
-/// (SONNY-6531, the server frees every handler result).
-pub fn listResources(cursor: ?[]const u8) []const u8 {
-    _ = cursor; // Pagination not needed for small resource list
-    return resources_json;
+const Resource = struct {
+    uri: []const u8,
+    name: []const u8,
+    description: []const u8,
+    mimeType: []const u8,
+};
+
+const ResourceTemplate = struct {
+    uriTemplate: []const u8,
+    name: []const u8,
+    description: []const u8,
+};
+
+/// List available resources: a ListResourcesResult allocated with
+/// `allocator` (the caller owns it; SONNY-6531: the mcp server frees it).
+pub fn listResources(allocator: std.mem.Allocator, cursor: ?[]const u8) ![]const u8 {
+    if (cursor != null) return error.InvalidParams;
+    return try json_lib.encode(allocator, struct { resources: []const Resource }{ .resources = &resource_list }, .{});
 }
 
-/// Read a resource by URI. Every result, the unknown-URI answer included,
-/// is allocated with `allocator`, and the caller owns it (SONNY-6531: the
-/// mcp server frees `resources/read` results).
+/// Read a resource by URI: a ReadResourceResult allocated with `allocator`
+/// (the caller owns it; SONNY-6531: the mcp server frees it). An unknown
+/// URI is `error.ResourceNotFound`.
 pub fn readResource(allocator: std.mem.Allocator, endpoint: ?[]const u8, uri: []const u8) ![]const u8 {
     const endpoint_str = endpoint orelse "localhost:3141";
 
@@ -49,254 +73,177 @@ pub fn readResource(allocator: std.mem.Allocator, endpoint: ?[]const u8, uri: []
         }
     }
 
-    return try allocator.dupe(u8, "{\"error\": \"Unknown resource URI\"}");
+    return error.ResourceNotFound;
 }
+
+const schema_uri = "geode://default/default/schema";
+const stats_uri = "geode://default/default/stats";
+const config_uri = "geode://config";
 
 /// Read schema resource from Geode server
 fn readSchemaResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
     const client = GeodeClient.init(allocator, endpoint) catch |err| {
-        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
+        return try formatResourceError(allocator, schema_uri, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 
     const schema_data = client.getSchema() catch {
         // Return fallback on connection error
-        return try allocator.dupe(u8, default_schema_resource);
+        return try formatContents(allocator, schema_uri, "application/json", default_schema_text);
     };
 
     // Format as MCP resource response
-    return try formatResourceResponse(allocator, "geode://default/default/schema", "application/json", schema_data);
+    return try formatResourceResponse(allocator, schema_uri, "application/json", schema_data);
 }
 
 /// Read stats resource from Geode server
 fn readStatsResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
     const client = GeodeClient.init(allocator, endpoint) catch |err| {
-        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
+        return try formatResourceError(allocator, stats_uri, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 
     const stats_data = client.getStats() catch {
-        return try allocator.dupe(u8, default_stats_resource);
+        return try formatContents(allocator, stats_uri, "application/json", default_stats_text);
     };
 
-    return try formatResourceResponse(allocator, "geode://default/default/stats", "application/json", stats_data);
+    return try formatResourceResponse(allocator, stats_uri, "application/json", stats_data);
 }
 
 /// Read config resource from Geode server
 fn readConfigResource(allocator: std.mem.Allocator, endpoint: []const u8) ![]const u8 {
     const client = GeodeClient.init(allocator, endpoint) catch |err| {
-        return try formatResourceError(allocator, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
+        return try formatResourceError(allocator, config_uri, mcp_client.initErrorMessage(err, "Failed to connect to Geode server"));
     };
     defer client.deinit();
 
     const config_data = client.getConfig() catch {
-        return try allocator.dupe(u8, default_config_resource);
+        return try formatContents(allocator, config_uri, "application/json", default_config_text);
     };
 
-    return try formatResourceResponse(allocator, "geode://config", "application/json", config_data);
+    return try formatResourceResponse(allocator, config_uri, "application/json", config_data);
 }
 
-/// Format a successful resource response for MCP
+/// A ReadResourceResult holding one text resource. Does not take `text`.
+fn formatContents(allocator: std.mem.Allocator, uri: []const u8, mime_type: []const u8, text: []const u8) ![]const u8 {
+    const contents = [_]McpResourceResponse{.{ .uri = uri, .mimeType = mime_type, .text = text }};
+    return try json_lib.encode(allocator, McpReadResourceResult{ .contents = &contents }, .{});
+}
+
+/// Format a successful resource response for MCP. Takes ownership of `content`.
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-043; FEATURE="JSON Library Migration"; ASPECT=ResourceResponse; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatResourceResponse(allocator: std.mem.Allocator, uri: []const u8, mime_type: []const u8, content: []const u8) ![]const u8 {
     defer allocator.free(content);
 
     // Build MCP resource response using JSON library (handles escaping automatically)
-    const response = McpResourceResponse{
-        .uri = uri,
-        .mimeType = mime_type,
-        .text = content,
-    };
-    return try json_lib.encode(allocator, response, .{});
+    return try formatContents(allocator, uri, mime_type, content);
 }
 
-/// Format an error response for MCP resource read
+/// The resource as a document naming why it could not be read (the
+/// endpoint DSN is unusable, SONNY-6494). The MCP library can only answer
+/// an error with the Zig error's name, which would lose the reason, so the
+/// reason is the resource's text, like the offline fallback documents.
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-044; FEATURE="JSON Library Migration"; ASPECT=ResourceError; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
-fn formatResourceError(allocator: std.mem.Allocator, error_msg: []const u8) ![]const u8 {
-    const response = McpResourceError{ .@"error" = error_msg };
-    return try json_lib.encode(allocator, response, .{});
+fn formatResourceError(allocator: std.mem.Allocator, uri: []const u8, error_msg: []const u8) ![]const u8 {
+    const text = try json_lib.encode(allocator, struct { @"error": []const u8 }{ .@"error" = error_msg }, .{});
+    defer allocator.free(text);
+    return try formatContents(allocator, uri, "application/json", text);
 }
 
-/// List resource templates
-/// Static text: the server.zig handler hands the mcp server a copy
-/// (SONNY-6531, the server frees every handler result).
-pub fn listResourceTemplates() []const u8 {
-    return resource_templates_json;
+/// List resource templates: a ListResourceTemplatesResult allocated with
+/// `allocator` (the caller owns it).
+pub fn listResourceTemplates(allocator: std.mem.Allocator) ![]const u8 {
+    return try json_lib.encode(allocator, struct { resourceTemplates: []const ResourceTemplate }{ .resourceTemplates = &resource_template_list }, .{});
 }
 
-// Fallback responses when server is unavailable
-const default_schema_resource =
-    \\{
-    \\  "uri": "geode://default/default/schema",
-    \\  "mimeType": "application/json",
-    \\  "text": "{\"node_labels\": [], \"relationship_types\": [], \"note\": \"Server unavailable\"}"
-    \\}
-;
+// Fallback resource text when the server is unavailable
+const default_schema_text = "{\"node_labels\": [], \"relationship_types\": [], \"note\": \"Server unavailable\"}";
 
-const default_stats_resource =
-    \\{
-    \\  "uri": "geode://default/default/stats",
-    \\  "mimeType": "application/json",
-    \\  "text": "{\"node_count\": 0, \"relationship_count\": 0, \"index_count\": 0, \"note\": \"Server unavailable\"}"
-    \\}
-;
+const default_stats_text = "{\"node_count\": 0, \"relationship_count\": 0, \"index_count\": 0, \"note\": \"Server unavailable\"}";
 
-const default_config_resource = std.fmt.comptimePrint(
-    \\{{
-    \\  "uri": "geode://config",
-    \\  "mimeType": "application/json",
-    \\  "text": "{{\\"version\\": \\"{s}\\", \\"gql_compliance\\": \\"ISO/IEC 39075:2024\\", \\"status\\": \\"disconnected\\"}}"
-    \\}}
-, .{build_options.version});
+const default_config_text = "{\"version\": \"" ++ build_options.version ++ "\", \"gql_compliance\": \"ISO/IEC 39075:2024\", \"status\": \"disconnected\"}";
 
-/// Static JSON definition of available resources
-const resources_json =
-    \\[
-    \\  {
-    \\    "uri": "geode://default/default/schema",
-    \\    "name": "Graph Schema",
-    \\    "description": "Current graph schema including node labels, relationship types, and properties",
-    \\    "mimeType": "application/json"
-    \\  },
-    \\  {
-    \\    "uri": "geode://default/default/stats",
-    \\    "name": "Database Statistics",
-    \\    "description": "Database statistics including node count, relationship count, and index information",
-    \\    "mimeType": "application/json"
-    \\  },
-    \\  {
-    \\    "uri": "geode://config",
-    \\    "name": "Server Configuration",
-    \\    "description": "Current server configuration and version information",
-    \\    "mimeType": "application/json"
-    \\  }
-    \\]
-;
+/// The resources geode serves
+const resource_list = [_]Resource{
+    .{
+        .uri = schema_uri,
+        .name = "Graph Schema",
+        .description = "Current graph schema including node labels, relationship types, and properties",
+        .mimeType = "application/json",
+    },
+    .{
+        .uri = stats_uri,
+        .name = "Database Statistics",
+        .description = "Database statistics including node count, relationship count, and index information",
+        .mimeType = "application/json",
+    },
+    .{
+        .uri = config_uri,
+        .name = "Server Configuration",
+        .description = "Current server configuration and version information",
+        .mimeType = "application/json",
+    },
+};
 
-/// Static JSON definition of resource templates
-const resource_templates_json =
-    \\[
-    \\  {
-    \\    "uriTemplate": "geode://{catalog}/{graph}/schema",
-    \\    "name": "Graph Schema Template",
-    \\    "description": "Schema for a specific catalog and graph"
-    \\  },
-    \\  {
-    \\    "uriTemplate": "geode://{catalog}/{graph}/stats",
-    \\    "name": "Statistics Template",
-    \\    "description": "Statistics for a specific catalog and graph"
-    \\  },
-    \\  {
-    \\    "uriTemplate": "geode://{catalog}/{graph}/node/{label}",
-    \\    "name": "Node Label Template",
-    \\    "description": "Information about a specific node label"
-    \\  },
-    \\  {
-    \\    "uriTemplate": "geode://{catalog}/{graph}/relationship/{type}",
-    \\    "name": "Relationship Type Template",
-    \\    "description": "Information about a specific relationship type"
-    \\  }
-    \\]
-;
+/// The resource templates
+const resource_template_list = [_]ResourceTemplate{
+    .{ .uriTemplate = "geode://{catalog}/{graph}/schema", .name = "Graph Schema Template", .description = "Schema for a specific catalog and graph" },
+    .{ .uriTemplate = "geode://{catalog}/{graph}/stats", .name = "Statistics Template", .description = "Statistics for a specific catalog and graph" },
+    .{ .uriTemplate = "geode://{catalog}/{graph}/node/{label}", .name = "Node Label Template", .description = "Information about a specific node label" },
+    .{ .uriTemplate = "geode://{catalog}/{graph}/relationship/{type}", .name = "Relationship Type Template", .description = "Information about a specific relationship type" },
+};
 
 // =============================================================================
 // Tests
 // =============================================================================
 
-test "listResources returns valid JSON" {
-    const result = listResources(null);
-    try std.testing.expect(result.len > 0);
-    try std.testing.expect(std.mem.startsWith(u8, result, "["));
+fn parseResult(allocator: std.mem.Allocator, result: []const u8) !std.json.Parsed(std.json.Value) {
+    try std.testing.expect(std.mem.indexOfScalar(u8, result, '\n') == null);
+    return std.json.parseFromSlice(std.json.Value, allocator, result, .{});
 }
 
-test "listResourceTemplates returns valid JSON" {
-    const result = listResourceTemplates();
-    try std.testing.expect(result.len > 0);
-    try std.testing.expect(std.mem.startsWith(u8, result, "["));
-}
-
-test "JSON library handles escaping in resources" {
+test "listResources returns a ListResourcesResult on one line" {
     const allocator = std.testing.allocator;
-
-    // Verify JSON library properly escapes special characters in resources
-    const result = try formatResourceError(allocator, "Error with \"quotes\"");
+    const result = try listResources(allocator, null);
     defer allocator.free(result);
-
-    try std.testing.expect(std.mem.indexOf(u8, result, "\\\"quotes\\\"") != null);
-}
-
-test "formatResourceError formats correctly" {
-    const allocator = std.testing.allocator;
-
-    const result = try formatResourceError(allocator, "Connection failed");
-    defer allocator.free(result);
-
-    try std.testing.expect(std.mem.indexOf(u8, result, "error") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "Connection failed") != null);
-}
-
-test "listResources contains all resource URIs" {
-    const result = listResources(null);
-
-    // Verify all 3 resources are present
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://default/default/schema") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://default/default/stats") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://config") != null);
-}
-
-test "listResources contains valid JSON structure" {
-    const allocator = std.testing.allocator;
-    const result = listResources(null);
-
-    // Parse to verify it's valid JSON
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, result, .{}) catch {
-        try std.testing.expect(false); // Should not fail to parse
-        return;
-    };
+    const parsed = try parseResult(allocator, result);
     defer parsed.deinit();
-
-    // Verify it's an array
-    try std.testing.expect(parsed.value == .array);
-    try std.testing.expectEqual(@as(usize, 3), parsed.value.array.items.len);
+    const list = parsed.value.object.get("resources").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), list.len);
+    try std.testing.expectEqualStrings(schema_uri, list[0].object.get("uri").?.string);
+    try std.testing.expectEqualStrings(stats_uri, list[1].object.get("uri").?.string);
+    try std.testing.expectEqualStrings(config_uri, list[2].object.get("uri").?.string);
 }
 
-test "listResourceTemplates contains all templates" {
-    const result = listResourceTemplates();
-
-    // Verify all 4 templates are present
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://{catalog}/{graph}/schema") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://{catalog}/{graph}/stats") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://{catalog}/{graph}/node/{label}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "geode://{catalog}/{graph}/relationship/{type}") != null);
+test "listResources refuses a cursor geode never issued" {
+    try std.testing.expectError(error.InvalidParams, listResources(std.testing.allocator, "some_cursor"));
 }
 
-test "listResourceTemplates valid JSON structure" {
+test "listResourceTemplates returns a ListResourceTemplatesResult on one line" {
     const allocator = std.testing.allocator;
-    const result = listResourceTemplates();
-
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, result, .{}) catch {
-        try std.testing.expect(false);
-        return;
-    };
-    defer parsed.deinit();
-
-    try std.testing.expect(parsed.value == .array);
-    try std.testing.expectEqual(@as(usize, 4), parsed.value.array.items.len);
-}
-
-test "readResource returns error for unknown URI" {
-    const allocator = std.testing.allocator;
-
-    const result = try readResource(allocator, null, "unknown://resource");
+    const result = try listResourceTemplates(allocator);
     defer allocator.free(result);
-
-    try std.testing.expect(std.mem.indexOf(u8, result, "error") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "Unknown resource URI") != null);
+    const parsed = try parseResult(allocator, result);
+    defer parsed.deinit();
+    const list = parsed.value.object.get("resourceTemplates").?.array.items;
+    try std.testing.expectEqual(@as(usize, 4), list.len);
+    try std.testing.expectEqualStrings("geode://{catalog}/{graph}/schema", list[0].object.get("uriTemplate").?.string);
+    try std.testing.expectEqualStrings("geode://{catalog}/{graph}/relationship/{type}", list[3].object.get("uriTemplate").?.string);
 }
 
-test "listResources cursor is ignored" {
-    const result1 = listResources(null);
-    const result2 = listResources("some_cursor");
+test "formatResourceError is a ReadResourceResult whose text names the error" {
+    const allocator = std.testing.allocator;
+    const result = try formatResourceError(allocator, config_uri, "Error with \"quotes\"");
+    defer allocator.free(result);
+    const parsed = try parseResult(allocator, result);
+    defer parsed.deinit();
+    const c = parsed.value.object.get("contents").?.array.items[0].object;
+    try std.testing.expectEqualStrings(config_uri, c.get("uri").?.string);
+    try std.testing.expect(std.mem.indexOf(u8, c.get("text").?.string, "Error with \\\"quotes\\\"") != null);
+}
 
-    try std.testing.expectEqualStrings(result1, result2);
+test "readResource answers an unknown URI with ResourceNotFound" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.ResourceNotFound, readResource(allocator, null, "unknown://resource"));
+    try std.testing.expectError(error.ResourceNotFound, readResource(allocator, null, "geode://default/default/nothing"));
 }

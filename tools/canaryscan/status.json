@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:51:13.168005012Z",
+  "generated_at": "2026-11-14T08:22:42.346671795Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83871,6 +83871,34 @@
       "features": [
         {
           "feature": "MCPResultShapes",
+          "aspect": "PromptResults",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/prompts.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6552_mcp_result_shapes.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "MCPResultShapes",
+          "aspect": "ResourceResults",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/resources.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6552_mcp_result_shapes.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "MCPResultShapes",
           "aspect": "SpecResultObjects",
           "status": "TESTED",
           "files": [
@@ -91087,7 +91115,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4266
+      "TESTED": 4268
     },
     "by_aspect": {
       "2PC": 3,
@@ -93857,6 +93885,7 @@
       "ProjectionScope": 1,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
+      "PromptResults": 1,
       "PromptSigintCheck": 1,
       "ProperCleanup": 1,
       "Properties": 1,
@@ -94187,6 +94216,7 @@
       "ResourceHash": 1,
       "ResourceLabelEquality": 1,
       "ResourceLeak": 1,
+      "ResourceResults": 1,
       "ResponseDeadline": 1,
       "ResponseDeadlineWallClock": 1,
       "ResponseReassembly": 1,

@@ -2389,6 +2389,37 @@
 
 ### Fixed
 
+- **`geode mcp` answers the MCP 2025-11-25 result objects and error codes,
+  one message per line (SONNY-6552).** **BREAKING for MCP clients** that
+  read the old shapes: `resources/list`, `resources/templates/list` and
+  `prompts/list` returned bare, pretty-printed arrays instead of
+  `{"resources":[...]}`, `{"resourceTemplates":[...]}` and
+  `{"prompts":[...]}`; `resources/read` returned a bare
+  `{uri,mimeType,text}` instead of `{"contents":[...]}`; an unknown prompt
+  or resource URI was a success carrying `{"error": ...}` and is now a
+  JSON-RPC error (`-32602` / `-32002`); an unknown tool was `-32603`
+  InternalError and is now `-32602`, the spec's protocol error. The
+  pretty-printed results spanned many lines, so on the newline-delimited
+  stdio transport a client reading one message per line could not decode
+  them; every result is now serialized on one line. A list `cursor` is
+  `-32602` (each list is one page; geode never issues one). `prompts/get`
+  refuses (`-32602`) a missing required argument, an argument the prompt
+  does not take and a non-string value, and writes the argument values into
+  the prompt text (they were ignored). The `query` tool no longer
+  advertises `catalog` / `graph` and the `graphs` tool no longer advertises
+  `catalog` (all were ignored; the `graphs` tool parsed `catalog` into
+  memory its own block-scoped `defer` freed at once); passing them is now
+  an `isError` tool result. `query` with `parameters` failed every call
+  (`"{any}"` printed the formatter, not JSON) and now sends them; a
+  statement the server reports as failed is `isError: true` for `schema`,
+  `explain`, `catalogs` and `graphs` too, not only `query`. `geode mcp`
+  and `geode completion` return through `main` instead of
+  `std.process.exit` (exit code unchanged), so a Debug build reports their
+  leaks. See [MCP_SERVER.md](MCP_SERVER.md#result-shapes-and-error-codes-sonny-6552).
+  Regression (field by field against the schema, through
+  `mcp.Server.processMessage` and a real `geode mcp --stdio` session):
+  `zig build test-sonny6552-mcp-result-shapes`; `test-sonny6531-mcp-ownership`
+  and `test-gap0875` updated to the new codes.
 - **Every `tests/*.zig` file is compiled by a build step or listed with the
   reason it is not, and configuration fails otherwise (SONNY-6542).** 564
   test files ran in no step: `tests/all_tests.zig` imported 92 of them as

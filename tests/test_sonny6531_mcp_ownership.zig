@@ -17,9 +17,14 @@
 // and against a real `geode serve`. Then a real `geode mcp --stdio` session
 // (this build's Debug binary, whose DebugAllocator panics on an invalid or
 // double free) answers every list/read/get/complete request and exits 0.
-// That session cannot see a leak: `geode mcp` ends with std.process.exit
-// (src/cli/cli_dispatcher.zig handleMcpCommand caller), so main's
-// DebugAllocator.deinit never runs; the leak half is the in-process tests.
+// SONNY-6552 (7): `geode mcp` now returns through main instead of ending
+// with std.process.exit, so main's DebugAllocator.deinit runs and reports
+// a leak of the session on stderr, which the session test refuses.
+//
+// SONNY-6552 changed what several requests answer (MCP 2025-11-25): an
+// unknown prompt, a prompt missing a required argument, an unknown tool and
+// a list cursor are -32602 errors, an unknown resource URI -32002; the
+// lists are result objects on one line. Those requests hand nothing over.
 //
 // CANARY: REQ=REQ-SONNY-6531-MCP-OWNERSHIP; FEATURE="MCPResultOwnership"; ASPECT=EveryHandlerResultFreed; STATUS=TESTED; TEST=tests/test_sonny6531_mcp_ownership.zig; OWNER=mcp; UPDATED=2026-11-14
 
@@ -34,9 +39,16 @@ const test_scratch = @import("test_scratch.zig");
 const GeodeMcpServer = mcp_server.GeodeMcpServer;
 const linux = std.os.linux;
 
-const prompt_names = [_][]const u8{
-    "find_nodes",    "find_relationships", "create_node",   "create_relationship",
-    "shortest_path", "graph_analysis",     "pattern_match",
+/// Each prompt with its required arguments (SONNY-6552: a prompt missing
+/// one is a -32602 error).
+const prompt_calls = [_]struct { name: []const u8, args: []const u8 }{
+    .{ .name = "find_nodes", .args = "{\"label\":\"Person\"}" },
+    .{ .name = "find_relationships", .args = "{\"type\":\"KNOWS\",\"direction\":\"both\"}" },
+    .{ .name = "create_node", .args = "{\"label\":\"Person\",\"properties\":\"{}\"}" },
+    .{ .name = "create_relationship", .args = "{\"from_label\":\"A\",\"to_label\":\"B\",\"type\":\"R\"}" },
+    .{ .name = "shortest_path", .args = "{\"from_label\":\"A\",\"to_label\":\"B\"}" },
+    .{ .name = "graph_analysis", .args = "{\"metric\":\"degree\"}" },
+    .{ .name = "pattern_match", .args = "{\"pattern\":\"a triangle\"}" },
 };
 
 const resource_uris = [_][]const u8{
@@ -110,9 +122,10 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
     try expectResponse(server, 10,
         \\{"jsonrpc":"2.0","id":10,"method":"tools/list"}
     , .{ .result = "\"name\":\"query\"" });
+    // SONNY-6552: the list is one page; a cursor geode never issued is -32602.
     try expectResponse(server, 11,
         \\{"jsonrpc":"2.0","id":11,"method":"tools/list","params":{"cursor":"next"}}
-    , .{ .result = "\"name\":\"diagnostics\"" });
+    , .{ .err = -32602 });
     try expectResponse(server, 12,
         \\{"jsonrpc":"2.0","id":12,"method":"resources/list"}
     , .{ .result = "geode://config" });
@@ -121,21 +134,22 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
     , .{ .result = "uriTemplate" });
     try expectResponse(server, 14,
         \\{"jsonrpc":"2.0","id":14,"method":"prompts/list"}
-    , .{ .result = "\"name\": \"pattern_match\"" });
+    , .{ .result = "\"name\":\"pattern_match\"" });
 
-    for (prompt_names, 0..) |name, i| {
+    for (prompt_calls, 0..) |call, i| {
         const id: i64 = 100 + @as(i64, @intCast(i));
+        // Without arguments: every prompt has a required one (-32602).
         try expectResponse(server, id, try fmtMsg(&buf,
             \\{{"jsonrpc":"2.0","id":{d},"method":"prompts/get","params":{{"name":"{s}"}}}}
-        , .{ id, name }), .{ .result = "\"messages\"" });
+        , .{ id, call.name }), .{ .err = -32602 });
         // With arguments: the library stringifies them for the handler.
         try expectResponse(server, id + 50, try fmtMsg(&buf,
-            \\{{"jsonrpc":"2.0","id":{d},"method":"prompts/get","params":{{"name":"{s}","arguments":{{"label":"Person"}}}}}}
-        , .{ id + 50, name }), .{ .result = "\"messages\"" });
+            \\{{"jsonrpc":"2.0","id":{d},"method":"prompts/get","params":{{"name":"{s}","arguments":{s}}}}}
+        , .{ id + 50, call.name, call.args }), .{ .result = "\"messages\"" });
     }
     try expectResponse(server, 199,
         \\{"jsonrpc":"2.0","id":199,"method":"prompts/get","params":{"name":"no_such_prompt"}}
-    , .{ .result = "Unknown prompt" });
+    , .{ .err = -32602 });
 
     // The tools that run in-process (no backend).
     try expectResponse(server, 20,
@@ -154,7 +168,8 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
         \\{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"diagnostics","arguments":{"query":"RETURN 1"}}}
     , .{ .result = "\"isError\":false" });
     // Tool error results (isError: true) and a tool that does not exist
-    // (the handler returns an error: nothing is handed over).
+    // (the handler returns an error: nothing is handed over; SONNY-6552:
+    // -32602, the spec's protocol error for an unknown tool).
     for ([_][]const u8{ "validate", "complete", "hover", "diagnostics", "query", "explain" }, 0..) |tool, i| {
         const id: i64 = 30 + @as(i64, @intCast(i));
         try expectResponse(server, id, try fmtMsg(&buf,
@@ -163,15 +178,16 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
     }
     try expectResponse(server, 39,
         \\{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}
-    , .{ .err = -32603 });
+    , .{ .err = -32602 });
 
-    // A resource URI geode does not serve, with and without the scheme.
+    // A resource URI geode does not serve, with and without the scheme
+    // (SONNY-6552: -32002 resource not found).
     try expectResponse(server, 40,
         \\{"jsonrpc":"2.0","id":40,"method":"resources/read","params":{"uri":"geode://default/default/nothing"}}
-    , .{ .result = "Unknown resource URI" });
+    , .{ .err = -32002 });
     try expectResponse(server, 41,
         \\{"jsonrpc":"2.0","id":41,"method":"resources/read","params":{"uri":"unknown://resource"}}
-    , .{ .result = "Unknown resource URI" });
+    , .{ .err = -32002 });
 
     // completion/complete, without and with params (the library
     // stringifies params for the handler).
@@ -193,11 +209,12 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
     , .{ .err = -32601 });
 
     // Notifications (no id): the handlers run and their results are freed
-    // with no response built.
+    // with no response built. (A notification whose handler fails gets an
+    // error response from the mcp library, so these all succeed.)
     for ([_][]const u8{
         \\{"jsonrpc":"2.0","method":"tools/list"}
         ,
-        \\{"jsonrpc":"2.0","method":"resources/read","params":{"uri":"unknown://resource"}}
+        \\{"jsonrpc":"2.0","method":"resources/read","params":{"uri":"geode://config"}}
         ,
         \\{"jsonrpc":"2.0","method":"prompts/get","params":{"name":"find_nodes","arguments":{"label":"X"}}}
         ,
@@ -211,7 +228,7 @@ fn driveLocalMethods(server: *GeodeMcpServer) !void {
 
     // A batch: every item's result is freed once.
     const batch =
-        \\[{"jsonrpc":"2.0","id":70,"method":"tools/list"},{"jsonrpc":"2.0","id":71,"method":"resources/templates/list"},{"jsonrpc":"2.0","id":72,"method":"prompts/get","params":{"name":"shortest_path","arguments":{"from_label":"A"}}},{"jsonrpc":"2.0","id":73,"method":"completion/complete","params":{"argument":{"name":"x","value":""}}},{"jsonrpc":"2.0","id":74,"method":"resources/read","params":{"uri":"unknown://resource"}},{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"diagnostics","arguments":{"query":"RETURN 1"}}},{"jsonrpc":"2.0","method":"prompts/list"}]
+        \\[{"jsonrpc":"2.0","id":70,"method":"tools/list"},{"jsonrpc":"2.0","id":71,"method":"resources/templates/list"},{"jsonrpc":"2.0","id":72,"method":"prompts/get","params":{"name":"shortest_path","arguments":{"from_label":"A","to_label":"B"}}},{"jsonrpc":"2.0","id":73,"method":"completion/complete","params":{"argument":{"name":"x","value":""}}},{"jsonrpc":"2.0","id":74,"method":"resources/read","params":{"uri":"geode://config"}},{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"diagnostics","arguments":{"query":"RETURN 1"}}},{"jsonrpc":"2.0","method":"prompts/list"}]
     ;
     const resp = (try dispatch(server, batch)) orelse return error.UnexpectedNullResponse;
     defer testing.allocator.free(resp);
@@ -236,7 +253,7 @@ fn driveBackendMethods(server: *GeodeMcpServer, tool_needle: []const u8, resourc
         ,
         \\"catalogs"
         ,
-        \\"graphs","arguments":{"catalog":"default"}
+        \\"graphs"
         ,
         \\"graphs","arguments":{}
         ,
@@ -426,7 +443,9 @@ fn runMcpSession(endpoint: []const u8, input: []const u8, timeout_s: i64) !Sessi
 test "SONNY-6531: a real geode mcp --stdio session answers every request and exits cleanly" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     // The Debug binary's DebugAllocator (src/cli/main.zig) panics on an
-    // invalid or double free, which kills the session.
+    // invalid or double free, which kills the session, and (SONNY-6552:
+    // `geode mcp` returns through main) reports every leaked allocation
+    // ("error(gpa): memory address ... leaked") when the session ends.
     if (builtin.mode != .Debug) return error.SkipZigTest;
     var backend: Server = .{ .handle = undefined, .data = undefined };
     try startServer(&backend);
@@ -468,8 +487,8 @@ test "SONNY-6531: a real geode mcp --stdio session answers every request and exi
             return error.MemoryErrorReported;
         }
     }
-    // Every request is answered. Matched by the response envelope's id, not
-    // per line: the resources and prompts results are multi-line documents.
+    // Every request is answered (the one-message-per-line shape check is
+    // tests/test_sonny6552_mcp_result_shapes.zig).
     var id: usize = 1;
     while (id < 20) : (id += 1) {
         var needle_buf: [64]u8 = undefined;

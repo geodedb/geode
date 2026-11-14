@@ -367,8 +367,9 @@ pub const GeodeClient = struct {
         return self.query("SHOW CATALOGS", null);
     }
 
-    pub fn listGraphs(self: *Self, catalog: ?[]const u8) ![]u8 {
-        _ = catalog;
+    /// SHOW GRAPHS has no catalog scope in geode (SONNY-6552: the ignored
+    /// `catalog` parameter is gone).
+    pub fn listGraphs(self: *Self) ![]u8 {
         return self.query("SHOW GRAPHS", null);
     }
 

@@ -61,5 +61,7 @@ test "GAP-0875c: non-cancelled token still dispatches (unknown tool control)" {
     var token = mcp.CancelToken{};
     const p = testPrincipal();
     const result = tools.callTool(allocator, null, false, &p, "no-such-tool", "{}", &token);
-    try std.testing.expectError(error.UnknownTool, result);
+    // SONNY-6552: an unknown tool is error.InvalidParams (the library's
+    // -32602, MCP 2025-11-25's protocol error for an unknown tool).
+    try std.testing.expectError(error.InvalidParams, result);
 }

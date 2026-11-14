@@ -5342,6 +5342,8 @@ REQ-SONNY-6544-DSN-USERINFO,DSN credentials,RedactionTable,TESTED,tests/test_son
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,AbsoluteHomeOnly,TESTED,src/cli/security/home_dir.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,RelativeHomeRefused,TESTED,tests/test_sonny6544_relative_home.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
 REQ-SONNY-6544-MCP-COMPLETION,MCPCompletion,CompleteResultShape,TESTED,tests/test_sonny6544_mcp_completion.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
+REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
