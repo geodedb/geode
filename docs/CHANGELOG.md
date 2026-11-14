@@ -2389,6 +2389,14 @@
 
 ### Fixed
 
+- **MCP `completion/complete` answers a CompleteResult (SONNY-6544 item
+  3).** It answered `"result":[]`; MCP 2025-11-25 (the pinned mcp library's
+  protocol) requires `{"completion":{"values":[...],"total"?,"hasMore"?}}`,
+  so a client found no `completion` object. Geode still has no argument
+  suggestions and now answers
+  `{"completion":{"values":[],"total":0,"hasMore":false}}`. Regression
+  (through `mcp.Server.processMessage`): `zig build
+  test-sonny6544-mcp-completion`.
 - **No test step spawns `./zig-out/bin/geode` any more, and configuration
   fails if one does (SONNY-6535).** That path holds whatever the last install
   left (built from another commit or optimize mode, or nothing: the test

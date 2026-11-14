@@ -320,16 +320,22 @@ fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) 
 // MCP "completion" is argument-completion for tools and resources
 // (autocomplete parameter values while the user is typing), not
 // general text completion. Geode does not yet maintain a per-tool
-// argument suggestion index, so we return an empty JSON array — a
-// valid "no suggestions available" response. Clients receive a
-// successful response with zero items and fall back to showing
-// their own suggestions or plain text input. This is the spec-
-// compliant way to handle an unimplemented completion provider.
-// CANARY: REQ=REQ-MCP-COMPLETE-001; FEATURE="MCPCompletion"; ASPECT=EmptyProvider; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
+// argument suggestion index, so we answer a CompleteResult with no
+// values — a valid "no suggestions available" response. Clients
+// receive a successful response with zero items and fall back to
+// showing their own suggestions or plain text input.
+// SONNY-6544: the result is the protocol's CompleteResult object
+// (2025-11-25, the pinned library's version:
+// {"completion":{"values":[...],"total"?,"hasMore"?}}); it used to be a
+// bare `[]`, which has no `completion` for a client to read.
+// CANARY: REQ=REQ-MCP-COMPLETE-001; FEATURE="MCPCompletion"; ASPECT=EmptyProvider; STATUS=TESTED; TEST=tests/test_sonny6544_mcp_completion.zig; OWNER=mcp; UPDATED=2026-11-14
+pub const empty_completion = "{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}";
+
 fn completeHandler(ctx: ?*anyopaque, params_json: []const u8) anyerror![]const u8 {
     _ = ctx;
     _ = params_json;
-    return "[]";
+    // SONNY-6531 re-pin: mcp v0.1.21 dispatches completion/complete with owned=false (never freed), so a literal is right here; v0.1.22 frees it (owned=true): return `self.allocator.dupe(u8, empty_completion)` with `self` = ctx as *GeodeMcpServer.
+    return empty_completion;
 }
 
 // GAP-0516: logging/setLevel is optional per MCP spec §7.2.
@@ -448,12 +454,11 @@ test "GAP-0516: unsubscribeResourceHandler returns MethodNotFound (paired with s
     );
 }
 
-test "GAP-0516: completeHandler returns empty JSON array (spec §4.4 optional)" {
-    const result = try completeHandler(null, "{\"ref\":{\"type\":\"ref/tool\",\"name\":\"query\"}}");
-    // Must be a valid JSON array literal the MCP client can parse.
-    // "[]" is 2 bytes; anything else (including null-terminated or
-    // object form) would break the response contract.
-    try std.testing.expectEqualStrings("[]", result);
+test "GAP-0516: completeHandler returns an empty CompleteResult (SONNY-6544)" {
+    const result = try completeHandler(null, "{\"ref\":{\"type\":\"ref/prompt\",\"name\":\"explore_graph\"},\"argument\":{\"name\":\"graph\",\"value\":\"\"}}");
+    // A CompleteResult object, not a bare array (the dispatch-level
+    // contract is tests/test_sonny6544_mcp_completion.zig).
+    try std.testing.expectEqualStrings("{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}", result);
 }
 
 test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {

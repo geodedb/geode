@@ -1722,7 +1722,7 @@ REQ-GPS-MCP-001,GPS MCP Principal,AdminAllowed,TESTED,,,security,2026-05-20,test
 REQ-GPS-MCP-001,GPS MCP Principal,DecisionLayer,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,6
 REQ-GPS-MCP-001,GPS MCP Principal,NoRolesUnauthorized,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,127
 REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,13
-REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,367
+REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,373
 REQ-GPS-MCP-001,GPS MCP Principal,PrincipalStorage,TESTED,,,security,2026-05-20,src/mcp/server.zig,45
 REQ-GPS-MCP-001,GPS MCP Principal,ReadWriteRole,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,163
 REQ-GPS-MCP-001,GPS MCP Principal,SourcePreserved,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,22
@@ -3376,7 +3376,7 @@ REQ-MATVIEW-SYSTEM-006,MaterializedViews,MemoryManagement,TESTED,,,storage,2026-
 REQ-MATVIEW-SYSTEM-007,MaterializedViews,TestCoverage,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig,70
 REQ-MATVIEW-SYSTEM-008,MaterializedViews,Documentation,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig,84
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,TESTED,,,query,2026-06-11,tests/test_materialized_views_enhanced.zig,1
-REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig,328
+REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,TESTED,,,mcp,2026-11-14,src/mcp/server.zig,331
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,30
@@ -3394,7 +3394,7 @@ REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig,6
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig,6
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,29
-REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig,345
+REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig,351
 REQ-MEM-001,MemorySafety,AllocatorUsage,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig,580
 REQ-MEM-002,MemorySafety,DeferCleanup,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig,588
 REQ-MEM-003,MemorySafety,BoundsChecking,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig,599

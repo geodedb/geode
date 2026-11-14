@@ -28,7 +28,7 @@ operators and client authors must understand.
 | `resources/read` | Reads a resource by URI. |
 | `resources/templates/list` | Lists resource templates. |
 | `prompts/list` / `prompts/get` | Lists / fetches the Geode prompt catalog. |
-| `completion/complete` | Argument-completion provider (MCP spec §4.4). Geode does not maintain a per-tool argument-suggestion index, so it returns an empty array `[]` — a spec-compliant "no suggestions" response. |
+| `completion/complete` | Argument-completion provider (MCP spec §4.4). Geode does not maintain a per-tool argument-suggestion index, so it returns an empty CompleteResult, `{"completion":{"values":[],"total":0,"hasMore":false}}` — a spec-compliant "no suggestions" response (it returned a bare `[]` before SONNY-6544, which has no `completion` object). Regression: `zig build test-sonny6544-mcp-completion`. |
 | `logging/setLevel` | Tolerated success (MCP spec §7.2). Geode log levels are fixed at startup (`--log-level`); the request is acknowledged without changing runtime verbosity, which the spec explicitly permits. |
 
 ## Intentionally unimplemented: resource subscriptions (GAP-0516)

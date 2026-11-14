@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:32:57.719252464Z",
+  "generated_at": "2026-11-14T06:35:17.236450585Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -48678,14 +48678,16 @@
         {
           "feature": "MCPCompletion",
           "aspect": "EmptyProvider",
-          "status": "EXEMPT",
+          "status": "TESTED",
           "files": [
             "src/mcp/server.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
           "benches": [],
           "owner": "mcp",
-          "updated": "2026-04-11"
+          "updated": "2026-11-14"
         }
       ]
     },
@@ -93995,9 +93997,9 @@
     "by_status": {
       "BENCHED": 144,
       "COMPLETE": 2,
-      "EXEMPT": 215,
+      "EXEMPT": 214,
       "IMPL": 326,
-      "TESTED": 4962
+      "TESTED": 4963
     },
     "by_aspect": {
       "2PC": 3,

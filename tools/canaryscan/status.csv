@@ -3168,7 +3168,7 @@ REQ-MATVIEW-SYSTEM-006,MaterializedViews,MemoryManagement,TESTED,tests/test_gap_
 REQ-MATVIEW-SYSTEM-007,MaterializedViews,TestCoverage,TESTED,tests/test_gap_analysis_january_2026.zig,test_gap_analysis_january_2026.zig,,storage,2026-01-15
 REQ-MATVIEW-SYSTEM-008,MaterializedViews,Documentation,TESTED,tests/test_gap_analysis_january_2026.zig,test_gap_analysis_january_2026.zig,,storage,2026-01-15
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,TESTED,tests/test_materialized_views_enhanced.zig,tests/test_materialized_views_enhanced.zig,,query,2026-06-11
-REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,src/mcp/server.zig,,,mcp,2026-04-11
+REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,TESTED,src/mcp/server.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/cli/lsp/mcp_input_guards_test.zig,,,mcp,2026-05-06
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/mcp/input_guards.zig,,,mcp,2026-05-06
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/mcp/lsp.zig,,,mcp,2026-05-06
