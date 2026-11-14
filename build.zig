@@ -535,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6494-mcp-dsn-errors", .reason = "intentionally red TDD reproduction (SONNY-6494, KNOWN_TEST_ISSUES): MCP answers a malformed endpoint DSN with a generic failure; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -8034,6 +8035,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
     sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
+    // SONNY-6494, intentionally red (docs/KNOWN_TEST_ISSUES.md): MCP tools,
+    // resources and `geode mcp --endpoint` name what is wrong with a
+    // malformed endpoint DSN (geode-client-zig v0.3.16's distinct errors,
+    // port 0, an IPv6 zone); `geode query --server <host>:0` is refused as an
+    // address. Not in shardDep until the fix lands; compiled by test-compile.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_mcp_dsn_errors.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6494-mcp-dsn-errors", "Run SONNY-6494 regression (MCP tools/call and resources/read answer a malformed endpoint DSN - unbracketed IPv6, junk after ], a bad or zero port, an unsupported scheme, an IPv6 zone - with what is wrong instead of a generic failure; geode mcp refuses it at startup without echoing credentials; geode query --server <host>:0 is refused as an address)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);
