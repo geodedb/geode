@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:47:31.772637125Z",
+  "generated_at": "2026-11-14T00:48:45.12027416Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85840,6 +85840,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6525-STATEMENT-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "StatementScope",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6525_statement_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6525_statement_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93413,7 +93432,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4928
+      "TESTED": 4929
     },
     "by_aspect": {
       "2PC": 3,
@@ -97014,6 +97033,7 @@
       "StatementOnStream": 1,
       "StatementParsing": 1,
       "StatementProposalBatch": 1,
+      "StatementScope": 1,
       "StatementScopeFailed": 1,
       "StatementScopedDimScratch": 1,
       "StatementScopedRecord": 1,
