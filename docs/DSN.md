@@ -1,8 +1,8 @@
 # Geode DSN (Data Source Name) Specification
 
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Status**: Official Specification
-**Last Updated**: 2026-11-13
+**Last Updated**: 2026-11-14
 
 This document defines the official DSN (Data Source Name) format for Geode client libraries. All client implementations MUST conform to this specification.
 
@@ -25,6 +25,11 @@ For convenience, these alternative formats are also supported:
 <host>:<port>[/<graph>][?<parameters>]
 <host>[/<graph>][?<parameters>]
 ```
+
+A DSN has no fragment: a `#` anywhere after the scheme ends the authority
+and starts a fragment, which is refused (`DsnFragment` in geode;
+geode-client-zig reports it as `InvalidDSN`), never ignored. A `#` in a
+user name, password or graph name is written `%23`.
 
 ## Supported Schemes
 
@@ -85,21 +90,19 @@ Refused with `InvalidAddress`, never reinterpreted:
   lenient `parseDSN` behind the MCP endpoint to 3141).
 
 **Port 0.** The grammar accepts `0`: for a listener (`geode serve --listen :0`) it
-means "any free port". A client cannot dial it, so geode refuses it, with
-`InvalidPort`, on every client address it parses before building a client:
-`--server` and the host part of `--dsn` (`geode query`, `shell`, `auth
-login`, `backup create`, `restore`, `migrate run`; `parseHostPort` in
-`src/client/zig_quic_bridge.zig`) and the MCP endpoint DSN (`parseEndpoint`
-in `src/mcp/client.zig`). geode-client-zig itself does not: its `parseDSN`
-and `parseDSNStrict` (v0.3.16) return port 0 for `host:0`, and its tests pin
-that (`src/config.zig`, "the port boundaries geode's host_port.parsePort
-accepts"); its `validate.port` rejects 0 (`PortOutOfRange`) but neither
-parser nor `connect` calls it. Another program that builds a client from a
-DSN with that library gets port 0 and fails when it dials. (A geode client
-port 0 used to fail at the first send with a bare `Unexpected`.)
+means "any free port". A client cannot dial it, so it is refused with
+`InvalidPort` on every client path. geode refuses it on the addresses it
+parses before building a client (`--server` and the host part of `--dsn`
+for `geode query`, `shell`, `auth login`, `backup create`, `restore`,
+`migrate run` and the REPL's `\connect`; `parseHostPort` in
+`src/client/zig_quic_bridge.zig`). geode-client-zig (since v0.3.17,
+SONNY-6550) refuses it in `parseDSN` and `parseDSNStrict`, which is how the
+MCP endpoint DSN is refused, and in `GeodeClient.connect`, for a client
+whose `Config` was built in code. (A geode client on port 0 used to fail
+at the first send with a bare `Unexpected`.)
 
 **How the MCP endpoint reports a bad DSN** (`geode mcp --endpoint`,
-SONNY-6494). geode-client-zig v0.3.16 parses the DSN with this grammar and
+SONNY-6494). geode-client-zig v0.3.17 parses the DSN with this grammar and
 names the fault; geode turns each error into a message (the DSN itself is
 never echoed, since it may carry a password). The CLI reports a bad
 `--server` or `--dsn` (`geode query`, `shell`, `auth login`, `backup
@@ -119,8 +122,10 @@ call answers `Error: <message>` (`isError: true`) and a resource read
 | `InputTooLong` | a percent-decoded credential or parameter over the client's limit | `Invalid Geode endpoint DSN: a credential or parameter value is too long` |
 | `Ipv6ZoneUnsupported` | an IPv6 address with a zone (`[fe80::1%eth0]`) | `Invalid Geode endpoint DSN: an IPv6 address with a zone ...` |
 | `InsecureTlsRefused` | `insecure=true` under production posture (SONNY-6453) | `Refused: the endpoint DSN sets insecure=true ...` |
-| `InvalidPercentEncoding` | CLI `--dsn`: a `%` in the user name or password not followed by two hex digits (SONNY-6544) | `Invalid Geode endpoint DSN: in the user name or password, % must start ...` |
-| `UnencodedCredentialDelimiter` | CLI `--dsn`: an `@` after the host, e.g. a password with a raw `/`, `?` or `#` (SONNY-6544) | `Invalid Geode endpoint DSN: an @ follows the host ...` |
+| `InvalidPercentEncoding` | a `%` not followed by two hex digits in the user name, password, graph path or a query value (SONNY-6544, SONNY-6550) | `Invalid Geode endpoint DSN: a % must start a %XX escape ...` |
+| `UnencodedCredentialDelimiter` | an `@` after the host: a password with a raw `/`, `?` or `#`, or an `@` in the graph path or a query value (SONNY-6544, SONNY-6550) | `Invalid Geode endpoint DSN: an @ follows the host ...` |
+| `DsnFragment` | a fragment (`#...`); geode-client-zig reports it as `InvalidDSN`, geode names it (SONNY-6550) | `Invalid Geode endpoint DSN: a fragment (#...) is not allowed ...` |
+| `TimeoutOutOfRange` | `parseDSNStrict` only: a `connect_timeout` / `timeout_ms` outside its range (SONNY-6550; no geode path parses strictly today) | `Invalid Geode endpoint DSN: the timeout is out of range ...` |
 
 Any other failure (the server cannot be reached, TLS, authentication)
 keeps the generic `Failed to initialize client` / `Failed to connect to
@@ -155,6 +160,16 @@ quic://geode.example.com:3141
 ## Graph Specification
 
 The graph name is an optional path component in the DSN. When present, the session is bound to the named graph at connection time, before any queries are executed.
+
+The graph path (everything after the `/` that ends the authority, up to
+`?`) is percent-decoded with the same strict rule as the credentials
+(SONNY-6550): a `%` must start a `%XX` escape of two hex digits, so a
+literal `%` is written `%25`, and `+` is a literal plus (not a space).
+`quic://localhost:3141/my%5Fgraph` binds `my_graph`; `/50%off` is refused
+with `InvalidPercentEncoding`. A `?`, `#` or `@` in a graph name is written
+`%3F`, `%23` or `%40`. The `graph=` query parameter is decoded the same way.
+The CLI's `--dsn` and the MCP endpoint both decode it (the CLI sent it
+undecoded before).
 
 ### Graph Binding Behavior
 
@@ -221,11 +236,12 @@ an error (`InvalidPercentEncoding`), never passed through as typed; `+` is a
 literal plus. A raw `/`, `?` or `#` in a credential ends the authority early,
 so a DSN with an `@` after the host is refused
 (`UnencodedCredentialDelimiter`) instead of being dialled at a host made of
-part of the password. geode's CLI (`geode query` / `geode shell` `--dsn`,
-`src/client/dsn_credentials.zig`) applies these rules (SONNY-6544).
-geode-client-zig v0.3.16 (the `geode mcp --endpoint` DSN) still splits at
-the first `@` anywhere in the DSN and decodes `+` as a space, so a password
-holding `@` must be written `%40` there.
+part of the password. A scheme-less DSN (`admin:pw@host:3141`) follows the
+same rule. Every geode path applies these rules with one implementation:
+geode-client-zig's `config.redact` (v0.3.17, SONNY-6550), which parses the
+`geode mcp --endpoint` DSN and which geode's CLI (`geode query` /
+`geode shell` `--dsn`, SONNY-6544) uses through the re-exports in
+`src/client/dsn_credentials.zig`.
 
 ### Query Parameter Credentials
 
@@ -250,8 +266,11 @@ userinfo user name counts as absent). geode's CLI (`geode query` /
 `geode shell` `--dsn`) reads them (SONNY-6551; it read only the userinfo
 before, so the harness form `localhost:3141?insecure=true&user=geode&pass=...`
 sent no credentials). Of the other query parameters the CLI reads none.
-geode-client-zig v0.3.x lets the query parameter win over the userinfo and
-decodes `+` as a space.
+The `geode mcp --endpoint` DSN follows the same precedence (SONNY-6550):
+geode-client-zig's `parseDSN` (v0.3.17) lets the query parameter overwrite
+the userinfo, so geode puts the userinfo's values back after parsing
+(`src/mcp/client.zig`). Another program that parses a DSN with
+geode-client-zig directly gets the query parameter's value.
 
 ## Query Parameters
 
@@ -291,6 +310,15 @@ decodes `+` as a space.
 | `timeout_ms` | - | integer | 30000 | Connection timeout in milliseconds |
 
 **Note**: When both `connect_timeout` (seconds) and `timeout_ms` (milliseconds) are specified, `timeout_ms` takes precedence.
+
+**Range.** A timeout is 1-3,600,000 milliseconds: `connect_timeout` 1-3600
+seconds, `timeout_ms` 1-3600000. geode-client-zig's `parseDSNStrict`
+refuses a value outside it with `TimeoutOutOfRange`, including
+`connect_timeout` seconds whose milliseconds overflow a 32-bit integer
+(e.g. `5000000`, which panicked the parser before v0.3.17); its lenient
+`parseDSN` keeps the default timeout for an overflowing `connect_timeout`.
+The `geode mcp --endpoint` DSN is parsed leniently; the CLI's `--dsn` reads
+no timeout parameter (use `--timeout`).
 
 ### Boolean Parameter Values
 
@@ -423,10 +451,15 @@ Implementations MUST return an error for:
 - Invalid port text: not 1-5 decimal digits, or above 65535
 - Invalid IPv6 address format (unbracketed, or brackets around a non-IPv6 host)
 
-Port 0 is valid DSN syntax (see "Port 0" under Host Specification): a
-client MUST refuse it before dialling, and MAY do so when parsing. geode
-refuses it in its own address checks (`InvalidPort`); geode-client-zig
-v0.3.16 parses it and does not refuse it (see above).
+Port 0 is valid host:port grammar (see "Port 0" under Host
+Specification): a client MUST refuse it before dialling, and MAY do so when
+parsing. geode and geode-client-zig (v0.3.17) refuse it when parsing a
+client address or DSN, and geode-client-zig's `connect` refuses it too
+(`InvalidPort`).
+
+Implementations MUST also return an error for a malformed percent-escape
+(`%` not followed by two hex digits) in the user name, password, graph path
+or a query value, an `@` after the authority, and a fragment.
 
 ### Optional Strict Mode
 
@@ -452,8 +485,9 @@ Implementations SHOULD validate:
 2. Implementations MUST provide a way to redact credentials from DSN strings for logging
 3. Password memory SHOULD be zeroed before deallocation (where language allows)
 
-geode's redaction is `geode.dsn_credentials.redacted` (`{f}`), used by every
-client-side line that shows a server address or DSN (SONNY-6544): the
+geode's redaction is `geode.dsn_credentials.redacted` (`{f}`; since
+SONNY-6550 a re-export of geode-client-zig's `config.redacted`), used by
+every client-side line that shows a server address or DSN (SONNY-6544): the
 userinfo is dropped (`quic://admin:s@cret@[::1]:3141/g` prints as
 `quic://[::1]:3141/g`), the value of a query parameter whose name contains
 `pass`, `pwd`, `secret`, `token`, `auth`, `credential`, `key`, `session`,
@@ -470,7 +504,7 @@ The error messages for a malformed DSN never include the DSN.
 ### Input Validation
 
 1. Hostnames MUST be validated for null bytes and other injection attacks
-2. URL decoding MUST handle malformed percent-encoding gracefully
+2. URL decoding MUST refuse malformed percent-encoding (never pass it through as typed)
 3. Input length limits SHOULD be enforced to prevent resource exhaustion
 
 ## Client Implementation Reference
@@ -489,6 +523,7 @@ The error messages for a malformed DSN never include the DSN.
 |---------|------|---------|
 | 1.0.0 | 2026-02-05 | Initial specification |
 | 1.1.0 | 2026-03-25 | Add graph path support, graph-bound sessions, auto-create semantics |
+| 1.2.0 | 2026-11-14 | Userinfo ends at the last `@` of the authority; strict percent-decoding of credentials, graph path and query values (`+` literal); fragments, an `@` after the authority and port 0 refused; userinfo takes precedence over query credentials; timeout range |
 
 ## License
 
