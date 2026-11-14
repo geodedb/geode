@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:30:44.336095902Z",
+  "generated_at": "2026-11-14T06:32:46.432086912Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86398,6 +86398,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6544-HOME-ABSOLUTE",
+      "features": [
+        {
+          "feature": "CLI home directory",
+          "aspect": "RelativeHomeRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93959,7 +93978,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4960
+      "TESTED": 4961
     },
     "by_aspect": {
       "2PC": 3,
@@ -97084,6 +97103,7 @@
       "RelationshipMergeAdjacencyEnvelope": 1,
       "RelationshipMergeEndpointLookup": 1,
       "RelativeDataDirAndRefusalCleanup": 1,
+      "RelativeHomeRefused": 1,
       "ReleaseAtStatement": 1,
       "ReleaseSafe": 1,
       "RemainingCategories": 1,

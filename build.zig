@@ -8168,6 +8168,21 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6544-dsn-credentials", "Run SONNY-6544 item 1 regression (geode query and shell log in to a real server whose admin password holds '@' and ':' through a raw or percent-encoded --dsn - the userinfo ends at the last '@' - and no output line of query, shell or auth login holds any piece of the password; a malformed percent-escape or an unencoded '/' in it is refused unprinted)").dependOn(&run_tests.step);
     }
+    // SONNY-6544 (2): a relative or empty HOME is refused, never a panic,
+    // and nothing is created under the working directory.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6544_relative_home.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info/rotate, authn config and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory; a relative XDG_STATE_HOME is ignored and the state dir goes under HOME)").dependOn(&run_tests.step);
+    }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig (std-only).
     {
         const dsn_mod = b.createModule(.{ .root_source_file = b.path("src/client/dsn_credentials.zig"), .target = target, .optimize = optimize });
