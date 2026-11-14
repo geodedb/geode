@@ -18967,6 +18967,7 @@ pub fn build(b: *std.Build) void {
     // graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
+        .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
     };
     for (sonny656x_regressions) |reg| {
