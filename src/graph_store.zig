@@ -2413,6 +2413,13 @@ const HydrationEntry = struct {
     failure: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(QuarantineCause.unknown)),
 };
 
+/// SONNY-6523 (7): scans of the shared graph-keyed maps DROP GRAPH has made
+/// (`purgeGraphKeyedIndexes`), for the regression test.
+var g_drop_graph_map_scans = std.atomic.Value(u64).init(0);
+pub fn dropGraphMapScans() u64 {
+    return g_drop_graph_map_scans.load(.monotonic);
+}
+
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=QuarantinedGraphFailClosed; STATUS=TESTED; TEST=tests/canary_recovery_corrupt_latency.zig; OWNER=storage; UPDATED=2026-10-19
 /// The errors a read of a quarantined graph fails with. A graph is
 /// quarantined when its first-touch hydration fails (`ensureGraphHydrated`):
@@ -3210,6 +3217,7 @@ pub const GraphStore = struct {
             self.label_index_mutex.lockUncancelable(io);
             defer self.label_index_mutex.unlock(io);
             while (true) {
+                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
                 var victim: ?[]const u8 = null;
                 var it = self.label_index.iterator();
                 while (it.next()) |e| {
@@ -3230,6 +3238,7 @@ pub const GraphStore = struct {
             self.label_count_rwlock.lockUncancelable(io);
             defer self.label_count_rwlock.unlock(io);
             while (true) {
+                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
                 var victim: ?[]const u8 = null;
                 var it = self.label_counts_by_graph.iterator();
                 while (it.next()) |e| {
@@ -3246,6 +3255,7 @@ pub const GraphStore = struct {
             self.edge_type_index_lock.lockUncancelable(io);
             defer self.edge_type_index_lock.unlock(io);
             while (true) {
+                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
                 var victim: ?[]const u8 = null;
                 var it = self.edge_type_index.iterator();
                 while (it.next()) |e| {
@@ -14082,6 +14092,7 @@ pub const GraphStore = struct {
             self.edge_type_count_rwlock.lockUncancelable(io);
             defer self.edge_type_count_rwlock.unlock(io);
             while (true) {
+                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
                 var victim: ?[]const u8 = null;
                 var it = self.edge_type_counts_by_graph.iterator();
                 while (it.next()) |e| {
@@ -14105,6 +14116,7 @@ pub const GraphStore = struct {
         };
         for (outers) |outer| {
             while (true) {
+                _ = g_drop_graph_map_scans.fetchAdd(1, .monotonic);
                 var victim: ?[]const u8 = null;
                 var it = outer.iterator();
                 while (it.next()) |e| {

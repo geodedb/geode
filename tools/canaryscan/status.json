@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:29:09.76021382Z",
+  "generated_at": "2026-11-14T01:31:55.849685377Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85806,6 +85806,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_drop_graph_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6523-FAILED-CREATE-COUNT",
       "features": [
         {
@@ -93487,7 +93506,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4933
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -96580,7 +96599,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 343,
+      "Regression": 344,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
