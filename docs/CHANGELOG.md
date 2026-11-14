@@ -2448,6 +2448,13 @@
   without a host gets the host message instead of `DSN missing host`.
   Regression: `zig build test-sonny6531-cli-address-errors`.
 
+- **Go sources are gofmt-formatted, and a pre-commit hook keeps them so
+  (SONNY-6544 item 5).** `tools/canaryscan/*.go` was indented with spaces
+  and `tests/quic_tests/test_quicgo_interop_regression.go` had a pre-1.19
+  doc comment; nothing checked Go formatting. Formatting only (`git diff -w`
+  is empty; the scanner built before and after writes a byte-identical
+  `status.csv`). The local `gofmt` hook in `.pre-commit-config.yaml` fails a
+  commit whose staged `.go` files `gofmt -l` lists.
 - **canaryscan writes rows in source order, whatever `--root` is (SONNY-6531
   item 3).** The rows of one requirement in `tools/canaryscan/status.csv`
   and `status.json` were sorted by FEATURE, then ASPECT, STATUS, OWNER,
