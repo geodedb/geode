@@ -103,8 +103,11 @@ const cases = [_]Case{
         nothing_written,
         nothing_written_q,
     } },
+    // SONNY-6525 item 2: `nn` is bound by nothing, so the statement is
+    // refused with 42000 before its write shape is checked (it was the
+    // write shape's 0A000); nothing is written either way.
     .{ .name = "C1 unbound target", .steps = &.{
-        .{ .query = "PROFILE MATCH (n:L) SET n.x = 1, nn.y = 2", .code = "0A000" },
+        .{ .query = "PROFILE MATCH (n:L) SET n.x = 1, nn.y = 2", .code = "42000" },
         nothing_written,
         nothing_written_q,
     } },

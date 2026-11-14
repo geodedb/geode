@@ -71,6 +71,12 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
         switch (item.kind) {
             .stmt => {
                 const s: *const ast.Statement = @ptrCast(@alignCast(item.ptr));
+                // SONNY-6525: the statement's queries start with nothing in
+                // scope.
+                if (!c.out_of_scope) c.vars.checkStatement(s) catch |err| switch (err) {
+                    error.VariableNotInScope => c.out_of_scope = true,
+                    error.OutOfMemory => c.failed = true,
+                };
                 switch (s.*) {
                     inline else => |*p| c.visit(@TypeOf(p.*), p),
                 }

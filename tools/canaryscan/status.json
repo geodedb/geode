@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:48:45.12027416Z",
+  "generated_at": "2026-11-14T01:25:41.743541333Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85847,6 +85847,7 @@
           "aspect": "StatementScope",
           "status": "TESTED",
           "files": [
+            "src/execution/scope_check.zig",
             "tests/test_sonny6525_statement_scope.zig"
           ],
           "tests": [

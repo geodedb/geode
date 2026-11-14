@@ -22,9 +22,12 @@
 //! quantifier's variable and a pattern comprehension's, EXISTS's or COUNT's
 //! pattern variables. ORDER BY after a RETURN reads the RETURN's names and
 //! the variables before it (14.10 SR 4 c) i) 2) A) III) 1)). Parameters are
-//! never variables. Before the first projection of a statement nothing is
-//! checked here (a reference to a name nothing binds there is outside this
-//! check). Wherever the parser keeps one field for clauses on both sides of
+//! never variables. SONNY-6525 item 2: a statement starts with nothing in
+//! scope (`checkStatement`), so the same rule holds before the first
+//! projection: `MATCH (n) RETURN m` is refused (it read m as NULL). Where
+//! the scope coming in is not known (a CTE body, the statement after
+//! VALUES, the columns of a CALL with no YIELD or of an unnamed item), the
+//! references there are not checked. Wherever the parser keeps one field for clauses on both sides of
 //! a projection, the field is checked against both scopes together, so no
 //! statement is refused for a name one of them binds.
 //!
@@ -61,6 +64,8 @@ pub const Checker = struct {
     /// The queries already checked as part of a chain or a subquery (each
     /// is walked once, in the scope it is reached in).
     covered: std.AutoHashMapUnmanaged(*const ast.Query, void) = .empty,
+    /// Statements whose scope coming in is not known (after VALUES).
+    open_statements: std.AutoHashMapUnmanaged(*const ast.Statement, void) = .empty,
     failed: bool = false,
 
     pub fn init(backing: std.mem.Allocator) Checker {
@@ -82,6 +87,66 @@ pub const Checker = struct {
     pub fn checkQuery(c: *Checker, q: *const ast.Query) Error!void {
         if (c.covered.contains(q)) return;
         _ = try c.chain(q, Scope.any);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6525-STATEMENT-SCOPE; FEATURE="LinearComposition"; ASPECT=StatementScope; STATUS=TESTED; TEST=tests/test_sonny6525_statement_scope.zig; OWNER=engine; UPDATED=2026-11-13
+    /// SONNY-6525 item 2: the queries of statement `s` start with nothing in
+    /// scope (a statement's incoming working record is empty, 14.1), so a
+    /// reference to a name nothing before it binds is refused in every
+    /// clause, not only after a projection. `MATCH (n) RETURN m` read m as
+    /// NULL. The statements that hold their own clauses (CREATE, INSERT,
+    /// MERGE, DELETE, FOR) are checked here too; any other kind is walked
+    /// as before, its queries with an unknown scope.
+    pub fn checkStatement(c: *Checker, s: *const ast.Statement) Error!void {
+        if (c.open_statements.contains(s)) return;
+        switch (s.*) {
+            // The statement after VALUES reads its columns, which are not
+            // variables this check knows.
+            .Values => |*v| if (v.next_statement) |next| try c.open_statements.put(c.alloc(), next, {}),
+            .Query => |*q| _ = try c.chain(q, empty),
+            .Union => |*u| {
+                _ = try c.chain(&u.first, empty);
+                for (u.tails) |*t| _ = try c.chain(&t.query, empty);
+            },
+            .Intersect, .Except => |*b| {
+                _ = try c.chain(&b.left, empty);
+                _ = try c.chain(&b.right, empty);
+            },
+            .For => |*f| try c.forStatement(f, empty),
+            .Create => |*cs| try c.patternStatement(cs.pattern, cs.return_clause),
+            .Insert => |*is| try c.patternStatement(is.pattern, is.return_clause),
+            .Merge => |*m| {
+                const sc = try c.bindPattern(m.pattern, empty);
+                try c.patternExprs(m.pattern, sc);
+                for (m.on_create) |*set| try c.setClause(set, sc);
+                for (m.on_match) |*set| try c.setClause(set, sc);
+            },
+            .Delete => |*d| {
+                const sc = if (d.match_clause) |p| try c.bindPattern(p, empty) else empty;
+                if (d.match_clause) |p| try c.patternExprs(p, sc);
+                if (d.where_clause) |*w| try c.expr(w, sc);
+                for (d.items) |item| switch (item) {
+                    inline else => |name| try c.ref(name, sc, null),
+                };
+                if (d.return_clause) |rc| try c.returnItems(rc, sc);
+            },
+            else => {},
+        }
+    }
+
+    const empty: Scope = .{ .open = false };
+
+    /// A CREATE or INSERT statement: its pattern binds, its property maps
+    /// and RETURN read what it binds.
+    fn patternStatement(c: *Checker, p: ast.GraphPattern, ret: ?ast.ReturnClause) Error!void {
+        const sc = try c.bindPattern(p, empty);
+        try c.patternExprs(p, sc);
+        if (ret) |rc| try c.returnItems(rc, sc);
+    }
+
+    fn returnItems(c: *Checker, rc: ast.ReturnClause, s: Scope) Error!void {
+        const with_ret = try c.merged(s, try c.names(rc.items, s));
+        for (rc.items) |*item| try c.expr(&item.expr, with_ret);
     }
 
     /// `q` and the parts chained after it, `in` in scope before `q`.

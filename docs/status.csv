@@ -5202,7 +5202,7 @@ REQ-SONNY-3243-UNION-WRITE-ATOMICITY,Execution,UnionStatementUndo,TESTED,,,execu
 REQ-SONNY-3244-PARSE-LIMITS,ParseLimits,Parser,TESTED,,,parser,2026-09-28,src/gql/parser.zig,474
 REQ-SONNY-3244-PARSE-LIMITS,ParseLimits,WireCode,TESTED,,,parser,2026-09-28,src/lib.zig,710
 REQ-SONNY-3245-CREATE-FORMS,CreateStatement,Regression,TESTED,,,engine,2026-11-12,tests/test_sonny3245_create_merge_forms.zig,28
-REQ-SONNY-3245-INSERT-PATTERN-RULES,CreateStatement,InsertSyntaxRules,TESTED,,,engine,2026-11-12,src/execution/param_check.zig,122
+REQ-SONNY-3245-INSERT-PATTERN-RULES,CreateStatement,InsertSyntaxRules,TESTED,,,engine,2026-11-12,src/execution/param_check.zig,128
 REQ-SONNY-3245-NULL-PROPERTY-ABSENT,SetClauseSemantics,NullRemovesProperty,TESTED,,,engine,2026-11-12,src/execution/property_mutation.zig,364
 REQ-SONNY-3246-CLUSTER-SET-RLS,DistributedCluster,LeaderSetRowVisibility,TESTED,,,distributed,2026-11-12,src/execution/crud_operations.zig,4406
 REQ-SONNY-3246-CLUSTER-SET-RLS,DistributedCluster,Regression,TESTED,,,distributed,2026-11-12,tests/test_sonny3246_cluster_set_rls.zig,18
@@ -5212,14 +5212,14 @@ REQ-SONNY-3248-ALLOWLIST-MINORS,WriteShapeValidator,Regression,TESTED,,,engine,2
 REQ-SONNY-3248-EXISTS-WHERE,ExistsSubquery,WhereEnvLifetime,TESTED,,,execution,2026-09-29,src/execution/graph_algorithms.zig,701
 REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetChain,TESTED,,,engine,2026-09-28,src/execution/query_execution.zig,1483
 REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetOnce,TESTED,,,engine,2026-09-29,src/execution.zig,2034
-REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetScope,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,207
+REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetScope,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,213
 REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetShadowsRequest,TESTED,,,engine,2026-09-29,src/execution/query_execution.zig,1410
 REQ-SONNY-3248-LET-SCOPE,ParameterBinding,SubqueryParameters,TESTED,,,engine,2026-09-29,src/execution/evaluator_adapter.zig,103
-REQ-SONNY-3248-LIMIT-PARAM,Pagination,InvalidWindowValue,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,107
+REQ-SONNY-3248-LIMIT-PARAM,Pagination,InvalidWindowValue,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,113
 REQ-SONNY-3248-LIMIT-PARAM,Pagination,StatementWindow,TESTED,,,engine,2026-09-29,src/execution.zig,1271
-REQ-SONNY-3248-REPEATED-SET-TARGET,SetClauseSemantics,MergeAliases,TESTED,,,engine,2026-09-29,src/execution/param_check.zig,583
+REQ-SONNY-3248-REPEATED-SET-TARGET,SetClauseSemantics,MergeAliases,TESTED,,,engine,2026-09-29,src/execution/param_check.zig,589
 REQ-SONNY-3248-REPEATED-SET-TARGET,SetClauseSemantics,RepeatedTarget,TESTED,,,engine,2026-09-28,src/execution/write_scope.zig,233
-REQ-SONNY-3248-REPEATED-SET-TARGET,SetClauseSemantics,StaticRefusal,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,551
+REQ-SONNY-3248-REPEATED-SET-TARGET,SetClauseSemantics,StaticRefusal,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,557
 REQ-SONNY-3250-NESTED-EXISTS-UAF,ExistsSubquery,Regression,TESTED,,,execution,2026-09-28,tests/test_sonny3250_nested_exists.zig,20
 REQ-SONNY-3251-LIMIT-ERRORS,Execution,StatementLimitRelay,TESTED,,,execution,2026-09-28,src/execution.zig,1852
 REQ-SONNY-3251-LIMIT-ERRORS,ExpressionEvaluator,LimitErrorRelay,TESTED,,,eval,2026-09-28,src/eval.zig,135
@@ -5288,12 +5288,12 @@ REQ-SONNY-3350-ROUND16-MINORS,MultiGraphIsolation,Regression,TESTED,,,storage,20
 REQ-SONNY-3357-MERGE-REL-PROPS,MergeRelationship,MatchRelationshipProperties,TESTED,,,execution,2026-11-12,src/execution/crud_operations.zig,732
 REQ-SONNY-3357-MERGE-REL-PROPS,MergeRelationship,Regression,TESTED,,,execution,2026-11-12,tests/test_sonny3357_merge_relationship_properties.zig,19
 REQ-SONNY-3367-VARIABLE-KIND,MultiChainRelationshipMatch,JoinKind,TESTED,,,engine,2026-09-28,src/execution/match_operations.zig,5587
-REQ-SONNY-3367-VARIABLE-KIND,PatternVariables,KindConflict,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,404
+REQ-SONNY-3367-VARIABLE-KIND,PatternVariables,KindConflict,TESTED,,,engine,2026-09-28,src/execution/param_check.zig,410
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ExpansionPoll,TESTED,,,engine,2026-09-29,src/execution/match_operations.zig,5531
-REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverGrpc,TESTED,,,engine,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,701
-REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverQuic,TESTED,,,engine,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,728
+REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverGrpc,TESTED,,,engine,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,704
+REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverQuic,TESTED,,,engine,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,731
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,NodeCache,TESTED,,,engine,2026-09-29,src/execution/match_operations.zig,5227
-REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ReadBudgetOverGrpc,TESTED,,,engine,2026-09-28,tests/test_sonny_write_allowlist_r4_transport.zig,571
+REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ReadBudgetOverGrpc,TESTED,,,engine,2026-09-28,tests/test_sonny_write_allowlist_r4_transport.zig,574
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,StreamingJoin,TESTED,,,engine,2026-09-29,src/execution/match_operations.zig,5743
 REQ-SONNY-3377-EDGE-SCAN-RELOAD,StorageNativeReads,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,7
 REQ-SONNY-3378-MAP-PROJECTION-LEAK,SharedProjection,Regression,TESTED,,,engine,2026-11-13,tests/test_sonny3378_map_projection_leak.zig,18
@@ -5305,7 +5305,7 @@ REQ-SONNY-3381-UNDO-INDEX-REPAIR,TransactionUndoLog,IndexRepairCollector,TESTED,
 REQ-SONNY-3383-COMMIT-REFUSED-WIRE,TransactionManagement,RefusedCommitOnQuicWire,TESTED,,,transport,2026-11-13,tests/test_sonny3383_commit_refused_wire.zig,11
 REQ-SONNY-3384-SET-DELETE-RETURN,DELETE in Query,Regression,TESTED,,,engine,2026-09-29,tests/test_sonny3384_set_detach_delete.zig,18
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,OwnedGraphEntities,TESTED,,,transport,2026-09-29,src/execution/value_utilities.zig,125
-REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,,,transport,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,836
+REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,,,transport,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,839
 REQ-SONNY-3386-MULTI-CHAIN-WITH,MultiChainRelationshipMatch,WithStage,TESTED,,,engine,2026-09-29,src/execution/match_operations.zig,7942
 REQ-SONNY-3389-CALL-RETURN,CallSubquery,ParserReturnTail,TESTED,,,parser,2026-11-11,src/gql/parser.zig,1971
 REQ-SONNY-3389-CALL-RETURN,CallSubquery,SharedProjection,TESTED,,,engine,2026-11-11,src/execution/query_execution.zig,2076
@@ -5765,7 +5765,7 @@ REQ-SONNY-6496-EXPLAIN-TAIL-START,EXPLAIN,Regression,TESTED,,,engine,2026-11-13,
 REQ-SONNY-6496-QUERY-LEAKS,ExecutionResultOwnership,ComputedTemporaries,TESTED,,,execution,2026-11-13,tests/test_sonny6496_query_leaks.zig,10
 REQ-SONNY-6496-SUBQUERY-FORMS,LinearComposition,SubqueryStart,TESTED,,,parser,2026-11-13,src/gql/parser.zig,788
 REQ-SONNY-6496-SUBQUERY-FORMS,LinearComposition,SubqueryStart,TESTED,,,parser,2026-11-13,tests/test_sonny6496_subquery_forms.zig,16
-REQ-SONNY-6496-WITH-SCOPE,LinearComposition,ProjectionScope,TESTED,,,engine,2026-11-13,src/execution/scope_check.zig,31
+REQ-SONNY-6496-WITH-SCOPE,LinearComposition,ProjectionScope,TESTED,,,engine,2026-11-13,src/execution/scope_check.zig,34
 REQ-SONNY-6496-WITH-SCOPE,LinearComposition,ProjectionScope,TESTED,,,engine,2026-11-13,tests/test_sonny6496_with_scope.zig,22
 REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,ChainParts,TESTED,,,execution,2026-11-13,src/execution/query_execution.zig,160
 REQ-SONNY-6498-ERROR-PATH-OWNERSHIP,ExecutionResultOwnership,PlannedReadRows,TESTED,,,execution,2026-11-13,src/execution/planned_read_runtime.zig,3343
@@ -5782,6 +5782,7 @@ REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,,,engine,2026-11-13,src/execution/evaluator_adapter.zig,71
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,,,engine,2026-11-13,src/execution/subquery_cache.zig,18
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,,,engine,2026-11-13,tests/test_sonny6525_correlated_subquery.zig,15
+REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,,,engine,2026-11-13,src/execution/scope_check.zig,92
 REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,,,engine,2026-11-13,tests/test_sonny6525_statement_scope.zig,23
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20

@@ -2298,6 +2298,32 @@
 
 ### Fixed
 
+- **A reference to a variable nothing binds is refused in every clause
+  (SONNY-6525 item 2, BREAKING).** ISO/IEC 39075:2024 20.12 SR 8: the
+  incoming working record of a reference has a field of its name, and a
+  statement starts with an empty record; a violation is a Syntax Rule's,
+  42000 (4.7.3). SONNY-6496 refused such a reference only after a WITH or
+  NEXT; before the first projection it read NULL: `MATCH (n) RETURN m`
+  answered a NULL row per node, `MATCH (n) WHERE m.k = 1` no rows,
+  `count(m)` 0, `RETURN m` one NULL row, a UNION arm or a statement-level
+  FOR the same, a WHERE read a RETURN alias as NULL, and a bare name read
+  the request parameter of that name (`WHERE n.k = lo` with `$lo`
+  supplied: write `$lo`). `scope_check.checkStatement` now starts every
+  statement's queries (a query, UNION / INTERSECT / EXCEPT arms, FOR,
+  CREATE / INSERT / MERGE / DELETE statements) with nothing in scope, from
+  the statement walk every transport runs before executing, so nothing is
+  written. Still accepted: forward references inside one MATCH's pattern
+  list, OPTIONAL MATCH, pattern predicates' own variables, path variables,
+  FOR / CALL { } / YIELD bindings, aliases in ORDER BY, `*`, `$`
+  parameters. Not checked (scope coming in unknown): CTE bodies, the
+  statement after VALUES, the columns of a CALL with no YIELD. Corrected
+  tests: 13 refused write shapes of `test-sonny-write-allowlist` that name
+  an unbound variable (`DELETE q` with no MATCH, `SET ... nn.y`, `nosuch`)
+  and the C1 case of `test-sonny-write-allowlist-r4-transport` now expect
+  42000 VariableNotInScope instead of the write shape's refusal
+  (WriteClauseNotApplied / 0A000), still with nothing written. The
+  VariableNotInScope message names both rules. Regression: `zig build
+  test-sonny6525-statement-scope`.
 - **A correlated IN / NOT IN subquery reads the outer row; an uncorrelated
   one runs once per statement (SONNY-6525 item 1, BREAKING).** The subquery
   of `x IN (MATCH ... RETURN ...)` ran without the row around it, so an
