@@ -4290,9 +4290,13 @@ pub const Parser = struct {
             // SONNY-3133: `- - ... 1` recursed with no limit.
             try self.enterRecursion();
             defer self.leaveRecursion();
-            // SONNY-3181: and it is a link of the expression.
-            try self.countExprLink();
             const e = try self.parseUnaryExpr();
+            // SONNY-3181: and it is a link of the expression, unless it
+            // signs a numeric literal (SONNY-6540): ISO/IEC 39075:2024 21.2,
+            // `<signed numeric literal> ::= [ <sign> ] <unsigned numeric
+            // literal>`, so a vector literal of 65,535 negative components
+            // is 65,535 literals, not an operator chain.
+            if (!isUnsignedNumericLiteral(e)) try self.countExprLink();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
             ep.* = e;
@@ -4303,8 +4307,8 @@ pub const Parser = struct {
             // SONNY-3133: as unary minus.
             try self.enterRecursion();
             defer self.leaveRecursion();
-            try self.countExprLink();
             const e = try self.parseUnaryExpr();
+            if (!isUnsignedNumericLiteral(e)) try self.countExprLink();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
             ep.* = e;
@@ -4810,11 +4814,18 @@ pub const Parser = struct {
                     // SONNY-2739: more than 255 fraction digits aborted the
                     // server here (`@intCast`); it is an out-of-range literal.
                     const scale: u8 = std.math.cast(u8, frac_part.len) orelse return error.Overflow;
-                    // coeff = parse int_part ++ frac_part as i128
-                    var buf = std.ArrayList(u8).empty;
-                    try buf.appendSlice(self.arena.allocator(), int_part);
-                    try buf.appendSlice(self.arena.allocator(), frac_part);
-                    const coeff = try std.fmt.parseInt(i128, buf.items, 10);
+                    // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=DecimalLiteralScratch; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
+                    // coeff = parse int_part ++ frac_part as i128.
+                    // SONNY-6540: the digits are scratch, built on the
+                    // stack and freed here. On the arena they stayed for
+                    // the whole parse: a decimal element cost more than
+                    // twice an integer one, and a 65,535-dimension vector
+                    // literal crossed `max_parse_arena_bytes`.
+                    var digits_sfa = std.heap.stackFallback(128, self.arena.allocator());
+                    const digits_alloc = digits_sfa.get();
+                    const digits = try std.mem.concat(digits_alloc, u8, &.{ int_part, frac_part });
+                    defer digits_alloc.free(digits);
+                    const coeff = try std.fmt.parseInt(i128, digits, 10);
                     break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
                 }
             },
@@ -5048,6 +5059,16 @@ pub const Parser = struct {
                 // Not an identifier or keyword, return error
                 return error.UnexpectedToken;
             },
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=SignedNumericLiteralNotALink; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
+    /// SONNY-6540: an <unsigned numeric literal> (ISO/IEC 39075:2024 21.2)
+    /// as the parser builds it: an integer or a decimal literal.
+    fn isUnsignedNumericLiteral(e: ast.Expr) bool {
+        return switch (e) {
+            .Int, .Decimal => true,
+            else => false,
         };
     }
 

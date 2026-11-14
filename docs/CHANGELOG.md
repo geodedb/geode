@@ -2298,6 +2298,25 @@
 
 ### Fixed
 
+- **A 65,535-dimension vector literal parses (SONNY-6540 item 8).** The
+  documented vector cap is 65,535 dimensions, but the array-literal form
+  could not reliably reach it. Every decimal literal (`1.0`) built its
+  digits in a buffer on the parser's arena and left it there, so a decimal
+  element cost the parser more than twice an integer element; under an
+  in-process executor's arena-over-arena the 65,536-element ENG-3922 (c)
+  literal crossed the 64 MiB parser budget (SONNY-3244) and answered 54000
+  before the dimension check could answer VectorTooLarge (`test-eng3922` was
+  red). The digits are now stack scratch, freed at once: a decimal element
+  costs what an integer one does (139 bytes of arena capacity each at 65,535
+  elements over the page allocator; 300 before). And a sign on a numeric
+  literal counted as an operator link against the 4096-link expression cap
+  (SONNY-3181), so a vector literal with more than 4096 negative components
+  answered 42000; ISO/IEC 39075:2024 21.2 makes the sign part of the
+  `<signed numeric literal>`, and it is no longer counted. A sign on
+  anything else (`-x`) still is, and the 64 MiB budget is unchanged: a
+  1,000,000-element literal is still refused with 54000. Regression:
+  `zig build test-sonny6540-vector-literal-parse` (`test-eng3922` is green
+  again).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
