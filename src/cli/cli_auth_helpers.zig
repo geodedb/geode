@@ -33,6 +33,8 @@ const geode = @import("geode");
 pub const graph_store = geode.graph_store;
 const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
+/// SONNY-6544: the CLI's one HOME rule (absolute only).
+const home_dir = @import("security/home_dir.zig");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 // CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=CliRlsPolicyCreate; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
@@ -173,15 +175,25 @@ fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
         return std.fs.path.join(allocator, &.{ cwd, raw });
     } else |_| {}
 
-    if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
-        defer allocator.free(xdg_state_home);
+    // SONNY-6544: a relative XDG_STATE_HOME is ignored (XDG Base Directory
+    // specification), and a relative or empty HOME is refused: the state
+    // dir was created relative to the working directory and its files then
+    // opened with `*Absolute` (an assert; a Debug panic).
+    if (home_dir.xdgDir("XDG_STATE_HOME")) |xdg_state_home| {
         return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
-    } else |_| {}
+    }
 
-    if (getEnvVarOwned(allocator, "HOME")) |home| {
+    if (home_dir.homeDirAlloc(allocator)) |home| {
         defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
-    } else |_| {}
+    } else |err| switch (err) {
+        error.HomeNotSet => {},
+        error.HomeNotAbsolute => {
+            home_dir.printError(err);
+            return err;
+        },
+        error.OutOfMemory => return err,
+    }
 
     if (builtin.os.tag != .windows) {
         // SONNY-6325: `<TMPDIR or /tmp>/geode-<uid>`, created 0700 and

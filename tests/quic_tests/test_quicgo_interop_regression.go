@@ -11,10 +11,11 @@
 // loop (fixed in commit a11c2104).
 //
 // Usage:
-//   Start Geode server first:
-//     GEODE_ADMIN_PASSWORD=test ./zig-out/bin/geode serve --listen 127.0.0.1:3141
-//   Then run:
-//     go run tests/quic_tests/test_quicgo_interop_regression.go [-addr 127.0.0.1:3141] [-n 10]
+//
+//	Start Geode server first:
+//	  GEODE_ADMIN_PASSWORD=test ./zig-out/bin/geode serve --listen 127.0.0.1:3141
+//	Then run:
+//	  go run tests/quic_tests/test_quicgo_interop_regression.go [-addr 127.0.0.1:3141] [-n 10]
 package main
 
 import (

@@ -28,6 +28,8 @@ const CompatTimer = struct {
 };
 const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
+/// SONNY-6544: \connect prints its address through dsn_credentials.redacted.
+const dsn_credentials = @import("../dsn_credentials.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 const spinner_mod = @import("spinner.zig");
@@ -2351,7 +2353,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             state.session.* = try ClientSession.init(state.allocator, args, current_transport);
             try state.session.connect();
             try state.session.hello();
-            try writeFmt(stdout, state.allocator, "Connected to {s}\r\n", .{args});
+            try writeFmt(stdout, state.allocator, "Connected to {f}\r\n", .{dsn_credentials.redacted(args)});
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;

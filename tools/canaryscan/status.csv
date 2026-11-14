@@ -3023,7 +3023,7 @@ REQ-MATVIEW-STORAGE-001,Materialized View Storage Creation,Storage,TESTED,src/qu
 REQ-MATVIEW-STORAGE-001,MatView,Storage,IMPL,tests/test_gap_0193_batch2_engine.zig,,,query,2026-11-12
 REQ-MATVIEW-STORAGE-002,Materialized View Storage Entry,Storage,TESTED,src/query/enhanced_materialized_views.zig,tests/test_materialized_views_enhanced.zig,,query,2026-06-11
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,TESTED,tests/test_materialized_views_enhanced.zig,tests/test_materialized_views_enhanced.zig,,query,2026-06-11
-REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,src/mcp/server.zig,,,mcp,2026-04-11
+REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,TESTED,src/mcp/server.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/cli/lsp/mcp_input_guards_test.zig,,,mcp,2026-05-06
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/mcp/input_guards.zig,,,mcp,2026-05-06
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,src/mcp/lsp.zig,,,mcp,2026-05-06
@@ -5334,6 +5334,12 @@ REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,ListingErrorPropagates,TESTED,src/
 REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,Regression,TESTED,tests/test_sonny6541_show_tables_errors.zig,tests/test_sonny6541_show_tables_errors.zig,,execution,2026-11-14
 REQ-SONNY-6542-TEST-SOURCE-REACHABILITY,TestSourceReachabilityGuard,TestInfra,TESTED,scripts/ci/test_source_reachability.zig,scripts/ci/test_source_reachability.zig,,ci,2026-11-14
 REQ-SONNY-6542-TEST-SOURCE-REACHABILITY,TestSourceReachabilityGuard,RevivedTests,TESTED,tests/test_sonny6542_revived.zig,tests/test_sonny6542_revived.zig,,ci,2026-11-14
+REQ-SONNY-6544-DSN-USERINFO,DSN credentials,UserinfoAndRedaction,TESTED,src/client/dsn_credentials.zig,tests/test_sonny6544_dsn_redaction.zig,,cli,2026-11-14
+REQ-SONNY-6544-DSN-USERINFO,DSN credentials,LastAtSplitAndRedaction,TESTED,tests/test_sonny6544_dsn_credentials.zig,tests/test_sonny6544_dsn_credentials.zig,,cli,2026-11-14
+REQ-SONNY-6544-DSN-USERINFO,DSN credentials,RedactionTable,TESTED,tests/test_sonny6544_dsn_redaction.zig,tests/test_sonny6544_dsn_redaction.zig,,cli,2026-11-14
+REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,AbsoluteHomeOnly,TESTED,src/cli/security/home_dir.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
+REQ-SONNY-6544-HOME-ABSOLUTE,CLI home directory,RelativeHomeRefused,TESTED,tests/test_sonny6544_relative_home.zig,tests/test_sonny6544_relative_home.zig,,cli,2026-11-14
+REQ-SONNY-6544-MCP-COMPLETION,MCPCompletion,CompleteResultShape,TESTED,tests/test_sonny6544_mcp_completion.zig,tests/test_sonny6544_mcp_completion.zig,,mcp,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

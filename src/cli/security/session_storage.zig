@@ -47,6 +47,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const builtin = @import("builtin");
 const cb = @import("crypto_backend");
+const home_dir = @import("home_dir.zig");
 
 /// Credential storage for local session management
 pub const Credentials = struct {
@@ -163,13 +164,12 @@ pub const CredentialStore = struct {
     file_path: []const u8,
     allocator: std.mem.Allocator,
 
+    /// SONNY-6544: `error.HomeNotSet` / `error.HomeNotAbsolute`
+    /// (`home_dir.errorMessage`) for a missing, empty or relative HOME;
+    /// `createDirAbsolute` below asserts an absolute path (a relative HOME
+    /// panicked `geode query` in Debug).
     pub fn init(allocator: std.mem.Allocator) !CredentialStore {
-        // Get home directory - use std.process for cross-platform compatibility
-        // Windows uses USERPROFILE, Unix uses HOME
-        const home = if (builtin.os.tag == .windows)
-            getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDirectory
-        else
-            getEnvVarOwned(allocator, "HOME") catch return error.NoHomeDirectory;
+        const home = try home_dir.homeDirAlloc(allocator);
         defer allocator.free(home);
 
         const geode_dir = try std.fmt.allocPrint(allocator, "{s}/.geode", .{home});

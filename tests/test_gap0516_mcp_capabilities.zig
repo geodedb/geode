@@ -154,8 +154,8 @@ test "GAP-0516: implemented subset (tools/resources/prompts list) still works" {
 // callTool branch which has a `defer ... free`). Driving it under
 // std.testing.allocator would fail the leak detector on an upstream bug
 // rather than a Geode regression. The completion handler's own contract
-// (returns the "[]" empty-provider body, spec §4.4) is covered leak-free by
-// the inline `completeHandler returns empty JSON array` test in
+// (an empty CompleteResult, SONNY-6544) is covered leak-free by
+// tests/test_sonny6544_mcp_completion.zig (no-params request) and the inline test in
 // src/mcp/server.zig.
 
 test "GAP-0516: logging/setLevel is a tolerated success (spec §7.2)" {

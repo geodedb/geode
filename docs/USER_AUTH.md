@@ -375,7 +375,12 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 ### Session Management
 
 - **Duration**: 24-hour expiration
-- **Storage**: `~/.geode/credentials.json` (user home directory)
+- **Storage**: `~/.geode/credentials.json` (user home directory). HOME
+  (USERPROFILE on Windows when HOME is unset) must be an absolute path: a
+  relative or empty HOME is refused with `Error: HOME is empty or not an
+  absolute path ...`, never resolved against the working directory
+  (SONNY-6544). The CLI state files (`geode session`, `authn`, `apikey`,
+  `mtls`) follow the same rule, and a relative `XDG_STATE_HOME` is ignored.
 - **Format**: Cryptographically secure random tokens
 - **Cross-platform**: Windows and Unix support
 - **Policy Enforcement**: Sessions invalidated for policy violations

@@ -232,11 +232,11 @@ pub fn dispatch(
                 // to send to 514.
                 const hostport = argv[i + 1];
                 const target = geode.host_port.split(hostport, 514) catch {
-                    std.debug.print("Error: --audit-syslog '{s}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{hostport});
+                    std.debug.print("Error: --audit-syslog '{f}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{geode.dsn_credentials.redacted(hostport)});
                     return error.InvalidAuditSyslogAddress;
                 };
                 if (syslogTarget(target.host, target.port) == null) {
-                    std.debug.print("Error: --audit-syslog '{s}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{hostport});
+                    std.debug.print("Error: --audit-syslog '{f}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{geode.dsn_credentials.redacted(hostport)});
                     return error.InvalidAuditSyslogAddress;
                 }
                 audit_cfg.syslog_host = try allocator.dupe(u8, target.host);
@@ -1244,15 +1244,15 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_HOST")) |value| {
         defer allocator.free(value);
         const target = geode.host_port.split(value, cli_config.syslog_port) catch {
-            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{value});
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{f}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{geode.dsn_credentials.redacted(value)});
             return error.InvalidAuditSyslogHost;
         };
         if (syslogTarget(target.host, target.port) == null) {
-            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{value});
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{f}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{geode.dsn_credentials.redacted(value)});
             return error.InvalidAuditSyslogHost;
         }
         if (port_from_env and target.port != cli_config.syslog_port) {
-            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}' names port {d} and GEODE_AUDIT_SYSLOG_PORT names {d}\n", .{ value, target.port, cli_config.syslog_port });
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{f}' names port {d} and GEODE_AUDIT_SYSLOG_PORT names {d}\n", .{ geode.dsn_credentials.redacted(value), target.port, cli_config.syslog_port });
             return error.InvalidAuditSyslogHost;
         }
         cli_config.syslog_host = try allocator.dupe(u8, target.host);

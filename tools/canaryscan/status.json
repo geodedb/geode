@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:58:44.822153863Z",
+  "generated_at": "2026-11-14T07:03:05.491702751Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -46509,14 +46509,16 @@
         {
           "feature": "MCPCompletion",
           "aspect": "EmptyProvider",
-          "status": "EXEMPT",
+          "status": "TESTED",
           "files": [
             "src/mcp/server.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
           "benches": [],
           "owner": "mcp",
-          "updated": "2026-04-11"
+          "updated": "2026-11-14"
         }
       ]
     },
@@ -83733,6 +83735,105 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6544-DSN-USERINFO",
+      "features": [
+        {
+          "feature": "DSN credentials",
+          "aspect": "UserinfoAndRedaction",
+          "status": "TESTED",
+          "files": [
+            "src/client/dsn_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_redaction.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DSN credentials",
+          "aspect": "LastAtSplitAndRedaction",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_dsn_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DSN credentials",
+          "aspect": "RedactionTable",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_dsn_redaction.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_redaction.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6544-HOME-ABSOLUTE",
+      "features": [
+        {
+          "feature": "CLI home directory",
+          "aspect": "AbsoluteHomeOnly",
+          "status": "TESTED",
+          "files": [
+            "src/cli/security/home_dir.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "CLI home directory",
+          "aspect": "RelativeHomeRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6544-MCP-COMPLETION",
+      "features": [
+        {
+          "feature": "MCPCompletion",
+          "aspect": "CompleteResultShape",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_mcp_completion.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -90932,9 +91033,9 @@
     "by_status": {
       "BENCHED": 143,
       "COMPLETE": 2,
-      "EXEMPT": 211,
+      "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4256
+      "TESTED": 4263
     },
     "by_aspect": {
       "2PC": 3,
@@ -90964,6 +91065,7 @@
       "Abort": 1,
       "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
+      "AbsoluteHomeOnly": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
       "AcceptWithoutPoolAndPeerEndpointChange": 1,
@@ -91498,6 +91600,7 @@
       "CompileTimeStackBound": 1,
       "CompiledPlan": 1,
       "CompilerLimits": 1,
+      "CompleteResultShape": 1,
       "CompletionTenantGate": 1,
       "Completions": 2,
       "Complex": 1,
@@ -92789,6 +92892,7 @@
       "LargeOrderedParity": 1,
       "LargeOrderedStreamingParity": 1,
       "LargeScaleAndCancellation": 1,
+      "LastAtSplitAndRedaction": 1,
       "LastContactFromRaftTraffic": 1,
       "LastElement": 1,
       "LateKeyRegistry": 1,
@@ -93927,6 +94031,7 @@
       "RecursiveCheck": 1,
       "RedReproduction": 1,
       "RedactionOnDenial": 1,
+      "RedactionTable": 1,
       "ReduceIsolation": 1,
       "ReduceUnadvertised": 1,
       "ReentrantLock": 1,
@@ -93961,6 +94066,7 @@
       "RelationshipMatchEdgeRls": 1,
       "RelationshipMergeEndpointLookup": 1,
       "RelativeDataDirAndRefusalCleanup": 1,
+      "RelativeHomeRefused": 1,
       "ReleaseAtStatement": 1,
       "ReleaseSafe": 1,
       "RemainingCategories": 1,
@@ -94818,6 +94924,7 @@
       "UserSpecificPolicyIncluded": 1,
       "UserWriteThroughs": 1,
       "UserWriterCallbacks": 1,
+      "UserinfoAndRedaction": 1,
       "UsernameRowAccess": 1,
       "UsingCaptureExcludesTerminator": 1,
       "UtcSlsDeclaration": 1,

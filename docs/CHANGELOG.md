@@ -4,6 +4,27 @@
 
 ### Security
 
+- **A `--dsn` password may hold `@` and `:`, and no part of it is printed
+  (SONNY-6544 item 1).** `geode query` and `geode shell` split `--dsn` at
+  the first `@`, so `quic://admin:p@ss@host:3141` logged in with the
+  password `p` at the address `ss@host:3141`, and `geode shell` printed the
+  rest of the password in its `Connecting to ...` line. The userinfo now
+  ends at the last `@` of the authority (RFC 3986 §3.2), user name and
+  password are percent-decoded (`%40`, `%3A`, `%20`), and `+` is a literal
+  plus. **Breaking:** a `%` in a DSN user name or password must start a
+  `%XX` escape (write `%` as `%25`; `50%off` is refused instead of being
+  sent as typed), and a DSN with an `@` after the host (a password holding
+  an unencoded `/`, `?` or `#`, or an `@` in a graph name or parameter) is
+  refused instead of being dialled at part of the password. Every client
+  place that prints an address or DSN (`geode shell`'s `Connecting to`,
+  `auth login`, the saved-session note, `session info`, `backup create`,
+  `restore`, `--output`/remote-URI errors, REPL `\connect`, the
+  `--audit-syslog` / `GEODE_AUDIT_SYSLOG_HOST` and LSP `--listen` errors)
+  goes through `geode.dsn_credentials.redacted`: no userinfo, and secret
+  query values (`pass=`, `password=`, `token=`, `*key*`, `*secret*`, ...)
+  shown as `***`. Regressions: `zig build test-sonny6544-dsn-credentials`
+  (real server whose admin password holds `@` and `:`, real CLI) and
+  `zig build test-sonny6544-dsn-redaction` (table).
 - **The mTLS client CAs are no longer trusted for server certificates
   (SONNY-6490 item 1).** Loading `GEODE_MTLS_CLIENT_CA` for
   `GEODE_MTLS_REQUIRED` also installed the bundle as the process-wide x509
@@ -2396,6 +2417,30 @@
   `tests/qualify_backup_ca.py` requires `--binary` instead of defaulting to
   `zig-out/bin/geode`, and `proto_test_util.spawnServerRandom` no longer
   frees the listen address twice when a server misses its startup deadline.
+- **A relative or empty HOME no longer panics the CLI or puts its state
+  under the working directory (SONNY-6544 item 2).** `geode query` built
+  `<HOME>/.geode` for the saved session and passed it to
+  `createDirAbsolute`, which asserts an absolute path: `HOME=relhome geode
+  query` panicked in a Debug build (a release build would have created
+  `relhome/.geode` under the working directory). `auth login
+  --save-session`, `auth token`, `session info` / `rotate` and the state
+  directory of `session`, `authn`, `apikey` and `mtls` had the same assert,
+  and the state directory was created relative to the working directory
+  first. One rule now (`src/cli/security/home_dir.zig`): HOME (USERPROFILE
+  on Windows when HOME is unset) must be absolute, else the command says
+  `HOME is empty or not an absolute path ...` and writes nothing (`geode
+  query` warns and runs without a saved session); a relative
+  `XDG_STATE_HOME` is ignored, as the XDG Base Directory specification
+  requires. Regression (real binary): `zig build
+  test-sonny6544-relative-home`.
+- **MCP `completion/complete` answers a CompleteResult (SONNY-6544 item
+  3).** It answered `"result":[]`; MCP 2025-11-25 (the pinned mcp library's
+  protocol) requires `{"completion":{"values":[...],"total"?,"hasMore"?}}`,
+  so a client found no `completion` object. Geode still has no argument
+  suggestions and now answers
+  `{"completion":{"values":[],"total":0,"hasMore":false}}`. Regression
+  (through `mcp.Server.processMessage`): `zig build
+  test-sonny6544-mcp-completion`.
 - **No test step spawns `./zig-out/bin/geode` any more, and configuration
   fails if one does (SONNY-6535).** That path holds whatever the last install
   left (built from another commit or optimize mode, or nothing: the test
@@ -2431,6 +2476,13 @@
   without a host gets the host message instead of `DSN missing host`.
   Regression: `zig build test-sonny6531-cli-address-errors`.
 
+- **Go sources are gofmt-formatted, and a pre-commit hook keeps them so
+  (SONNY-6544 item 5).** `tools/canaryscan/*.go` was indented with spaces
+  and `tests/quic_tests/test_quicgo_interop_regression.go` had a pre-1.19
+  doc comment; nothing checked Go formatting. Formatting only (`git diff -w`
+  is empty; the scanner built before and after writes a byte-identical
+  `status.csv`). The local `gofmt` hook in `.pre-commit-config.yaml` fails a
+  commit whose staged `.go` files `gofmt -l` lists.
 - **canaryscan writes rows in source order, whatever `--root` is (SONNY-6531
   item 3).** The rows of one requirement in `tools/canaryscan/status.csv`
   and `status.json` were sorted by FEATURE, then ASPECT, STATUS, OWNER,
