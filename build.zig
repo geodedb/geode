@@ -12871,6 +12871,22 @@ pub fn build(b: *std.Build) void {
     const run_sonny6518_exec_tests = b.addRunArtifact(sonny6518_exec_tests);
     shardDep(test_step, &run_sonny6518_exec_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6518-exec-order", "Run SONNY-6518 item 3 regression (src/exec.zig stableOrderByTemporal: numbers by value across INT and DECIMAL, NULLS FIRST by default in either direction, as the server's full sort)").dependOn(&run_sonny6518_exec_tests.step);
+    // SONNY-6518: see tests/test_sonny6518_conversion_functions.zig.
+    const sonny6518_conversion_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_conversion_functions.zig"), .target = target, .optimize = optimize });
+    sonny6518_conversion_mod.addImport("geode", root_mod);
+    sonny6518_conversion_mod.addImport("logging", logging_mod);
+    const sonny6518_conversion_tests = b.addTest(.{ .root_module = sonny6518_conversion_mod });
+    const run_sonny6518_conversion_tests = b.addRunArtifact(sonny6518_conversion_tests);
+    shardDep(test_step, &run_sonny6518_conversion_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-conversion-functions", "Run SONNY-6518 item 2 regression (toFloat / toInteger / toBoolean / toString answer the value and the exception of CAST to FLOAT / INTEGER / BOOLEAN / STRING, ISO/IEC 39075 20.8: text that is no literal of the target is 22018, a type Table 4 does not convert is 22G03)").dependOn(&run_sonny6518_conversion_tests.step);
+    // SONNY-6518: see tests/test_sonny6518_substring_positions.zig.
+    const sonny6518_substring_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_substring_positions.zig"), .target = target, .optimize = optimize });
+    sonny6518_substring_mod.addImport("geode", root_mod);
+    sonny6518_substring_mod.addImport("logging", logging_mod);
+    const sonny6518_substring_tests = b.addTest(.{ .root_module = sonny6518_substring_mod });
+    const run_sonny6518_substring_tests = b.addRunArtifact(sonny6518_substring_tests);
+    shardDep(test_step, &run_sonny6518_substring_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6518-substring-positions", "Run SONNY-6518 item 5 regression (substring's 1-based start position follows SQL's character substring rule: positions start .. start + length - 1 that exist; a negative length is 22011; substring, left and right count characters, not bytes)").dependOn(&run_sonny6518_substring_tests.step);
 
     // SONNY-6499 (5): the exec ORDER BY text fallback orders strings by NFC.
     const sonny6499_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_exec_order_nfc.zig"), .target = target, .optimize = optimize });

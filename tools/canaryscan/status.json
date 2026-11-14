@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T03:31:06.919372649Z",
+  "generated_at": "2026-11-14T03:32:12.532307829Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85840,6 +85840,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6518-CONVERSION-FUNCTIONS",
+      "features": [
+        {
+          "feature": "TypeConversionFunctions",
+          "aspect": "SameAsCast",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6518_conversion_functions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_conversion_functions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6518-EXEC-ORDER",
       "features": [
         {
@@ -85855,6 +85874,25 @@
           ],
           "benches": [],
           "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6518-SUBSTRING-POSITIONS",
+      "features": [
+        {
+          "feature": "StringFunctions",
+          "aspect": "CharacterPositions",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6518_substring_positions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6518_substring_positions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
           "updated": "2026-11-13"
         }
       ]
@@ -93532,7 +93570,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4934
+      "TESTED": 4936
     },
     "by_aspect": {
       "2PC": 3,
@@ -94008,6 +94046,7 @@
       "ChangeStreamMalformedSnapshotIntervalEnv": 1,
       "CharPadComparison": 1,
       "CharRepertoireDeclaration": 1,
+      "CharacterPositions": 1,
       "CheckDuplicates": 1,
       "CheckFunction": 1,
       "CheckRefused": 1,
@@ -96811,6 +96850,7 @@
       "SafeUnwrap": 3,
       "SafetyGuard": 1,
       "SafetyGuards": 1,
+      "SameAsCast": 1,
       "SameQuestionsAsTheGates": 1,
       "Sanitization": 1,
       "SaveFailureIsAnError": 1,
