@@ -2298,6 +2298,29 @@
 
 ### Fixed
 
+- **A quarantined graph refuses reads to in-process callers too (SONNY-6528
+  item 4).** SONNY-6523 made the QUIC and gRPC handlers refuse a program on
+  a quarantined graph (REQ-GQL-028: its hydration found its store damaged).
+  A caller that runs the executor in process, or calls the store directly,
+  was not covered: once the graph was quarantined, the executor still
+  answered the engine-direct reads (filtered and exact-index counts, ORDER
+  BY ... LIMIT, `max(n.i)`), `CALL geode.fts.search`, an index-served `MATCH
+  ... SET` (0 rows, success), and `db.labels()`, `db.relationshipTypes()`,
+  `db.propertyKeys()` and SHOW TABLES answered from the graph's partial label
+  maps, as did the store's schema listings the LSP schema provider calls
+  (`listNodeLabels`, `listEdgeTypes`, `listPropertiesForLabel`: their
+  hydration skipped every graph whose hydration had already run, a failed
+  one included). The executor now runs the transports' check itself at its
+  outermost entry point (a program that changes data hydrates its graph
+  first), and the listings fail with the quarantine error while any graph
+  is quarantined. CREATE and DROP GRAPH of a quarantined graph still run; a
+  dropped graph is no longer quarantined. **Operator-visible:** while any
+  graph is quarantined, the cross-graph schema listings (`db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()`, SHOW TABLES, LSP schema
+  completion) fail with the quarantine error, from every session, until the
+  graph is restored or dropped. Regression: `zig build
+  test-sonny6528-quarantine-in-process` (in process, zeroed node pages; 23
+  statement shapes and the six direct listings).
 - **A replayed create of a node the node cache evicted is refused, not made
   twice (SONNY-6528 item 3).** `GraphStore.createNodeWithId` (the Raft apply
   of a replicated create, and every other create with a given id) decided

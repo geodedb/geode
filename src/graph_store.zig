@@ -4764,7 +4764,8 @@ pub const GraphStore = struct {
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
-        self.ensureAllGraphsHydrated();
+        // SONNY-6528 (4): and fail closed while any graph is quarantined.
+        try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_types_for_tenant) read from
         // `edge_types_by_tenant`. The previous implementation walked every
         // edge in the store, deduping on each tick — that was O(E) per LSP
@@ -4846,7 +4847,8 @@ pub const GraphStore = struct {
         label: []const u8,
     ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
-        self.ensureAllGraphsHydrated();
+        // SONNY-6528 (4): and fail closed while any graph is quarantined.
+        try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_property_keys_for_label_in_tenant)
         // via `label_properties_by_tenant`. The composite index key is
         // "label\x00prop_key" — we walk the inner map and strip the prefix.
@@ -5008,7 +5010,8 @@ pub const GraphStore = struct {
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
-        self.ensureAllGraphsHydrated();
+        // SONNY-6528 (4): and fail closed while any graph is quarantined.
+        try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_labels_for_tenant) read from
         // `node_labels_by_tenant`. The previous implementation walked every
         // node in the store on every LSP completion call. Reference counts
@@ -5360,8 +5363,13 @@ pub const GraphStore = struct {
         var dropped = false;
         // Runs before the unlock above: a first touch waiting for the entry
         // sees the graph as done, not a build of a graph that is gone.
+        // SONNY-6528 (4): a dropped graph is no longer quarantined: nothing
+        // of it is left to read (`requireAllGraphsHydrated` skips it).
         defer if (dropped) {
-            if (hydration_entry) |e| e.done.store(true, .release);
+            if (hydration_entry) |e| {
+                e.done.store(true, .release);
+                e.failed.store(false, .release);
+            }
         };
         t_dropping_graph = true;
         defer t_dropping_graph = false;
@@ -13681,6 +13689,37 @@ pub const GraphStore = struct {
             }
         }
         for (names.items) |n| self.ensureGraphHydrated(n);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6528-QUARANTINE-IN-PROCESS; FEATURE="StorageIntegrity"; ASPECT=CrossGraphListingsFailClosed; STATUS=TESTED; TEST=tests/test_sonny6528_quarantine_in_process.zig; OWNER=storage; UPDATED=2026-11-14
+    /// SONNY-6528 (4): `ensureAllGraphsHydrated`, then fail with the first
+    /// quarantined graph's error (and note it for the executor, as
+    /// `ensureGraphHydrated` does). For the cross-graph schema listings
+    /// (`listNodeLabels`, `listEdgeTypes`, `listPropertiesForLabel`): they
+    /// union every graph's label maps, and a quarantined graph's are partial.
+    /// `ensureAllGraphsHydrated` skips a graph whose hydration already ran,
+    /// a failed one included, so the listings answered from them (the LSP
+    /// schema provider calls them directly, and SHOW TABLES swallowed their
+    /// errors). The security graph is exempt, as for reads
+    /// (`noteQuarantinedRead`); a dropped graph is not quarantined
+    /// (`dropGraph` clears it).
+    pub fn requireAllGraphsHydrated(self: *GraphStore) GraphQuarantineError!void {
+        self.ensureAllGraphsHydrated();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const found: ?GraphQuarantineError = blk: {
+            self.hydration_mutex.lockUncancelable(io);
+            defer self.hydration_mutex.unlock(io);
+            var it = self.pending_hydration.iterator();
+            while (it.next()) |e| {
+                if (!e.value_ptr.*.failed.load(.acquire)) continue;
+                if (std.mem.eql(u8, e.key_ptr.*, SECURITY_GRAPH_NAME)) continue;
+                break :blk @as(QuarantineCause, @enumFromInt(e.value_ptr.*.failure.load(.acquire))).toError();
+            }
+            break :blk null;
+        };
+        const err = found orelse return;
+        if (t_quarantined_read == null) t_quarantined_read = err;
+        return err;
     }
 
     /// PHASE 1b: hydrate the graph that owns `node_id`, resolved via the eager

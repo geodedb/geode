@@ -1576,6 +1576,30 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     return result;
 }
 
+// CANARY: REQ=REQ-SONNY-6528-QUARANTINE-IN-PROCESS; FEATURE="StorageIntegrity"; ASPECT=ExecutorProgramGate; STATUS=TESTED; TEST=tests/test_sonny6528_quarantine_in_process.zig; OWNER=storage; UPDATED=2026-11-14
+/// SONNY-6528 (4): the executor's own check of the transports' gate
+/// (`graph_store.programQuarantineError`, SONNY-6523): a program on a
+/// quarantined graph's data fails before it runs. The transports check it
+/// before serving a program; a caller that runs the executor in process (an
+/// embedding, a test, any entry point but QUIC and gRPC) did not, and the
+/// engine-direct reads (an exact-index or ordered-index read, a pushed-down
+/// aggregate, a fulltext search) and the index-served writes never pass the
+/// hydration chokepoint that notes a quarantined graph: they answered from
+/// it. A program that changes data hydrates its graph first, so its damage
+/// is found before anything is written. CREATE and DROP GRAPH alone run
+/// (dropping a damaged graph is how an operator removes it).
+fn refuseQuarantinedProgram(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !void {
+    // Only an engine-backed store hydrates, and so quarantines, a graph.
+    if (graph_store.getGlobalAdapter() == null or graph_store.getCurrentGlobalStore() == null) return;
+    const start = if (context.session_state) |s| s.graph orelse graph_store.DEFAULT_GRAPH_NAME else graph_store.DEFAULT_GRAPH_NAME;
+    const home = if (context.graph_bound) start else graph_store.DEFAULT_GRAPH_NAME;
+    if (query_traits.programOnlyGraphDdl(program, start, home)) return;
+    const graphs = try query_traits.programDataGraphList(allocator, program, start, home);
+    defer allocator.free(graphs);
+    if (graphs.len == 0) return;
+    if (graph_store.programQuarantineError(allocator, graphs, query_traits.isMutatingProgram(program))) |err| return err;
+}
+
 fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     installDecryptDecider(); // SONNY-6334
     // SONNY-3247: at the outermost entry point, the parameters are the
@@ -1584,6 +1608,7 @@ fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Pro
     // REQ-GQL-028 fail-closed: a quarantined graph noted before this program
     // (another request on this thread) is not this program's.
     if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();
+    if (t_entry_depth == 0) try refuseQuarantinedProgram(allocator, program, context); // SONNY-6528 (4)
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
@@ -1799,6 +1824,11 @@ fn executeStatementInScratch(allocator: std.mem.Allocator, stmt: ast.Statement, 
     // SONNY-3247: see `executeProgramWithContext`.
     if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
     if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();
+    if (t_entry_depth == 0) {
+        // SONNY-6528 (4): as `executeProgramInScratch`.
+        var one = [_]ast.Statement{stmt};
+        try refuseQuarantinedProgram(allocator, &.{ .statements = &one }, context);
+    }
     // SONNY-2823: a statement run on its own (the PROFILE paths) is a
     // program; its session engine transaction ends with it.
     enterEntryPoint();
