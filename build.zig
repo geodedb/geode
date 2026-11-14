@@ -536,6 +536,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6523-checkpoint-settings", .reason = "intentionally red TDD reproduction (SONNY-6523 item 6): the deferred-mode interval is measured from boot; compiled by test-compile; registered through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10182,6 +10183,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6523_dr_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6523_dr_step = b.step("test-sonny6523-dropped-graph-restart", "Run SONNY-6523 item 5 regression (a replicated write for a graph dropped before a restart answers GraphNotFound after it, also after a second restart; CREATE GRAPH of the name then makes a fresh empty graph that survives a restart)");
     sonny6523_dr_step.dependOn(&run_sonny6523_dr_tests.step);
+    // SONNY-6523 (6): the checkpoint settings do what they are documented to
+    // do; a failing light checkpoint is counted and logged once per cause.
+    const sonny6523_ck_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6523_checkpoint_settings.zig"), .target = target, .optimize = optimize });
+    sonny6523_ck_test_mod.addImport("geode", root_mod);
+    const sonny6523_ck_tests = b.addTest(.{ .root_module = sonny6523_ck_test_mod });
+    const run_sonny6523_ck_tests = b.addRunArtifact(sonny6523_ck_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6523_ck_tests.step);
+    const sonny6523_ck_step = b.step("test-sonny6523-checkpoint-settings", "Run SONNY-6523 item 6 regression (the deferred-mode checkpoint interval counts from the adapter's open, not from boot; a failing light checkpoint is counted in adapter_checkpoint_failures_total and logged at ERROR once per cause, again at most every 10 minutes, and its recovery once)");
+    sonny6523_ck_step.dependOn(&run_sonny6523_ck_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.

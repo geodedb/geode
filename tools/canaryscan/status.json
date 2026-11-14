@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:57:46.233658506Z",
+  "generated_at": "2026-11-14T01:58:23.140149612Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85806,6 +85806,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6523-CHECKPOINT-SETTINGS",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_checkpoint_settings.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6523-DROP-GRAPH-PURGE-LINEAR",
       "features": [
         {
@@ -93541,7 +93560,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4936
+      "TESTED": 4937
     },
     "by_aspect": {
       "2PC": 3,
@@ -96636,7 +96655,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 345,
+      "Regression": 346,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
