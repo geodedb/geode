@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:21:35.498835813Z",
+  "generated_at": "2026-11-14T06:39:40.324197053Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -2291,25 +2291,6 @@
       ]
     },
     {
-      "id": "REQ-AGG-COLLECT-004",
-      "features": [
-        {
-          "feature": "ShellTestVerification",
-          "aspect": "AggregationCollect",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-AGG-SUM-001",
       "features": [
         {
@@ -3080,20 +3061,6 @@
           "benches": [],
           "owner": "cli",
           "updated": "2025-09-30"
-        },
-        {
-          "feature": "Argon2idHashing",
-          "aspect": "PasswordSecurity",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -3163,20 +3130,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "UserAuthPolicy",
-          "aspect": "ConfigurablePolicy",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -4889,20 +4842,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "UserAuthPolicy",
-          "aspect": "ForceReset",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -4934,20 +4873,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "UserAuthPolicy",
-          "aspect": "PassphrasePolicy",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-02-24"
         }
       ]
     },
@@ -8073,20 +7998,6 @@
       "features": [
         {
           "feature": "Circular Dependency Resolution",
-          "aspect": "CoreModules",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "Circular Dependency Resolution",
           "aspect": "ModuleImports",
           "status": "TESTED",
           "files": [
@@ -8132,329 +8043,6 @@
           ],
           "tests": [
             "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-004",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "GraphStoreIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-005",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "ExecutionIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-006",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "SecurityIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-007",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "TypesIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-008",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "ServerIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-009",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "CLIIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-010",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "ParserIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-011",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "EvaluatorIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-012",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "StorageIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-013",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "IndexIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-014",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "ProtocolIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-015",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "CryptoIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-016",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "AuthIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-017",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "AuditIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-018",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "DistributedIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-019",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "BackupIndep",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CIRCULAR-DEP-020",
-      "features": [
-        {
-          "feature": "Circular Dependency Resolution",
-          "aspect": "BuildVerification",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
           ],
           "benches": [],
           "owner": "build",
@@ -10025,20 +9613,6 @@
       "id": "REQ-CLI-SUBPROCESS-INTEGRATION-002",
       "features": [
         {
-          "feature": "CLI Subprocess Elimination",
-          "aspect": "IntegrationTesting",
-          "status": "EXEMPT",
-          "files": [
-            "tests/test_cli_subprocess_elimination_integration_simple.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_002"
-          ],
-          "benches": [],
-          "owner": "claude",
-          "updated": "2025-10-05"
-        },
-        {
           "feature": "CLISubprocess",
           "aspect": "Integration2",
           "status": "IMPL",
@@ -10324,20 +9898,6 @@
           "benches": [],
           "owner": "eval",
           "updated": "2025-11-15"
-        },
-        {
-          "feature": "RustClientIntegration",
-          "aspect": "QUICTransport",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "clients",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -14187,82 +13747,6 @@
       ]
     },
     {
-      "id": "REQ-DISTRIBUTED-INDEX-OPTIMIZER-001",
-      "features": [
-        {
-          "feature": "Distributed IndexOptimizer",
-          "aspect": "FederationAwareCostEstimation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_index_optimizer_distributed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001_FederationAwareCostEstimation"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INDEX-OPTIMIZER-002",
-      "features": [
-        {
-          "feature": "Distributed IndexOptimizer",
-          "aspect": "CrossShardOperationCosts",
-          "status": "TESTED",
-          "files": [
-            "tests/test_index_optimizer_distributed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_002_CrossShardOperationCosts"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INDEX-OPTIMIZER-003",
-      "features": [
-        {
-          "feature": "Distributed IndexOptimizer",
-          "aspect": "OptimizationStrategySelection",
-          "status": "TESTED",
-          "files": [
-            "tests/test_index_optimizer_distributed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_003_OptimizationStrategySelection"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INDEX-OPTIMIZER-REGRESSION-001",
-      "features": [
-        {
-          "feature": "Distributed IndexOptimizer Regression",
-          "aspect": "BackwardCompatibility",
-          "status": "TESTED",
-          "files": [
-            "tests/index_optimizer_distributed_regression_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_REGRESSION_001_BackwardCompatibility"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
       "id": "REQ-DISTRIBUTED-INTEGRATION-001",
       "features": [
         {
@@ -16628,20 +16112,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "ModuleStructure",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16659,20 +16129,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "MatchExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16690,20 +16146,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "CreateExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16721,39 +16163,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "MergeExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-EXEC-REFACTOR-005",
-      "features": [
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "DeleteExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16809,20 +16218,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-11-12"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "SetExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16852,20 +16247,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "RemoveExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16883,20 +16264,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "WithExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -16914,39 +16281,6 @@
           "benches": [],
           "owner": "refactoring",
           "updated": "2025-10-17"
-        },
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "ReturnExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-EXEC-REFACTOR-010",
-      "features": [
-        {
-          "feature": "ExecutionRefactoring",
-          "aspect": "CallExecution",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -19886,44 +19220,6 @@
       ]
     },
     {
-      "id": "REQ-GAP-0193-BATCH-PROMOTION",
-      "features": [
-        {
-          "feature": "GAP-0193 IMPL Batch Promotion",
-          "aspect": "UnitTests",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "compliance",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0193-BATCH-SUMMARY",
-      "features": [
-        {
-          "feature": "GAP-0193 IMPL Batch Promotion",
-          "aspect": "Summary",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "compliance",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-GAP-0193-BATCH2-ENG",
       "features": [
         {
@@ -22109,25 +21405,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-07-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-ANALYSIS-JANUARY-2026",
-      "features": [
-        {
-          "feature": "Gap Analysis Verification Tests",
-          "aspect": "UnitTests",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "compliance",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -27347,8 +26624,7 @@
           "aspect": "NextPlanFreshnessGuard",
           "status": "TESTED",
           "files": [
-            "scripts/next_freshness_check.zig",
-            "tests/test_next_plan_freshness.zig"
+            "scripts/next_freshness_check.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_010_NextPlanFreshnessGuard"
@@ -27668,20 +26944,6 @@
           "updated": "2025-09-21"
         },
         {
-          "feature": "AdvancedUnionOperations",
-          "aspect": "TypeInference",
-          "status": "TESTED",
-          "files": [
-            "tests/advanced_union_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_TypeInference"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        },
-        {
           "feature": "GROUP BY/Aggregation",
           "aspect": "AvgVarianceEnvelope",
           "status": "BENCHED",
@@ -27692,20 +26954,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope"
           ],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Aggregation COUNT DISTINCT",
-          "aspect": "CountDistinctVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_count_distinct_variance.zig"
-          ],
-          "tests": [
-            "BenchmarkCANARY_REQ_GQL_012_CountDistinctVarianceEnvelope"
-          ],
-          "benches": [],
           "owner": "engine",
           "updated": "2025-09-21"
         },
@@ -27722,20 +26970,6 @@
           "benches": [],
           "owner": "planner",
           "updated": "2025-09-25"
-        },
-        {
-          "feature": "Aggregation COUNT DISTINCT",
-          "aspect": "CountDistinctParser",
-          "status": "TESTED",
-          "files": [
-            "tests/test_count_distinct_parser.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_012_CountDistinctParser"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
         },
         {
           "feature": "GROUP BY/Aggregation",
@@ -27827,20 +27061,6 @@
           "updated": "2025-09-21"
         },
         {
-          "feature": "AdvancedUnionOperations",
-          "aspect": "IntersectOperation",
-          "status": "TESTED",
-          "files": [
-            "tests/advanced_union_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_013_IntersectOperation"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        },
-        {
           "feature": "Transactions/MVCC",
           "aspect": "MVCCRepairThroughputVarianceEnvelope",
           "status": "BENCHED",
@@ -27927,41 +27147,8 @@
       ]
     },
     {
-      "id": "REQ-GQL-014",
-      "features": [
-        {
-          "feature": "AdvancedUnionOperations",
-          "aspect": "ExceptOperation",
-          "status": "TESTED",
-          "files": [
-            "tests/advanced_union_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_014_ExceptOperation"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-015",
       "features": [
-        {
-          "feature": "AdvancedUnionOperations",
-          "aspect": "OptimizationStrategy",
-          "status": "TESTED",
-          "files": [
-            "tests/advanced_union_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_015_OptimizationStrategy"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        },
         {
           "feature": "Set Operations",
           "aspect": "SetOpDistinctDedupVarianceEnvelope",
@@ -28082,20 +27269,6 @@
           "updated": "2025-09-20"
         },
         {
-          "feature": "AdvancedUnionOperations",
-          "aspect": "MultiWayOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/advanced_union_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_MultiWayOptimization"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        },
-        {
           "feature": "Variable Length Path Expand",
           "aspect": "PathExpandAllocVarianceEnvelope",
           "status": "BENCHED",
@@ -28189,22 +27362,6 @@
           "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_016_PathHighBranchVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Path Expand Breadth",
-          "aspect": "BoundedQuantifierDeterminism",
-          "status": "BENCHED",
-          "files": [
-            "tests/test_path_bounded_quantifier.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_BoundedQuantifierDeterminism"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_016_BoundedQuantifierDeterminism"
           ],
           "owner": "planner",
           "updated": "2025-09-21"
@@ -28486,20 +27643,6 @@
           "updated": "2025-09-24"
         },
         {
-          "feature": "Transport Parity Ordered Rows",
-          "aspect": "ProtocolE2E",
-          "status": "TESTED",
-          "files": [
-            "tests/e2e_protocol_transport_parity.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_TransportParity_QUICvsGRPC"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-24"
-        },
-        {
           "feature": "Transport Parity CASE 3VL",
           "aspect": "ProtocolE2E",
           "status": "TESTED",
@@ -28652,20 +27795,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-24"
-        },
-        {
-          "feature": "QueryPlanCaching",
-          "aspect": "CacheOperations",
-          "status": "TESTED",
-          "files": [
-            "tests/query_plan_cache_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_CacheOperations"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
         },
         {
           "feature": "PropertyAccess",
@@ -28827,39 +27956,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-11-13"
-        },
-        {
-          "feature": "QueryPlanCaching",
-          "aspect": "CacheEviction",
-          "status": "TESTED",
-          "files": [
-            "tests/query_plan_cache_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_018_CacheEviction"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-019",
-      "features": [
-        {
-          "feature": "QueryOptimization",
-          "aspect": "CostBasedOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/query_plan_cache_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_019_CostBasedOptimization"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
         }
       ]
     },
@@ -28877,20 +27973,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-04-05"
-        },
-        {
-          "feature": "QueryOptimization",
-          "aspect": "MemoryEstimation",
-          "status": "TESTED",
-          "files": [
-            "tests/query_plan_cache_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_020_MemoryEstimation"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
         }
       ]
     },
@@ -29096,20 +28178,6 @@
           ],
           "owner": "planner",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "QueryOptimization",
-          "aspect": "ParallelismPlanning",
-          "status": "TESTED",
-          "files": [
-            "tests/query_plan_cache_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_ParallelismPlanning"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-03"
         },
         {
           "feature": "Bench Variance Infra",
@@ -29960,8 +29028,7 @@
           "aspect": "Engine",
           "status": "TESTED",
           "files": [
-            "src/canary.zig",
-            "tests/canary_constraints_negative.zig"
+            "src/canary.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_032_ConstraintTypeMismatch",
@@ -29998,20 +29065,6 @@
           ],
           "owner": "schema",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Constraint Cascading",
-          "aspect": "CascadePerf",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_constraints_cascade_perf.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_032_CascadePerf"
-          ],
-          "owner": "schema",
-          "updated": "2025-09-20"
         },
         {
           "feature": "Schema Constraints Performance",
@@ -30111,25 +29164,6 @@
           "benches": [],
           "owner": "schema",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-040",
-      "features": [
-        {
-          "feature": "Temporal",
-          "aspect": "TemporalExtremeOffsetArithmetic",
-          "status": "TESTED",
-          "files": [
-            "tests/test_temporal_extreme_offsets.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_040_TemporalExtremeOffsetArithmetic"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
         }
       ]
     },
@@ -31135,20 +30169,6 @@
         },
         {
           "feature": "TDE",
-          "aspect": "KeyHierarchy",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_tde_multi_key_hierarchy.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_046_KeyHierarchy"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "TDE",
           "aspect": "Storage",
           "status": "TESTED",
           "files": [
@@ -32004,76 +31024,6 @@
         },
         {
           "feature": "Network Transport",
-          "aspect": "QUICTLS",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_quic_tls.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICTLS"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICHandshake",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_quic_tls.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICHandshake"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICFlowControl",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_quic_tls.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICFlowControl"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICIdleTimeout",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_quic_tls.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICIdleTimeout"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICConnectionMigration",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_quic_tls.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICConnectionMigration"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Network Transport",
           "aspect": "QUICBasicE2E",
           "status": "TESTED",
           "files": [
@@ -32398,8 +31348,7 @@
           "aspect": "ExplainJSONBiasFactors",
           "status": "TESTED",
           "files": [
-            "src/planner/cost_explain.zig",
-            "tests/debug/test_cost_model_explain_bias.zig"
+            "src/planner/cost_explain.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_ExplainJSONBiasFactors"
@@ -32413,8 +31362,7 @@
           "aspect": "ExplainJSONRecursive",
           "status": "TESTED",
           "files": [
-            "src/planner/cost_explain.zig",
-            "tests/e2e_explain_recursive.zig"
+            "src/planner/cost_explain.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_ExplainJSONRecursive"
@@ -32428,8 +31376,7 @@
           "aspect": "AdaptiveEstimatorBias",
           "status": "TESTED",
           "files": [
-            "src/planner/cost_seed.zig",
-            "tests/debug/test_cost_model_adaptive_bias_parity.zig"
+            "src/planner/cost_seed.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity"
@@ -32475,104 +31422,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampVarianceEnvelope"
           ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBias",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_adaptive_bias.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBiasClampWarning",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_bias_clamp_warning.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBiasPersistence",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_bias_persistence.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorBiasPersistenceV2",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_bias_persistence_v2.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "AdaptiveEstimatorDynamicAlpha",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_dynamic_alpha.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdaptiveEstimatorDynamicAlpha"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "ExplainJSONDynamicAlpha",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_explain_v4.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "PlannerAdaptiveBiasApplication",
-          "status": "TESTED",
-          "files": [
-            "tests/debug/test_cost_model_planner_bias_application.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication"
-          ],
-          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -32662,8 +31511,7 @@
           "aspect": "InvertedIndexQueryLatencyVarianceEnvelope",
           "status": "BENCHED",
           "files": [
-            "src/canary.zig",
-            "tests/benchmark_inverted_index_lookup_variance.zig"
+            "src/canary.zig"
           ],
           "tests": [],
           "benches": [
@@ -32682,11 +31530,9 @@
           "aspect": "ParserRecognition",
           "status": "TESTED",
           "files": [
-            "src/gql/ast.zig",
-            "tests/canary_parser_recursive_negative_cycle.zig"
+            "src/gql/ast.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle",
             "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle|TestCANARY_REQ_GQL_079_ParserRecognition"
           ],
           "benches": [],
@@ -34329,20 +33175,6 @@
       "id": "REQ-GQL-ADVANCED-TYPES-REGRESSION",
       "features": [
         {
-          "feature": "Advanced Types Regression Tests",
-          "aspect": "Testing",
-          "status": "EXEMPT",
-          "files": [
-            "tests/advanced_types_regression_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_ADVANCED_TYPES_REGRESSION_All"
-          ],
-          "benches": [],
-          "owner": "testing",
-          "updated": "2025-01-03"
-        },
-        {
           "feature": "GQLTypes",
           "aspect": "Regression",
           "status": "IMPL",
@@ -34488,25 +33320,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-ALGO-PERF",
-      "features": [
-        {
-          "feature": "GraphAlgorithmPerformance",
-          "aspect": "Benchmarks",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-ALGO-PERF-001",
       "features": [
         {
@@ -34620,8 +33433,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
-            "tests/test_auth_mfa_flows.zig"
+            "src/security/geode_auth_lib.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_AUTH_002_AuthPassword"
@@ -34640,8 +33452,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
-            "tests/test_auth_mfa_flows.zig"
+            "src/security/geode_auth_lib.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_AUTH_003_AuthMFA"
@@ -35000,44 +33811,6 @@
           "benches": [],
           "owner": "parser",
           "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-CATALOG-001",
-      "features": [
-        {
-          "feature": "Enhanced Catalog Operations",
-          "aspect": "RegressionTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/test_catalog_operations_regression.zig"
-          ],
-          "tests": [
-            "TestCatalogOperationsRegression"
-          ],
-          "benches": [],
-          "owner": "parser",
-          "updated": "2025-10-04"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-CATALOG-002",
-      "features": [
-        {
-          "feature": "Graph Type Operations",
-          "aspect": "FrameworkTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/test_catalog_operations_regression.zig"
-          ],
-          "tests": [
-            "TestGraphTypeFramework"
-          ],
-          "benches": [],
-          "owner": "parser",
-          "updated": "2025-10-04"
         }
       ]
     },
@@ -36056,25 +34829,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-FINANCIAL-NETWORK",
-      "features": [
-        {
-          "feature": "FinancialNetwork",
-          "aspect": "Integration",
-          "status": "TESTED",
-          "files": [
-            "tests/integration/test_financial_fraud_network.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_FINANCIAL_NETWORK"
-          ],
-          "benches": [],
-          "owner": "team",
-          "updated": "2025-10-02"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-FLAGS-001",
       "features": [
         {
@@ -36082,8 +34836,7 @@
           "aspect": "INFRA",
           "status": "TESTED",
           "files": [
-            "src/util/feature_flags.zig",
-            "tests/unit_feature_flags.zig"
+            "src/util/feature_flags.zig"
           ],
           "tests": [
             "tests/unit_feature_flags.zig:1"
@@ -36295,20 +35048,6 @@
       "id": "REQ-GQL-FTS-003",
       "features": [
         {
-          "feature": "FTS IndexOptimizer Integration",
-          "aspect": "TESTING",
-          "status": "TESTED",
-          "files": [
-            "tests/test_fts_indexoptimizer_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_FTS_IndexOptimizer_Integration"
-          ],
-          "benches": [],
-          "owner": "search",
-          "updated": "2025-10-04"
-        },
-        {
           "feature": "FTS",
           "aspect": "IndexOptimizer",
           "status": "IMPL",
@@ -36319,25 +35058,6 @@
           "benches": [],
           "owner": "search",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-FTS-004",
-      "features": [
-        {
-          "feature": "FTS Performance Optimization",
-          "aspect": "INTEGRATION",
-          "status": "TESTED",
-          "files": [
-            "tests/test_fts_performance_optimization.zig"
-          ],
-          "tests": [
-            "TestCANARY_FTS_Performance_Optimization"
-          ],
-          "benches": [],
-          "owner": "search",
-          "updated": "2025-10-04"
         }
       ]
     },
@@ -36745,25 +35465,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-GEOGRAPHIC-MAPPING",
-      "features": [
-        {
-          "feature": "GeographicMapping",
-          "aspect": "Integration",
-          "status": "TESTED",
-          "files": [
-            "tests/integration/test_geographic_mapping.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_GEOGRAPHIC_MAPPING"
-          ],
-          "benches": [],
-          "owner": "team",
-          "updated": "2025-10-02"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-GLOBAL-CLUSTERING-001",
       "features": [
         {
@@ -36886,25 +35587,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-GRAPHTYPE-001",
-      "features": [
-        {
-          "feature": "Graph Type Operations",
-          "aspect": "ComprehensiveTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/test_graph_type_comprehensive.zig"
-          ],
-          "tests": [
-            "TestGraphTypeComprehensive"
-          ],
-          "benches": [],
-          "owner": "parser",
-          "updated": "2025-10-04"
         }
       ]
     },
@@ -37883,25 +36565,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-LIKE-001",
-      "features": [
-        {
-          "feature": "LIKE Clause Parsing Fix",
-          "aspect": "RegressionTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/test_like_clause_regression.zig"
-          ],
-          "tests": [
-            "TestLikeClauseRegression"
-          ],
-          "benches": [],
-          "owner": "parser",
-          "updated": "2025-10-04"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-LIMIT-OPTIONAL-001",
       "features": [
         {
@@ -38237,25 +36900,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-MFA-002",
-      "features": [
-        {
-          "feature": "MFA authentication enforcement",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/unit_mfa_enforcement.zig"
-          ],
-          "tests": [
-            "tests/unit_mfa_enforcement.zig:1"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-MFA-003",
       "features": [
         {
@@ -38296,8 +36940,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
-            "tests/test_auth_mfa_flows.zig"
+            "src/security/geode_auth_lib.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_MFA_004_IssuedFlow"
@@ -38316,11 +36959,9 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
-            "tests/test_auth_mfa_flows.zig"
+            "src/security/geode_auth_lib.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_005_SuccessFlow",
             "TestCANARY_REQ_GQL_MFA_005_SuccessFlow|TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete"
           ],
           "benches": [],
@@ -38337,8 +36978,7 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
-            "tests/test_auth_mfa_flows.zig"
+            "src/security/geode_auth_lib.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_MFA_006_FailureFlow"
@@ -38375,44 +37015,6 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_MFA_007_RecoveryAudit|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-MFA-008",
-      "features": [
-        {
-          "feature": "Session step-up requirement",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_session_step_up.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_008_StepUpRequire"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-MFA-009",
-      "features": [
-        {
-          "feature": "Session step-up mark",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_session_step_up.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_MFA_009_StepUpMark"
           ],
           "benches": [],
           "owner": "security",
@@ -39089,44 +37691,6 @@
           "benches": [],
           "owner": "types",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-NET-TYPES-100",
-      "features": [
-        {
-          "feature": "NetworkTypesIntegration",
-          "aspect": "EndToEndTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/network_types_integration_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_NET_TYPES_100_Integration"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2025-10-03"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-NET-TYPES-REGRESSION",
-      "features": [
-        {
-          "feature": "Network Types Regression Tests",
-          "aspect": "Testing",
-          "status": "EXEMPT",
-          "files": [
-            "tests/network_types_regression_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_NET_TYPES_REGRESSION_All"
-          ],
-          "benches": [],
-          "owner": "testing",
-          "updated": "2025-01-03"
         }
       ]
     },
@@ -40531,20 +39095,6 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-06-10"
-        },
-        {
-          "feature": "S3CloudBackups",
-          "aspect": "Storage",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -40682,25 +39232,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-SET-OPERATIONS",
-      "features": [
-        {
-          "feature": "SetOperations",
-          "aspect": "Core",
-          "status": "TESTED",
-          "files": [
-            "tests/integration/test_union_operations.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SET_OPERATIONS"
-          ],
-          "benches": [],
-          "owner": "team",
-          "updated": "2025-10-02"
         }
       ]
     },
@@ -41480,25 +40011,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-TDE-OVERHEAD-001",
-      "features": [
-        {
-          "feature": "TDEOverheadSmoke",
-          "aspect": "BENCH",
-          "status": "TESTED",
-          "files": [
-            "tests/benchmark_tde_overhead_smoke.zig"
-          ],
-          "tests": [
-            "BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-16"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-TDE-SSS-001",
       "features": [
         {
@@ -41727,8 +40239,7 @@
           "aspect": "NormalizationNfc",
           "status": "TESTED",
           "files": [
-            "src/unicode/geode_unicode.zig",
-            "tests/canary_unicode_basic.zig"
+            "src/unicode/geode_unicode.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_UNICODE_004_NfcRoundTrip"
@@ -41761,8 +40272,7 @@
           "aspect": "CaseFolding",
           "status": "TESTED",
           "files": [
-            "src/unicode/geode_unicode.zig",
-            "tests/canary_unicode_basic.zig"
+            "src/unicode/geode_unicode.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_UNICODE_005_FoldSharpS"
@@ -41948,20 +40458,6 @@
           "benches": [],
           "owner": "unicode",
           "updated": "2025-09-27"
-        },
-        {
-          "feature": "UTF-8 -> UTF-16 Conversion",
-          "aspect": "ClientTestZig",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_client_unicode.zig"
-          ],
-          "tests": [
-            "TestCANARY_ClientUnicode_Utf8ToUtf16"
-          ],
-          "benches": [],
-          "owner": "clients",
-          "updated": "2025-09-27"
         }
       ]
     },
@@ -41995,20 +40491,6 @@
           "benches": [],
           "owner": "clients",
           "updated": "2025-09-27"
-        },
-        {
-          "feature": "UTF-16 -> UTF-8 Conversion",
-          "aspect": "ClientTestZig",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_client_unicode.zig"
-          ],
-          "tests": [
-            "TestCANARY_ClientUnicode_Utf16ToUtf8"
-          ],
-          "benches": [],
-          "owner": "clients",
-          "updated": "2025-09-27"
         }
       ]
     },
@@ -42028,58 +40510,6 @@
           "benches": [],
           "owner": "unicode",
           "updated": "2025-09-27"
-        },
-        {
-          "feature": "WTF-8 Lossy Decode",
-          "aspect": "ClientTestZig",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_client_unicode.zig"
-          ],
-          "tests": [
-            "TestCANARY_ClientUnicode_Wtf8Lossy"
-          ],
-          "benches": [],
-          "owner": "clients",
-          "updated": "2025-09-27"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-UNION-001",
-      "features": [
-        {
-          "feature": "UnionPropertyAccess",
-          "aspect": "PropertyEvaluation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_union_property_access.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_UNION_001_PropertyAccess"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-10-04"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-UNION-INTEGRATION-001",
-      "features": [
-        {
-          "feature": "UNION Property Access Integration",
-          "aspect": "Integration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_union_property_access_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_UNION_INTEGRATION_001_PropertyAccessIntegration"
-          ],
-          "benches": [],
-          "owner": "claude",
-          "updated": "2025-01-04"
         }
       ]
     },
@@ -45050,191 +43480,6 @@
           "benches": [],
           "owner": "crud_operations",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "ListProperties",
-          "aspect": "ListCreation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-002",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListAccess",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-003",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListSlice",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-004",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListSize",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-005",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListHead",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-006",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListTail",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-007",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListConcat",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-008",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListIn",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-009",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListComprehension",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-LIST-PROP-010",
-      "features": [
-        {
-          "feature": "ListProperties",
-          "aspect": "ListUnwind",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -45628,20 +43873,6 @@
           "benches": [],
           "owner": "cli",
           "updated": "2025-10-28"
-        },
-        {
-          "feature": "LanguageServerProtocol",
-          "aspect": "LSPServer",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -47690,39 +45921,6 @@
           "benches": [],
           "owner": "crud_operations",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "MapProperties",
-          "aspect": "MapCreation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MAP-PROP-002",
-      "features": [
-        {
-          "feature": "MapProperties",
-          "aspect": "MapAccess",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -47742,20 +45940,6 @@
           "benches": [],
           "owner": "eval",
           "updated": "2026-01-09"
-        },
-        {
-          "feature": "MapProperties",
-          "aspect": "MapKeys",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -47775,77 +45959,6 @@
           "benches": [],
           "owner": "eval",
           "updated": "2026-01-09"
-        },
-        {
-          "feature": "MapProperties",
-          "aspect": "MapMerge",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MAP-PROP-005",
-      "features": [
-        {
-          "feature": "MapProperties",
-          "aspect": "MapProjection",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MAP-PROP-006",
-      "features": [
-        {
-          "feature": "MapProperties",
-          "aspect": "NestedMap",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MAP-PROP-007",
-      "features": [
-        {
-          "feature": "MapProperties",
-          "aspect": "MapInCreate",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -47896,20 +46009,6 @@
           "status": "TESTED",
           "files": [
             "src/query/materialized_views.zig"
-          ],
-          "tests": [
-            "test_materialized_views"
-          ],
-          "benches": [],
-          "owner": "query",
-          "updated": "2025-10-05"
-        },
-        {
-          "feature": "Materialized View Management",
-          "aspect": "Testing",
-          "status": "TESTED",
-          "files": [
-            "tests/test_materialized_views.zig"
           ],
           "tests": [
             "test_materialized_views"
@@ -48412,139 +46511,6 @@
       ]
     },
     {
-      "id": "REQ-MATVIEW-SYSTEM-002",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "RefreshStrategy",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-003",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "DependencyTracking",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-004",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "PerformanceMonitoring",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-005",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "ErrorHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-006",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "MemoryManagement",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-007",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "TestCoverage",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MATVIEW-SYSTEM-008",
-      "features": [
-        {
-          "feature": "MaterializedViews",
-          "aspect": "Documentation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-MATVIEW-TEST-001",
       "features": [
         {
@@ -48908,120 +46874,6 @@
       ]
     },
     {
-      "id": "REQ-MEM-SAFETY-001",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "AllocatorUse",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MEM-SAFETY-002",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "DeferCleanup",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MEM-SAFETY-003",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "BoundsChecking",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MEM-SAFETY-004",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "NullSafety",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MEM-SAFETY-005",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "ErrorHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MEM-SAFETY-006",
-      "features": [
-        {
-          "feature": "MemorySafety",
-          "aspect": "SliceValidation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-MEMORY-SAFETY-001",
       "features": [
         {
@@ -49280,139 +47132,6 @@
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-001",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "SchemaMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-002",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "LabelMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-003",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "PropertyMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-004",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "RelTypeMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-005",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "IndexMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-006",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "ConstraintMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-META-INT-007",
-      "features": [
-        {
-          "feature": "MetadataIntegration",
-          "aspect": "FunctionMetadata",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "catalog",
           "updated": "2026-01-15"
         }
       ]
@@ -55814,20 +53533,6 @@
           "benches": [],
           "owner": "performance",
           "updated": "2025-11-16"
-        },
-        {
-          "feature": "EvaluationPipelinePerformance",
-          "aspect": "VectorOps",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "performance",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -58510,39 +56215,6 @@
           "benches": [],
           "owner": "transport",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "QUICConnectionCleanup",
-          "aspect": "ResourceLeak",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-QUIC-CONN-CLEANUP-002",
-      "features": [
-        {
-          "feature": "QUICConnectionCleanup",
-          "aspect": "ConnectionList",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -58560,20 +56232,6 @@
           "benches": [],
           "owner": "server",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "QUICConnectionCleanup",
-          "aspect": "DestructorPattern",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -65079,20 +62737,6 @@
         },
         {
           "feature": "ServerRefactoring",
-          "aspect": "ModuleStructure",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "ServerRefactoring",
           "aspect": "ProtocolHandler",
           "status": "TESTED",
           "files": [
@@ -65200,58 +62844,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-11-12"
-        },
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "SessionManagement",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-005",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "TransactionCoord",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-006",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "ErrorHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -65269,20 +62861,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-11-14"
-        },
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "ProtocolHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -65300,77 +62878,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-11-14"
-        },
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "QUICIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-009",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "TLSHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-010",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "AuthIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-011",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "AuditIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -65388,77 +62895,6 @@
           "benches": [],
           "owner": "refactor",
           "updated": "2025-11-14"
-        },
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "MetricsExport",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-013",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "HealthCheck",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-014",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "GracefulShutdown",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SERVER-REFACTOR-015",
-      "features": [
-        {
-          "feature": "ServerRefactoring",
-          "aspect": "ConfigManagement",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "server",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -88031,20 +85467,6 @@
           "benches": [],
           "owner": "aggregation",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "StringMinMax",
-          "aspect": "MinString",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -88064,58 +85486,6 @@
           "benches": [],
           "owner": "aggregation",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "StringMinMax",
-          "aspect": "MaxString",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-STRING-MINMAX-003",
-      "features": [
-        {
-          "feature": "StringMinMax",
-          "aspect": "MinMaxComparison",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-STRING-MINMAX-004",
-      "features": [
-        {
-          "feature": "StringMinMax",
-          "aspect": "NullHandling",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -88135,20 +85505,6 @@
           "benches": [],
           "owner": "aggregation",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "StringMinMax",
-          "aspect": "EmptyInput",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -88168,20 +85524,6 @@
           "benches": [],
           "owner": "aggregation",
           "updated": "2025-12-27"
-        },
-        {
-          "feature": "StringMinMax",
-          "aspect": "UnicodeSort",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "aggregation",
-          "updated": "2026-01-15"
         }
       ]
     },
@@ -90710,25 +88052,6 @@
       ]
     },
     {
-      "id": "REQ-TXN-ISOLATION-001",
-      "features": [
-        {
-          "feature": "EnhancedTransactionIsolation",
-          "aspect": "IsolationLevels",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_analysis_january_2026.zig"
-          ],
-          "tests": [
-            "test_gap_analysis_january_2026.zig"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-TXN-SAVEPOINT-001",
       "features": [
         {
@@ -92832,82 +90155,6 @@
       ]
     },
     {
-      "id": "REQ-VECTOR-INDEX-POPULATION-001",
-      "features": [
-        {
-          "feature": "Vector Index Population",
-          "aspect": "VectorIndexPopulation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_vector_index_population.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_VECTOR_INDEX_POPULATION_001_Basic"
-          ],
-          "benches": [],
-          "owner": "index",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-VECTOR-INDEX-POPULATION-002",
-      "features": [
-        {
-          "feature": "Vector Index Population",
-          "aspect": "PropertyValueIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_vector_index_population.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_VECTOR_INDEX_POPULATION_002_PropertyValueSwitch"
-          ],
-          "benches": [],
-          "owner": "index",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-VECTOR-INDEX-POPULATION-003",
-      "features": [
-        {
-          "feature": "Vector Index Population",
-          "aspect": "JSONSerialization",
-          "status": "TESTED",
-          "files": [
-            "tests/test_vector_index_population.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_VECTOR_INDEX_POPULATION_003_JSONFormat"
-          ],
-          "benches": [],
-          "owner": "index",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-VECTOR-INDEX-POPULATION-INTEGRATION-001",
-      "features": [
-        {
-          "feature": "Vector Index Population Integration",
-          "aspect": "IntegrationTesting",
-          "status": "TESTED",
-          "files": [
-            "tests/test_vector_index_population_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_VECTOR_INDEX_POPULATION_INTEGRATION_001"
-          ],
-          "benches": [],
-          "owner": "claude",
-          "updated": "2025-01-05"
-        }
-      ]
-    },
-    {
       "id": "REQ-VECTOR-INDEX-READER-QUIESCENCE-001",
       "features": [
         {
@@ -93406,177 +90653,6 @@
       ]
     },
     {
-      "id": "REQ-WITH-GROUPBY-001",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "BasicGroupBy",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-002",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "MultiColumn",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-003",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "SumAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-004",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "AvgAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-005",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "MinMaxAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-006",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "CollectAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-007",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "HavingFilter",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-008",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "OrderByAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-WITH-GROUPBY-009",
-      "features": [
-        {
-          "feature": "WithGroupByAggregation",
-          "aspect": "NestedWith",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_batch_promotion.zig"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-ZERO-LEN-PATH-002",
       "features": [
         {
@@ -93681,11 +90757,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 144,
+      "BENCHED": 141,
       "COMPLETE": 2,
-      "EXEMPT": 214,
+      "EXEMPT": 211,
       "IMPL": 324,
-      "TESTED": 4946
+      "TESTED": 4782
     },
     "by_aspect": {
       "2PC": 3,
@@ -93743,13 +90819,9 @@
       "AdaptiveDiffPerfThreshold": 2,
       "AdaptiveDiffPerfThresholdEnv": 2,
       "AdaptiveDiffPerfThresholdEnvInvalidParse": 1,
-      "AdaptiveEstimatorBias": 2,
+      "AdaptiveEstimatorBias": 1,
       "AdaptiveEstimatorBiasClampVarianceEnvelope": 1,
-      "AdaptiveEstimatorBiasClampWarning": 1,
-      "AdaptiveEstimatorBiasPersistence": 1,
-      "AdaptiveEstimatorBiasPersistenceV2": 1,
       "AdaptiveEstimatorBiasVarianceEnvelope": 1,
-      "AdaptiveEstimatorDynamicAlpha": 1,
       "AdaptiveEstimatorVarianceAutoCalibration": 1,
       "AdaptiveFeedbackHook": 1,
       "AdaptiveFlush": 1,
@@ -93783,7 +90855,6 @@
       "AggregatesInsideItems": 1,
       "AggregatesThroughSharedProjection": 1,
       "Aggregation": 5,
-      "AggregationCollect": 1,
       "AggregationComputation": 2,
       "AggregationEdgeTraversal": 1,
       "AggregationFiltering": 1,
@@ -93800,7 +90871,6 @@
       "AllShortestPathsIsolation": 1,
       "AllocOnStatementShard": 1,
       "AllocatorUsage": 1,
-      "AllocatorUse": 1,
       "AllowPolicyScope": 1,
       "AlterPolicy": 1,
       "AlterPolicyAST": 1,
@@ -93869,8 +90939,6 @@
       "AuditDiagnosticsPrivateFiles": 1,
       "AuditFilters": 1,
       "AuditFormatting": 1,
-      "AuditIndep": 1,
-      "AuditIntegration": 1,
       "AuditKeyPairComplete": 1,
       "AuditLog": 2,
       "AuditLogging": 6,
@@ -93885,8 +90953,6 @@
       "AuthDispatchPolicyDelete": 1,
       "AuthDispatchPolicyList": 1,
       "AuthGate": 1,
-      "AuthIndep": 1,
-      "AuthIntegration": 1,
       "AuthModule": 1,
       "AuthProviderOutlivesSessions": 1,
       "AuthRefreshSingleFlight": 1,
@@ -93905,13 +90971,11 @@
       "AutoKeyChecks": 1,
       "Avg": 1,
       "AvgAgg": 1,
-      "AvgAggregation": 1,
       "AvgRefactor": 1,
       "AvgVarianceEnvelope": 1,
       "AwsKmsSigV4": 1,
       "BACKUP_MANAGER": 1,
       "BATCH_ALLOC": 1,
-      "BENCH": 1,
       "BFSExpansion": 1,
       "BUILD": 4,
       "BackfillEnumeratesFullNodeSet": 1,
@@ -93927,11 +90991,9 @@
       "BackupCommands": 2,
       "BackupEncryption": 1,
       "BackupExcludesSecrets": 1,
-      "BackupIndep": 1,
       "BackupListNoTmp": 1,
       "BackupNeedsDataDir": 1,
       "BackwardCompat": 2,
-      "BackwardCompatibility": 1,
       "BackwardsCompatibility": 1,
       "BadgeGeneration": 1,
       "BadgeStalenessGuard": 1,
@@ -93940,7 +91002,6 @@
       "BareSetOnRelationship": 1,
       "Basic": 5,
       "BasicEncryption": 1,
-      "BasicGroupBy": 1,
       "BasicPlanGeneration": 1,
       "BasicTesting": 1,
       "BatchErrorExtraction": 1,
@@ -93963,7 +91024,7 @@
       "BenchmarkFixture": 4,
       "BenchmarkScaling": 1,
       "Benchmarking": 3,
-      "Benchmarks": 3,
+      "Benchmarks": 2,
       "Betweenness": 3,
       "BidirectionalGuard": 1,
       "Binding": 1,
@@ -93992,10 +91053,9 @@
       "BoundedParallelCrypto": 1,
       "BoundedParallelCryptoTest": 1,
       "BoundedPollWakeFanout": 1,
-      "BoundedQuantifierDeterminism": 1,
       "BoundedResidency": 2,
       "BoundedRetirement": 1,
-      "BoundsChecking": 2,
+      "BoundsChecking": 1,
       "BowtieRejection": 1,
       "BoxedEdges": 1,
       "BracketListLiteralKeys": 1,
@@ -94011,7 +91071,6 @@
       "BuildStep": 6,
       "BuildSystem": 2,
       "BuildTarget": 4,
-      "BuildVerification": 1,
       "Builder": 1,
       "BuiltinFunctions": 6,
       "BuiltinRoleAssigned": 1,
@@ -94054,7 +91113,6 @@
       "CLIConfig": 1,
       "CLIFlag": 3,
       "CLIFramework": 1,
-      "CLIIndep": 1,
       "CLIParsing": 1,
       "CLI_ARGS": 1,
       "COLLECT": 1,
@@ -94066,16 +91124,14 @@
       "CacheCleanupOnExit": 1,
       "CacheCredentialsOnAuth": 1,
       "CacheEfficiency": 1,
-      "CacheEviction": 2,
+      "CacheEviction": 1,
       "CacheImpl": 1,
       "CacheIntegration": 1,
-      "CacheOperations": 1,
       "CacheOptimization": 1,
       "CacheOwnsKeys": 1,
       "CachePerformance": 1,
       "CalibrationEntries": 1,
       "CallDispatch": 1,
-      "CallExecution": 1,
       "CallFilter": 1,
       "CallHandlers": 1,
       "CallHandlersImport": 1,
@@ -94101,7 +91157,7 @@
       "CardinalityEstimation": 2,
       "CardinalityPrivacyGuard": 1,
       "CartesianProduct": 1,
-      "CascadePerf": 2,
+      "CascadePerf": 1,
       "CaseExpressionIsolation": 1,
       "CaseFolding": 1,
       "CaseParsing": 1,
@@ -94210,7 +91266,6 @@
       "ClientExecutePhaseTiming": 1,
       "ClientFrameReadTimeout": 1,
       "ClientSession": 1,
-      "ClientTestZig": 3,
       "ClientTimeoutBranch": 1,
       "ClientVerifiesPinnedFreshAttestation": 1,
       "ClientWriteCongestionDeadline": 1,
@@ -94235,7 +91290,7 @@
       "ColdStoreResolution": 1,
       "Collect": 1,
       "CollectAgg": 1,
-      "CollectAggregation": 2,
+      "CollectAggregation": 1,
       "CollectIsolation": 1,
       "CollectRefactor": 1,
       "CollectStatements": 1,
@@ -94286,7 +91341,6 @@
       "ComprehensiveBatch4": 1,
       "ComprehensiveBatch5": 1,
       "ComprehensiveBatch6": 1,
-      "ComprehensiveTesting": 1,
       "ComptimeLists": 1,
       "Computation": 1,
       "ComputationalOperation": 2,
@@ -94302,14 +91356,13 @@
       "ConditionalSave": 1,
       "Config": 4,
       "ConfigBootstrap": 1,
-      "ConfigManagement": 2,
+      "ConfigManagement": 1,
       "ConfigResolution": 1,
       "ConfigTesting": 1,
       "ConfigurableConnectionStallThreshold": 1,
       "ConfigurableCoordinatorCoalescing": 1,
       "ConfigurableHelloReadTimeout": 1,
       "ConfigurableInitialCwnd": 1,
-      "ConfigurablePolicy": 1,
       "Configuration": 1,
       "ConfigureAdaptiveFlush": 1,
       "ConfigureChangeStream": 1,
@@ -94331,7 +91384,6 @@
       "ConnectionHandler": 1,
       "ConnectionHandling": 2,
       "ConnectionKeyedStallWatchdog": 1,
-      "ConnectionList": 1,
       "ConnectionManagement": 1,
       "ConnectionOutlivesFirstStream": 1,
       "ConnectionOutlivesFirstStreamBuild": 1,
@@ -94348,7 +91400,6 @@
       "ConstCorrectness": 2,
       "ConstraintGraphScope": 1,
       "ConstraintIsolation": 1,
-      "ConstraintMetadata": 1,
       "ConstraintPerfVarianceEnvelope": 1,
       "ConstructionDefaults": 1,
       "Constructor": 1,
@@ -94382,12 +91433,11 @@
       "CoordinatorMetricsHotPath": 1,
       "CoordinatorOperations": 1,
       "CoordinatorPhaseMetrics": 1,
-      "Core": 26,
+      "Core": 25,
       "CoreEngine": 1,
       "CoreFunctionality": 2,
       "CoreImplementation": 2,
       "CoreInterface": 1,
-      "CoreModules": 1,
       "CorePersistence": 1,
       "CoreSystem": 2,
       "CoreTests": 1,
@@ -94399,15 +91449,12 @@
       "Cos": 1,
       "Cosine": 1,
       "CosineOnVectors": 1,
-      "CostBasedOptimization": 1,
       "CostBasedOptimizer": 1,
       "CostBasedPlanning": 1,
       "CostEstimation": 1,
       "CostOptimization": 1,
       "CountAgg": 1,
       "CountDistinct": 1,
-      "CountDistinctParser": 1,
-      "CountDistinctVarianceEnvelope": 1,
       "CountFiltering": 1,
       "CountMatches": 1,
       "CountPredicateIsolation": 1,
@@ -94419,7 +91466,7 @@
       "CreateClassifiedAsCreate": 1,
       "CreateConstraintValidates": 2,
       "CreateEdge": 2,
-      "CreateExecution": 4,
+      "CreateExecution": 3,
       "CreateForBatch": 1,
       "CreateForBatchWithTracking": 2,
       "CreateGraph": 1,
@@ -94468,14 +91515,12 @@
       "CrossPathConcurrency": 1,
       "CrossPlatform": 1,
       "CrossProcessExclusion": 1,
-      "CrossShardOperationCosts": 1,
       "CrossSubsystemReachability": 1,
       "CrossTenantE2E": 1,
       "CrossThreadRecordRegression": 1,
       "CrudAutoIndex": 1,
       "CrudImport": 2,
       "Crypto": 1,
-      "CryptoIndep": 1,
       "Cryptography": 1,
       "CudaDynamicLoader": 1,
       "CurrentGraphEquality": 1,
@@ -94570,7 +91615,7 @@
       "DefaultLaneFallbackLatency": 1,
       "DefaultSimpleCreateFastPath": 1,
       "DefenseInDepth": 1,
-      "DeferCleanup": 2,
+      "DeferCleanup": 1,
       "DeferToHandler": 1,
       "DeferToPostWith": 1,
       "DeferredBackfill": 1,
@@ -94580,7 +91625,7 @@
       "DefinitionContext": 1,
       "Delete": 2,
       "DeleteCodec": 1,
-      "DeleteExecution": 3,
+      "DeleteExecution": 2,
       "DeleteFiltering": 1,
       "DeleteGraphContext": 1,
       "DeleteGraphFilter": 2,
@@ -94595,12 +91640,11 @@
       "Density": 1,
       "DenyOverridesAllow": 1,
       "DependencyGraph": 1,
-      "DependencyTracking": 2,
+      "DependencyTracking": 1,
       "DepthGuard": 1,
       "DescendingSort": 1,
       "Deserialization": 1,
       "DeserializeGraphMutation": 1,
-      "DestructorPattern": 1,
       "DetectFinalAgg": 1,
       "Detection": 3,
       "DeterministicEncryption": 1,
@@ -94656,13 +91700,12 @@
       "DistinctYieldNames": 1,
       "Distributed": 2,
       "DistributedCluster": 1,
-      "DistributedIndep": 1,
       "DistributedQueries": 1,
       "DistributionStats": 1,
       "DivergedLabelDictOpen": 1,
       "DivergentDurableStateRecovery": 1,
       "DoSGuard": 3,
-      "Documentation": 3,
+      "Documentation": 2,
       "DocumentationAccuracy": 1,
       "DocumentationCoverage": 1,
       "DocumentedCommandsExist": 1,
@@ -94788,7 +91831,6 @@
       "EmbeddedOrderKeyDefault": 1,
       "EmbeddedTcpAuthGate": 1,
       "EmptyArgs": 1,
-      "EmptyInput": 1,
       "EmptyMatchWith": 1,
       "EmptyProvider": 1,
       "EmptyRlsEngineFastPath": 1,
@@ -94816,7 +91858,6 @@
       "EndToEnd": 1,
       "EndToEndDecide": 1,
       "EndToEndIntegration": 2,
-      "EndToEndTesting": 1,
       "EndToEndTests": 1,
       "EndpointSeek": 1,
       "EndpointSideSetDestroyCleanup": 1,
@@ -94845,7 +91886,7 @@
       "EqualityThreeValued": 1,
       "ErrorDetection": 1,
       "ErrorFreesRows": 1,
-      "ErrorHandling": 15,
+      "ErrorHandling": 12,
       "ErrorLogging": 1,
       "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
@@ -94869,7 +91910,6 @@
       "Evaluation": 9,
       "Evaluator": 2,
       "EvaluatorAbstraction": 1,
-      "EvaluatorIndep": 1,
       "EvaluatorTests": 1,
       "EvaluatorUnit": 1,
       "EventCapture": 1,
@@ -94898,7 +91938,6 @@
       "ExactPropertyIndexSharding": 1,
       "ExactValueOnPersistedPaths": 1,
       "ExactlyOneDefaultCollation": 1,
-      "ExceptOperation": 1,
       "ExcludeAuditSeed": 1,
       "ExcludeKeyMaterialAndLock": 1,
       "ExcludedShapes": 1,
@@ -94925,7 +91964,6 @@
       "ExecutionContextIdempotencyKey": 1,
       "ExecutionHints": 1,
       "ExecutionImport": 2,
-      "ExecutionIndep": 1,
       "ExecutionInterrupt": 1,
       "ExecutionIsolation": 1,
       "ExecutionMutation": 1,
@@ -94957,7 +91995,6 @@
       "ExplainJSON": 1,
       "ExplainJSONBiasFactors": 1,
       "ExplainJSONDetailed": 1,
-      "ExplainJSONDynamicAlpha": 1,
       "ExplainJSONRecursive": 1,
       "ExplainProfileAllowlist": 1,
       "ExplainProfileAlone": 1,
@@ -95036,7 +92073,6 @@
       "FederatedOptimization": 1,
       "FederatedQuery": 1,
       "Federation": 3,
-      "FederationAwareCostEstimation": 1,
       "FederationAwareOptimization": 1,
       "FederationIntegration": 1,
       "FieldAllowlist": 1,
@@ -95087,7 +92123,6 @@
       "FlowControl": 2,
       "FlushStorage": 1,
       "FollowerRemovedTextRebuild": 1,
-      "ForceReset": 1,
       "ForeachIsolation": 1,
       "ForkJoin": 1,
       "FormatString": 1,
@@ -95096,7 +92131,6 @@
       "FrameBudget": 1,
       "FrameProbe": 1,
       "Framework": 3,
-      "FrameworkTesting": 1,
       "FreeExtendedReadCopy": 1,
       "FrequencySampler": 1,
       "FreshActiveConnServiceableWithin": 1,
@@ -95123,7 +92157,6 @@
       "FunctionCall": 2,
       "FunctionImpl": 1,
       "FunctionInvocation": 1,
-      "FunctionMetadata": 1,
       "FunctionParams": 1,
       "FunctionParsing": 1,
       "FunctionTests": 1,
@@ -95205,7 +92238,6 @@
       "GpsDecryptFieldGate": 1,
       "GqlExecution": 1,
       "GqlFunction": 21,
-      "GracefulShutdown": 1,
       "GrantCallbacks": 1,
       "GrantChangeInvalidatesDecisionCache": 1,
       "GrantCheck": 1,
@@ -95253,7 +92285,6 @@
       "GraphStoreCheckedRead": 1,
       "GraphStoreFlushPolicyBench": 1,
       "GraphStoreImport": 1,
-      "GraphStoreIndep": 1,
       "GraphStoreLoadOptimizationDeltaVarianceEnvelope": 1,
       "GraphStorePersistence": 2,
       "GraphStoreRefusesDefault": 1,
@@ -95342,9 +92373,7 @@
       "HashBeforeStore": 1,
       "Hashing": 1,
       "HavingCountDistinctFilter": 1,
-      "HavingFilter": 1,
       "HeadElement": 1,
-      "HealthCheck": 1,
       "HealthLivenessFromRaftTraffic": 1,
       "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
@@ -95395,7 +92424,7 @@
       "IMPL": 9,
       "INDEX_CATALOG": 1,
       "INFRA": 1,
-      "INTEGRATION": 2,
+      "INTEGRATION": 1,
       "ISOCompliance": 1,
       "IdBandCollisionSweep": 1,
       "Idempotence": 1,
@@ -95430,7 +92459,6 @@
       "IndexDdlAndConfigureFieldSerialized": 1,
       "IndexGraphField": 1,
       "IndexGraphScope": 1,
-      "IndexIndep": 1,
       "IndexIntegration": 2,
       "IndexIsolation": 1,
       "IndexKeyGate": 1,
@@ -95438,7 +92466,6 @@
       "IndexMaintenance": 4,
       "IndexMaintenanceRegression": 2,
       "IndexManagement": 1,
-      "IndexMetadata": 1,
       "IndexOptimization": 2,
       "IndexOptimizer": 1,
       "IndexPathVisibility": 1,
@@ -95488,12 +92515,12 @@
       "IntegerType": 1,
       "IntegerTypes": 1,
       "IntegerVectorType": 1,
-      "Integration": 15,
+      "Integration": 12,
       "Integration1": 1,
       "Integration2": 1,
       "Integration3": 1,
       "IntegrationTest": 3,
-      "IntegrationTesting": 9,
+      "IntegrationTesting": 7,
       "IntegrationTests": 4,
       "IntegrityCheck": 1,
       "InterNodeMessaging": 1,
@@ -95504,7 +92531,6 @@
       "IntermediateWithAgg": 1,
       "InterruptCheckTTY": 1,
       "InterruptTracking": 1,
-      "IntersectOperation": 1,
       "IntervalAndJsonArgumentBridge": 1,
       "IntervalArithmetic": 1,
       "IntervalTreePersistence": 1,
@@ -95518,10 +92544,8 @@
       "IpAddr": 1,
       "IsoFeatures": 1,
       "Isolation": 1,
-      "IsolationLevels": 1,
       "IterativeChains": 2,
       "IterativeWalkers": 3,
-      "JSONSerialization": 1,
       "Jan2026Fixes": 1,
       "JoinAuditTextUnambiguous": 1,
       "JoinKind": 1,
@@ -95546,7 +92570,7 @@
       "KeyEscrow": 1,
       "KeyFile": 1,
       "KeyGeneration": 1,
-      "KeyHierarchy": 2,
+      "KeyHierarchy": 1,
       "KeyIsolation": 1,
       "KeyManagement": 3,
       "KeyResolvedWriteFastPathGate": 1,
@@ -95564,7 +92588,7 @@
       "LFUCache": 1,
       "LRUEviction": 1,
       "LSNTests": 1,
-      "LSPServer": 2,
+      "LSPServer": 1,
       "LTrim": 1,
       "LabelChangeIndexMaintenance": 1,
       "LabelCountRefcountRead": 1,
@@ -95578,7 +92602,7 @@
       "LabelIndexCardinality": 1,
       "LabelIndexScan": 1,
       "LabelMatching": 1,
-      "LabelMetadata": 2,
+      "LabelMetadata": 1,
       "LabelPostingLocking": 1,
       "LabelPropagation": 1,
       "LabelScanHydrationGuard": 1,
@@ -95647,27 +92671,22 @@
       "LineLongerThan4095Bytes": 1,
       "LintCompliance": 1,
       "List": 1,
-      "ListAccess": 2,
-      "ListComprehension": 2,
+      "ListAccess": 1,
+      "ListComprehension": 1,
       "ListComprehensionIsolation": 1,
-      "ListConcat": 2,
-      "ListCreation": 2,
+      "ListConcat": 1,
+      "ListCreation": 1,
       "ListEncryptedFields": 1,
       "ListExpression": 2,
       "ListFunctions": 2,
       "ListGraphGrants": 1,
-      "ListHead": 1,
-      "ListIn": 1,
       "ListKeyByValue": 1,
       "ListKeys": 1,
       "ListLiteralCoercion": 2,
       "ListPropertySize": 1,
       "ListRoles": 1,
-      "ListSize": 1,
-      "ListSlice": 2,
-      "ListTail": 1,
+      "ListSlice": 1,
       "ListType": 1,
-      "ListUnwind": 1,
       "ListenErrorOwnership": 1,
       "ListenerCertProbe": 1,
       "ListenerOwnsProviderLifetime": 1,
@@ -95744,13 +92763,10 @@
       "Management": 1,
       "ManagerRestoreIsStaged": 1,
       "MandatoryEnforcement": 1,
-      "MapAccess": 2,
-      "MapCreation": 2,
+      "MapAccess": 1,
+      "MapCreation": 1,
       "MapExpression": 1,
-      "MapInCreate": 1,
-      "MapKeys": 2,
-      "MapMerge": 1,
-      "MapProjection": 1,
+      "MapKeys": 1,
       "MapType": 1,
       "MappingRefusedAsUnsupported": 1,
       "MasterKeyCheckValue": 1,
@@ -95769,7 +92785,7 @@
       "MatchCreateEdgeSummaryRow": 1,
       "MatchCreateFollowerFailClosed": 1,
       "MatchCreateRows": 1,
-      "MatchExecution": 4,
+      "MatchExecution": 3,
       "MatchExprEval": 1,
       "MatchFiltering": 3,
       "MatchGuard": 1,
@@ -95791,7 +92807,6 @@
       "MaxAggregation": 1,
       "MaxBindings": 1,
       "MaxRefactor": 1,
-      "MaxString": 1,
       "MayBind": 1,
       "MaySchema": 1,
       "MaySchemaDatabase": 1,
@@ -95804,8 +92819,7 @@
       "MemberReadOwnership": 1,
       "MemberResolution": 1,
       "MemoryEfficiency": 1,
-      "MemoryEstimation": 1,
-      "MemoryManagement": 4,
+      "MemoryManagement": 3,
       "MemoryManager": 1,
       "MemoryOptimization": 1,
       "MemoryOverGrpc": 1,
@@ -95819,7 +92833,7 @@
       "MergeCodec": 1,
       "MergeCreateUndoLog": 1,
       "MergeError": 1,
-      "MergeExecution": 3,
+      "MergeExecution": 2,
       "MergeFiltering": 1,
       "MergeHandler": 1,
       "MergeIsolation": 1,
@@ -95844,7 +92858,6 @@
       "MetricValidation": 1,
       "MetricVocabulary": 1,
       "MetricsAcceptWake": 1,
-      "MetricsExport": 1,
       "MetricsPoolIsolation": 1,
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
@@ -95856,11 +92869,8 @@
       "MinAggregation": 1,
       "MinBindings": 1,
       "MinMaxAgg": 1,
-      "MinMaxAggregation": 1,
-      "MinMaxComparison": 1,
       "MinPropertyTypesDeclaration": 1,
       "MinRefactor": 1,
-      "MinString": 1,
       "MinimalEntryPoint": 1,
       "MiscBatch2": 1,
       "MismatchFalsePositiveGuard": 1,
@@ -95875,13 +92885,11 @@
       "ModuleLoader": 1,
       "ModuleOrder": 1,
       "ModuleSplit": 1,
-      "ModuleStructure": 2,
       "ModuleSystem": 1,
       "MonotonicClockNoTestLocalBenchmarks": 1,
       "MultiByteRange": 1,
       "MultiChain": 2,
       "MultiChainDispatch": 1,
-      "MultiColumn": 1,
       "MultiColumnSort": 1,
       "MultiCreate": 1,
       "MultiGraphRollback": 1,
@@ -95901,7 +92909,6 @@
       "MultiPropertyMergeFastPath": 1,
       "MultiPropertyMergeIndexedProbe": 1,
       "MultiTenantSignal": 1,
-      "MultiWayOptimization": 1,
       "MultipleNodeBinding": 1,
       "MultipleOptional": 1,
       "MultipleRoles": 1,
@@ -95930,11 +92937,10 @@
       "NestedAggregates": 1,
       "NestedArgErrorPropagation": 1,
       "NestedDepthLimit": 1,
-      "NestedMap": 2,
+      "NestedMap": 1,
       "NestedTransaction": 1,
       "NestedTreeRefusal": 1,
       "NestedValues": 1,
-      "NestedWith": 1,
       "NestingAndLinkBounds": 1,
       "NetworkCallback": 1,
       "NetworkSecurity": 1,
@@ -96060,13 +93066,12 @@
       "NullComparison": 2,
       "NullConcat": 1,
       "NullFields": 1,
-      "NullHandling": 3,
+      "NullHandling": 2,
       "NullIf": 1,
       "NullKeyRefused": 1,
       "NullOnNoRows": 1,
       "NullPropagation": 1,
       "NullRemovesProperty": 1,
-      "NullSafety": 1,
       "NullSemantics": 1,
       "NullType": 1,
       "NullsFirst": 1,
@@ -96112,8 +93117,6 @@
       "OperatorParsing": 1,
       "Operators": 1,
       "Optimization": 3,
-      "OptimizationStrategy": 1,
-      "OptimizationStrategySelection": 1,
       "Optimizer": 1,
       "OptimizerHints": 1,
       "OptionDefinition": 1,
@@ -96130,7 +93133,6 @@
       "Orchestration": 2,
       "OrderAndPage": 1,
       "OrderByAfterAggregation": 1,
-      "OrderByAggregation": 1,
       "OrderByAndLimit": 1,
       "OrderByEnforcement": 1,
       "OrderByIsolation": 1,
@@ -96178,7 +93180,6 @@
       "ParallelReadWriteE2EBuild": 1,
       "ParallelRegression": 1,
       "ParallelThroughput": 1,
-      "ParallelismPlanning": 1,
       "ParameterBinding": 1,
       "ParameterBindingParity": 1,
       "ParameterHandling": 1,
@@ -96200,7 +93201,6 @@
       "ParserFix": 1,
       "ParserFuzzing": 1,
       "ParserGRANT": 1,
-      "ParserIndep": 1,
       "ParserMatchQuery": 1,
       "ParserNoConflict": 1,
       "ParserProgram": 1,
@@ -96225,12 +93225,10 @@
       "PartialSubmitWaitGroup": 1,
       "Participant": 1,
       "Partitioning": 1,
-      "PassphrasePolicy": 1,
       "PasswordChange": 2,
       "PasswordChangeFailClosed": 1,
       "PasswordPolicy": 1,
       "PasswordReset": 1,
-      "PasswordSecurity": 1,
       "PasswordValidation": 1,
       "Path": 1,
       "PathCacheDegreeBucketDiscrimination": 1,
@@ -96313,7 +93311,6 @@
       "Performance": 5,
       "PerformanceBaselines": 1,
       "PerformanceBenchmarks": 1,
-      "PerformanceMonitoring": 1,
       "PerformanceOptimizations": 1,
       "PerformanceProfiler": 1,
       "PerformanceTesting": 1,
@@ -96388,7 +93385,6 @@
       "PlannedReadRows": 1,
       "PlannedRuntimeDeclinesWrites": 1,
       "Planner": 7,
-      "PlannerAdaptiveBiasApplication": 1,
       "PlannerCardinalityEstimateVarianceEnvelope": 1,
       "PlannerIndexOrdered": 1,
       "PlannerOps": 1,
@@ -96534,17 +93530,14 @@
       "PropertyAggregate": 1,
       "PropertyConstraints": 1,
       "PropertyConversion": 1,
-      "PropertyEvaluation": 1,
       "PropertyExistence": 1,
       "PropertyFiltering": 2,
       "PropertyIndex": 1,
       "PropertyMapOrderByLimit": 1,
       "PropertyMapPutRemove": 1,
       "PropertyMatching": 1,
-      "PropertyMetadata": 1,
       "PropertyStorage": 3,
       "PropertyStorageFootprint": 1,
-      "PropertyValueIntegration": 1,
       "ProposeAndReplicate": 1,
       "ProposeFence": 1,
       "ProposeWithTenant": 1,
@@ -96552,12 +93545,11 @@
       "ProtoReadDeadline": 1,
       "Protocol": 2,
       "ProtocolConformance": 1,
-      "ProtocolE2E": 16,
+      "ProtocolE2E": 15,
       "ProtocolE2E_GRPC": 1,
       "ProtocolE2E_QUIC": 4,
       "ProtocolHandler": 1,
-      "ProtocolHandling": 2,
-      "ProtocolIndep": 1,
+      "ProtocolHandling": 1,
       "ProtocolTests": 1,
       "ProtocolWire": 1,
       "ProviderConfig": 1,
@@ -96577,19 +93569,14 @@
       "QUICBasicE2E": 1,
       "QUICCleanup": 1,
       "QUICClientConnect": 1,
-      "QUICConnectionMigration": 1,
       "QUICConnectionParams": 1,
       "QUICConnectionRecovery": 1,
       "QUICCore": 2,
       "QUICErrorHandling": 1,
-      "QUICFlowControl": 1,
       "QUICHandler": 2,
-      "QUICHandshake": 1,
       "QUICHandshakeRegression": 1,
       "QUICHeaderProtect": 1,
-      "QUICIdleTimeout": 1,
       "QUICImport": 2,
-      "QUICIntegration": 1,
       "QUICListener": 1,
       "QUICLockBypass": 1,
       "QUICLoop": 1,
@@ -96602,10 +93589,9 @@
       "QUICState": 1,
       "QUICStream": 1,
       "QUICStreamOpen": 1,
-      "QUICTLS": 1,
       "QUICTLSComprehensive": 1,
       "QUICTLSConfig": 1,
-      "QUICTransport": 2,
+      "QUICTransport": 1,
       "QUICWire": 1,
       "QUICWiring": 1,
       "QUIC_HANDLERS": 1,
@@ -96775,7 +93761,6 @@
       "RefreshLogic": 1,
       "RefreshOncePerWrite": 1,
       "RefreshScheduler": 1,
-      "RefreshStrategy": 1,
       "RefusalAudit": 1,
       "RefusalKeysHexEncoded": 1,
       "RefuseFabricated": 2,
@@ -96789,10 +93774,9 @@
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionTest": 3,
-      "RegressionTesting": 5,
+      "RegressionTesting": 3,
       "RegressionTests": 2,
       "RelPatternFilter": 2,
-      "RelTypeMetadata": 1,
       "RelationshipDeferToPostWith": 1,
       "RelationshipDeleteEndpointLookup": 1,
       "RelationshipLabelIndexScan": 1,
@@ -96812,7 +93796,7 @@
       "RemovalErrorsReported": 1,
       "Remove": 2,
       "RemoveAttributeErrors": 1,
-      "RemoveExecution": 2,
+      "RemoveExecution": 1,
       "RemoveFiltering": 1,
       "RemoveGraph": 1,
       "RemoveLabel": 1,
@@ -96865,7 +93849,7 @@
       "ResolverIgnoresReadSnapshot": 1,
       "ResourceHash": 1,
       "ResourceLabelEquality": 1,
-      "ResourceLeak": 2,
+      "ResourceLeak": 1,
       "ResponseDeadline": 1,
       "ResponseDeadlineWallClock": 1,
       "ResponseReassembly": 1,
@@ -96893,7 +93877,6 @@
       "ReturnAfterSet": 1,
       "ReturnAggregation": 1,
       "ReturnAndSorting": 1,
-      "ReturnExecution": 1,
       "ReturnFix": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
@@ -96950,7 +93933,7 @@
       "RuntimeTypeMapping": 1,
       "S3RestoreIsStaged": 1,
       "SCHEMA": 2,
-      "SECURITY": 38,
+      "SECURITY": 35,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,
@@ -96992,7 +93975,6 @@
       "SchemaFrameTyping": 1,
       "SchemaListings": 1,
       "SchemaManagement": 1,
-      "SchemaMetadata": 1,
       "SchemaMigration": 1,
       "SchemaVariation": 1,
       "ScopeCheck": 1,
@@ -97020,7 +94002,6 @@
       "SecurityContext": 1,
       "SecurityEnforcement": 1,
       "SecurityGraphWriteLock": 1,
-      "SecurityIndep": 1,
       "SecurityInit": 1,
       "SecurityManager": 2,
       "SecurityManagerInit": 1,
@@ -97061,7 +94042,6 @@
       "ServerHandler": 1,
       "ServerHydration": 1,
       "ServerImport": 1,
-      "ServerIndep": 1,
       "ServerInit": 16,
       "ServerInitExprEngine": 1,
       "ServerInitFtsApplyHook": 1,
@@ -97095,7 +94075,7 @@
       "SessionGraphContext": 1,
       "SessionGraphGate": 1,
       "SessionIsolation": 1,
-      "SessionManagement": 4,
+      "SessionManagement": 3,
       "SessionParamPrefixDeclaration": 1,
       "SessionReset": 1,
       "SessionSet": 1,
@@ -97108,7 +94088,7 @@
       "Set": 2,
       "SetButUnusableKeyRefuses": 1,
       "SetClauses": 1,
-      "SetExecution": 2,
+      "SetExecution": 1,
       "SetFiltering": 1,
       "SetGuardrail": 1,
       "SetLabel": 1,
@@ -97212,7 +94192,6 @@
       "SkipLimitIsolation": 1,
       "SkipValidation": 1,
       "SliceReqCrosscheckGuard": 1,
-      "SliceValidation": 1,
       "Slicing": 1,
       "SlowPollWarning": 1,
       "SmallestPostingPreselect": 1,
@@ -97319,10 +94298,9 @@
       "StepUpClassification": 1,
       "Stop": 1,
       "StorableValues": 1,
-      "Storage": 20,
+      "Storage": 19,
       "StorageBench": 1,
       "StorageFilterAndDescendants": 1,
-      "StorageIndep": 1,
       "StorageIntegration": 1,
       "StorageIsolation": 1,
       "StorageLookupResidual": 1,
@@ -97389,10 +94367,8 @@
       "SuccessfulLogin": 1,
       "Sum": 1,
       "SumAgg": 1,
-      "SumAggregation": 1,
       "SumEvaluation": 1,
       "SumStats": 1,
-      "Summary": 1,
       "SummaryColumns": 1,
       "SuperuserKeepsAdmin": 1,
       "SuppressOutput": 1,
@@ -97404,10 +94380,9 @@
       "TDE": 2,
       "TDERotationVarianceEnvelope": 1,
       "TEST": 11,
-      "TESTING": 13,
+      "TESTING": 12,
       "TLS": 1,
       "TLSConnection": 1,
-      "TLSHandling": 1,
       "TLSHandshake": 1,
       "TLSOneShot": 1,
       "TLSSecurity": 1,
@@ -97423,7 +94398,6 @@
       "Telemetry": 1,
       "Temporal": 1,
       "TemporalArgumentBridge": 1,
-      "TemporalExtremeOffsetArithmetic": 1,
       "TemporalLiteralFormat": 1,
       "TenantEnvelope": 1,
       "TenantFilterTest": 1,
@@ -97442,7 +94416,7 @@
       "TestAssertions": 1,
       "TestAutomation": 1,
       "TestCleanup": 1,
-      "TestCoverage": 4,
+      "TestCoverage": 3,
       "TestEnforcement": 1,
       "TestExecution": 1,
       "TestExposure": 1,
@@ -97463,7 +94437,7 @@
       "TestSuite": 4,
       "TestTeardown": 1,
       "TestTransparentEncryption": 1,
-      "Testing": 17,
+      "Testing": 14,
       "TestingBatch2": 1,
       "Tests": 2,
       "TextPropertyValidation": 1,
@@ -97500,7 +94474,6 @@
       "Training": 1,
       "Transaction": 1,
       "TransactionBodyProjection": 1,
-      "TransactionCoord": 1,
       "TransactionCoordination": 1,
       "TransactionIsolation": 1,
       "TransactionLifecycle": 1,
@@ -97547,7 +94520,6 @@
       "TypeHelpers": 1,
       "TypeHelpersImport": 1,
       "TypeImpl": 1,
-      "TypeInference": 1,
       "TypeManagement": 1,
       "TypePromotion": 1,
       "TypePromotionAliases": 1,
@@ -97558,7 +94530,6 @@
       "TypeValidators": 1,
       "TypedGroupKeys": 1,
       "Types": 10,
-      "TypesIndep": 1,
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
@@ -97578,7 +94549,6 @@
       "Unescaping": 1,
       "UnicodeHomographPrevention": 1,
       "UnicodeRoleValidation": 1,
-      "UnicodeSort": 1,
       "UnicodeVersionDeclaration": 1,
       "UnifiedBinary": 2,
       "UnifiedBinaryServerStartup": 1,
@@ -97611,7 +94581,7 @@
       "UnitTestExecution": 1,
       "UnitTestFramework": 1,
       "UnitTesting": 5,
-      "UnitTests": 27,
+      "UnitTests": 25,
       "UnitValidation": 1,
       "UnitVerification": 1,
       "UniversalAndUserSpecificMixed": 1,
@@ -97710,9 +94680,7 @@
       "VarianceEnvelopeGuard": 1,
       "Vector": 1,
       "VectorDimension": 1,
-      "VectorIndexPopulation": 1,
       "VectorMetricPersistence": 1,
-      "VectorOps": 1,
       "VectorReadersLocked": 1,
       "VendorParallelPoolGating": 1,
       "Verification": 3,
@@ -97759,7 +94727,7 @@
       "WithBindingDoubleFree": 1,
       "WithBindingResultLeak": 1,
       "WithClauseIsolation": 1,
-      "WithExecution": 2,
+      "WithExecution": 1,
       "WithFiltering": 1,
       "WithParameterValidation": 1,
       "WithStage": 1,
