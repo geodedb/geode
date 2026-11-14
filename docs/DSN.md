@@ -93,11 +93,16 @@ own QUIC client (the cluster peer dialler and the test client) dials
 IPv6: grpc-zig binds IPv4 only.
 
 The CLI's QUIC client (`geode query`, `geode shell`, `geode backup`, ...)
-cannot reach an IPv6 server yet: geode-client-zig binds its endpoint to
-`0.0.0.0:0` and formats the dial address without brackets. It looks a host
-name up in both address families, uses the first IPv4 address, and refuses
-an IPv6 literal or an IPv6-only name with `Ipv6EndpointUnsupported` and a
-message saying why (`src/client/quic_endpoint_host.zig`).
+and the MCP endpoint client reach IPv6 servers (geode-client-zig v0.3.16,
+SONNY-6494): an address literal is dialled as written, an IPv6 one
+bracketed from an IPv6 endpoint (`[::]:0`); a host name is looked up in both
+address families through the system resolver (hosts file and DNS) and its
+first IPv4 address is used, otherwise its first IPv6 address. The TLS
+server name stays the host as given. An IPv6 address with a zone
+(`[fe80::1%eth0]:3141`) parses but cannot be dialled (the QUIC library's
+dialler has no zone support): the CLI refuses it with
+`Ipv6ZoneUnsupported` and says why. Before v0.3.16 the CLI refused every
+IPv6 destination with `Ipv6EndpointUnsupported`.
 
 ### Hostnames
 

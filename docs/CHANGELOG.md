@@ -2298,6 +2298,27 @@
 
 ### Fixed
 
+- **The CLI reaches IPv6 servers (SONNY-6494 item 6; geode-client-zig
+  v0.3.16).** `geode query`, `geode shell`, `geode backup` and the other
+  QUIC CLI commands refused every IPv6 destination with
+  `Ipv6EndpointUnsupported` (`src/client/quic_endpoint_host.zig`), because
+  the client library bound an IPv4-only endpoint and formatted the dial
+  address without brackets. v0.3.16 resolves the host itself: an address
+  literal is dialled as written (IPv6 bracketed, from a `[::]:0` endpoint),
+  and a host name is looked up in both families through the system resolver
+  (hosts file and DNS), first IPv4 address first, otherwise its first IPv6
+  address. geode's own resolver step is removed (it duplicated that rule)
+  and the host goes to the library unchanged; the TLS server name stays the
+  host as given. **Behaviour change:** `--server [::1]:3141`,
+  `--dsn quic://[::1]:3141` and an IPv6-only host name now connect instead
+  of being refused. An IPv6 address with a zone (`[fe80::1%eth0]:3141`) is
+  still refused before dialling, now with `Ipv6ZoneUnsupported` and a
+  message saying the QUIC dialler cannot use a zone. The steps
+  `test-5077-quic-endpoint-host` and `test-sonny6487-endpoint-host-family`,
+  which tested the removed module, are gone; the new end-to-end
+  `zig build test-sonny6494-ipv6-query` drives a real server on `[::1]`
+  through `--server`, `--dsn`, `ip6-localhost` and the MCP endpoint client.
+
 - **Remote KMS latency stays flat on a long-lived connection, and a 16 MiB
   QUIC request is answered (SONNY-2412, SONNY-3232; quic v0.1.51,
   SONNY-6478/SONNY-6475).** quic v0.1.51 retires a finished stream and no

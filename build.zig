@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6494-ipv6-query", .reason = "intentionally red TDD reproduction (SONNY-6494 item 6, KNOWN_TEST_ISSUES): geode refuses an IPv6 destination before geode-client-zig v0.3.16 could dial it; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10305,25 +10304,6 @@ pub fn build(b: *std.Build) void {
     // data-directory backup and printing success; the local path runs only
     // with --local and an explicit data directory. Spawns the installed CLI
     // against a closed loopback port; no server.
-    const endpoint_host_mod = b.createModule(.{ .root_source_file = b.path("src/client/quic_endpoint_host.zig"), .target = target, .optimize = optimize });
-    const endpoint_host_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_5077_quic_endpoint_host.zig"), .target = target, .optimize = optimize });
-    endpoint_host_test_mod.link_libc = true;
-    endpoint_host_test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
-    const endpoint_host_tests = b.addTest(.{ .root_module = endpoint_host_test_mod });
-    const run_endpoint_host_tests = b.addRunArtifact(endpoint_host_tests);
-    shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
-    const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
-    endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
-    {
-        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_endpoint_host_family.zig"), .target = target, .optimize = optimize });
-        test_mod.link_libc = true;
-        test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
-        const tests = b.addTest(.{ .root_module = test_mod });
-        const run_tests = b.addRunArtifact(tests);
-        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6487-endpoint-host-family", "Run SONNY-6487 item 2 regression (the CLI QUIC client looks a server name up in both address families, prefers IPv4, and refuses an IPv6-only destination with Ipv6EndpointUnsupported because geode-client-zig binds an IPv4-only endpoint)").dependOn(&run_tests.step);
-    }
-
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
     const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
@@ -10447,24 +10427,23 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port; geode query refuses an IPv6 server with the client-library reason)").dependOn(&run_tests.step);
+        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port)").dependOn(&run_tests.step);
     }
-    // SONNY-6494 (6), intentionally red (docs/KNOWN_TEST_ISSUES.md): the
-    // CLI's QUIC client reaches a real geode serve on [::1] now that
-    // geode-client-zig v0.3.16 dials IPv6. Not in shardDep until the fix
-    // lands; compiled by test-compile.
+    // SONNY-6494 (6): the CLI's QUIC client reaches a real geode serve on
+    // [::1] now that geode-client-zig v0.3.16 dials IPv6.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_ipv6_query.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
         mod.addImport("protobuf", protobuf_mod);
         mod.addImport("schema", schema_mod);
         mod.addImport("transport/quic", transport_quic_mod);
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
-        b.step("test-sonny6494-ipv6-query", "Run SONNY-6494 item 6 regression (geode query --server [::1]:<port>, --dsn quic://[::1]:<port> and --server ip6-localhost:<port> answer against a real geode serve listening on [::1]; an IPv6 zone is refused before dialling with the reason; skips without an IPv6 loopback)").dependOn(&run_tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-ipv6-query", "Run SONNY-6494 item 6 regression (geode query --server [::1]:<port>, --dsn quic://[::1]:<port>, --server ip6-localhost:<port> and the MCP endpoint client (quic://user:pass@[::1]:<port>) answer against a real geode serve listening on [::1]; an IPv6 zone is refused before dialling with the reason; skips without an IPv6 loopback)").dependOn(&run_tests.step);
     }
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_host_port.zig"), .target = target, .optimize = optimize });

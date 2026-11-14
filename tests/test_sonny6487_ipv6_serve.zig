@@ -10,10 +10,9 @@
 //     and formatted the dial address without brackets.
 //   * `--listen 127.0.0.1:<not a port>` refuses to start; it used to listen
 //     on 0.0.0.0:3141 instead.
-//   * `geode query --server [::1]:<port>` / `--server ip6-localhost:<port>`
-//     says the CLI's QUIC client (geode-client-zig, which binds an IPv4-only
-//     endpoint) cannot reach an IPv6 server yet, instead of failing with a
-//     bare InvalidAddress; `--server localhost:<port>` resolves to IPv4.
+//   * (`geode query --server [::1]:<port>` used to be refused here because
+//     geode-client-zig could not dial IPv6; since v0.3.16 it answers:
+//     tests/test_sonny6494_ipv6_query.zig, SONNY-6494.)
 //   * `geode --audit-syslog <host>:<not a port>` is refused; it used to send
 //     to port 514. An IPv4 or bracketed IPv6 target receives the audit
 //     datagram (127.0.0.1 used to be sent to 1.0.0.127: wrong byte order),
@@ -125,41 +124,6 @@ test "SONNY-6487: geode serve --listen [::1]:<port> answers a query over IPv6" {
     defer res.deinit(a);
     try std.testing.expectEqual(@as(usize, 1), res.rows.len);
     try std.testing.expect(util.testValueEqual(.{ .int = 42 }, res.rows[0][0]));
-
-    // The CLI client (geode-client-zig) binds an IPv4-only QUIC endpoint: it
-    // refuses an IPv6 server with that reason instead of a bare
-    // InvalidAddress from a mis-split dial address.
-    const exe = geode_test_bin.geode_exe;
-    var targets: [2][]const u8 = .{ addr, "" };
-    var n_targets: usize = 1;
-    const by_name = try std.fmt.allocPrint(a, "ip6-localhost:{d}", .{port});
-    defer a.free(by_name);
-    if (hostsFileNames("ip6-localhost")) {
-        targets[1] = by_name;
-        n_targets = 2;
-    }
-    for (targets[0..n_targets]) |target| {
-        const r = try runGeode(a, &.{ exe, "query", "--server", target, "--insecure", "--no-saved-session", "-U", util.defaultUsername(), "-P", util.defaultPassword(), "--timeout", "10", "RETURN 1 AS x" }, &.{}, 60);
-        defer r.deinit(a);
-        if (r.code == 0 or std.mem.indexOf(u8, r.output, "IPv6") == null) {
-            std.debug.print("query --server {s}: code {?d}\noutput:\n{s}\n", .{ target, r.code, r.output });
-            return error.TestUnexpectedResult;
-        }
-    }
-}
-
-fn hostsFileNames(name: []const u8) bool {
-    var buf: [16 * 1024]u8 = undefined;
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const text = std.Io.Dir.cwd().readFile(io, "/etc/hosts", &buf) catch return false;
-    var lines = std.mem.tokenizeScalar(u8, text, '\n');
-    while (lines.next()) |line| {
-        var fields = std.mem.tokenizeAny(u8, line, " \t");
-        const ip = fields.next() orelse continue;
-        if (ip[0] == '#') continue;
-        while (fields.next()) |f| if (std.mem.eql(u8, f, name)) return true;
-    }
-    return false;
 }
 
 test "SONNY-6487: geode serve refuses a --listen port that is not a port" {

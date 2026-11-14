@@ -1,6 +1,7 @@
+// CANARY: REQ=REQ-CLI-DNS-5077; FEATURE="CLI QUIC hostname resolution"; ASPECT=HostnameResolution; STATUS=TESTED; TEST=tests/test_sonny6494_ipv6_query.zig; OWNER=cli; UPDATED=2026-11-13
+
 const std = @import("std");
 pub const zig_client = @import("geode_client_zig");
-const endpoint_host = @import("quic_endpoint_host.zig");
 const host_port = @import("host_port.zig");
 
 pub const TlsConfig = struct {
@@ -24,12 +25,13 @@ fn initClientWithInsecureSetting(
     password: ?[]const u8,
     insecure: bool,
 ) !zig_client.GeodeClient {
-    const transport_host = endpoint_host.resolveAlloc(allocator, host) catch |err| {
-        if (err == error.Ipv6EndpointUnsupported) printIpv6Unsupported(host);
-        return err;
-    };
-    defer allocator.free(transport_host);
-    var cfg = zig_client.config.Config.initWithTransport(transport_host, port, .quic);
+    // SONNY-6494: geode-client-zig (v0.3.16) resolves the host itself: an
+    // address literal is dialled as written (IPv6 bracketed, from a [::]:0
+    // endpoint), and a name prefers its first IPv4 address and falls back to
+    // IPv6, through the system resolver (hosts file and DNS, SONNY-5077).
+    // The TLS server name below stays the host as given.
+    try refuseIpv6Zone(host);
+    var cfg = zig_client.config.Config.initWithTransport(host, port, .quic);
     defer cfg.deinit(allocator);
 
     cfg.insecure = insecure;
@@ -71,17 +73,19 @@ pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPo
 
 const isIpv6Literal = host_port.isIpv6Literal;
 
-/// SONNY-6487: geode-client-zig binds its QUIC endpoint to 0.0.0.0:0 and
-/// formats the dial address without brackets, so it cannot reach an IPv6
-/// server. Say so instead of failing later with a bare InvalidAddress.
-fn printIpv6Unsupported(host: []const u8) void {
-    if (@import("builtin").is_test) return;
-    std.debug.print(
-        "Error: '{s}' is an IPv6 address or has only IPv6 addresses; the CLI's QUIC client " ++
-            "(geode-client-zig) binds an IPv4-only endpoint and cannot reach an IPv6 server yet. " ++
-            "Use an IPv4 address or a name with an IPv4 address.\n",
+/// SONNY-6494: the grammar accepts an IPv6 zone (`[fe80::1%eth0]:3141`), but
+/// the quic dialler cannot parse one, so geode-client-zig refuses it with
+/// `error.Ipv6ZoneUnsupported` when it connects. Refuse it here, before a
+/// client is built, and say why.
+fn refuseIpv6Zone(host: []const u8) error{Ipv6ZoneUnsupported}!void {
+    const bare = if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host[1 .. host.len - 1] else host;
+    if (!isIpv6Literal(bare) or std.mem.indexOfScalar(u8, bare, '%') == null) return;
+    if (!@import("builtin").is_test) std.debug.print(
+        "Error: '{s}' is an IPv6 address with a zone; the CLI's QUIC client cannot dial a " ++
+            "zoned address. Use a global or loopback IPv6 address, an IPv4 address, or a host name.\n",
         .{host},
     );
+    return error.Ipv6ZoneUnsupported;
 }
 
 /// SONNY-6484: refuse a DSN whose host is an unbracketed IPv6 literal

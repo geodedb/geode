@@ -14,6 +14,8 @@
 //     answer the query;
 //   * `--server ip6-localhost:<port>` (a name with only an IPv6 address,
 //     when /etc/hosts has one) answers it too;
+//   * the MCP endpoint client (`geode mcp`'s DSN, parsed by the library)
+//     answers through `quic://user:pass@[::1]:<port>`;
 //   * `--server [fe80::1%lo]:<port>` is still refused before dialling, with
 //     the reason: the quic dialler cannot parse an IPv6 zone.
 // Real server and real CLI binary; skips (with a message) when the host has
@@ -24,6 +26,7 @@ const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
+const geode_mcp = @import("geode_mcp");
 
 fn ipv6LoopbackAvailable() bool {
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
@@ -158,6 +161,21 @@ test "SONNY-6494: geode query reaches a geode serve listening on [::1]" {
         defer a.free(by_name);
         try expectAnswered(a, "--server", by_name);
     } else std.debug.print("note: /etc/hosts has no ip6-localhost entry; the IPv6-only name case is not run\n", .{});
+
+    // The MCP endpoint client, through a DSN.
+    {
+        const mcp_dsn = try std.fmt.allocPrint(a, "quic://{s}:{s}@{s}?insecure=true", .{ util.defaultUsername(), "Geode%20Test%20Admin%20Passphrase", addr });
+        defer a.free(mcp_dsn);
+        try std.testing.expectEqualStrings("Geode Test Admin Passphrase", util.defaultPassword());
+        const client = try geode_mcp.client.GeodeClient.init(a, mcp_dsn);
+        defer client.deinit();
+        const out = try client.query("RETURN 41 + 1 AS x", null);
+        defer a.free(out);
+        if (std.mem.indexOf(u8, out, "42") == null) {
+            std.debug.print("MCP query over {s}: {s}\n", .{ addr, out });
+            return error.TestUnexpectedResult;
+        }
+    }
 
     // An IPv6 zone is refused before dialling, with the reason.
     const zoned = try std.fmt.allocPrint(a, "[fe80::1%lo]:{d}", .{port});
