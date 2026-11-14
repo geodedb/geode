@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -32,7 +33,7 @@ test "ORDER policy: expr forbidden by default" {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         proto.TestEnv.standard(),
     );
     defer server.deinit();
@@ -74,7 +75,7 @@ test "ORDER policy: expr allowed with --order-keys expr" {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--order-keys", "expr" },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--order-keys", "expr" },
         proto.TestEnv.standard(),
     );
     defer server.deinit();

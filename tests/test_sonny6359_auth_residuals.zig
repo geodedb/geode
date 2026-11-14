@@ -54,7 +54,7 @@ const HMAC_KEY = [_]u8{0x59} ** 32;
 const GOOD = "Correct Horse Battery Staple Seven";
 const GOOD2 = "Purple Elephant Dancing Quietly Nine";
 const GOOD3 = "Silver Mountain River Lantern Four";
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 
 const linux = std.os.linux;
 

@@ -86,7 +86,7 @@ test "SONNY-6384: a write after a checkpoint, a hard crash and a reopen survives
 // End to end: the offline CLI, the server, SIGKILLs
 // ---------------------------------------------------------------------------
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 const admin_user = util.DefaultAuth.username;
 const admin_pw = util.DefaultAuth.password;
 const offline_pw = "Correct Horse Battery Staple Seven";

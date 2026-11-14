@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 // Protocol test: PROFILE includes GraphStore metrics.
@@ -21,7 +22,7 @@ test "protocol: PROFILE graph_store metrics" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         util.TestEnv.standard(),
     );
     defer server.deinit();

@@ -30,7 +30,7 @@ const graph_store = geode.graph_store;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 const hmac_hex = "6b" ** 32;
 
 /// Policy-compliant passphrases, one per user and step.

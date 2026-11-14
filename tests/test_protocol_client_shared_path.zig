@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
 const proto = @import("proto_test_util.zig");
@@ -36,7 +37,7 @@ fn startProtocolPair(allocator: std.mem.Allocator) !ProtocolPair {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         null,
     );
     errdefer server.deinit();

@@ -22,7 +22,7 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = @import("geode_test_bin").geode_exe;
 const bob_pw = "Correct Horse Battery Staple Seven";
 
 fn skipWithoutBinary() !void {

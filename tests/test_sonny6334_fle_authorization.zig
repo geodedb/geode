@@ -27,6 +27,7 @@
 // CANARY: REQ=REQ-SONNY-6334-FLE-AUTHZ; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -535,7 +536,7 @@ test "SONNY-6334 (1)(2)(3): over QUIC a ReadWrite user naming the listed FLE rol
     const port = try util.getRandomPort();
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, &.{"GEODE_MASTER_KEY=" ++ master_key});
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, &.{"GEODE_MASTER_KEY=" ++ master_key});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
 

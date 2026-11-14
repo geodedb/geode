@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
 const proto_test_util = @import("proto_test_util.zig");
@@ -29,7 +30,7 @@ fn runJsonQueryAgainstServer(
     return runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", query_text },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", query_text },
     );
 }
 
@@ -42,8 +43,8 @@ fn runShellAgainstServer(
 
     const command = try std.fmt.allocPrint(
         allocator,
-        "./zig-out/bin/geode shell --server {s} --insecure-tls-skip-verify -U {s} -P {s} --format json --no-history",
-        .{ addr, proto_test_util.defaultUsername(), proto_test_util.defaultPassword() },
+        "{s} shell --server {s} --insecure-tls-skip-verify -U {s} -P {s} --format json --no-history",
+        .{ geode_test_bin.geode_exe, addr, proto_test_util.defaultUsername(), proto_test_util.defaultPassword() },
     );
     defer allocator.free(command);
 
@@ -178,7 +179,7 @@ fn execOkQuery(allocator: std.mem.Allocator, addr: []const u8, query_text: []con
 }
 
 fn execOkGraphQuery(allocator: std.mem.Allocator, addr: []const u8, graph: []const u8, query_text: []const u8) !void {
-    const result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", graph, query_text });
+    const result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", graph, query_text });
     defer allocator.free(result.out);
     defer allocator.free(result.err);
     try assertCommandSucceeded(result);
@@ -239,7 +240,7 @@ test "query and shell share result semantics for gap_0200 chained WITH query" {
 
     const query_text = "WITH 1 AS x WITH x + 1 AS y RETURN y AS result";
 
-    const query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", query_text });
+    const query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", query_text });
     defer allocator.free(query_result.out);
     defer allocator.free(query_result.err);
     try assertCommandSucceeded(query_result);
@@ -269,7 +270,7 @@ test "query graph flag and shell use command share graph-scoped execution semant
     const query_result = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", graph_name, "MATCH (n:ParityNode) RETURN n.name AS name" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", graph_name, "MATCH (n:ParityNode) RETURN n.name AS name" },
     );
     defer allocator.free(query_result.out);
     defer allocator.free(query_result.err);
@@ -302,7 +303,7 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
     }
 
     const ordered_query = "MATCH (n:GAP0257) RETURN n.id AS id, n.value AS value ORDER BY n.id";
-    const ordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", ordered_query });
+    const ordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", ordered_query });
     defer allocator.free(ordered_query_result.out);
     defer allocator.free(ordered_query_result.err);
     try assertCommandSucceeded(ordered_query_result);
@@ -317,7 +318,7 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
     try assertResultJsonEqual(ordered_query_result.out, ordered_shell_json);
 
     const unordered_query = "MATCH (n:GAP0257) RETURN n.id AS id";
-    const unordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", unordered_query });
+    const unordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", unordered_query });
     defer allocator.free(unordered_query_result.out);
     defer allocator.free(unordered_query_result.err);
     try assertCommandSucceeded(unordered_query_result);
@@ -443,7 +444,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const file_result = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--file", query_file_path },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--file", query_file_path },
     );
     defer allocator.free(file_result.out);
     defer allocator.free(file_result.err);
@@ -459,7 +460,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const verify_query_graph = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", "test_query_file_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", "test_query_file_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
     );
     defer allocator.free(verify_query_graph.out);
     defer allocator.free(verify_query_graph.err);
@@ -468,7 +469,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const verify_shell_graph = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", "test_shell_source_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", "test_shell_source_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
     );
     defer allocator.free(verify_shell_graph.out);
     defer allocator.free(verify_shell_graph.err);

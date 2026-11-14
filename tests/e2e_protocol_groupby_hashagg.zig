@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -75,7 +76,7 @@ test "e2e: HashAgg with memory pressure" {
         "GEODE_QUERY_MEM_LIMIT_BYTES=1024",
     };
 
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

@@ -2368,6 +2368,24 @@
 
 ### Fixed
 
+- **No test step spawns `./zig-out/bin/geode` any more, and configuration
+  fails if one does (SONNY-6535).** That path holds whatever the last install
+  left (built from another commit or optimize mode, or nothing: the test
+  then skipped). 14 named steps (`test-sonny2846-*`, `test-sonny3034-*`,
+  `test-sonny3122-*`, `test-sonny3241-*`, `test-sonny6327-*`,
+  `test-sonny6334-*`, `test-sonny6341-*`, `test-sonny6345-*`,
+  `test-sonny6358-*`, `test-sonny6359-*`, `test-sonny6367-*`,
+  `test-sonny6369-*`, `test-sonny6377-security-*`, `test-sonny6384-*`
+  offline crash durability) depended on the install step and spawned that
+  path; they and 14 files `tests/all_tests.zig` imports now spawn the
+  executable this build emits through `spawnsBuiltGeode` and
+  `@import("geode_test_bin")` (SONNY-2697). `checkSpawningTestsUseBuiltGeode`
+  in build.zig scans, when `build()` returns, every test artifact a step runs
+  (its tests/ modules and the tests/ files they `@import`) and panics,
+  listing file:line, on code that names the path. Also corrected two comments
+  that said a 400-CREATE chunk takes ~38 s in a Debug server with about 13
+  fdatasync calls per statement: measured for SONNY-6534 it takes 6-10 s,
+  about 2 per statement. Regression: `zig build -l` (configuration).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

@@ -125,7 +125,7 @@ test "exit codes are defined correctly" {
 test "unified CLI binary name detection" {
     // Test basename extraction for unified CLI
     try testing.expectEqualStrings("geode", std.fs.path.basename("/usr/local/bin/geode"));
-    try testing.expectEqualStrings("geode", std.fs.path.basename("./zig-out/bin/geode"));
+    try testing.expectEqualStrings("geode", std.fs.path.basename("./zig-out/bin/geode")); // not spawned (SONNY-6535)
     try testing.expectEqualStrings("geode-auth", std.fs.path.basename("geode-auth"));
     try testing.expectEqualStrings("geode", std.fs.path.basename("/path/to/geode"));
 
