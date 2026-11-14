@@ -2298,6 +2298,30 @@
 
 ### Fixed
 
+- **A WITH in a later part of a chain that aggregates, is DISTINCT or has a
+  SKIP / LIMIT reads every row reaching it (SONNY-6540 item 5, BREAKING:
+  results change).** The chain executor (`executeQueryChain`) ran each
+  later part once per row of the first part. For the first aggregating WITH
+  it found it grouped the first part's rows directly, so a part in between
+  (`WITH z WITH z.k * 2 AS k2 WITH sum(k2) AS t`) and the aggregating
+  part's own MATCH (`WITH z MATCH (z)-[:R]->(y) WITH z.g AS g, sum(y.v)`)
+  were skipped and their variables read NULL, and that part's WHERE after
+  the WITH, ORDER BY, SKIP / LIMIT and DISTINCT were ignored; a DISTINCT or
+  windowed WITH in a later part was applied to each first-part row's rows
+  apart (`... MATCH (z)-->(y) WITH y ORDER BY y.v DESC LIMIT 1` gave one row
+  per z). Such a part now runs its whole WITH stage over all of the rows
+  reaching it, as the planned read runs one (the WHERE before the WITH, the
+  projection and its grouping, DISTINCT, ORDER BY, SKIP and LIMIT, the WHERE
+  after it; `match_operations.applyWithStage`, shared with the write
+  steps), and the rest of the chain reads its rows; a WITH that starts a
+  part before its MATCH is computed first, then the MATCH per row. ISO/IEC
+  39075:2024 14.3 / 14.11: a return statement (Geode's WITH) is applied to
+  the working table as a whole. Also: a WITH followed directly by another
+  WITH kept its items but dropped its DISTINCT, ORDER BY, SKIP and LIMIT in
+  the parser (`WITH DISTINCT g WITH g ...` returned duplicates), and the
+  scope check refused the WHERE of such a WITH (`WITH x.g AS g, count(*) AS
+  c WHERE c > 1 WITH ...`: 42000) because it read it before the
+  projection. Regression: `zig build test-sonny6540-chain-with-stage`.
 - **A 65,535-dimension vector literal parses (SONNY-6540 item 8).** The
   documented vector cap is 65,535 dimensions, but the array-literal form
   could not reliably reach it. Every decimal literal (`1.0`) built its

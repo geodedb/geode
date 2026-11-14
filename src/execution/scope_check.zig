@@ -215,6 +215,10 @@ pub const Checker = struct {
         }
 
         const post_with: ?ast.WithClause = if (q.is_initial_with) null else q.with_clause;
+        // A part chained by its implicit RETURN (`WITH a WITH b ...`): the
+        // RETURN items are the projection, its WHERE filters what they
+        // project.
+        const ret_projects = post_with == null and q.next_query != null and q.ret.items.len > 0 and !sameItems(q.ret.items, initial);
         var post = s;
         if (post_with) |wc| {
             if (q.pre_with_where) |*w| try c.expr(w, s);
@@ -228,14 +232,13 @@ pub const Checker = struct {
             // binds for the part after it only through the WITH.
         } else {
             // The WHERE after an initial WITH, or the MATCH's (which
-            // replaces it in this field): both read `s`.
-            if (q.where_clause) |*w| try c.expr(w, s);
+            // replaces it in this field): both read `s`. SONNY-6540: not a
+            // projection-only part's, which reads what it projects (below);
+            // `WITH x.g AS g, count(*) AS c WHERE c > 1 WITH ...` was
+            // refused (VariableNotInScope).
+            if (!ret_projects) if (q.where_clause) |*w| try c.expr(w, s);
             if (q.filter_clause) |*f| try c.expr(f, s);
         }
-        // A part chained by its implicit RETURN (`WITH a WITH b ...`): the
-        // RETURN items are the projection, its WHERE filters what they
-        // project.
-        const ret_projects = post_with == null and q.next_query != null and q.ret.items.len > 0 and !sameItems(q.ret.items, initial);
         if (ret_projects) {
             for (q.ret.items) |*item| try c.expr(&item.expr, post);
             const out = try c.project(q.ret.items, post);

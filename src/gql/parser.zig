@@ -2557,10 +2557,14 @@ pub const Parser = struct {
                     .with_clause = null, // WITH items become ret.items for chaining
                     .set_clauses = &.{},
                     .remove_clauses = &.{},
-                    .ret = .{ .items = initial_with_clause.?.items, .distinct = false },
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
+                    // SONNY-6540 item 5: and its DISTINCT, ORDER BY, SKIP and
+                    // LIMIT, which were dropped here.
+                    .ret = .{ .items = initial_with_clause.?.items, .distinct = initial_with_clause.?.distinct },
+                    .order_by = if (initial_with_clause.?.order_by) |ob| ob.* else null,
+                    .limit = if (initial_with_clause.?.limit) |l| @intCast(l) else null,
+                    .offset = if (initial_with_clause.?.offset) |o| @intCast(o) else null,
+                    .limit_param = initial_with_clause.?.limit_param,
+                    .offset_param = initial_with_clause.?.offset_param,
                     .next_query = next_ptr,
                     .group_by = null,
                     .having = null,

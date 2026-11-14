@@ -50,6 +50,15 @@ const cases = [_]Case{
     .{ .q = "MATCH (z:C6540) WITH z WITH z.g AS g, sum(z.k) AS s RETURN g, s ORDER BY s DESC LIMIT 2", .ordered = true, .want = &.{ "3, 8", "2, 4" } },
     .{ .q = "MATCH (z:C6540) WITH z WITH z.g AS g, sum(z.k) AS s RETURN sum(s) AS t", .want = &.{"15"} },
 
+    // A WITH that starts a part before its MATCH: the stage, then the MATCH
+    // per row of it.
+    .{ .q = "MATCH (z:C6540) WITH z WITH z.g AS g, count(*) AS c MATCH (w:C6540) WHERE w.g = g RETURN w.k, c", .want = &.{ "1, 2", "2, 2", "4, 1", "8, 1" } },
+    .{ .q = "MATCH (z:C6540) WITH z WITH z.g AS g, count(*) AS c WHERE c > 1 MATCH (w:C6540) WHERE w.g = g RETURN w.k", .want = &.{ "1", "2" } },
+    // A WITH followed by another WITH keeps its DISTINCT, ORDER BY and LIMIT.
+    .{ .q = "MATCH (z:C6540) WITH z WITH z.g AS g, sum(z.k) AS s ORDER BY s DESC LIMIT 1 WITH g, s RETURN g, s", .want = &.{"3, 8"} },
+    .{ .q = "MATCH (z:C6540) WITH z.g AS g WITH DISTINCT g WITH g RETURN g", .want = &.{ "1", "2", "3" } },
+    .{ .q = "MATCH (z:C6540) WITH z.g AS g ORDER BY g LIMIT 1 WITH g RETURN g", .want = &.{"1"} },
+
     // A part between the first and the aggregating one.
     .{ .q = "MATCH (z:C6540) WITH z WITH z.k * 2 AS k2 WITH sum(k2) AS t RETURN t", .want = &.{"30"} },
     // The aggregating part's own MATCH, and the WHERE before its WITH.

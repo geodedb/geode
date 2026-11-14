@@ -8250,7 +8250,6 @@ fn readWithStageRows(
     // before.
     const split = q.pre_with_where != null or q.with_where != null;
     const pattern_where: ?ast.Expr = if (split) q.pre_with_where else null;
-    const stage_where: ?ast.Expr = if (split) q.with_where else q.where_clause;
 
     var pattern_q = q;
     pattern_q.with_clause = null;
@@ -8264,6 +8263,30 @@ fn readWithStageRows(
     pattern_q.remove_clauses = &.{};
     var pattern = try readBindings(allocator, pattern_q, param_names, param_values, inline_let_bindings, current_graph, .rows_only);
     defer pattern.deinit(allocator);
+
+    var rows = try applyWithStage(allocator, q, with_clause, &pattern.rows, param_names, param_values);
+    errdefer rows.deinit(allocator);
+    const items = try allocator.dupe(ast.ReturnItem, with_clause.items);
+    return .{ .rows = rows, .items = items };
+}
+
+// CANARY: REQ=REQ-SONNY-6540-CHAIN-WITH-STAGE; FEATURE="ChainedWithAggregation"; ASPECT=SharedWithStage; STATUS=TESTED; TEST=tests/test_sonny6540_chain_with_stage.zig; OWNER=engine; UPDATED=2026-11-14
+/// SONNY-3140 / SONNY-6540: part `q`'s WITH stage over `pattern_rows`, the
+/// part's rows after the WHERE before the WITH: the projection with the
+/// WITH's GROUP BY and HAVING; DISTINCT; ORDER BY; SKIP and LIMIT (a literal
+/// or a parameter); then the WHERE after the WITH. Takes over the nodes and
+/// edges `pattern_rows` owns. The write steps (`readWithStageRows`) and the
+/// chain executor's later parts (`query_execution.zig`) both run a WITH here.
+pub fn applyWithStage(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    with_clause: ast.WithClause,
+    pattern_rows: *ExecutionResult,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) anyerror!ExecutionResult {
+    const split = q.pre_with_where != null or q.with_where != null;
+    const stage_where: ?ast.Expr = if (split) q.with_where else q.where_clause;
 
     // The projection, its GROUP BY and HAVING, its ORDER BY and a literal
     // SKIP / LIMIT, as every WITH stage computes them. DISTINCT comes before
@@ -8279,12 +8302,12 @@ fn readWithStageRows(
         stage.offset_param = null;
     }
     if (with_clause.distinct) stage.order_by = null;
-    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
+    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern_rows.*, stage, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
     errdefer rows.deinit(allocator);
     // The rows point at the nodes and edges the pattern's rows hold.
-    rows.owned_graph_entities = pattern.rows.owned_graph_entities;
-    pattern.rows.owned_graph_entities = null;
-    try ownWithStageValues(allocator, &rows, with_clause.items, pattern.rows.owns_value_memory);
+    rows.owned_graph_entities = pattern_rows.owned_graph_entities;
+    pattern_rows.owned_graph_entities = null;
+    try ownWithStageValues(allocator, &rows, with_clause.items, pattern_rows.owns_value_memory);
 
     if (with_clause.distinct) {
         try applyDistinct(allocator, &rows);
@@ -8328,9 +8351,7 @@ fn readWithStageRows(
         allocator.free(rows.rows);
         rows.rows = out;
     }
-
-    const items = try allocator.dupe(ast.ReturnItem, with_clause.items);
-    return .{ .rows = rows, .items = items };
+    return rows;
 }
 
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=WithStageItems; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
