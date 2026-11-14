@@ -2403,6 +2403,61 @@
   hydration scan's comment that no write runs during a hydration is
   corrected (the shard-locked bulk writers do; SONNY-6492 item 2 allows for
   them). Regression: `zig build test-sonny6523-checkpoint-settings`.
+- **A malformed MCP endpoint DSN says what is wrong (SONNY-6494;
+  geode-client-zig v0.3.16).** The client library now parses a DSN with
+  geode's host:port grammar and names the fault (`InvalidDSN`,
+  `InvalidPort`, `UnsupportedScheme`), but geode's MCP tools answered every
+  such endpoint with `Error: Failed to initialize client`, its resources
+  with `Failed to connect to Geode server`, and `geode mcp --endpoint
+  <bad DSN>` started anyway. `src/mcp/client.zig` maps each error to a
+  message (docs/DSN.md, "How the MCP endpoint reports a bad DSN"); the
+  tools and resources return it, and **`geode mcp` now refuses a bad
+  `--endpoint` at startup** (exit 2, `Error: --endpoint: <message>`; the
+  DSN is not echoed because it may carry a password). geode's own
+  `checkDsnHost` pre-check is removed: the library refuses an unbracketed
+  IPv6 host itself (the error is now `InvalidDSN`, was `InvalidAddress`).
+  **Port 0 is refused for every client address** (`--server`, `--dsn`, the
+  MCP endpoint): the grammar keeps accepting it for listeners, where it
+  means "any free port", but a client dialling it failed at the first send
+  with a bare `Unexpected`. An IPv6 zone in the MCP endpoint is refused
+  with its reason. Regression: `zig build test-sonny6494-mcp-dsn-errors`.
+
+- **The CLI reaches IPv6 servers (SONNY-6494 item 6; geode-client-zig
+  v0.3.16).** `geode query`, `geode shell`, `geode backup` and the other
+  QUIC CLI commands refused every IPv6 destination with
+  `Ipv6EndpointUnsupported` (`src/client/quic_endpoint_host.zig`), because
+  the client library bound an IPv4-only endpoint and formatted the dial
+  address without brackets. v0.3.16 resolves the host itself: an address
+  literal is dialled as written (IPv6 bracketed, from a `[::]:0` endpoint),
+  and a host name is looked up in both families through the system resolver
+  (hosts file and DNS), first IPv4 address first, otherwise its first IPv6
+  address. geode's own resolver step is removed (it duplicated that rule)
+  and the host goes to the library unchanged; the TLS server name stays the
+  host as given. **Behaviour change:** `--server [::1]:3141`,
+  `--dsn quic://[::1]:3141` and an IPv6-only host name now connect instead
+  of being refused. An IPv6 address with a zone (`[fe80::1%eth0]:3141`) is
+  still refused before dialling, now with `Ipv6ZoneUnsupported` and a
+  message saying the QUIC dialler cannot use a zone. The steps
+  `test-5077-quic-endpoint-host` and `test-sonny6487-endpoint-host-family`,
+  which tested the removed module, are gone; the new end-to-end
+  `zig build test-sonny6494-ipv6-query` drives a real server on `[::1]`
+  through `--server`, `--dsn`, `ip6-localhost` and the MCP endpoint client.
+
+- **Remote KMS latency stays flat on a long-lived connection, and a 16 MiB
+  QUIC request is answered (SONNY-2412, SONNY-3232; quic v0.1.51,
+  SONNY-6478/SONNY-6475).** quic v0.1.51 retires a finished stream and no
+  longer resends acknowledged STREAM data: 64 remote KMS unwraps on one
+  connection now take 11.1 ms -> 11.3 ms (1.01x; 43.7 ms -> 140.8 ms, 3.22x,
+  on v0.1.50), so `test-sonny2412-kms-latency-flat` leaves the known-issues
+  list and runs in the aggregate. The same release fixes the receive-side
+  crawl of a request larger than the 10 MiB stream window: a request of the
+  16 MiB maximum is answered (about 3.5 s, Debug server on loopback; it used
+  to take ~168 s in ReleaseSafe and did not finish in Debug), and
+  `test-sonny3232-quic-request-size` asserts it again instead of recording
+  it. The earlier advice to keep QUIC requests well under 10 MiB no longer
+  applies. Stalls of long transfers under heavy CPU load that remain in the
+  library are tracked as SONNY-6522.
+
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

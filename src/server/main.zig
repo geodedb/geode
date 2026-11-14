@@ -268,8 +268,9 @@ const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .
 // SONNY-6466: the per-connection stall watchdog's threshold
 // (GEODE_QUIC_STALL_CANCEL_MS). A client that vanishes without a
 // CONNECTION_CLOSE (a crash, a pulled cable) sends nothing more, and vendored
-// quic v0.1.49 neither sends PINGs nor enforces the idle timeout it
-// advertises, so the server cannot tell it from a quiet live client. What it
+// quic (still on v0.1.51: `connection/idle.zig` is not wired and the
+// dead-connection reaper is opt-in) neither sends PINGs nor enforces the
+// idle timeout it advertises, so the server cannot tell it from a quiet live client. What it
 // can see is a connection on which no stream has read a message for this
 // long: the watchdog then cancels that connection's in-flight reads (57014).
 // The same bound therefore caps a single read that runs this long on a

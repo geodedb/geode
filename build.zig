@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -5833,10 +5832,9 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
     }
     // SONNY-2412: remote KMS latency stays flat over 64 requests on one
-    // connection (perf gate: enforced when CI is unset). Intentionally RED
-    // reproduction of a quic dependency defect (docs/KNOWN_TEST_ISSUES.md):
-    // kept out of `shardDep` until a quic release with the fix is pinned;
-    // compiled by `test-compile`.
+    // connection (perf gate: enforced when CI is unset). The quic defect it
+    // reproduced (completed streams resent forever) is fixed in quic v0.1.51
+    // (SONNY-6478), so it runs in the aggregate.
     {
         const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2412_kms_latency_flat.zig"), .target = target, .optimize = optimize }) });
         tests.root_module.addImport("transport/quic", transport_quic_mod);
@@ -5846,7 +5844,7 @@ pub fn build(b: *std.Build) void {
         tests.root_module.addImport("perf_gate", perf_gate_mod);
         tests.root_module.link_libc = true;
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny2412-kms-latency-flat", "Run SONNY-2412 regression (64 remote KMS unwraps on one QUIC connection keep a flat latency: the median of the last 16 within 2x of the first 16; perf gate, enforced when CI is unset)").dependOn(&run_tests.step);
     }
 
@@ -6086,7 +6084,7 @@ pub fn build(b: *std.Build) void {
         tests.root_module.link_libc = true;
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6484-ipv6-host-port", "Run SONNY-6484 item 1 regression (client addresses and DSNs: [::1], [::1]:3141 and [fe80::1%eth0]:3141 parse to the bare address and port; a bare IPv6 literal and malformed brackets are refused, not misread as host ':' port 1)").dependOn(&run_tests.step);
+        b.step("test-sonny6484-ipv6-host-port", "Run SONNY-6484 item 1 regression (client addresses and DSNs: [::1], [::1]:3141 and [fe80::1%eth0]:3141 parse to the bare address and port; a bare IPv6 literal, malformed brackets and port 0 are refused, not misread as host ':' port 1; the MCP endpoint DSN parser refuses a bare IPv6 host)").dependOn(&run_tests.step);
     }
 
     // SONNY-6463 (5): source files outside src/distributed whose inline tests
@@ -8036,6 +8034,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
     sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
+    // SONNY-6494: MCP tools, resources and `geode mcp --endpoint` name what
+    // is wrong with a malformed endpoint DSN (geode-client-zig v0.3.16's
+    // distinct errors, port 0, an IPv6 zone); `geode query --server
+    // <host>:0` is refused as an address.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_mcp_dsn_errors.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-mcp-dsn-errors", "Run SONNY-6494 regression (MCP tools/call and resources/read answer a malformed endpoint DSN - unbracketed IPv6, junk after ], a bad or zero port, an unsupported scheme, an IPv6 zone - with what is wrong instead of a generic failure; geode mcp refuses it at startup without echoing credentials; geode query --server <host>:0 is refused as an address)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);
@@ -10356,25 +10368,6 @@ pub fn build(b: *std.Build) void {
     // data-directory backup and printing success; the local path runs only
     // with --local and an explicit data directory. Spawns the installed CLI
     // against a closed loopback port; no server.
-    const endpoint_host_mod = b.createModule(.{ .root_source_file = b.path("src/client/quic_endpoint_host.zig"), .target = target, .optimize = optimize });
-    const endpoint_host_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_5077_quic_endpoint_host.zig"), .target = target, .optimize = optimize });
-    endpoint_host_test_mod.link_libc = true;
-    endpoint_host_test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
-    const endpoint_host_tests = b.addTest(.{ .root_module = endpoint_host_test_mod });
-    const run_endpoint_host_tests = b.addRunArtifact(endpoint_host_tests);
-    shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
-    const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
-    endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
-    {
-        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_endpoint_host_family.zig"), .target = target, .optimize = optimize });
-        test_mod.link_libc = true;
-        test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
-        const tests = b.addTest(.{ .root_module = test_mod });
-        const run_tests = b.addRunArtifact(tests);
-        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6487-endpoint-host-family", "Run SONNY-6487 item 2 regression (the CLI QUIC client looks a server name up in both address families, prefers IPv4, and refuses an IPv6-only destination with Ipv6EndpointUnsupported because geode-client-zig binds an IPv4-only endpoint)").dependOn(&run_tests.step);
-    }
-
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
     const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
@@ -10498,7 +10491,23 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port; geode query refuses an IPv6 server with the client-library reason)").dependOn(&run_tests.step);
+        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port)").dependOn(&run_tests.step);
+    }
+    // SONNY-6494 (6): the CLI's QUIC client reaches a real geode serve on
+    // [::1] now that geode-client-zig v0.3.16 dials IPv6.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_ipv6_query.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-ipv6-query", "Run SONNY-6494 item 6 regression (geode query --server [::1]:<port>, --dsn quic://[::1]:<port>, --server ip6-localhost:<port> and the MCP endpoint client (quic://user:pass@[::1]:<port>) answer against a real geode serve listening on [::1]; an IPv6 zone is refused before dialling with the reason; skips without an IPv6 loopback)").dependOn(&run_tests.step);
     }
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_host_port.zig"), .target = target, .optimize = optimize });
@@ -12450,9 +12459,9 @@ pub fn build(b: *std.Build) void {
     const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351: quic v0.1.47 keeps lost STREAM data until retransmitted), one past the 16 MiB maximum is not; the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
-    // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the
-    // 16 MiB maximum is answered 54000 and its connection closed, so the
-    // client fails fast (it used to block until its 60 s writer deadline).
+    // SONNY-3232: QUIC requests of 1 MiB, 4 MiB and the 16 MiB maximum are
+    // answered (the maximum since quic v0.1.51); one over the 16 MiB maximum
+    // is answered 54000 and its connection closed, so the client fails fast (it used to block until its 60 s writer deadline).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_request_size.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -12464,7 +12473,7 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
+        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; the maximum-size request (16 MiB less the envelope) is answered too (quic v0.1.51, SONNY-6475); one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each)").dependOn(&run_tests.step);
     }
 
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)

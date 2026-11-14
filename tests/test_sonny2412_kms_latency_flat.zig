@@ -5,16 +5,16 @@
 // 11 ms to about 110 ms over 64 requests. The client opens one QUIC stream
 // per request on the connection (`RemoteKmsClient.sendRequest`).
 //
-// Intentionally RED when the gate is enforced (docs/KNOWN_TEST_ISSUES.md):
-// the cause is in the quic dependency (v0.1.49). The server endpoint keeps
-// retransmitting the already-delivered response data (STREAM frames) of every
-// completed request stream, the client acknowledges each copy, and it never
-// stops (about 370 datagrams a second on a connection with nothing in
-// flight); each request adds one more, so the useful exchange gets a
-// shrinking share of the endpoint's packet budget. geode cannot retire the
-// streams itself: `Connection.teardownStream` after the client's close
-// changes nothing, after the server's destroy it breaks a later request
-// (InvalidStream).
+// The cause was in the quic dependency (v0.1.49 and v0.1.50): the server
+// endpoint kept retransmitting the already-delivered response data (STREAM
+// frames) of every completed request stream, the client acknowledged each
+// copy, and it never stopped (about 370 datagrams a second on a connection
+// with nothing in flight); each request added one more, so the useful
+// exchange got a shrinking share of the endpoint's packet budget (37 ms ->
+// 138 ms, 2.9-3.7x). quic v0.1.51 (SONNY-6478) retires a stream once both
+// directions are finished and no longer resends acknowledged data; geode
+// does not (and need not) call `teardownStream`. On v0.1.51 the run is flat
+// (11.1 ms -> 11.3 ms, 1.01x).
 //
 // A real `RemoteKmsServer` served from a thread, a real `RemoteKmsClient`,
 // over QUIC with the per-test TLS pair (tests/kms_test_tls.zig): 64 unwraps
@@ -22,7 +22,7 @@
 // enforced when CI is unset or GEODE_PERF_GATES=enforce) is that the median
 // of the last 16 requests is within 2x of the median of the first 16.
 //
-// CANARY: REQ=REQ-SONNY-2412-KMS-LATENCY-FLAT; FEATURE="RemoteKMSPrototype"; ASPECT=Regression; STATUS=IMPL; TEST=tests/test_sonny2412_kms_latency_flat.zig; OWNER=security; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-2412-KMS-LATENCY-FLAT; FEATURE="RemoteKMSPrototype"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2412_kms_latency_flat.zig; OWNER=security; UPDATED=2026-11-13
 
 const std = @import("std");
 const kms = @import("security/kms_remote");

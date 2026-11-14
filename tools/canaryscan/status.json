@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T02:37:56.503006694Z",
+  "generated_at": "2026-11-14T03:09:11.550124359Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -9073,10 +9073,10 @@
           "aspect": "HostnameResolution",
           "status": "TESTED",
           "files": [
-            "src/client/quic_endpoint_host.zig"
+            "src/client/zig_quic_bridge.zig"
           ],
           "tests": [
-            "tests/test_5077_quic_endpoint_host.zig"
+            "tests/test_sonny6494_ipv6_query.zig"
           ],
           "benches": [],
           "owner": "cli",

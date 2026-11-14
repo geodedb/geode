@@ -2,9 +2,10 @@
 // (16 MiB framed message, `decodeBufferedMessage`; docs/USAGE.md) and just
 // over it are answered, against a real `geode serve` over real QUIC.
 //
-// What holds on this HEAD (quic 0.1.48, which fixed the loss-recovery bug,
-// SONNY-3351, that left round 15's ~1 MiB requests unanswered):
-//   * 1 MiB and 4 MiB are answered with their full size (asserted).
+// What holds (quic 0.1.48 fixed the loss-recovery bug, SONNY-3351, that left
+// round 15's ~1 MiB requests unanswered; quic 0.1.51 the large-stream crawl):
+//   * 1 MiB, 4 MiB and the maximum-size request are answered with their
+//     full size (asserted).
 //   * A request over the maximum used to be refused by ENDING THE STREAM WITH
 //     NO REPLY: the server stopped reading, so the client, held by the stream
 //     window, blocked writing and failed only at its own 60 s writer deadline,
@@ -13,12 +14,13 @@
 //     the client's write stops as soon as the close arrives (asserted: the
 //     failure is the server's close or 54000, inside the 60 s writer
 //     deadline) and the server serves the next connection.
-//   * A request larger than the 10 MiB stream receive window is still
-//     transferred very slowly (ReleaseSafe: 16 MiB in ~168 s; Debug: no
-//     answer in 300 s): the window credit after the first 10 MiB arrives at a
-//     crawl. That is in the QUIC library's flow-control path, not fixed here;
-//     the maximum-size case is RECORDED with its time, not asserted (see the
-//     SONNY-3232 report's library follow-up).
+//   * A request larger than the 10 MiB stream receive window used to crawl
+//     (ReleaseSafe: 16 MiB in ~168 s; Debug: no answer in 300 s): the
+//     receiver sorted and walked every buffered out-of-order segment for each
+//     packet. quic v0.1.51 (SONNY-6475) keeps them sorted and drains only the
+//     contiguous prefix, so the maximum-size case is asserted again (Debug:
+//     answered in about 3.5 s on loopback). Stalls of long transfers under
+//     heavy CPU load that remain in the library are SONNY-6522.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -32,8 +34,6 @@ const envelope_room: usize = 4096;
 /// Bound for the asserted answers (a Debug server on a loaded machine
 /// answered 4 MiB in 16 s).
 const answer_bound_s: u32 = 120;
-/// The recorded maximum-size case waits this long, then moves on.
-const recorded_bound_s: u32 = 30;
 /// An over-maximum request must fail inside the client's 60 s writer
 /// deadline. The time includes the client encoding and starting to send
 /// 16 MiB (about 20 s for a Debug client), so the decisive check is HOW it
@@ -99,7 +99,7 @@ fn smallRequestServed(allocator: std.mem.Allocator, addr: []const u8, server_pid
     return r.error_code == null and r.rows.len == 1;
 }
 
-test "SONNY-3232 QUIC requests of 1 MiB and 4 MiB are answered, one over the 16 MiB maximum fails fast, and the server serves on" {
+test "SONNY-3232 QUIC requests of 1 MiB, 4 MiB and the 16 MiB maximum are answered, one over it fails fast, and the server serves on" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
@@ -109,21 +109,12 @@ test "SONNY-3232 QUIC requests of 1 MiB and 4 MiB are answered, one over the 16 
     const addr = server.getAddr();
 
     var failures: usize = 0;
-    for ([_]usize{ 1024 * 1024, 4 * 1024 * 1024 }) |bytes| {
+    for ([_]usize{ 1024 * 1024, 4 * 1024 * 1024, max_message_bytes - envelope_room }) |bytes| {
         const o = try probe(allocator, addr, server_pid, bytes, answer_bound_s);
         defer if (o.error_code) |c| allocator.free(c);
         const ok = o.served_n != null and o.served_n.? == @as(i64, @intCast(bytes));
         std.debug.print("SONNY-3232 {s}: {d}-byte request -> served={any} error={?s} transport={?s} in {d} ms{s}\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms, if (ok) "" else "  <-- UNEXPECTED" });
         if (!ok) failures += 1;
-        if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
-    }
-
-    // Recorded, not asserted: the window credit past 10 MiB crawls.
-    {
-        const bytes = max_message_bytes - envelope_room;
-        const o = try probe(allocator, addr, server_pid, bytes, recorded_bound_s);
-        defer if (o.error_code) |c| allocator.free(c);
-        std.debug.print("SONNY-3232 {s}: {d}-byte request (inside the maximum; recorded) -> served={any} error={?s} transport={?s} in {d} ms\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms });
         if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
     }
 

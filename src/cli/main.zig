@@ -4301,7 +4301,7 @@ const AuthResult = hello_decode.AuthResult;
 /// refuses.
 fn printInvalidServerAddress(stderr: std.Io.File, server_addr: []const u8) void {
     var buf: [512]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: invalid server address '{s}' (expected host:port, [ipv6]:port or :port; port 0-65535)\n", .{server_addr}) catch "Error: invalid server address (expected host:port, [ipv6]:port or :port)\n";
+    const msg = std.fmt.bufPrint(&buf, "Error: invalid server address '{s}' (expected host:port, [ipv6]:port or :port; port 1-65535, port 0 cannot be dialled)\n", .{server_addr}) catch "Error: invalid server address (expected host:port, [ipv6]:port or :port; port 1-65535, port 0 cannot be dialled)\n";
     stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
 }
 

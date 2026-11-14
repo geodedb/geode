@@ -22,6 +22,48 @@ pub const GeodeClientError = error{
     UnsupportedParamType,
 };
 
+/// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
+/// on; null when `err` is not about the DSN. geode-client-zig (v0.3.16)
+/// parses it with geode's host:port grammar (docs/DSN.md) and names the
+/// fault; port 0 and an IPv6 zone parse but cannot be dialled
+/// (`parseEndpoint`). The DSN itself is not part of the message: it may
+/// carry a password.
+pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.InvalidDSN => "Invalid Geode endpoint DSN: the host must be a name, an IPv4 address or a bracketed IPv6 address ([::1]), optionally followed by :port (docs/DSN.md)",
+        error.InvalidPort => "Invalid Geode endpoint DSN: the port must be 1-65535, written as 1-5 digits; port 0 cannot be dialled (docs/DSN.md)",
+        error.UnsupportedScheme => "Invalid Geode endpoint DSN: unsupported scheme; use quic:// or grpc:// (docs/DSN.md)",
+        error.InputTooLong => "Invalid Geode endpoint DSN: a credential or parameter value is too long",
+        error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
+        error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
+        else => null,
+    };
+}
+
+/// `endpointErrorMessage`, or `fallback` for any other error.
+pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
+    return endpointErrorMessage(err) orelse fallback;
+}
+
+/// Parse `endpoint` as geode-client-zig does, and refuse what parses but
+/// cannot be dialled: port 0 (`error.InvalidPort`) and an IPv6 zone
+/// (`error.Ipv6ZoneUnsupported`). The returned config's host slices
+/// `endpoint`.
+fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
+    var cfg = try zig_client.config.parseDSN(allocator, endpoint);
+    errdefer cfg.deinit(allocator);
+    if (cfg.port == 0) return error.InvalidPort;
+    if (geode.zig_quic_bridge.isZonedIpv6(cfg.host)) return error.Ipv6ZoneUnsupported;
+    return cfg;
+}
+
+/// SONNY-6494: check an endpoint DSN without building a client (`geode mcp`
+/// startup). The error maps through `endpointErrorMessage`.
+pub fn checkEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !void {
+    var cfg = try parseEndpoint(allocator, endpoint);
+    cfg.deinit(allocator);
+}
+
 pub const GeodeClient = struct {
     allocator: std.mem.Allocator,
     endpoint_storage: []u8,
@@ -37,14 +79,13 @@ pub const GeodeClient = struct {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
-        // SONNY-6484: an IPv6 host must be bracketed (docs/DSN.md);
-        // geode-client-zig's parseDSN reads a bare `::1` as host `:` port 1.
-        try geode.zig_quic_bridge.checkDsnHost(endpoint);
-
         const endpoint_storage = try allocator.dupe(u8, endpoint);
         errdefer allocator.free(endpoint_storage);
 
-        var cfg = try zig_client.config.parseDSN(allocator, endpoint_storage);
+        // SONNY-6484/6494: an IPv6 host must be bracketed and a port is
+        // 1-65535; geode-client-zig v0.3.16 refuses the rest of the grammar
+        // itself (InvalidDSN, InvalidPort), so geode's own pre-check is gone.
+        var cfg = try parseEndpoint(allocator, endpoint_storage);
         errdefer cfg.deinit(allocator);
 
         // S-5: Warn if DSN contains embedded credentials to discourage credential leakage via logs.
@@ -391,7 +432,8 @@ test "GeodeClient endpoint parsing" {
 
 test "GeodeClient endpoint parsing with IPv6" {
     // SONNY-6484: docs/DSN.md requires brackets around an IPv6 host. A bare
-    // `::1` is refused (it used to become host `:` port 1, silently).
+    // `::1` is refused (it used to become host `:` port 1, silently); since
+    // geode-client-zig v0.3.16 by the library's parser, as InvalidDSN.
     const allocator = std.testing.allocator;
 
     const client = try GeodeClient.init(allocator, "[::1]");
@@ -405,7 +447,7 @@ test "GeodeClient endpoint parsing with IPv6" {
     try std.testing.expectEqual(@as(u16, 8443), with_port.port);
 
     for ([_][]const u8{ "::1", "::1:3141", "quic://2001:db8::1" }) |bare| {
-        try std.testing.expectError(error.InvalidAddress, GeodeClient.init(allocator, bare));
+        try std.testing.expectError(error.InvalidDSN, GeodeClient.init(allocator, bare));
     }
 }
 
