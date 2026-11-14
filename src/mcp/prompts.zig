@@ -5,12 +5,16 @@ const std = @import("std");
 
 /// List available prompts
 /// Returns JSON array of prompt definitions
+/// Static text: the server.zig handler hands the mcp server a copy
+/// (SONNY-6531, the server frees every handler result).
 pub fn listPrompts(cursor: ?[]const u8) []const u8 {
     _ = cursor; // Pagination not needed for small prompt list
     return prompts_json;
 }
 
 /// Get a specific prompt by name
+/// Static text: the server.zig handler hands the mcp server a copy
+/// (SONNY-6531, the server frees every handler result).
 pub fn getPrompt(name: []const u8, args_json: ?[]const u8) []const u8 {
     _ = args_json; // Some prompts may use arguments
 

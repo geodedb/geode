@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:03:05.491702751Z",
+  "generated_at": "2026-11-14T07:36:45.48328795Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83523,6 +83523,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6531-MCP-OWNERSHIP",
+      "features": [
+        {
+          "feature": "MCPResultOwnership",
+          "aspect": "AllocatorOwnedHandlerResults",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6531_mcp_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "MCPResultOwnership",
+          "aspect": "EveryHandlerResultFreed",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6531_mcp_ownership.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6531_mcp_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION",
       "features": [
         {
@@ -91035,7 +91068,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4263
+      "TESTED": 4265
     },
     "by_aspect": {
       "2PC": 3,
@@ -91144,6 +91177,7 @@
       "AllShortestPathsFilter": 1,
       "AllShortestPathsIsolation": 1,
       "AllocOnStatementShard": 1,
+      "AllocatorOwnedHandlerResults": 1,
       "AllocatorUsage": 1,
       "AllowPolicyScope": 1,
       "AlterPolicy": 1,
@@ -92197,6 +92231,7 @@
       "EveryExpressionVariant": 1,
       "EveryFleKeyPathChecksKcv": 1,
       "EveryGraphDeny": 1,
+      "EveryHandlerResultFreed": 1,
       "EveryInlineMapHolder": 1,
       "EveryLabelPolicy": 1,
       "EveryPathExpands": 1,

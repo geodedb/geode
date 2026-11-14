@@ -8330,6 +8330,23 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6544-mcp-completion", "Run SONNY-6544 item 3 regression (MCP completion/complete, with and without params, answers {\"completion\":{\"values\":[...],\"total\",\"hasMore\"}} through the real mcp.Server.processMessage dispatch, not a bare [])").dependOn(&run_tests.step);
     }
+    // SONNY-6531 (1): every MCP handler result is allocator-owned and freed
+    // once by the mcp library (v0.1.22 contract), through the real
+    // processMessage dispatch and a real `geode mcp --stdio` session.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6531_mcp_ownership.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and the offline fallbacks, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);
@@ -15524,22 +15541,10 @@ pub fn build(b: *std.Build) void {
     const gap0514_gs_step = b.step("test-gap0514-graph-store", "Run GAP-0514 graph_store regression tests (dirty tracking, saveToFile, adjacency, multi-graph)");
     gap0514_gs_step.dependOn(&run_gap0514_gs_tests.step);
 
-    // GAP-0516: MCP server handler behaviour tests are colocated with
-    // the source in `src/mcp/server.zig`. Wiring them into `zig build
-    // test` requires making the whole `src/mcp/` tree test-root, which
-    // surfaces 5+ pre-existing dead-test failures in `lsp.zig` and
-    // `client.zig` (leaks from `getCompletions`/`validateQuery`, an
-    // assertion drift in `getHover`, and a bearer-token conflict in
-    // `client.test.GeodeClient endpoint parsing with IPv6`). Fixing
-    // those is out of scope for GAP-0516; tracked under the GAP-0514
-    // test-hygiene sprint (see `docs/FULL_AUDIT_2026_04_06.md`).
-    //
-    // The functional fix IS in place: handlers return spec-compliant
-    // responses (`error.MethodNotFound` → JSON-RPC -32601, empty JSON
-    // array for completion, silent success for setLogLevel). Inline
-    // regression tests at `src/mcp/server.zig` document the contract
-    // and will activate automatically when the MCP test tree is
-    // rewired during the GAP-0514 sprint.
+    // GAP-0516: the MCP server handler tests colocated with the source in
+    // `src/mcp/server.zig` (and the inline tests of lsp/resources/tools/
+    // client.zig) run in `test-sonny6484-inline` (SONNY-6484); prompts.zig's
+    // run in `test-sonny6463-inline`.
 
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
     // TODO: Fix File I/O API usage in REPL modules

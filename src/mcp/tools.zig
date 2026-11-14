@@ -69,6 +69,8 @@ const McpErrorResult = struct {
 
 /// List available Geode MCP tools
 /// Returns JSON array of tool definitions
+/// Static text: the server.zig handler hands the mcp server a copy
+/// (SONNY-6531, the server frees every handler result).
 pub fn listTools(cursor: ?[]const u8) []const u8 {
     _ = cursor; // Pagination not needed for small tool list
     return tools_json;

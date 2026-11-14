@@ -880,7 +880,7 @@ REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TE
 REQ-DOC-AUTH-LOCKOUT-CONFIG,AuthRateLimiting,Documentation,EXEMPT,,,security,2026-08-29,docs/USER_AUTH.md,826
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/MCP_LSP_BRIDGE.md,193
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md,752
-REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md,156
+REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md,182
 REQ-DOCS-001,Docs,Documentation,IMPL,,,docs,2026-11-14,tests/test_gap_0193_final_batch.zig,545
 REQ-DOCS-API-001,Docs,APIDocumentation,IMPL,,,docs,2026-11-14,tests/test_gap_0193_batch4_comprehensive.zig,652
 REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,IMPL,,,claude,2026-11-12,tests/test_gap_0193_batch2_testing.zig,126
@@ -1613,7 +1613,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,963
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18674
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18679
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2403
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1392
@@ -1675,11 +1675,11 @@ REQ-GPS-MCP-001,GPS MCP Principal,AdminAllowed,TESTED,,,security,2026-05-20,test
 REQ-GPS-MCP-001,GPS MCP Principal,DecisionLayer,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,6
 REQ-GPS-MCP-001,GPS MCP Principal,NoRolesUnauthorized,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,127
 REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,13
-REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,373
+REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig,382
 REQ-GPS-MCP-001,GPS MCP Principal,PrincipalStorage,TESTED,,,security,2026-05-20,src/mcp/server.zig,45
 REQ-GPS-MCP-001,GPS MCP Principal,ReadWriteRole,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,163
 REQ-GPS-MCP-001,GPS MCP Principal,SourcePreserved,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,22
-REQ-GPS-MCP-001,GPS MCP Principal,ToolDispatch,TESTED,,,security,2026-05-20,src/mcp/server.zig,239
+REQ-GPS-MCP-001,GPS MCP Principal,ToolDispatch,TESTED,,,security,2026-05-20,src/mcp/server.zig,254
 REQ-GPS-MCP-001,GPS MCP Principal,ToolsThreading,TESTED,,,security,2026-05-21,src/mcp/tools.zig,14
 REQ-GPS-MCP-001,GPS MCP Principal,WriteBlocked,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,57
 REQ-GPS-METADATA-000,GPS Metadata Isolation,ContextThreading,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig,62
@@ -1760,7 +1760,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18683
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18688
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1712
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1964
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1050
@@ -1772,7 +1772,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7650
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18695
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18700
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -2971,11 +2971,11 @@ REQ-LIB-MIGRATION-JSON-026,JSON Library Migration,CLI,TESTED,,,cli,2026-01-24,sr
 REQ-LIB-MIGRATION-JSON-032,JSON Library Migration,MigrationScript,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig,1425
 REQ-LIB-MIGRATION-JSON-038,JSON Library Migration,MCPTools,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,7
 REQ-LIB-MIGRATION-JSON-039,JSON Library Migration,MCPResponseTypes,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,54
-REQ-LIB-MIGRATION-JSON-040,JSON Library Migration,ToolResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,378
-REQ-LIB-MIGRATION-JSON-041,JSON Library Migration,ErrorResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,392
+REQ-LIB-MIGRATION-JSON-040,JSON Library Migration,ToolResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,380
+REQ-LIB-MIGRATION-JSON-041,JSON Library Migration,ErrorResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,394
 REQ-LIB-MIGRATION-JSON-042,JSON Library Migration,MCPResources,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,7
-REQ-LIB-MIGRATION-JSON-043,JSON Library Migration,ResourceResponse,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,96
-REQ-LIB-MIGRATION-JSON-044,JSON Library Migration,ResourceError,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,110
+REQ-LIB-MIGRATION-JSON-043,JSON Library Migration,ResourceResponse,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,100
+REQ-LIB-MIGRATION-JSON-044,JSON Library Migration,ResourceError,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,114
 REQ-LIB-MIGRATION-JSON-048,JSON Library Migration,MCPLSP,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,24
 REQ-LIB-MIGRATION-JSON-049,JSON Library Migration,LSPValidation,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,583
 REQ-LIB-MIGRATION-JSON-050,JSON Library Migration,LSPCompletions,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,609
@@ -3232,25 +3232,25 @@ REQ-MATVIEW-STORAGE-001,MatView,Storage,IMPL,,,query,2026-11-12,tests/test_gap_0
 REQ-MATVIEW-STORAGE-001,Materialized View Storage Creation,Storage,TESTED,,,query,2026-06-11,src/query/enhanced_materialized_views.zig,445
 REQ-MATVIEW-STORAGE-002,Materialized View Storage Entry,Storage,TESTED,,,query,2026-06-11,src/query/enhanced_materialized_views.zig,902
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,TESTED,,,query,2026-06-11,tests/test_materialized_views_enhanced.zig,1
-REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,TESTED,,,mcp,2026-11-14,src/mcp/server.zig,331
+REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,TESTED,,,mcp,2026-11-14,src/mcp/server.zig,342
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,30
 REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,562
 REQ-MCP-LSP-BRIDGE-001,MCPLSPBridgeContract,BridgeContract,TESTED,,,mcp,2026-06-10,src/mcp/lsp.zig,22
-REQ-MCP-READ-ONLY-001,MCPReadOnly,Classifier,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,408
+REQ-MCP-READ-ONLY-001,MCPReadOnly,Classifier,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,410
 REQ-MCP-READ-ONLY-001,MCPReadOnly,ClassifierImport,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,44
 REQ-MCP-READ-ONLY-001,MCPReadOnly,CliFlag,TESTED,,,mcp,2026-08-28,src/cli/cli_dispatcher.zig,1077
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionDefinition,TESTED,,,mcp,2026-08-28,src/mcp/server.zig,212
 REQ-MCP-READ-ONLY-001,MCPReadOnly,OptionStorage,TESTED,,,mcp,2026-08-28,src/mcp/server.zig,37
-REQ-MCP-READ-ONLY-001,MCPReadOnly,QueryToolGate,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,157
+REQ-MCP-READ-ONLY-001,MCPReadOnly,QueryToolGate,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,159
 REQ-MCP-READ-ONLY-001,MCPReadOnly,Test,TESTED,,,mcp,2026-08-29,tests/test_mcp_read_only.zig,19
-REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig,293
-REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig,301
+REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig,306
+REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,TESTED,,,mcp,2026-06-10,src/mcp/server.zig,314
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig,6
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig,6
 REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,29
-REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig,351
+REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig,360
 REQ-MEM-001,MemorySafety,AllocatorUsage,IMPL,,,engine,2026-11-14,tests/test_gap_0193_priority_categories.zig,580
 REQ-MEM-002,MemorySafety,DeferCleanup,IMPL,,,engine,2026-11-14,tests/test_gap_0193_priority_categories.zig,588
 REQ-MEM-003,MemorySafety,BoundsChecking,IMPL,,,engine,2026-11-14,tests/test_gap_0193_priority_categories.zig,599
@@ -5635,6 +5635,8 @@ REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,ExecutorProgramGate,TESTED
 REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,Regression,TESTED,,,storage,2026-11-14,tests/test_sonny6528_quarantine_in_process.zig,29
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,Regression,TESTED,,,storage,2026-11-14,tests/test_sonny6528_security_write_exclusion.zig,25
 REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,SecurityGraphWriteLock,TESTED,,,storage,2026-11-14,src/storage/graph_storage_adapter.zig,1813
+REQ-SONNY-6531-MCP-OWNERSHIP,MCPResultOwnership,AllocatorOwnedHandlerResults,TESTED,,,mcp,2026-11-14,src/mcp/server.zig,240
+REQ-SONNY-6531-MCP-OWNERSHIP,MCPResultOwnership,EveryHandlerResultFreed,TESTED,,,mcp,2026-11-14,tests/test_sonny6531_mcp_ownership.zig,24
 REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,DecideHoldsReplicatedApplyMutex,TESTED,,,distributed,2026-11-14,src/distributed/txn_coordinator.zig,547
 REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,Regression,TESTED,,,distributed,2026-11-14,tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig,25
 REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK,DistributedCluster,DropApplyAnnouncesWait,TESTED,,,distributed,2026-11-14,src/distributed/raft_apply.zig,684

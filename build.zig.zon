@@ -330,14 +330,17 @@
         // =======================================================================
 
         // Model Context Protocol (MCP) - AI/LLM integration
-        // Updated 2026-08-29 (Task 6): v0.1.11 hardcoded owned=false for tools/call
-        // results while the dispatch free-site only frees owned results, leaking
-        // every dynamically-allocated tool response for the life of `geode mcp`.
-        // v0.1.12 marks tools/call owned=true (server frees it); see
-        // docs/MCP_SERVER.md. Upstream fix: gitlab.com/devnw/zig/mcp@956b07d.
+        // 2026-11-14: v0.1.22 (eb9da27, SONNY-6531) frees the result of EVERY
+        // handler callback with the allocator given to Server.init (v0.1.12 to
+        // v0.1.21 freed only tools/call, so every resources/read response
+        // leaked for the life of `geode mcp`), and the JSON it stringifies for
+        // prompts/get arguments and completion/complete params. Every geode
+        // handler (src/mcp/server.zig) therefore returns allocator-owned bytes,
+        // never a literal. Same json/thread_pool/otel pins as v0.1.21. See
+        // docs/MCP_SERVER.md.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=ddb3d0a125ece885a42e99e53a7d8ffbba2f8a0c#ddb3d0a125ece885a42e99e53a7d8ffbba2f8a0c",
-            .hash = "mcp-0.1.21-exAeBBAUCACOUX7iMou6kvpH1s_Oy9bykx-LzwmqQF0v",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.22#eb9da27bc4b278eb73cefa4120a53eb92e419c0c",
+            .hash = "mcp-0.1.22-exAeBLBXCAC7RucZzI7lrQOB9D6KbKrHbv6-p4qmTpvJ",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible

@@ -1,6 +1,6 @@
 # Geode MCP Server — Protocol Subset & Capability Contract
 
-**Last updated:** 2026-06-10
+**Last updated:** 2026-11-14
 **Owner:** mcp
 **Status:** Authoritative reference for the MCP method subset Geode
 implements, and for the resource-subscription contract (GAP-0516).
@@ -9,7 +9,7 @@ The Geode MCP (Model Context Protocol) server (`src/mcp/server.zig`)
 exposes graph-database operations and the GQL language bridge to
 AI/LLM clients over the MCP JSON-RPC protocol (stdio and HTTP
 transports). It is built on the pinned `mcp` library (`build.zig.zon`
-`.mcp` = v0.1.12).
+`.mcp` = v0.1.22).
 
 This document records exactly which MCP methods Geode implements,
 which it intentionally does not, and the one upstream-library caveat
@@ -55,29 +55,55 @@ via `resources/read` on an interval. There is no server-push path.
 two handlers to a real implementation and update this section, the
 CANARY markers, and `tests/test_gap0516_mcp_capabilities.zig`.
 
-### Fixed: `tools/call` result leak (upstream v0.1.11 → v0.1.12)
+### Handler result ownership (upstream v0.1.22, SONNY-6531)
 
-The pinned `mcp` library's `tools/call` dispatch (`mcp.zig` `handleMethod`)
-hardcoded `.owned = false` on every `callTool` result through v0.1.11, while
-the JSON-RPC response free site only frees results marked `owned`. Every
-dynamically-allocated tool response Geode's `query`/`schema`/`explain`/etc.
-handlers return therefore leaked for the lifetime of a long-running
-`geode mcp` server. Fixed upstream in v0.1.12 (commit `956b07d`): the
-`tools/call` dispatch site now returns `.owned = true`, and
-`Handler.callTool`'s doc comment states the ownership contract ("callTool
-implementations must return bytes allocated with the allocator the server
-frees with"). `tools/list`/`resources/*`/`prompts/*` results are
-unaffected — audited and intentionally left `owned = false` because the
-library's own demo/example handlers may return static strings there.
-Regression proof: `tests/test_mcp_read_only.zig` drives real `tools/call`
-round trips under the strict `std.testing.allocator` (previously worked
-around with `std.heap.page_allocator` to dodge the upstream leak).
+Since `mcp` v0.1.22 the server frees the result of **every** handler
+callback that returns `[]const u8` (`listTools`, `callTool`,
+`listResources`, `readResource`, `listResourceTemplates`, `listPrompts`,
+`getPrompt`, `complete`) with the allocator passed to `mcp.Server.init`:
+after the JSON-RPC response is built, for a notification (no response),
+and when building the response fails. A callback that returns an error
+hands nothing over. It also frees the JSON it stringifies to pass
+`prompts/get` arguments and `completion/complete` params to the handler.
+
+History: through v0.1.11 no handler result was freed, so every
+`tools/call` response leaked; v0.1.12 (commit `956b07d`) freed
+`tools/call` results only, so every `resources/read` response (and the
+stringified `prompts/get` arguments and `completion/complete` params)
+still leaked for the lifetime of a long-running `geode mcp` server.
+
+Geode's side of the contract (`src/mcp/server.zig`): `GeodeMcpServer.init`
+passes its own `allocator` to `mcp.Server.init`, and every handler returns
+bytes from that allocator. `tools/call` and `resources/read` results are
+built with it (`src/mcp/tools.zig`, `src/mcp/resources.zig`, including the
+unknown-URI answer and the offline fallback documents); the fixed listings,
+prompts and the empty CompleteResult are handed over as `ownedCopy` copies.
+Returning a string literal would be an invalid free.
+
+Regression proof (all under the strict `std.testing.allocator`, which
+fails on a leak and panics on an invalid free):
+
+- `zig build test-sonny6531-mcp-ownership` drives every method Geode
+  implements through the real `mcp.Server.processMessage` dispatch (every
+  tool incl. `isError` results and an unknown tool, every resource incl.
+  unknown URIs and the offline fallbacks, every prompt incl. unknown,
+  completion, logging, subscribe/unsubscribe, notifications and a batch),
+  with no backend, an undialable DSN, a dead endpoint and a real
+  `geode serve`; then a real Debug `geode mcp --stdio` session answers
+  every request and exits 0 (an invalid free aborts it). That session
+  cannot report leaks: `geode mcp` ends with `std.process.exit`, before
+  `main`'s `DebugAllocator.deinit`.
+- `zig build test-gap0516`, `test-mcp-read-only`,
+  `test-sonny6494-mcp-dsn-errors` and `test-sonny6544-mcp-completion` run
+  their `resources/read` and `completion/complete` cases leak-checked
+  (they used `std.heap.smp_allocator` / skipped them before).
+- `zig build test-sonny6484-inline` runs the handlers' inline tests.
 
 ### Known upstream advertisement caveat
 
-The pinned `mcp` library (v0.1.12) **hardcodes**
+The pinned `mcp` library (v0.1.22) **hardcodes**
 `"resources":{"subscribe":true,"listChanged":true}` in the
-`initialize` response (`mcp.zig` `buildInitialize`, ~line 3127) and
+`initialize` response (`mcp.zig` `handleInitialize`, ~line 3193) and
 exposes **no `ServerOptions` field to override it**. Geode therefore
 cannot make the advertised capability string match its handler
 behaviour without forking the dependency.

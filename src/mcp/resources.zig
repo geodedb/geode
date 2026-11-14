@@ -23,12 +23,16 @@ const McpResourceError = struct {
 
 /// List available resources
 /// Returns JSON array of resource definitions
+/// Static text: the server.zig handler hands the mcp server a copy
+/// (SONNY-6531, the server frees every handler result).
 pub fn listResources(cursor: ?[]const u8) []const u8 {
     _ = cursor; // Pagination not needed for small resource list
     return resources_json;
 }
 
-/// Read a resource by URI
+/// Read a resource by URI. Every result, the unknown-URI answer included,
+/// is allocated with `allocator`, and the caller owns it (SONNY-6531: the
+/// mcp server frees `resources/read` results).
 pub fn readResource(allocator: std.mem.Allocator, endpoint: ?[]const u8, uri: []const u8) ![]const u8 {
     const endpoint_str = endpoint orelse "localhost:3141";
 
@@ -45,7 +49,7 @@ pub fn readResource(allocator: std.mem.Allocator, endpoint: ?[]const u8, uri: []
         }
     }
 
-    return "{\"error\": \"Unknown resource URI\"}";
+    return try allocator.dupe(u8, "{\"error\": \"Unknown resource URI\"}");
 }
 
 /// Read schema resource from Geode server
@@ -114,6 +118,8 @@ fn formatResourceError(allocator: std.mem.Allocator, error_msg: []const u8) ![]c
 }
 
 /// List resource templates
+/// Static text: the server.zig handler hands the mcp server a copy
+/// (SONNY-6531, the server frees every handler result).
 pub fn listResourceTemplates() []const u8 {
     return resource_templates_json;
 }
@@ -282,6 +288,7 @@ test "readResource returns error for unknown URI" {
     const allocator = std.testing.allocator;
 
     const result = try readResource(allocator, null, "unknown://resource");
+    defer allocator.free(result);
 
     try std.testing.expect(std.mem.indexOf(u8, result, "error") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "Unknown resource URI") != null);
