@@ -13366,7 +13366,7 @@ pub fn build(b: *std.Build) void {
     const sonny6518_builtin_tests = b.addTest(.{ .root_module = sonny6518_builtin_mod });
     const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
     shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
-    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
+    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 42000 (SONNY-6555), a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
     // SONNY-6518 item 3: the gql tool's ORDER BY orders as the server's full sort. See tests/test_sonny6518_exec_order.zig.
     const sonny6518_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_exec_order.zig"), .target = target, .optimize = optimize });
     sonny6518_exec_mod.addImport("geode", root_mod);

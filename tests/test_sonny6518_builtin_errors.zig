@@ -12,9 +12,11 @@
 // negative base to a power that is not whole (SQRT, SR 13) is 2201F, MOD by
 // 0 is 22012, LEFT / RIGHT of a negative length is 22011. A value of a type
 // the function does not take is 22G03 (invalid value type) and a wrong
-// number of arguments 22023. Each of these answered NULL (or, through the
-// basic dispatch, "unknown function", 42883), so `WHERE sqrt(n.x) > 1`
-// silently dropped the rows with a negative x.
+// number of arguments 42000 (SONNY-6555 item 5: the operand count is the
+// program text's, ISO/IEC 39075:2024 4.7.3 step 4; it was 22023 here).
+// Each of these answered NULL (or, through the basic dispatch, "unknown
+// function", 42883), so `WHERE sqrt(n.x) > 1` silently dropped the rows
+// with a negative x.
 //
 // CANARY: REQ=REQ-SONNY-6518-BUILTIN-ERRORS; FEATURE="BuiltinFunctions"; ASPECT=ArgumentErrors; STATUS=TESTED; TEST=tests/test_sonny6518_builtin_errors.zig; OWNER=eval; UPDATED=2026-11-13
 
@@ -69,7 +71,8 @@ fn checkArity(s: *Session, f: *Failures) !void {
     const bad = [_][]const u8{ "sqrt()", "upper('a', 'b')", "pi(1)", "mod(1)", "left('a')", "round(1, 2, 3)", "substring('a')" };
     for (bad) |call| {
         var buf: [96]u8 = undefined;
-        try expectFail(s, f, try std.fmt.bufPrint(&buf, "RETURN {s} AS x", .{call}), &.{}, error.InvalidArgs);
+        // SONNY-6555 item 5: WrongArgumentCount (42000), was InvalidArgs (22023).
+        try expectFail(s, f, try std.fmt.bufPrint(&buf, "RETURN {s} AS x", .{call}), &.{}, error.WrongArgumentCount);
     }
 }
 

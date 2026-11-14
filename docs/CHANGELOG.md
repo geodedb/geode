@@ -2438,6 +2438,26 @@
 
 ### Fixed
 
+- **A function called with the wrong number of arguments is 42000 (SONNY-6555
+  item 5, BREAKING: GQLSTATE changes).** ISO/IEC 39075:2024 4.7.3 step 4: a
+  source that matches no production, or violates a Syntax Rule, fails with
+  "syntax error or access rule violation" (42000); an operand count is
+  decided by the program text, as SONNY-6540 item 9 pinned for `abs(1,
+  2)`. The parser checks only a few functions, and the rest answered as
+  their handler happened to: 22023 (`sqrt()`, `upper('a', 'b')`,
+  `ipaddr()`, `toFloat()`, `datetime('a', 'b')`), NULL (`tail()`, `head([1],
+  2)`, `url_host('a', 'b')`, `smallint(1, 2)`, `range(1)`) or 42883 "unknown
+  function" (`nullif(1)`, `properties()`, `date(1, 2)`, `startsWith('a')`).
+  Every arity refusal of the function dispatch (built-ins, timeseries
+  functions, the extension registry) is now the new `WrongArgumentCount`,
+  mapped to 42000 on QUIC and gRPC, and a function Geode lists (SHOW
+  FUNCTIONS) that no handler took is that too, not 42883; it fails the
+  statement in a grouped projection as well. `InvalidArgs` (22023) is left
+  for an argument value a function refuses and for procedures (`CALL`),
+  whose arity is unchanged. The check stays in the dispatch, which owns
+  the function catalogue the parser does not (extension registry,
+  timeseries flag): a call no row reaches is not refused. Regression: `zig
+  build test-sonny6555-function-arity`.
 - **A WITH takes SKIP / OFFSET before LIMIT (SONNY-6555 item 6).** ISO/IEC
   39075:2024 14.9 `<order by and page statement>` puts the offset clause
   (`OFFSET` or `SKIP`, 16.19) before the limit clause (16.18). A RETURN
