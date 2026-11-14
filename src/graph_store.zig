@@ -13562,6 +13562,23 @@ pub const GraphStore = struct {
     /// per-graph load: the resident IdMap re-insert is idempotent and the
     /// deferred indexes are built from the engine scan.
     pub fn ensureGraphHydrated(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, true);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrateWithoutCompletionPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6547 (4): `ensureGraphHydrated` without the completion persist
+    /// (`persistHydrationProductsForGraph`), for the Raft apply paths: they
+    /// run under the Raft node's `inner_mutex`, and that persist is a
+    /// checkpoint of the graph, which waits up to 5 s for the graph's lock,
+    /// so a local request holding it stopped the whole Raft node for that
+    /// long. The products stay memory-only until the next full checkpoint
+    /// (a crash before it re-pays this hydration's scan on the next first
+    /// touch, as before the completion persist existed).
+    pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, false);
+    }
+
+    fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const entry = blk: {
             self.hydration_mutex.lockUncancelable(io);
@@ -13630,7 +13647,7 @@ pub const GraphStore = struct {
         // class), and never when the hydration was served entirely from
         // counter-current snapshots (nothing new to persist). Best-effort:
         // persist errors are logged inside and never fail the triggering query.
-        if (outcome == .rebuilt) {
+        if (persist and outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
     }

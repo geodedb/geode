@@ -2533,6 +2533,23 @@
   (the apply waits for the proposer's read lock, then drops the graph).
   Nothing in the server proposes a `schema_change` today (item 6).
   Regression: `zig build test-sonny6547-single-voter-drop`.
+- **A replicated write's first hydration of its graph no longer stops the
+  Raft node (SONNY-6547 item 4).** A Raft apply runs under the node's
+  `inner_mutex`; the graph-mutation apply (and the 2PC decide apply)
+  hydrated its graph there, and a first hydration persists its products
+  with a checkpoint of the graph, which waits up to 5 s for the graph's
+  lock. With a local reader holding that lock the leader's `inner_mutex`
+  was unavailable for 6.3 s (measured: no tick, so no heartbeat, no inbound
+  message, no propose; in a real cluster longer than an election timeout).
+  The leader now hydrates an entry's graph before it proposes it, without
+  `inner_mutex` (`raft_apply.prehydrateForApply` from
+  `ClusterCoordinator.proposeWrite`), and the apply paths hydrate without
+  the completion persist (`GraphStore.ensureGraphHydratedForReplicatedApply`;
+  the next full checkpoint persists the products). Apply order is
+  unchanged. Measured after: 117-129 ms longest wait (three runs) for `inner_mutex`.
+  Remaining: on a follower, or for entries replayed after a restart, the
+  hydration scan itself (no lock wait) still runs under `inner_mutex`.
+  Regression: `zig build test-sonny6547-apply-hydration-stall`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

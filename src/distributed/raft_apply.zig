@@ -228,6 +228,23 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anye
     return applyCommand(allocator, g_store, cmd, raft_index);
 }
 
+// CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=PrehydrateBeforePropose; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+/// SONNY-6547 (4): hydrate the graph a `graph_mutation` entry's apply writes
+/// (`applyGraphMutationInner`), for a proposer to call before it takes the
+/// Raft node's `inner_mutex`: the apply then finds the graph hydrated and
+/// builds nothing under `inner_mutex`. The products are not persisted here
+/// either (the proposer may hold the graph's lock, which that persist's
+/// checkpoint waits for); the next full checkpoint persists them. Ordering
+/// is unchanged: hydration builds resident indexes from the engine, as any
+/// first read of the graph does, and writes nothing.
+pub fn prehydrateForApply(cmd: Command) void {
+    const store = g_store orelse return;
+    switch (cmd) {
+        .graph_mutation => |gm| store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default"),
+        else => {},
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Core routing logic
 // ---------------------------------------------------------------------------
@@ -439,9 +456,17 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
     // so a checkpoint of the graph waits for it (every local writer holds
     // the graph's rwlock, which this thread must not take: see
     // `ManagedGraph.replicated_apply_mutex`). The graph is hydrated first,
-    // outside it: a first hydration persists its products with a checkpoint
-    // of the graph.
-    store.ensureGraphHydrated(graph_name);
+    // outside it.
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=ApplyHydratesWithoutPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    // SONNY-6547 (4): this runs under the Raft node's `inner_mutex`, so a
+    // first hydration here does not persist its products: that persist is a
+    // checkpoint of the graph, which waits up to 5 s for the graph's lock
+    // (held by any local request on the graph), and the whole Raft node
+    // waited with it (no tick, no heartbeat, no inbound message; 6.3 s
+    // measured). The leader hydrates an entry's graph before it proposes
+    // it, without `inner_mutex` (`prehydrateForApply`); a graph hydrated
+    // here is persisted by the next full checkpoint.
+    store.ensureGraphHydratedForReplicatedApply(graph_name);
     const apply_adapter = graph_store_mod.getGlobalAdapter();
     const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
     defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);
