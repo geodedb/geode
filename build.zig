@@ -8153,6 +8153,21 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6531-cli-address-errors", "Run SONNY-6531 item 2 regression (geode query, shell, auth login, backup create and restore name what is wrong with a malformed --server or --dsn - host, port, port 0, scheme - with the MCP path's message instead of a generic one, and never echo the address or DSN credentials)").dependOn(&run_tests.step);
     }
+    // SONNY-6544 (1): a --dsn password with '@' and ':' logs in (userinfo
+    // ends at the last '@', percent-decoded) and is never printed.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6544_dsn_credentials.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6544-dsn-credentials", "Run SONNY-6544 item 1 regression (geode query and shell log in to a real server whose admin password holds '@' and ':' through a raw or percent-encoded --dsn - the userinfo ends at the last '@' - and no output line of query, shell or auth login holds any piece of the password; a malformed percent-escape or an unencoded '/' in it is refused unprinted)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);

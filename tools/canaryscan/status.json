@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:01:01.381222281Z",
+  "generated_at": "2026-11-14T06:17:06.892591829Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86351,6 +86351,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6544-DSN-USERINFO",
+      "features": [
+        {
+          "feature": "DSN credentials",
+          "aspect": "LastAtSplitAndRedaction",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_dsn_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93912,7 +93931,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4957
+      "TESTED": 4958
     },
     "by_aspect": {
       "2PC": 3,
@@ -95821,6 +95840,7 @@
       "LargeOrderedParity": 1,
       "LargeOrderedStreamingParity": 1,
       "LargeScaleAndCancellation": 1,
+      "LastAtSplitAndRedaction": 1,
       "LastContactFromRaftTraffic": 1,
       "LastElement": 1,
       "LateKeyRegistry": 1,
