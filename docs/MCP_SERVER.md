@@ -24,10 +24,70 @@ operators and client authors must understand.
 | `ping` | Standard liveness reply. |
 | `tools/list` | Lists Geode tools: `query`, `schema`, `explain`, `catalogs`, `graphs`, `validate`, `complete`, `hover`, `diagnostics`. |
 | `tools/call` | Dispatches to the named tool (`src/mcp/tools.zig`). Backend tools (`query`/`schema`/`explain`/`catalogs`/`graphs`) require a configured geode endpoint; the language tools (`validate`/`complete`/`hover`/`diagnostics`) are pure and need no backend; `validate` and `diagnostics` include the recommendations listed in [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md). |
-| `resources/list` | Lists Geode resources. |
+| `resources/list` | Lists Geode resources (`geode://default/default/schema`, `geode://default/default/stats`, `geode://config`). |
 | `resources/read` | Reads a resource by URI. |
 | `resources/templates/list` | Lists resource templates. |
-| `prompts/list` / `prompts/get` | Lists / fetches the Geode prompt catalog. |
+| `prompts/list` / `prompts/get` | Lists / fetches the Geode prompt catalog; `prompts/get` writes the argument values into the prompt text. |
+
+## Result shapes and error codes (SONNY-6552)
+
+The pinned `mcp` library implements MCP revision **2025-11-25**
+(`mcp.ProtocolVersion`, negotiated in `initialize`). Every result is the
+object that revision's schema (`schema/2025-11-25/schema.ts`) gives the
+method, serialized on **one line**: the stdio transport delimits messages
+by newlines and a message "MUST NOT contain embedded newlines".
+
+| Method | Result (2025-11-25 schema) |
+|---|---|
+| `tools/list` | `ListToolsResult` `{"tools":[{name, description, inputSchema}]}` |
+| `tools/call` | `CallToolResult` `{"content":[{"type":"text","text":...}],"isError":bool}` |
+| `resources/list` | `ListResourcesResult` `{"resources":[{uri, name, description, mimeType}]}` |
+| `resources/templates/list` | `ListResourceTemplatesResult` `{"resourceTemplates":[{uriTemplate, name, description}]}` |
+| `resources/read` | `ReadResourceResult` `{"contents":[{uri, mimeType, text}]}` |
+| `prompts/list` | `ListPromptsResult` `{"prompts":[{name, description, arguments:[{name, description, required}]}]}` |
+| `prompts/get` | `GetPromptResult` `{"description":..., "messages":[{"role":"user","content":{"type":"text","text":...}}]}` |
+| `completion/complete` | `CompleteResult` `{"completion":{"values":[],"total":0,"hasMore":false}}` |
+
+Every list is a single page: no `nextCursor` is returned.
+
+Errors are JSON-RPC errors (the `message` is the Zig error name the
+library reports, e.g. `InvalidParams`):
+
+| Request | Error code |
+|---|---|
+| `tools/call` with an unknown tool name | `-32602` (the spec's protocol error for an unknown tool) |
+| `prompts/get` with an unknown prompt name | `-32602` |
+| `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` |
+| `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) |
+| `resources/read` of a URI geode does not serve | `-32002` (resource not found) |
+| `resources/subscribe` / `resources/unsubscribe` | `-32601` (see below) |
+
+Tool **execution** failures are not protocol errors: they are a
+`CallToolResult` with `"isError":true` and the reason in the text. That
+covers bad tool arguments, an argument a tool does not advertise (the
+`query` tool refuses `catalog` / `graph`, the `graphs` tool takes no
+arguments), a backend that cannot be reached, and a statement the server
+reports as failed (for `query`, `schema`, `explain`, `catalogs` and
+`graphs` alike). A `resources/read` whose endpoint DSN is unusable answers
+the resource with a `{"error": "<reason>"}` text document (the library can
+only report a Zig error name, which would drop the reason); when the
+server is unreachable, `schema` and `stats` answer their offline
+documents (`"note": "Server unavailable"`).
+
+Before SONNY-6552 the lists were pretty-printed bare arrays,
+`resources/read` was a bare `{uri,mimeType,text}`, an unknown prompt or
+URI was a success carrying `{"error": ...}`, an unknown tool was
+`-32603`, the `query` tool advertised `catalog` / `graph` and the `graphs`
+tool `catalog` without using them, `prompts/get` ignored its arguments,
+and `query` failed every call that passed `parameters`.
+
+Regression: `zig build test-sonny6552-mcp-result-shapes` checks each
+response field by field through the real `mcp.Server.processMessage` and
+a real `geode mcp --stdio` session (one JSON-RPC message per stdout line).
+
+The library maps `error.ToolNotFound` and `error.PromptNotFound` to
+`-32002`, the code the 2025-11-25 spec gives only to a missing resource;
+geode does not use them.
 | `completion/complete` | Argument-completion provider (MCP spec §4.4). Geode does not maintain a per-tool argument-suggestion index, so it returns an empty CompleteResult, `{"completion":{"values":[],"total":0,"hasMore":false}}` — a spec-compliant "no suggestions" response (it returned a bare `[]` before SONNY-6544, which has no `completion` object). Regression: `zig build test-sonny6544-mcp-completion`. |
 | `logging/setLevel` | Tolerated success (MCP spec §7.2). Geode log levels are fixed at startup (`--log-level`); the request is acknowledged without changing runtime verbosity, which the spec explicitly permits. |
 
@@ -76,9 +136,10 @@ Geode's side of the contract (`src/mcp/server.zig`): `GeodeMcpServer.init`
 passes its own `allocator` to `mcp.Server.init`, and every handler returns
 bytes from that allocator. `tools/call` and `resources/read` results are
 built with it (`src/mcp/tools.zig`, `src/mcp/resources.zig`, including the
-unknown-URI answer and the offline fallback documents); the fixed listings,
-prompts and the empty CompleteResult are handed over as `ownedCopy` copies.
-Returning a string literal would be an invalid free.
+offline fallback documents); the resource and prompt results are
+serialized with it (SONNY-6552), and the tool listing and the empty
+CompleteResult are handed over as `ownedCopy` copies. Returning a string
+literal would be an invalid free.
 
 Regression proof (all under the strict `std.testing.allocator`, which
 fails on a leak and panics on an invalid free):
@@ -90,9 +151,10 @@ fails on a leak and panics on an invalid free):
   completion, logging, subscribe/unsubscribe, notifications and a batch),
   with no backend, an undialable DSN, a dead endpoint and a real
   `geode serve`; then a real Debug `geode mcp --stdio` session answers
-  every request and exits 0 (an invalid free aborts it). That session
-  cannot report leaks: `geode mcp` ends with `std.process.exit`, before
-  `main`'s `DebugAllocator.deinit`.
+  every request and exits 0 with no leak report on stderr (an invalid
+  free aborts it). Since SONNY-6552 `geode mcp` returns through `main`
+  instead of ending with `std.process.exit`, so `main`'s
+  `DebugAllocator.deinit` runs and reports a leak of the session.
 - `zig build test-gap0516`, `test-mcp-read-only`,
   `test-sonny6494-mcp-dsn-errors` and `test-sonny6544-mcp-completion` run
   their `resources/read` and `completion/complete` cases leak-checked
@@ -167,6 +229,8 @@ v0.3.16); the port 1-65535 (0 is refused); the scheme `quic://` or
   the implemented subset (`tools/list`, `resources/list`,
   `resources/templates/list`, `prompts/list`, `logging/setLevel`)
   returns success; and the upstream advertisement caveat is pinned.
+- `zig build test-sonny6552-mcp-result-shapes` — every result shape and
+  error code above, in-process and over a real `geode mcp --stdio`.
 - Inline handler-level tests live in `src/mcp/server.zig` (the
   `GAP-0516:` test blocks) and cover the handlers directly,
   independent of transport.

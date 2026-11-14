@@ -5320,6 +5320,9 @@ REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,NoCredentialsInHistory,TESTED,s
 REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,NoCredentialsNoUnsafePath,TESTED,tests/test_sonny6551_repl_history.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14
 REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile,TESTED,tests/test_sonny6551_saved_session.zig,,,security,2026-11-14
+REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

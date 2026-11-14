@@ -397,14 +397,17 @@ pub fn dispatch(
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01
-        // Shell completion script generation using external CLI library
+        // Shell completion script generation using external CLI library.
+        // SONNY-6552: returns through main (exit 0), so the Debug leak
+        // check runs.
         try handleCompletionsCommand(allocator, argv, subcommand_start);
-        std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "mcp")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPCommand; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
-        // Model Context Protocol server for AI/LLM integration
+        // Model Context Protocol server for AI/LLM integration.
+        // SONNY-6552: returns through main (exit 0, as before) instead of
+        // std.process.exit, so main's DebugAllocator.deinit runs and a
+        // Debug `geode mcp` reports its leaks.
         try handleMcpCommand(allocator, argv, subcommand_start);
-        std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "login") or std.mem.eql(u8, subcommand, "logout")) {
         // Top-level aliases - route to auth subcommands
         const auth_start_idx = if (subcommand_start > 0) subcommand_start - 1 else 0;
