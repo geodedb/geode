@@ -84,9 +84,7 @@ test "FileStorage-backed RaftNode restores currentTerm after deinit + re-init on
         .id = 2,
         .endpoint = "127.0.0.1",
         .port = 21051,
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
 
     const target_term: u64 = 5;
