@@ -2438,6 +2438,25 @@
 
 ### Fixed
 
+- **A cluster node's vote is on disk before its grant can leave the node
+  (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
+  its transport from inside `step()` and writes the hard state (term,
+  voted_for; fsync) only in `advance()`, which `RaftNode.drainReady` calls
+  after `step()` returns. Geode's bridge queued the grant on the peer's
+  outbox at once and the outbox thread sends without the raft mutex, so a
+  node could tell a candidate "granted", crash before the fsync, restart
+  with no vote for that term and grant it to another candidate: two
+  leaders in one term. The bridge now holds everything the library sends
+  during `step` / `tick` / `propose` until `advance()` has succeeded, then
+  queues it; if `ready()` or `advance()` fails the held messages are
+  dropped (raft resends). Leader AppendEntries now leave after the
+  leader's own append is durable (one fsync later than before). The vote
+  already survived a clean restart (the library stores term and vote
+  together); `test-raft-hardstate-durability` now asserts it and that the
+  restarted node refuses a second candidate in the same term. Regression:
+  `zig build test-sonny6563-vote-persist-before-send` (the grant reached
+  the network while the disk held term 0, voted_for null).
+
 - **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
   (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
   nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC

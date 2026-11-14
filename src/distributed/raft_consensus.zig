@@ -3073,6 +3073,16 @@ pub const RaftNode = struct {
     txn_coordinator: ?*TxnCoordinator,
     pending_responses: std.StringHashMap(ClientResponse),
 
+    // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=HeldUntilPersisted; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6563: what the inner library sent through the bridge during
+    /// `step` / `tick` / `propose`, held (under `inner_mutex`) until
+    /// `drainReady`'s `advance()` has made the hard state and entries they
+    /// announce durable. The library sends a RequestVote grant from inside
+    /// `step()`, before `advance()` fsyncs the vote; queued at once, the
+    /// outbox thread could put it on the wire first, and a crash then lost
+    /// the vote (the node could grant the term again after restart).
+    held_outbound: std.ArrayList(OutboundEntry) = .empty,
+
     pub fn init(
         allocator: Allocator,
         id: u64,
@@ -3241,6 +3251,47 @@ pub const RaftNode = struct {
             },
         }
         self.pending_responses.deinit();
+        self.dropHeldOutbound();
+        self.held_outbound.deinit(self.allocator);
+    }
+
+    /// SONNY-6563: hand what `step` / `tick` / `propose` sent to the network,
+    /// now that `advance()` has persisted the state it announces. The
+    /// network is the peer's outbox (its thread sends without
+    /// `inner_mutex`), or a test's `send_override`, called in place.
+    fn releaseHeldOutbound(self: *RaftNode) void {
+        defer self.held_outbound.clearRetainingCapacity();
+        const transport = self.transport orelse {
+            for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
+            return;
+        };
+        for (self.held_outbound.items) |held| {
+            if (transport.send_override != null) {
+                transport.send(held.peer, held.from, held.term, held.msg) catch |err| {
+                    log.warn("raft bridge: synchronous send failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("to", held.peer.id),
+                    });
+                };
+                freeOutboundMessage(self.allocator, held.msg);
+                continue;
+            }
+            transport.enqueueOutbound(held.peer, held.from, held.term, held.msg) catch |err| {
+                log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("to", held.peer.id),
+                });
+                freeOutboundMessage(self.allocator, held.msg);
+            };
+        }
+    }
+
+    /// SONNY-6563: the state these messages announce is not durable (ready()
+    /// or advance() failed): they are not sent. Raft resends what matters
+    /// (a candidate asks again, a leader re-replicates).
+    fn dropHeldOutbound(self: *RaftNode) void {
+        for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
+        self.held_outbound.clearRetainingCapacity();
     }
 
     /// Wire the wrapper's geode-level `Transport` (typically QUIC+TLS in
@@ -3536,6 +3587,7 @@ pub const RaftNode = struct {
         // error in the log so we don't silently drop committed entries.
         const rd = self.inner.ready() catch |err| {
             log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
+            self.dropHeldOutbound();
             return;
         };
 
@@ -3616,7 +3668,13 @@ pub const RaftNode = struct {
         // skipped the call.
         self.inner.advance() catch |err| {
             log.warn("raft advance error", &.{Attr.string("error", @errorName(err))});
+            // SONNY-6563: nothing that announces unpersisted state is sent.
+            self.dropHeldOutbound();
+            return;
         };
+        // SONNY-6563: the hard state and entries are durable; what the inner
+        // library sent during this step / tick / propose may now leave.
+        self.releaseHeldOutbound();
     }
 
     /// Look up a peer by id.  Returns null if the id isn't in `self.peers`.
@@ -3695,10 +3753,10 @@ const RaftLibTransportBridge = struct {
         // do the cheap part inline (raft_lib -> geode conversion,
         // peer lookup) and hand the actual `send` off to the
         // Transport's dispatch thread.
-        const transport = node.transport orelse {
+        if (node.transport == null) {
             log.debug("raft bridge: no transport set", &.{Attr.uint("to", to)});
             return;
-        };
+        }
         const peer = node.findPeerById(to) orelse {
             log.debug("raft bridge: unknown destination peer", &.{Attr.uint("to", to)});
             return;
@@ -3710,23 +3768,12 @@ const RaftLibTransportBridge = struct {
             });
             return;
         };
-        // Synchronous dispatch path is preserved for tests that wire a
-        // `send_override` — those callers want immediate capture and
-        // don't care about latency.  When no override is set, route
-        // through the outbox so the QUIC I/O happens off the raft
-        // critical path.
-        if (transport.send_override != null) {
-            transport.send(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
-                log.warn("raft bridge: synchronous send failed", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("to", to),
-                });
-            };
-            freeOutboundMessage(node.allocator, geode_msg);
-            return;
-        }
-        transport.enqueueOutbound(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
-            log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
+        // SONNY-6563: held until `drainReady` has persisted the state this
+        // message announces (a vote grant is sent from inside `step()`,
+        // before `advance()` fsyncs the vote). `releaseHeldOutbound` then
+        // queues it on the outbox (or calls a test's `send_override`).
+        node.held_outbound.append(node.allocator, .{ .peer = peer, .from = node.id, .term = node.inner.current_term, .msg = geode_msg }) catch |err| {
+            log.warn("raft bridge: cannot hold outbound message; dropping it", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("to", to),
             });
