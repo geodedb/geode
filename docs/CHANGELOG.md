@@ -2385,6 +2385,20 @@
   without a host gets the host message instead of `DSN missing host`.
   Regression: `zig build test-sonny6531-cli-address-errors`.
 
+- **canaryscan writes rows in source order, whatever `--root` is (SONNY-6531
+  item 3).** The rows of one requirement in `tools/canaryscan/status.csv`
+  and `status.json` were sorted by FEATURE, then ASPECT, STATUS, OWNER,
+  UPDATED and file lists, so editing one of those fields moved rows inside
+  the requirement, and the file column was the raw walk path, so `--root .`
+  and an absolute root wrote different files. Entries are now sorted by
+  their first marker's file and line, then the remaining fields; files are
+  relative to `--root`; and the report is built from the collected markers
+  so the visit order cannot matter. Both files were regenerated once in
+  the new order (same rows; only the order changed). `docs/status.csv`
+  (`make status-csv`) was already stable: its sort key ends in file and
+  line, and two runs are byte-identical. Regression: `cd tools/canaryscan
+  && go test ./...` (`order_test.go`).
+
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

@@ -23,17 +23,41 @@ var skipDirs = map[string]bool{
     ".crush": true, "data": true, "certs": true, "zig-packages": true, "zig-pkg": true, ".worktrees": true,
 }
 
-func Scan(root string) (report, error) {
-    type key struct {
-        id, feature, aspect, status, owner, updated string
-    }
-    type val struct {
-        files   map[string]struct{}
-        tests   map[string]struct{}
-        benches map[string]struct{}
-    }
-    agg := map[key]*val{}
+// marker is one CANARY line: where it is and what it says. file is relative
+// to the scan root, with forward slashes.
+type marker struct {
+    id, feature, aspect, status, owner, updated string
+    file                                        string
+    line                                        int
+    tests, benches                              []string
+}
 
+// srcPos orders markers by where they are in the tree.
+type srcPos struct {
+    file string
+    line int
+}
+
+func (a srcPos) less(b srcPos) bool {
+    if a.file != b.file {
+        return a.file < b.file
+    }
+    return a.line < b.line
+}
+
+func Scan(root string) (report, error) {
+    markers, err := collect(root)
+    if err != nil {
+        return report{}, err
+    }
+    return aggregate(markers), nil
+}
+
+// collect walks root and returns every marker. SONNY-6531: a file is named
+// relative to root, so the output does not depend on how --root is spelled
+// (`.`, `./`, an absolute path, `../..` from a hook).
+func collect(root string) ([]marker, error) {
+    var markers []marker
     err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
         if err != nil {
             return err
@@ -48,6 +72,11 @@ func Scan(root string) (report, error) {
         if isBinary(path) {
             return nil
         }
+        rel, err := filepath.Rel(root, path)
+        if err != nil {
+            return err
+        }
+        rel = filepath.ToSlash(rel)
         f, err := os.Open(path)
         if err != nil {
             return nil // skip unreadable files
@@ -66,40 +95,78 @@ func Scan(root string) (report, error) {
             if err != nil {
                 return fmt.Errorf("parse %s:%d: %w", path, ln, err)
             }
-            k := key{
+            mk := marker{
                 id:      rec["REQ"],
                 feature: unquote(rec["FEATURE"]),
                 aspect:  rec["ASPECT"],
                 status:  rec["STATUS"],
                 owner:   rec["OWNER"],
                 updated: rec["UPDATED"],
+                file:    rel,
+                line:    ln,
+                tests:   splitList(rec["TEST"]),
+                benches: splitList(rec["BENCH"]),
             }
-            if k.id == "" || k.aspect == "" || k.status == "" {
+            if mk.id == "" || mk.aspect == "" || mk.status == "" {
                 return fmt.Errorf("missing required fields in %s:%d", path, ln)
             }
-            if _, ok := agg[k]; !ok {
-                agg[k] = &val{
-                    files:   map[string]struct{}{},
-                    tests:   map[string]struct{}{},
-                    benches: map[string]struct{}{},
-                }
-            }
-            agg[k].files[path] = struct{}{}
-            for _, t := range splitList(rec["TEST"]) {
-                if t != "" {
-                    agg[k].tests[t] = struct{}{}
-                }
-            }
-            for _, b := range splitList(rec["BENCH"]) {
-                if b != "" {
-                    agg[k].benches[b] = struct{}{}
-                }
-            }
+            markers = append(markers, mk)
         }
         return nil
     })
     if err != nil {
-        return report{}, err
+        return nil, err
+    }
+    return markers, nil
+}
+
+// aggregate shapes the report. Its output depends only on the set of
+// markers, not on the order they were found in.
+func aggregate(markers []marker) report {
+    type key struct {
+        id, feature, aspect, status, owner, updated string
+    }
+    type val struct {
+        files   map[string]struct{}
+        tests   map[string]struct{}
+        benches map[string]struct{}
+        first   srcPos
+    }
+    agg := map[key]*val{}
+
+    for _, mk := range markers {
+        k := key{
+            id:      mk.id,
+            feature: mk.feature,
+            aspect:  mk.aspect,
+            status:  mk.status,
+            owner:   mk.owner,
+            updated: mk.updated,
+        }
+        pos := srcPos{file: mk.file, line: mk.line}
+        v, ok := agg[k]
+        if !ok {
+            v = &val{
+                files:   map[string]struct{}{},
+                tests:   map[string]struct{}{},
+                benches: map[string]struct{}{},
+                first:   pos,
+            }
+            agg[k] = v
+        } else if pos.less(v.first) {
+            v.first = pos
+        }
+        v.files[mk.file] = struct{}{}
+        for _, t := range mk.tests {
+            if t != "" {
+                v.tests[t] = struct{}{}
+            }
+        }
+        for _, b := range mk.benches {
+            if b != "" {
+                v.benches[b] = struct{}{}
+            }
+        }
     }
 
     // shape report
@@ -126,6 +193,7 @@ func Scan(root string) (report, error) {
             Benches: keys(v.benches),
             Owner:   k.owner,
             Updated: k.updated,
+            first:   v.first,
         }
         reqMap[normalizeReq(k.id)] = append(reqMap[normalizeReq(k.id)], ent)
         sumStatus[ent.Status]++
@@ -133,12 +201,16 @@ func Scan(root string) (report, error) {
     }
     var rows []requirementRow
     for id, feats := range reqMap {
-        // SONNY-6374: a total order. Entries that share FEATURE and ASPECT
-        // (different STATUS, OWNER, UPDATED or files) compared equal, so
-        // they came out in map-iteration order and status.csv lines moved
-        // between runs.
+        // SONNY-6374: a total order. SONNY-6531: by source position first
+        // (the entry's first marker: file, then line), so a FEATURE, STATUS,
+        // OWNER or UPDATED edit does not move rows inside the requirement;
+        // the remaining fields break the tie of two entries whose first
+        // markers share a line (one raw ID written with two hyphens).
         sort.Slice(feats, func(i, j int) bool {
             a, b := feats[i], feats[j]
+            if a.first != b.first {
+                return a.first.less(b.first)
+            }
             if a.Feature != b.Feature {
                 return a.Feature < b.Feature
             }
@@ -171,7 +243,7 @@ func Scan(root string) (report, error) {
             ByStatus: sumStatus,
             ByAspect: sumAspect,
         },
-    }, nil
+    }
 }
 
 func parseCanaryKV(s string) (map[string]string, error) {

@@ -3,6 +3,7 @@ package main
 import (
     "bytes"
     "encoding/json"
+    "math/rand/v2"
     "os"
     "path/filepath"
     "strings"
@@ -130,6 +131,23 @@ func TestScanOutputDoesNotDependOnHowRootIsSpelled(t *testing.T) {
         relCSV, relJSON := render(t, rel)
         if relCSV != absCSV || relJSON != absJSON {
             t.Fatalf("--root %q wrote:\n%s\n--root %q wrote:\n%s", root, relCSV, dir, absCSV)
+        }
+    }
+}
+
+func TestReportDoesNotDependOnVisitOrder(t *testing.T) {
+    markers, err := collect(orderFixture(t))
+    if err != nil {
+        t.Fatalf("collect: %v", err)
+    }
+    wantCSV, wantJSON := render(t, aggregate(markers))
+    rng := rand.New(rand.NewPCG(6531, 1))
+    for i := 0; i < 50; i++ {
+        shuffled := append([]marker(nil), markers...)
+        rng.Shuffle(len(shuffled), func(a, b int) { shuffled[a], shuffled[b] = shuffled[b], shuffled[a] })
+        c, j := render(t, aggregate(shuffled))
+        if c != wantCSV || j != wantJSON {
+            t.Fatalf("visit order %d wrote:\n%s\nwant:\n%s", i, c, wantCSV)
         }
     }
 }
