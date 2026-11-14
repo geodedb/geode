@@ -90,6 +90,19 @@ fn textLike(value: Value) ?[]const u8 {
     };
 }
 
+/// SONNY-6518 item 5: the byte offset of the `n`-th character (0-based) of
+/// `s`, or `s.len` past its last. A byte that starts no UTF-8 sequence counts
+/// as one character.
+fn charOffset(s: []const u8, n: usize) usize {
+    var at: usize = 0;
+    var seen: usize = 0;
+    while (at < s.len and seen < n) : (seen += 1) {
+        const width = std.unicode.utf8ByteSequenceLength(s[at]) catch 1;
+        at = @min(s.len, at + width);
+    }
+    return at;
+}
+
 /// SONNY-6518: a text argument of a constructor: null for the null value
 /// (the result is then null); a value that is no text is 22G03 (it was
 /// NULL).
@@ -636,45 +649,44 @@ pub fn evalStringFunction(
     args: []*ast.Expr,
     env: Env,
 ) EvalError!?Value {
-    // substring(str, start [, length])
+    // CANARY: REQ=REQ-SONNY-6518-SUBSTRING-POSITIONS; FEATURE="StringFunctions"; ASPECT=CharacterPositions; STATUS=TESTED; TEST=tests/test_sonny6518_substring_positions.zig; OWNER=eval; UPDATED=2026-11-13
+    // substring(str, start [, length]): a Geode extension (ISO/IEC 39075:2024
+    // has LEFT and RIGHT only, 20.24), 1-based as documented. SONNY-6518 item
+    // 5: the characters at positions start .. start + length - 1 that the
+    // string has, as SQL's <character substring function> (ISO/IEC 9075-2)
+    // defines them: a start of 0 or less counts its positions before the
+    // first character (substring('abc', 0, 1) is '': it was 'a'), a
+    // negative length is a substring error (22011: it was ''), and positions
+    // are characters, not bytes.
     if (std.mem.eql(u8, function_name, "substring")) {
         if (args.len < 2 or args.len > 3) return EvalError.InvalidArgs;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const start_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const len_arg: ?Value = if (args.len == 3) try eval.evalExpr(allocator, args[2].*, env) else null;
 
         const str = switch (str_arg) {
             .Str, .Text => |s| s,
             .Null => return Value{ .Null = {} },
             else => return EvalError.TypeMismatch,
         };
-
-        // GQL/SQL uses 1-based indexing for substring
-        const start = switch (start_arg) {
-            .Int => |i| if (i < 1) 0 else @as(usize, @intCast(i - 1)),
+        const start: i64 = switch (start_arg) {
+            .Int => |i| i,
             .Null => return Value{ .Null = {} },
             else => return EvalError.TypeMismatch,
         };
-
-        if (args.len >= 3) {
-            const len_arg = try eval.evalExpr(allocator, args[2].*, env);
-            const len = switch (len_arg) {
-                .Int => |i| if (i < 0) 0 else @as(usize, @intCast(i)),
-                .Null => return Value{ .Null = {} },
-                else => return EvalError.TypeMismatch,
-            };
-
-            if (start >= str.len) {
-                return Value{ .Str = "" };
-            }
-
-            const end = @min(start + len, str.len);
-            return Value{ .Str = str[start..end] };
-        } else {
-            if (start >= str.len) {
-                return Value{ .Str = "" };
-            }
-            return Value{ .Str = str[start..] };
+        // The position after the last one taken (exclusive), if a length is given.
+        const end: ?i64 = if (len_arg) |la| switch (la) {
+            .Int => |l| if (l < 0) return EvalError.IndexOutOfBounds else start +| l,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
+        } else null;
+        const first: i64 = @max(start, 1);
+        if (end) |e| {
+            if (e <= first) return Value{ .Str = "" };
         }
+        const from = charOffset(str, @intCast(first - 1));
+        const to = if (end) |e| charOffset(str, @intCast(e - 1)) else str.len;
+        return Value{ .Str = str[from..@max(from, to)] };
     }
 
     // replace(str, search, replacement)
@@ -814,8 +826,9 @@ pub fn evalStringFunction(
             else => return EvalError.TypeMismatch,
         };
 
-        const result_len = @min(count, str.len);
-        return Value{ .Str = str[0..result_len] };
+        // SONNY-6518 item 5: the first NC characters (20.24 GR 1 e, f ii); it
+        // took bytes.
+        return Value{ .Str = str[0..charOffset(str, count)] };
     }
 
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
@@ -839,9 +852,10 @@ pub fn evalStringFunction(
             else => return EvalError.TypeMismatch,
         };
 
-        const result_len = @min(count, str.len);
-        const start = str.len - result_len;
-        return Value{ .Str = str[start..] };
+        // SONNY-6518 item 5: the last NC characters (20.24 GR 1 e, f iii); it
+        // took bytes.
+        const chars = std.unicode.utf8CountCodepoints(str) catch str.len;
+        return Value{ .Str = str[charOffset(str, chars - @min(count, chars))..] };
     }
 
     // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="StringFunctions"; ASPECT=Split; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25

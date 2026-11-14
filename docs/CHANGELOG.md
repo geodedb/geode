@@ -2298,6 +2298,17 @@
 
 ### Fixed
 
+- **substring, left and right count characters; substring's start follows
+  the 1-based rule (SONNY-6518 item 5, BREAKING).** ISO/IEC 39075:2024
+  20.24 LEFT / RIGHT take the first / last NC characters; Geode's
+  `substring(str, start [, length])` (an extension, 1-based as documented)
+  now takes the characters at positions start .. start + length - 1 that
+  the string has, the rule of SQL's <character substring function>
+  (ISO/IEC 9075-2). Changes: `substring('abc', 0, 1)` is '' (was 'a'),
+  `substring('abc', 0, 2)` 'a' (was 'ab'), `substring('abc', -1, 3)` 'a'
+  (was 'abc'), a negative length 22011 (was ''); multi-byte characters
+  count as one (`left('日本語', 2)` is '日本': it answered half a
+  character). Regression: `zig build test-sonny6518-substring-positions`.
 - **toFloat, toInteger, toBoolean and toString are the CAST of their
   target (SONNY-6518 item 2, BREAKING).** They answer what `CAST(x AS
   FLOAT / INTEGER / BOOLEAN / STRING)` answers (ISO/IEC 39075:2024 20.8,
