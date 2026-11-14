@@ -6458,6 +6458,61 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6442-serve-unknown-options", "Run SONNY-6442 item 4 regression (geode serve refuses an unknown option, a positional argument or a value option without its value with exit 2, and parses every option its --help documents)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6560: every geode command refuses an option it does not know, a
+    // value option without its value and (query) a format it does not
+    // render with exit 2; dot/mermaid render every result shape; the help
+    // texts document only options that are read (built binary + a server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6560_cli_unsupported_options.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6560-cli-unsupported-options", "Run SONNY-6560 regression (every geode command refuses an option it does not know and a value option given without its value with exit 2 naming it; geode query refuses a --format it does not render, and dot/mermaid render paths, plans and errors and escape DOT labels; --begin/--commit/--rollback and the other documented-but-unread options are refused and no longer documented; --batch BEGIN/ROLLBACK leaves nothing; built binary + a real server)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6559 (7, 8, 11): a successful geode command returns through main
+    // (its Debug leak check runs; the CLI audit log records the success),
+    // the audit configuration's strings are freed, and geode completion
+    // writes its script to stdout (built binary + a server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_cli_exit_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-cli-exit-paths", "Run SONNY-6559 items 7, 8 and 11 regression (geode completion writes its script to stdout with stderr empty for every shell; a Debug command run with every GEODE_AUDIT_* setting and --audit-file/--audit-syslog/--audit-eventlog reports no leak; audit, login, logout, session, authn, mtls and tenant return through main on success: the CLI audit log records the command's success and no leak report is printed; built binary + a real server)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6559 (5, 6, 10): every MCP backend tool and advertised resource
+    // template works against a real server (catalogs is gone, schema and
+    // query return lists and nodes, explain the plan geode query prints,
+    // {graph} is honoured, node/relationship templates read) and resource
+    // URIs are parsed strictly (a real geode mcp --stdio session).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_mcp_backend.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-mcp-backend", "Run SONNY-6559 items 5, 6 and 10 regression (through a real geode mcp --stdio session against a real geode serve: no catalogs tool, the schema/graphs/query tools return lists and nodes, explain returns the plan geode query --format json prints, the schema/stats templates honour {graph}, node/{label} and relationship/{type} read, an unknown graph and every malformed geode:// URI are -32002, no leak report)").dependOn(&run_tests.step);
+    }
+
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
     remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);

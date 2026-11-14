@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T08:44:32.131510178Z",
+  "generated_at": "2026-11-14T09:04:27.175868505Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79113,6 +79113,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6559-CLI-EXIT-PATHS",
+      "features": [
+        {
+          "feature": "CliExitPaths",
+          "aspect": "ReturnThroughMain",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6559_cli_exit_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_cli_exit_paths.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6559-MCP-BACKEND",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "EveryToolAndResourceSucceeds",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6559_mcp_backend.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_mcp_backend.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-CLI-UNSUPPORTED-OPTIONS",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "RefuseWhatIsNotSupported",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -84215,7 +84272,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4172
+      "TESTED": 4175
     },
     "by_aspect": {
       "2PC": 3,
@@ -85294,6 +85351,7 @@
       "EveryLabelPolicy": 1,
       "EveryPathExpands": 1,
       "EverySite": 1,
+      "EveryToolAndResourceSucceeds": 1,
       "EvictedNode": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,
@@ -87004,6 +87062,7 @@
       "RefuseFabricated": 2,
       "RefuseInternal": 1,
       "RefuseReserved": 1,
+      "RefuseWhatIsNotSupported": 1,
       "RefusedCommitOnQuicWire": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
@@ -87117,6 +87176,7 @@
       "ReturnFix": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
+      "ReturnThroughMain": 1,
       "ReverseTraversal": 2,
       "RevivedTests": 1,
       "RevokeFailureReported": 1,
