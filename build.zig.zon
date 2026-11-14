@@ -608,8 +608,20 @@
             // (`crc32c.Hasher`, `free_space.checkHostLayout`,
             // `free_space.host_layout_supported`). Same transitive deps as
             // v0.4.13 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.14#fc913be98c87f999ea217721c9437f3f74796014",
-            .hash = "graph_storage-0.4.14-9UyJSz_kLwApVECl_iInjDSakbUB3ln7wT60iVXdadif",
+            // v0.4.15 (2026-11-13, SONNY-6524): a new label name is made
+            // durable on shard 0, then on shards 1..15 in parallel with shard
+            // 0's id (was 16 shards one after another); a failed durable write
+            // is undone in memory; a shard that holds the name or the id
+            // differently fails with `error.LabelDictionaryDiverged`.
+            // `ShardedGraphEngine.open` compares every shard's labels.dict with
+            // shard 0's: it repairs a shard when no record there uses a
+            // disputed id and otherwise refuses with
+            // `error.LabelDictionaryDiverged` (opt-in
+            // `GraphConfig.label_dict_divergence = .adopt_shard0` rewrites
+            // from shard 0). API additions only; no store format change. Same
+            // transitive deps as v0.4.14 (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.15#9ed6f98b7bab634043e38cdee06af94528fde28c",
+            .hash = "graph_storage-0.4.15-9UyJS1GZMAD2oQSL-KqimNv_IAPOjfSnIIbhVC4yDNuc",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

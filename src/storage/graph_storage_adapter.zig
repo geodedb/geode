@@ -23,6 +23,7 @@ const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
+const label_dict_divergence = @import("label_dict_divergence.zig");
 // GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
 // executor's cancel flags so a client disconnect / stall-watchdog abort frees a
 // handler wedged inside the O(graph) first-access rebuild. `read_budget` is a
@@ -11571,13 +11572,18 @@ pub const StorageAdapter = struct {
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         if (is_security_graph) cfg.sync_mode = .sync_each_commit;
 
-        const engine = gs.ShardedGraphEngine.open(
+        // SONNY-6524: a graph whose shard label dictionaries disagree is
+        // refused (LabelDictionaryDiverged) unless the operator asked for the
+        // shard 0 rewrite and the disagreement is the shape it is right for.
+        const engine = label_dict_divergence.openShardedEngine(
             self.allocator,
             self.data_dir,
+            name,
             graph_uuid,
             cfg,
         ) catch |err| {
-            log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
+            // LabelDictionaryDiverged is logged there, with the shape and the repair.
+            if (err != error.LabelDictionaryDiverged) log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
         // error-policy: A — best-effort close on an already-failing path.

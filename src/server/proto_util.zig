@@ -708,6 +708,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DataCorruption => .{ .code = "58000", .message = "DataCorruption: the graph's stored data is damaged (records the storage engine counts are missing or inconsistent). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the check that failed" },
         error.ChecksumMismatch => .{ .code = "58000", .message = "ChecksumMismatch: a page of the graph's stored data failed its checksum (the bytes read back are not the bytes written). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the page" },
         error.InvalidData => .{ .code = "58000", .message = "InvalidData: a record of the graph's stored data could not be decoded (it is malformed). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the record" },
+        // SONNY-6524: graph-storage refused to open the graph because its
+        // shards' label dictionaries disagree on what a label id used by
+        // records means; serving it could return wrong labels.
+        error.LabelDictionaryDiverged => .{ .code = "58000", .message = "LabelDictionaryDiverged: the graph's shard label dictionaries disagree, so it is not opened and refuses reads and writes; other graphs are unaffected. The server log names the graph and says whether GEODE_LABEL_DICT_ADOPT_SHARD0 can repair it or it needs a manual repair" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

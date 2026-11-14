@@ -5483,6 +5483,8 @@ REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuarantinedGraphRefusesWr
 REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuicProgramGate,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
 REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,Regression,TESTED,tests/test_sonny6523_quarantine_fail_closed.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
 REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,TransportProgramGate,TESTED,src/graph_store.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6524-LABEL-DICT-SPLIT,CrashRecovery,DivergedLabelDictOpen,TESTED,src/storage/label_dict_divergence.zig,tests/test_sonny6524_label_dict_split.zig,,storage,2026-11-13
+REQ-SONNY-6524-LABEL-DICT-SPLIT,CrashRecovery,Regression,TESTED,tests/test_sonny6524_label_dict_split.zig,tests/test_sonny6524_label_dict_split.zig,,storage,2026-11-13
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,src/execution/evaluator_adapter.zig,tests/test_sonny6525_correlated_subquery.zig,,engine,2026-11-13
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,tests/test_sonny6525_correlated_subquery.zig,,,engine,2026-11-13
 REQ-SONNY-6525-ORDER-BY-SCOPE,LinearComposition,OrderByAfterAggregation,TESTED,src/execution/scope_check.zig,tests/test_sonny6525_order_by_scope.zig,,engine,2026-11-13

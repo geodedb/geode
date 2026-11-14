@@ -118,6 +118,75 @@
   with a lost node could not be opened. The check takes its table of lost
   slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
   test-sonny6452-tde-page-tail-repair`.
+- **A graph refused for disagreeing shard label dictionaries says so, and a
+  split left by the old ORDER BY path can be repaired on request
+  (SONNY-6524).** Every label id geode has written into a record, on any
+  shard, is shard 0's: names were given through a view of shard 0's
+  dictionary (from the move to the sharded engine, 2026-04-25) or through
+  `ShardedGraphEngine.getOrAssignLabel`, which has returned shard 0's id
+  since it was added, and geode reads names through shard 0's dictionary
+  only. When graph-storage 0.4.15 refuses a graph (above), geode now reads
+  its 16 dictionaries and logs which of two shapes it has (ERROR, scope
+  `storage`, with the graph name). (a) Shard 0 names every label the other
+  shards name, in the same id order: what the old ORDER BY path, the
+  shard-0-only naming before 2026-05-29 and a 0.4.14 broadcast that failed
+  part-way left. Shard 0's names are the ones the records were written with.
+  (b) A shard names a label shard 0 does not have, or orders two labels the
+  other way round: shard 0 lost a name (graph-storage 0.4.13 and older wrote
+  dictionaries only at checkpoint and went on to the next shard after one
+  failed), and rewriting the other shards from shard 0 would drop or rename
+  labels. New `GEODE_LABEL_DICT_ADOPT_SHARD0` (comma-separated graph names):
+  a graph named there in shape (a) is opened with graph-storage's
+  `.adopt_shard0`, which rewrites shards 1..15 from shard 0 (logged as a
+  WARN); it opens normally from then on. Shape (b) is refused even then and
+  needs a manual repair. geode does not adopt on its own: if shard 0 lost a
+  name, the old ORDER BY path gave its id to a label no node had yet, and
+  the lost name was named again, the dictionaries look exactly like shape
+  (a) while the nodes written before the loss carry the reused id, and
+  adopting reads them under the other label (as geode already did before
+  0.4.15). Reads and writes of a refused graph now fail with 58000
+  `LabelDictionaryDiverged` (they reported the generic `GraphQuarantined
+  ... restart the server to retry`, which a restart does not fix).
+  Regression: `zig build test-sonny6524-label-dict-split` (each shape built
+  with the engine calls that produced it and written through the adapter's
+  CREATE paths: refused by default with nothing written; adopted on
+  request with every node and relationship on every shard read back under
+  the label it was created with, through geode and through the owning
+  shard's own dictionary; the lost-name shapes refused even when asked,
+  and graph-storage's own adoption shown to read each of the 32 nodes
+  written before the loss under a wrong label or none; a real server
+  answers its other graphs throughout and counts the adopted graph's
+  labels as created).
+- **graph-storage v0.4.15 (SONNY-6524): a new label name costs about a
+  sixth of what it did, a failed label write is undone, and shard label
+  dictionaries are compared at open.** `ShardedGraphEngine.getOrAssignLabel`
+  makes a new name durable on shard 0, then on shards 1..15 in parallel with
+  shard 0's id (0.4.14 wrote the 16 dictionaries one after another: 32
+  serial fsyncs). Measured against a real server with the 0.4.14 and 0.4.15
+  binaries of this branch, 5 interleaved rounds, medians, dev host at load
+  average about 4-5: a CREATE that introduces one new label 575 -> 96 ms, a
+  MERGE 567 -> 96 ms; one CREATE that introduces 30 new labels
+  16.7 -> 2.29 s; a `/*+BATCH*/` bulk-MERGE that introduces 10 new labels
+  5.96 -> 0.79 s; CREATE and MERGE on existing labels unchanged (about
+  17 ms in both). The same bench measured 0.4.13 at 325 ms per new label
+  on 2026-11-13 (not re-run here), so a new label is now cheaper than it
+  was before 0.4.14 made label names durable. A failed durable write of a
+  new name no longer leaves the name in memory, where later statements
+  found it and never wrote it (and the shards after the failing one never
+  got it). geode has nothing left to remove: it stopped rewriting the 16
+  dictionaries itself with SONNY-6491, and every path that names a label
+  goes through `getOrAssignLabel`.
+  **BREAKING (operator): a graph whose shard label dictionaries disagree in
+  a way its records depend on is not opened.** `ShardedGraphEngine.open`
+  compares each shard's `labels.dict` with shard 0's. A shard that is only
+  missing names, or names ids no record on it uses, is rewritten from
+  shard 0; otherwise the open fails with `LabelDictionaryDiverged` and
+  nothing is written. Graphs split by geode's old ORDER BY path (below) are
+  refused once a node, relationship or ordered index on shards 1..15 uses a
+  label named after the split. Reads and writes of such a graph fail with
+  a 58000 error; the server and its other graphs keep serving. No store
+  format change and no downgrade restriction from 0.4.14. Same transitive
+  dependencies as 0.4.14.
 - **graph-storage v0.4.14 (SONNY-6473, SONNY-6491, SONNY-6470): crash
   recovery and checkpoint ordering.** Crash recovery applies only the
   newest committed image of each page (by LSN): transactions that overlapped
@@ -155,9 +224,9 @@
   that introduces 10 new labels 3.1 -> 6.2 s; CREATE and MERGE on existing
   labels unchanged (19-23 ms in both). Without the removal it was about 3x
   (48 fsyncs). Ingest that introduces many distinct labels pays this once
-  per name. Regression: `zig build test-sonny6491-label-name-crash` (every
-  label-creating write shape, SIGKILL, restart, counted by label and listed
-  by `db.labels()`).
+  per name (graph-storage 0.4.15 brings it to 96 ms, above). Regression:
+  `zig build test-sonny6491-label-name-crash` (every label-creating write
+  shape, SIGKILL, restart, counted by label and listed by `db.labels()`).
 - **An ORDER BY on a label no node has yet no longer loses that label or
   splits the shards' label ids (SONNY-6491).** `MATCH (n:L) RETURN n.k
   ORDER BY n.k LIMIT m` starts a one-time background build of the
@@ -177,7 +246,8 @@
   refuses to assign names (`error.LabelDictionaryViewIsReadOnly`).
   **Existing stores:** dictionaries already split this way stay split (the
   engine does not reconcile them); geode reads only shard 0's, which is
-  consistent with the records. Regression: `zig build
+  consistent with the records. (graph-storage 0.4.15, above, refuses to
+  open such a graph once records use the disputed ids.) Regression: `zig build
   test-sonny6491-orderby-label-intern` (SIGKILL and clean restart, the 16
   shard dictionaries on disk compared name by name, `createOrderedIndex`
   on an unseen label, and the ORDER BY trigger naming nothing).

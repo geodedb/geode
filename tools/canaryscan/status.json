@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T05:01:16.742905112Z",
+  "generated_at": "2026-11-14T05:22:57.118335194Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86026,6 +86026,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6524-LABEL-DICT-SPLIT",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "DivergedLabelDictOpen",
+          "status": "TESTED",
+          "files": [
+            "src/storage/label_dict_divergence.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6524_label_dict_split.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6524_label_dict_split.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6524_label_dict_split.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6525-CORRELATED-SUBQUERY",
       "features": [
         {
@@ -93879,7 +93912,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4955
+      "TESTED": 4957
     },
     "by_aspect": {
       "2PC": 3,
@@ -94854,6 +94887,7 @@
       "DistributedIndep": 1,
       "DistributedQueries": 1,
       "DistributionStats": 1,
+      "DivergedLabelDictOpen": 1,
       "DivergentDurableStateRecovery": 1,
       "DoSGuard": 3,
       "Documentation": 3,
@@ -96984,7 +97018,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 351,
+      "Regression": 352,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
