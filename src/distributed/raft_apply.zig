@@ -702,10 +702,24 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
-                // SONNY-3028: the apply thread has no engine transaction open
-                // on the graph; kept for the error set.
+                // CANARY: REQ=REQ-SONNY-6547-REPLICATED-DROP-IN-USE; FEATURE="DistributedCluster"; ASPECT=RefusedDropFailsApply; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-14
+                // SONNY-6547 (3): the graph is in use on this node (the
+                // applying thread holds its read lock, or a session
+                // transaction changed it, SONNY-3134): nothing was dropped,
+                // and the apply fails, so the Raft node counts and logs a
+                // committed entry not applied. It logged the refusal, then
+                // the graph as dropped, and reported the entry applied while
+                // the node kept the graph. An apply runs on the thread that
+                // ticks or steps the node (the raft library commits on a
+                // tick or a step, never in a propose), which holds no graph
+                // lock. What a replicated drop does to an open transaction is
+                // for the replicated DDL feature to decide: nothing proposes
+                // a `schema_change` today (SONNY-6547 (6)).
                 error.ObjectInUse => {
-                    log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
+                    log.err("raft apply: drop_graph refused, the graph is in use on this node; the entry is not applied here", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    return err;
                 },
                 // SONNY-6433: no room to record the graph lock; nothing was
                 // dropped, and the apply fails.

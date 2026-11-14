@@ -2518,6 +2518,21 @@
   SHOW / `db.*` handlers already propagate their errors (sweep in the
   SONNY-6547 report). Regression: `zig build
   test-sonny6547-show-graphs-errors`.
+- **A Raft `drop_graph` apply refused because the graph is in use no longer
+  reports the graph dropped (SONNY-6547 item 3).** `GraphStore.dropGraph`
+  refuses (`ObjectInUse`) a caller that holds the graph's read lock or a
+  graph an open session transaction changed; the apply logged that, then
+  logged the graph as dropped and returned success, so the entry counted as
+  applied while the node kept the graph (every node replaying the log later
+  drops it). It now fails: the Raft node counts and logs a committed entry
+  not applied. The reported trigger, a one-voter cluster applying a drop
+  on the proposer's own thread while it holds the graph's read lock, does
+  not occur with the pinned raft library: a propose only appends, and the
+  entry commits and applies on the next tick or step, on a thread that
+  holds no graph lock; the regression runs it on a real one-voter cluster
+  (the apply waits for the proposer's read lock, then drops the graph).
+  Nothing in the server proposes a `schema_change` today (item 6).
+  Regression: `zig build test-sonny6547-single-voter-drop`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
