@@ -18965,4 +18965,23 @@ pub fn build(b: *std.Build) void {
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
     }
+    // SONNY-6561 / SONNY-6563 regressions, with tests/all_tests.zig's module
+    // graph (the e2e ones spawn this build's geode).
+    const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
+        .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
+    };
+    for (sonny656x_regressions) |reg| {
+        const reg_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| reg_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        reg_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            reg_tests.root_module.linkSystemLibrary("ssl", .{});
+            reg_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) reg_tests.root_module.linkSystemLibrary("dl", .{});
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, reg.weight, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
 }
