@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T05:40:21.492839847Z",
+  "generated_at": "2026-11-14T05:48:15.044878425Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86351,6 +86351,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6542-TEST-SOURCE-REACHABILITY",
+      "features": [
+        {
+          "feature": "TestSourceReachabilityGuard",
+          "aspect": "TestInfra",
+          "status": "TESTED",
+          "files": [
+            "scripts/ci/test_source_reachability.zig"
+          ],
+          "tests": [
+            "scripts/ci/test_source_reachability.zig"
+          ],
+          "benches": [],
+          "owner": "ci",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93912,7 +93931,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4957
+      "TESTED": 4958
     },
     "by_aspect": {
       "2PC": 3,
@@ -97684,6 +97703,7 @@
       "TestFixtures": 1,
       "TestFramework": 2,
       "TestHarness": 2,
+      "TestInfra": 1,
       "TestInfrastructure": 1,
       "TestIsolation": 2,
       "TestJsonOptimization": 1,
