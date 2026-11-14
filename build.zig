@@ -16296,6 +16296,17 @@ pub fn build(b: *std.Build) void {
     const eng3922_tests = b.addTest(.{ .root_module = eng3922_test_mod });
     const run_eng3922_tests = b.addRunArtifact(eng3922_tests);
     shardDep(test_step, &run_eng3922_tests.step, 0, test_shard_loads, test_shard_index);
+    // SONNY-6540 item 8: a 65,535-dimension vector literal parses inside the
+    // 64 MiB parser budget (decimal literals no longer leave a digit buffer
+    // on the arena; a sign on a numeric literal is not an operator link).
+    const sonny6540_vlit_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_vector_literal_parse.zig"), .target = target, .optimize = optimize });
+    sonny6540_vlit_mod.addImport("geode", root_mod);
+    sonny6540_vlit_mod.link_libc = true;
+    const sonny6540_vlit_tests = b.addTest(.{ .root_module = sonny6540_vlit_mod });
+    const run_sonny6540_vlit = b.addRunArtifact(sonny6540_vlit_tests);
+    shardDep(test_step, &run_sonny6540_vlit.step, 0, test_shard_loads, test_shard_index);
+    const sonny6540_vlit_step = b.step("test-sonny6540-vector-literal-parse", "SONNY-6540 item 8: a 65,535-dimension vector literal parses inside the parser budget");
+    sonny6540_vlit_step.dependOn(&run_sonny6540_vlit.step);
     const eng3922_step = b.step("test-eng3922", "Run ENG-3922 vector dimension-guard + over-cap regressions");
     eng3922_step.dependOn(&run_eng3922_tests.step);
 
