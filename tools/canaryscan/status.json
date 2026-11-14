@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T01:43:22.403493122Z",
+  "generated_at": "2026-11-14T01:44:01.488072969Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85839,6 +85839,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_dropped_graph_restart.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6523-FAILED-CREATE-COUNT",
       "features": [
         {
@@ -93508,7 +93527,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4934
+      "TESTED": 4935
     },
     "by_aspect": {
       "2PC": 3,
@@ -96602,7 +96621,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 344,
+      "Regression": 345,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
