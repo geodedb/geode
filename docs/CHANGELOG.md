@@ -6748,6 +6748,29 @@
 
 ### Removed
 
+- **Distributed modules the server never reached (SONNY-6563, SONNY-6567
+  item 7).** Each had no reference chain from the server root (`lib.zig`
+  exported some as unreferenced `distributed.*` decls; the rest were
+  imported only by their own test roots or by each other) and no symbol in
+  the Debug `geode` binary: `src/distributed/raft_persistent.zig` (it
+  persisted the term and not the vote, so a reopened node forgot its vote;
+  the cluster uses the raft library's FileStorage, which keeps both),
+  `raft_log_storage.zig` with `raft_consensus.PersistentStorage` and the
+  no-op `RaftNode.setStorage`, `twophase.zig` (a 2PC transport) and
+  `value_convert.zig`, `query_planner.zig` (`DistributedQueryPlanner`,
+  `FederationManager`) and the never-assigned
+  `ServerState.distributed_query_planner`, `network_transport.zig`,
+  `enhanced_query_transport.zig`, `node_registry.zig` and its test,
+  `sharding.zig`, `consistent_hash.zig`, `federation_flag.zig`; with their
+  tests, benchmarks and steps (`test-dist-query-planner`, `test-sharding`,
+  `test-gap0889`, `test-sonny6487-federation-flag-inline`, the red
+  `test-sonny6548-raft-persistent-voted-for`; `test-gap0870` keeps its Raft
+  command half, `test-sonny6453-cluster-peer-tls` its raft / coordinator
+  dial). `src/distributed/README.md` lists what remains, all of it reached
+  by the server. docs/TDE_FILE_LEVEL_ENCRYPTION.md named
+  `raft_persistent.zig` as the encrypted Raft state: the Raft hard state,
+  log and snapshots are written in plaintext by the library's FileStorage.
+
 - **Product code no build reached, which no longer compiled (SONNY-6548 item
   3).** Zig analyzes lazily, so these compiled only because nothing in the
   server referenced them: `src/types/hash.zig` (`hash`, `argon2idStrHash`,

@@ -72,7 +72,6 @@ const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
 
-const raft_log = @import("raft_log_storage.zig");
 const cluster_auth = @import("cluster_auth.zig");
 
 const logging = @import("logging");
@@ -2082,139 +2081,6 @@ fn connectWithTLS(qc: *quic.QuicClient, host: []const u8, port: u16) !void {
     try qc.waitForHandshake(1);
 }
 
-// ---- Persistent storage (file-backed term & votedFor) ----
-// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Consensus Persistence"; ASPECT=TermVotedFor; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-05
-
-pub const PersistentStorage = struct {
-    allocator: Allocator,
-    data_dir: []const u8,
-    log_storage: ?raft_log.LogStorage,
-
-    pub fn init(allocator: Allocator, data_dir: []const u8) !PersistentStorage {
-        // Build path: {data_dir}/raft_log.bin
-        const log_path = try std.fmt.allocPrint(allocator, "{s}/raft_log.bin", .{data_dir});
-        const ls = raft_log.LogStorage.init(allocator, log_path) catch |err| {
-            allocator.free(log_path);
-            return err;
-        };
-        return PersistentStorage{
-            .allocator = allocator,
-            .data_dir = data_dir,
-            .log_storage = ls,
-        };
-    }
-
-    pub fn close(self: *PersistentStorage) void {
-        if (self.log_storage) |*ls| {
-            // Free the path we allocated in init()
-            self.allocator.free(ls.file_path);
-            ls.deinit();
-            self.log_storage = null;
-        }
-    }
-
-    /// Read current_term from {data_dir}/current_term. Returns null if file does not exist.
-    pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
-        return readU64File(self.data_dir, "current_term");
-    }
-
-    /// Atomically write current_term to {data_dir}/current_term.
-    pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
-        try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        var buf: [32]u8 = undefined;
-        const str = std.fmt.bufPrint(&buf, "{d}", .{term}) catch unreachable;
-        try atomicWriteFile(dir, "current_term", str);
-    }
-
-    /// Read voted_for from {data_dir}/voted_for. Returns null if file does not exist.
-    pub fn getVotedFor(self: *PersistentStorage) !?u64 {
-        return readU64File(self.data_dir, "voted_for");
-    }
-
-    /// Atomically write voted_for to {data_dir}/voted_for, or delete the file if null.
-    pub fn saveVotedFor(self: *PersistentStorage, voter: ?u64) !void {
-        try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        if (voter) |v| {
-            var buf: [32]u8 = undefined;
-            const str = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
-            try atomicWriteFile(dir, "voted_for", str);
-        } else {
-            dir.deleteFile(std.Io.Threaded.global_single_threaded.io(), "voted_for") catch |err| {
-                if (err != error.FileNotFound) return err;
-            };
-        }
-    }
-
-    /// Read all persisted log entries, or null if the log is empty.
-    pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) !?[]LogEntry {
-        if (self.log_storage) |*ls| {
-            const entries = try ls.readAllEntries(allocator);
-            if (entries.len == 0) {
-                allocator.free(entries);
-                return null;
-            }
-            return entries;
-        }
-        return null;
-    }
-
-    /// Append a single entry to the persistent log.
-    pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
-        if (self.log_storage) |*ls| try ls.appendEntry(entry);
-    }
-
-    // ---- Internal helpers ----
-
-    fn ensureDir(path: []const u8) !void {
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-    }
-
-    fn readU64File(dir_path: []const u8, file_name: []const u8) !?u64 {
-        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), dir_path, .{}) catch |err| {
-            if (err == error.FileNotFound) return null;
-            return err;
-        };
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        const f = dir.openFile(std.Io.Threaded.global_single_threaded.io(), file_name, .{}) catch |err| {
-            if (err == error.FileNotFound) return null;
-            return err;
-        };
-        defer f.close(std.Io.Threaded.global_single_threaded.io());
-        var buf: [32]u8 = undefined;
-        const n = try f.readPositionalAll(std.Io.Threaded.global_single_threaded.io(), &buf, 0);
-        if (n == 0) return null;
-        const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
-        return std.fmt.parseInt(u64, trimmed, 10) catch null;
-    }
-
-    // CANARY: REQ=REQ-SEC-RAFT-ATOMIC-001; FEATURE="Atomic Raft State Persistence"; ASPECT=TOCTOU; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
-    /// Write data to file_name atomically via write-to-temp-then-rename.
-    /// SEC-D011: Crash-safe persistence -- writes to a .tmp file, fsyncs, then renames
-    /// so that a crash mid-write never corrupts the final file.
-    fn atomicWriteFile(dir: std.Io.Dir, name: []const u8, data: []const u8) !void {
-        const io_fs = std.Io.Threaded.global_single_threaded.io();
-        var tmp_buf: [256]u8 = undefined;
-        const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
-
-        const f = try dir.createFile(io_fs, tmp_name, .{});
-        errdefer {
-            f.close(io_fs);
-            dir.deleteFile(io_fs, tmp_name) catch {};
-        }
-        try f.writeStreamingAll(io_fs, data);
-        try f.sync(io_fs);
-        f.close(io_fs);
-
-        try dir.rename(tmp_name, dir, name, io_fs);
-    }
-};
-
 // ---- Message types ----
 
 pub const Message = union(enum) {
@@ -3347,10 +3213,6 @@ pub const RaftNode = struct {
         self.drainReady();
     }
 
-    pub fn setStorage(_: *RaftNode, _: *PersistentStorage) !void {
-        // External library manages its own storage
-    }
-
     pub fn tick(self: *RaftNode) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
@@ -4202,55 +4064,6 @@ test "encodeRaftFrame includes auth_token and decodeRaftFrame exposes it" {
     try std.testing.expectEqual(@as(u64, 1), decoded.term);
     // Without GEODE_CLUSTER_TOKEN set, auth_token should be empty
     try std.testing.expectEqualStrings("", decoded.auth_token);
-}
-
-test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
-    // SEC-D011: Verify atomic write pattern (write-to-temp, fsync, rename) persists correctly.
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try std.fmt.allocPrint(
-        allocator,
-        ".zig-cache/tmp/{s}",
-        .{&tmp.sub_path},
-    );
-    defer allocator.free(dir_path);
-
-    var storage = PersistentStorage.init(allocator, dir_path) catch unreachable;
-    defer storage.close();
-
-    // saveCurrentTerm round-trip
-    try storage.saveCurrentTerm(42);
-    const term = try storage.getCurrentTerm();
-    try std.testing.expectEqual(@as(?u64, 42), term);
-
-    // Overwrite with different value
-    try storage.saveCurrentTerm(99);
-    const term2 = try storage.getCurrentTerm();
-    try std.testing.expectEqual(@as(?u64, 99), term2);
-
-    // saveVotedFor round-trip
-    try storage.saveVotedFor(7);
-    const voted = try storage.getVotedFor();
-    try std.testing.expectEqual(@as(?u64, 7), voted);
-
-    // saveVotedFor(null) deletes the file
-    try storage.saveVotedFor(null);
-    const voted_null = try storage.getVotedFor();
-    try std.testing.expectEqual(@as(?u64, null), voted_null);
-
-    // Verify .tmp file does not persist (atomic rename should have cleaned up)
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
-    defer dir.close(io);
-    const tmp_exists = dir.openFile(io, "current_term.tmp", .{});
-    if (tmp_exists) |f| {
-        f.close(io);
-        return error.TmpFileNotCleaned;
-    } else |err| {
-        try std.testing.expectEqual(error.FileNotFound, err);
-    }
 }
 
 // k8s root cause #5 (2026-06-08): transient stream-credit backpressure must NOT

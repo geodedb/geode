@@ -33,13 +33,11 @@
 //   u64     policy_version
 //   u8      source_tag_ordinal  (PrincipalSource enum ordinal)
 //
-// Phase 7 note: when the wire-level shard RPC (enhanced_query_transport.zig;
-// query_transport.zig was never compiled and was removed in SONNY-6279) is
-// extended to carry opaque metadata blobs,
-// the coordinator should call serialize() and attach the result to the
-// outbound NodeQuery; the worker should call deserialize() and construct its
-// ExecutionContext. That integration is deferred to Phase 7 because the
-// current QueryTransport does not have a metadata header on the RPC path.
+// No shard RPC carries it: the inter-node query transports
+// (query_transport.zig, enhanced_query_transport.zig) were reached by nothing
+// in the server and were removed (SONNY-6279, SONNY-6563). A future
+// cross-node query path would serialize() it on the coordinator and
+// deserialize() it into the worker's ExecutionContext.
 
 const std = @import("std");
 const principal_mod = @import("../security/principal.zig");

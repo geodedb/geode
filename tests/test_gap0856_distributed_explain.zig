@@ -15,8 +15,7 @@
 // compiled and were removed in SONNY-6279; proto_util still maps the error.
 //
 // This test pins the contract of the shared choke point those consumers call.
-// It is stdlib-only (no QUIC/protobuf), mirroring the isolation strategy of
-// src/distributed/test_query_transport_node_registry.zig.
+// It is stdlib-only (no QUIC/protobuf).
 
 const std = @import("std");
 const de = @import("distributed_explain");

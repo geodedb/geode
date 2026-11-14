@@ -347,9 +347,6 @@ pub const ServerState = struct {
         edge_count: u64,
     } = null,
 
-    // Distributed query planner for federation-aware optimization
-    distributed_query_planner: ?*anyopaque = null,
-
     // Query plan cache and optimizer for performance optimization
     // Issue #460: Changed from per-connection QueryOptimizer to shared cross-connection optimizer
     query_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,

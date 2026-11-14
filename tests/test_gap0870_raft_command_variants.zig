@@ -340,10 +340,3 @@ test "proposal-time validation: invalid variants rejected before reaching the lo
         .metadata = "",
     } }));
 }
-
-// ---------------------------------------------------------------------------
-// Enhanced query transport dispatch honesty is covered by inline tests in
-// src/distributed/enhanced_query_transport.zig (compiled as its own test
-// root in the same `test-gap0870` build step — the module is standalone and
-// cannot live inside the geode lib graph; see build.zig).
-// ---------------------------------------------------------------------------
