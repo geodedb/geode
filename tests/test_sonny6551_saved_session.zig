@@ -26,7 +26,7 @@
 // The QUIC HELLO has no field for a session token and the server keeps no
 // record of the session ids it hands out, so a saved session cannot
 // authenticate a query yet; `geode query` says so when it finds a valid
-// one (docs/SESSION_MANAGEMENT.md).
+// one (docs/USER_AUTH.md, "Saved sessions").
 //
 // Real `geode serve` (auth on) and the real `geode auth login` /
 // `geode query` binaries, with a private HOME.

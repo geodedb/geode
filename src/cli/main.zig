@@ -914,25 +914,39 @@ const DsnParseResult = struct {
     use_grpc: bool, // true if grpc:// scheme
     /// SONNY-6544: embedded credentials, percent-decoded (owned; `deinit`).
     credentials: ?dsn_credentials.Credentials = null,
+    /// SONNY-6551: `username`/`user` and `password`/`pass` query
+    /// parameters, percent-decoded (owned; `deinit`).
+    query_credentials: dsn_credentials.QueryCredentials = .{},
     graph: ?[]const u8 = null, // graph name from URL path
 
+    /// SONNY-6551: per field, the userinfo wins over the query parameter
+    /// (docs/DSN.md); an empty userinfo user name counts as absent.
     fn username(self: *const DsnParseResult) ?[]const u8 {
-        return if (self.credentials) |c| c.username else null;
+        if (self.credentials) |c| {
+            if (c.username.len > 0) return c.username;
+        }
+        return self.query_credentials.username;
     }
 
     fn password(self: *const DsnParseResult) ?[]const u8 {
-        return if (self.credentials) |c| c.password else null;
+        if (self.credentials) |c| {
+            if (c.password) |p| return p;
+        }
+        return self.query_credentials.password;
     }
 
     fn deinit(self: *DsnParseResult, allocator: std.mem.Allocator) void {
         if (self.credentials) |*c| c.deinit(allocator);
         self.credentials = null;
+        self.query_credentials.deinit(allocator);
     }
 };
 
 const dsn_credentials = geode.dsn_credentials;
 /// SONNY-6544: the CLI's one HOME rule (absolute only).
 const home_dir = @import("security/home_dir.zig");
+/// SONNY-6551: the one writer and reader of ~/.geode/credentials.json.
+const session_storage = @import("security/session_storage.zig");
 
 /// SONNY-6544: the userinfo ends at the LAST '@' of the authority and is
 /// percent-decoded (RFC 3986 §3.2, `dsn_credentials`); a first-'@' split
@@ -962,8 +976,8 @@ fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
         return null;
     }
 
-    // [userinfo@]host[:port] up to the first '/', '?' or '#'. Query
-    // parameters are not read by the CLI.
+    // [userinfo@]host[:port] up to the first '/', '?' or '#'. Of the query
+    // parameters the CLI reads the credentials (SONNY-6551).
     const authority = dsn_credentials.splitAuthority(rest) catch |err| {
         zig_quic_bridge.printEndpointError(err);
         return null;
@@ -983,19 +997,25 @@ fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
         }
     }
 
-    const credentials: ?dsn_credentials.Credentials = if (authority.userinfo) |userinfo|
+    var credentials: ?dsn_credentials.Credentials = if (authority.userinfo) |userinfo|
         dsn_credentials.decodeUserinfo(allocator, userinfo) catch |err| {
             zig_quic_bridge.printEndpointError(err);
             return null;
         }
     else
         null;
+    const query_credentials = dsn_credentials.decodeQueryCredentials(allocator, authority.rest) catch |err| {
+        if (credentials) |*c| c.deinit(allocator);
+        zig_quic_bridge.printEndpointError(err);
+        return null;
+    };
 
     // The host_port is passed directly to --server logic which expects "host:port"
     return DsnParseResult{
         .host_port = authority.host_port,
         .use_grpc = use_grpc,
         .credentials = credentials,
+        .query_credentials = query_credentials,
         .graph = graph,
     };
 }
@@ -1491,65 +1511,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         query_text = stdin_allocated;
     }
 
-    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
-
-    // Auto-load saved session credentials if not explicitly provided
-    var loaded_token: ?[]u8 = null;
-    var loaded_username: ?[]u8 = null;
-    defer if (loaded_token) |t| allocator.free(t);
-    defer if (loaded_username) |u| allocator.free(u);
-
-    if (use_saved_session and token == null and user == null) {
-        const session_storage = @import("security/session_storage.zig");
-        var cred_store = session_storage.CredentialStore.init(allocator) catch |err| blk: {
-            // If we can't initialize credential store, just proceed without it.
-            // SONNY-6544: but say so when HOME is unusable (relative or
-            // empty): no saved session is read or created anywhere else.
-            if (err == error.HomeNotAbsolute) {
-                std.debug.print("Warning: saved session not loaded: {s}\n", .{home_dir.errorMessage(err).?});
-            }
-            break :blk null;
-        };
-
-        if (cred_store) |*store| {
-            defer store.deinit();
-
-            if (try store.loadCredentials()) |creds| {
-                // Verify system fingerprint matches
-                const current_fp = try session_storage.getSystemFingerprint(allocator);
-                defer allocator.free(current_fp);
-
-                // See server_addr resolution at the bottom of cmdQuery: keep
-                // this fallback in sync so the saved-session match check
-                // doesn't fail when the harness is driving the query.
-                const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
-                const server_addr = server orelse (env_server_creds orelse "127.0.0.1:3141");
-                const fp_match = std.mem.eql(u8, creds.system_fingerprint, current_fp);
-                const server_match = std.mem.eql(u8, creds.server, server_addr);
-                const now = compat_timestamp();
-                const age_secs = now - creds.created_at;
-                const max_age_secs: i64 = 3600; // 1 hour
-                const not_expired = age_secs < max_age_secs;
-
-                if (fp_match and server_match and not_expired) {
-                    loaded_token = try allocator.dupe(u8, creds.token);
-                    loaded_username = try allocator.dupe(u8, creds.username);
-                    token = loaded_token;
-                    user = loaded_username;
-                } else if (fp_match and !server_match) {
-                    std.debug.print("Note: saved session is for {f}, not {f}. Use --save-session to update.\n", .{ dsn_credentials.redacted(creds.server), dsn_credentials.redacted(server_addr) });
-                } else if (fp_match and !not_expired) {
-                    std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{});
-                }
-                // Free loaded credentials regardless of match
-                allocator.free(creds.token);
-                allocator.free(creds.username);
-                allocator.free(creds.server);
-                allocator.free(creds.system_fingerprint);
-            }
-        }
-    }
-
     // Check for unauthorized user before executing
     if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
         const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -1575,6 +1536,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             graph = g;
             graph_for_prepend = null; // DSN graph handled by HELLO, not USE GRAPH prepend
         }
+    }
+
+    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+    // SONNY-6551: after --dsn, so the saved session is matched against the
+    // server this query really goes to.
+    if (use_saved_session and token == null and user == null) {
+        const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
+        noteSavedSession(allocator, server orelse (env_server_creds orelse "127.0.0.1:3141"));
     }
 
     // Determine execution mode based on --server flag.  Resolution order:
@@ -4191,60 +4160,59 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
 
 // ---- Credential Storage & Authentication ----
 
-const CredentialStorage = struct {
-    server: []const u8,
-    username: []const u8,
-    session_token: []const u8,
-    expires_at: i64,
-};
+/// SONNY-6551: how long `auth login --save-session` keeps a session on offer.
+const saved_session_lifetime_secs: i64 = 24 * 60 * 60;
 
-/// SONNY-6544: HOME must be absolute (`home_dir`); `error.HomeNotSet` /
-/// `error.HomeNotAbsolute` otherwise. The `*Absolute` calls below assert it.
-fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
-    return home_dir.homePathAlloc(allocator, &.{ ".geode", "credentials.json" });
-}
-
-fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
-    const geode_dir = try home_dir.homePathAlloc(allocator, &.{".geode"});
-    defer allocator.free(geode_dir);
-
-    const io_md = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.createDirAbsolute(io_md, geode_dir, std.Io.File.Permissions.fromMode(0o700)) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
+/// SONNY-6551: what `geode query` (no credentials given) says about the saved
+/// session for `server_addr`. The QUIC HELLO carries a user name and a
+/// password and nothing else, and the server keeps no record of the session
+/// ids it returns, so a saved session cannot authenticate a query: it is
+/// never sent. A file that is not read is named with the reason
+/// (`session_storage.ignoredMessage`); nothing is created.
+fn noteSavedSession(allocator: std.mem.Allocator, server_addr: []const u8) void {
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
+        // SONNY-6544: say so when HOME is unusable (relative or empty): no
+        // saved session is read or created anywhere else.
+        if (err == error.HomeNotAbsolute) {
+            std.debug.print("Warning: saved session not loaded: {s}\n", .{home_dir.errorMessage(err).?});
+        }
+        return;
     };
-    // S-9: Restrict credentials directory to owner-only access
-    if (comptime @import("builtin").os.tag != .windows) {
-        var dir = std.Io.Dir.openDirAbsolute(io_md, geode_dir, .{}) catch return;
-        defer dir.close(io_md);
-        dir.setPermissions(io_md, std.Io.File.Permissions.fromMode(0o700)) catch {};
+    defer store.deinit();
+    var result = store.load() catch |err| {
+        std.debug.print("Warning: saved session not loaded: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer result.deinit();
+    switch (result) {
+        .none => {},
+        .ignored => |why| std.debug.print("Warning: saved session ignored: {s}\n", .{session_storage.ignoredMessage(why)}),
+        .loaded => |*loaded| {
+            const creds = loaded.credentials();
+            const fingerprint = session_storage.getSystemFingerprint(allocator) catch return;
+            defer allocator.free(fingerprint);
+            switch (session_storage.applies(creds, server_addr, compat_timestamp(), fingerprint)) {
+                .foreign => std.debug.print("Warning: saved session ignored: it was saved by another OS user or on another host\n", .{}),
+                .other_server => std.debug.print("Note: saved session is for {f}, not {f}. Use --save-session to update.\n", .{ dsn_credentials.redacted(creds.server), dsn_credentials.redacted(server_addr) }),
+                .expired => std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{}),
+                .usable => std.debug.print("Note: found a saved session for {f} (user '{s}'), but geode servers do not accept a saved session token yet, so it is not used; authenticate with -U and --password or --password-file, or --dsn (docs/USER_AUTH.md, 'Saved sessions')\n", .{ dsn_credentials.redacted(creds.server), creds.username }),
+            }
+        },
     }
 }
 
-fn saveCredentials(allocator: std.mem.Allocator, creds: CredentialStorage) !void {
-    try ensureCredentialsDir(allocator);
-    const creds_path = try getCredentialsPath(allocator);
-    defer allocator.free(creds_path);
-
-    // Create JSON string manually (simpler than full JSON object)
-    const json_content = try std.fmt.allocPrint(allocator,
-        \\{{"server":"{s}","username":"{s}","session_token":"{s}","expires_at":{}}}
-    , .{ creds.server, creds.username, creds.session_token, creds.expires_at });
-    defer allocator.free(json_content);
-
-    // Write to file with restrictive permissions (owner read/write only)
-    const io_cf = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.createFileAbsolute(io_cf, creds_path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) });
-    defer file.close(io_cf);
-
-    try file.writeStreamingAll(io_cf, json_content);
-}
-
-fn clearCredentials(allocator: std.mem.Allocator) !void {
-    const creds_path = getCredentialsPath(allocator) catch return;
-    defer allocator.free(creds_path);
-
-    std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), creds_path) catch {};
+/// SONNY-6551: write the session through the one writer
+/// (`session_storage.CredentialStore.save`); prints why and exits on failure.
+fn saveSessionOrExit(allocator: std.mem.Allocator, creds: session_storage.Credentials) void {
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
+        std.debug.print("Error: Could not save credentials: {s}\n", .{session_storage.saveErrorMessage(err) orelse @errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer store.deinit();
+    store.save(creds) catch |err| {
+        std.debug.print("Error: Could not save credentials: {s}\n", .{session_storage.saveErrorMessage(err) orelse @errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {
@@ -4452,7 +4420,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
     if (insecure) insecure_tls_gate.enforceOrExit();
 
-    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
+    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
 
     // Prompt for username if not provided (always dupe to ensure heap allocation)
     const final_username = if (username) |u| try allocator.dupe(u8, u) else blk: {
@@ -4544,15 +4512,6 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
-    // Save credentials
-    const expires_at = compat_milliTimestamp() + 24 * 60 * 60 * 1000; // 24 hours
-    const creds = CredentialStorage{
-        .server = server,
-        .username = final_username,
-        .session_token = auth_result.session_token,
-        .expires_at = expires_at,
-    };
-
     // Write to stdout for pipe-friendly output (test harness checks stdout_contains)
     const msg = try std.fmt.allocPrint(allocator, "Successfully authenticated as '{s}' on server '{f}'\n", .{ final_username, dsn_credentials.redacted(server) });
     defer allocator.free(msg);
@@ -4563,14 +4522,17 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     const stdout_file = std.Io.File{ .handle = stdout_handle, .flags = .{ .nonblocking = false } };
     stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     if (save_session) {
-        saveCredentials(allocator, creds) catch |err| {
-            if (home_dir.errorMessage(err)) |why| {
-                std.debug.print("Error: Could not save credentials: {s}\n", .{why});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
+        const fingerprint = try session_storage.getSystemFingerprint(allocator);
+        defer allocator.free(fingerprint);
+        const now = compat_timestamp();
+        saveSessionOrExit(allocator, .{
+            .server = server,
+            .username = final_username,
+            .token = auth_result.session_token,
+            .created_at = now,
+            .expires_at = now + saved_session_lifetime_secs,
+            .system_fingerprint = fingerprint,
+        });
         stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Session token saved to ~/.geode/credentials.json\n") catch {};
     } else {
         const token_msg = try std.fmt.allocPrint(allocator, "Session token: {s}\nUse --save-session to persist credentials locally\n", .{auth_result.session_token});
@@ -4597,12 +4559,17 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
     }
 
-    // Clear saved credentials
-    clearCredentials(allocator) catch |err| {
-        std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
-        logAuditEvent("auth", "logout", "failure");
-        return;
-    };
+    // Clear saved credentials (SONNY-6551: creates nothing; an unusable
+    // HOME has nothing to clear).
+    if (session_storage.CredentialStore.init(allocator)) |store_val| {
+        var store = store_val;
+        defer store.deinit();
+        store.delete() catch |err| {
+            std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
+            logAuditEvent("auth", "logout", "failure");
+            return;
+        };
+    } else |_| {}
 
     // Log successful logout
     logAuditEvent("auth", "logout", "success");
@@ -4644,47 +4611,36 @@ fn cmdAuthValidate(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     // SONNY-6544: HOME (USERPROFILE on Windows) must be absolute.
-    const credentials_path = getCredentialsPath(allocator) catch |err| {
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
         home_dir.printError(err);
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer allocator.free(credentials_path);
-
-    // Try to read the credentials file
-    const io_cr = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io_cr, credentials_path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print("No saved credentials found\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
+    defer store.deinit();
+    // SONNY-6551: through the one reader; prints the file in its one format.
+    var result = store.load() catch |err| {
         std.debug.print("Error reading credentials: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close(io_cr);
-
-    // Read file content
-    const cr_len = file.length(io_cr) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+    defer result.deinit();
+    const loaded = switch (result) {
+        .none => {
+            std.debug.print("No saved credentials found\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        },
+        .ignored => |why| {
+            std.debug.print("Error: saved session ignored: {s}\n", .{session_storage.ignoredMessage(why)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        },
+        .loaded => |*l| l,
     };
-    if (cr_len > 1024 * 1024) {
-        std.debug.print("Error: credentials file too large\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+    const content = try session_storage.CredentialStore.encode(allocator, loaded.credentials());
+    defer {
+        std.crypto.secureZero(u8, content);
+        allocator.free(content);
     }
-    const content = allocator.alloc(u8, @intCast(cr_len)) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    _ = file.readPositionalAll(io_cr, content, 0) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer allocator.free(content);
 
     // Output the content to stdout
     const stdout_fd = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
     try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), content);
-    if (content.len == 0 or content[content.len - 1] != '\n') {
-        try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
-    }
+    try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
 }

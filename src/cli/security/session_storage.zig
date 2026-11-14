@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
+// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
 
 const std = @import("std");
 
@@ -49,13 +49,20 @@ const builtin = @import("builtin");
 const cb = @import("crypto_backend");
 const home_dir = @import("home_dir.zig");
 
-/// Credential storage for local session management
+/// SONNY-6551: one saved session (`~/.geode/credentials.json`), as written by
+/// `geode auth login --save-session` and read by `geode query`.
 pub const Credentials = struct {
-    token: []const u8, // Cryptographically random token (64 hex chars)
-    username: []const u8,
+    /// The `--server` address the session was obtained from.
     server: []const u8,
+    username: []const u8,
+    /// The session id the server returned in its HELLO.
+    token: []const u8,
+    /// Unix seconds.
     created_at: i64,
-    system_fingerprint: []const u8, // hostname + system_username
+    /// Unix seconds; the session is not offered at or after this time.
+    expires_at: i64,
+    /// `getSystemFingerprint()` of the process that saved it.
+    system_fingerprint: []const u8,
 };
 
 /// Session token with expiration and renewal
@@ -159,137 +166,312 @@ fn currentUid() u32 {
     };
 }
 
-/// Credential storage manager
+// CANARY: REQ=REQ-SONNY-6551-SAVED-SESSION-FILE; FEATURE="LocalSessionStorage"; ASPECT=OneWriterOneReaderSafeFile; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+/// SONNY-6551: the one writer and the one reader of the saved session file
+/// `<HOME>/.geode/credentials.json` (docs/SESSION_MANAGEMENT.md).
+///
+/// Format: one std.json object, `file_version` 1, exactly the fields of
+/// `Credentials` plus `version`; every string is JSON-escaped. A file with a
+/// missing, extra or mistyped field (an older geode's `session_token` file
+/// included) is not read.
+///
+/// Writing: `~/.geode` is created mode 0700, opened without following a
+/// symbolic link, and must belong to this user; group or other access on an
+/// existing one is removed. The file is written to a new temporary file
+/// (O_CREAT|O_EXCL, mode 0600) in that directory, synced and renamed over
+/// `credentials.json`: a reader sees the old file or the new one, and a
+/// symbolic link at the final path is replaced, never followed.
+///
+/// Reading creates nothing. The file is not read (`LoadResult.ignored`)
+/// when `~/.geode` is a symbolic link, belongs to another user or is
+/// writable by group or other, or when `credentials.json` is a symbolic
+/// link, not a regular file, belongs to another user, has group or other
+/// permissions (as ssh treats a private key), is larger than
+/// `max_file_bytes` or is not the format above.
 pub const CredentialStore = struct {
-    file_path: []const u8,
+    /// `<HOME>/.geode`.
+    dir_path: []u8,
     allocator: std.mem.Allocator,
 
-    /// SONNY-6544: `error.HomeNotSet` / `error.HomeNotAbsolute`
-    /// (`home_dir.errorMessage`) for a missing, empty or relative HOME;
-    /// `createDirAbsolute` below asserts an absolute path (a relative HOME
-    /// panicked `geode query` in Debug).
+    pub const file_name = "credentials.json";
+    pub const file_version: i64 = 1;
+    pub const max_file_bytes: u64 = 16 * 1024;
+
+    /// The JSON object on disk.
+    const FileV1 = struct {
+        version: i64,
+        server: []const u8,
+        username: []const u8,
+        token: []const u8,
+        created_at: i64,
+        expires_at: i64,
+        system_fingerprint: []const u8,
+    };
+
+    pub const SaveError = error{
+        /// `~/.geode` is a symbolic link or not a directory, or belongs to
+        /// another user.
+        CredentialsDirUnsafe,
+    };
+
+    /// Why a file that is there was not read.
+    pub const Ignored = enum {
+        directory_unsafe,
+        symlink,
+        not_regular_file,
+        not_owned,
+        permissions_too_open,
+        too_large,
+        unreadable,
+        malformed,
+    };
+
+    pub const Loaded = struct {
+        parsed: std.json.Parsed(FileV1),
+
+        pub fn credentials(self: *const Loaded) Credentials {
+            const v = self.parsed.value;
+            return .{
+                .server = v.server,
+                .username = v.username,
+                .token = v.token,
+                .created_at = v.created_at,
+                .expires_at = v.expires_at,
+                .system_fingerprint = v.system_fingerprint,
+            };
+        }
+    };
+
+    pub const LoadResult = union(enum) {
+        /// No `~/.geode` or no `credentials.json`.
+        none,
+        loaded: Loaded,
+        ignored: Ignored,
+
+        pub fn deinit(self: *LoadResult) void {
+            switch (self.*) {
+                .loaded => |*l| {
+                    std.crypto.secureZero(u8, @constCast(l.parsed.value.token));
+                    l.parsed.deinit();
+                },
+                else => {},
+            }
+            self.* = .none;
+        }
+    };
+
+    /// Resolves `<HOME>/.geode` (`home_dir`: `error.HomeNotSet` /
+    /// `error.HomeNotAbsolute` for an unusable HOME). Creates nothing.
     pub fn init(allocator: std.mem.Allocator) !CredentialStore {
-        const home = try home_dir.homeDirAlloc(allocator);
-        defer allocator.free(home);
-
-        const geode_dir = try std.fmt.allocPrint(allocator, "{s}/.geode", .{home});
-        defer allocator.free(geode_dir);
-
-        // Create ~/.geode directory if it doesn't exist
-        std.Io.Dir.createDirAbsolute(std.Io.Threaded.global_single_threaded.io(), geode_dir, .default_dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-
-        const file_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
-
-        return CredentialStore{
-            .file_path = file_path,
+        return .{
+            .dir_path = try home_dir.homePathAlloc(allocator, &.{".geode"}),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *CredentialStore) void {
-        self.allocator.free(self.file_path);
+        self.allocator.free(self.dir_path);
     }
 
-    pub fn saveCredentials(self: *CredentialStore, creds: Credentials) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
-
-        // SONNY-6463: Zig 0.16 file API (std.fs.createFileAbsolute and
-        // ArrayList.writer are gone; this did not compile, and no step built it).
-        const body = try std.fmt.allocPrint(self.allocator, "{{\n  \"token\": \"{s}\",\n  \"username\": \"{s}\",\n  \"server\": \"{s}\",\n  \"created_at\": {d},\n  \"system_fingerprint\": \"{s}\"\n}}\n", .{ creds.token, creds.username, creds.server, creds.created_at, creds.system_fingerprint });
-        defer self.allocator.free(body);
-
-        const io = std.Io.Threaded.global_single_threaded.io();
-        const file = try std.Io.Dir.createFileAbsolute(io, self.file_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
-        defer file.close(io);
-        try file.writeStreamingAll(io, body);
+    /// The JSON text `save` writes (and `geode auth token` prints). The
+    /// caller zeroes and frees it.
+    pub fn encode(allocator: std.mem.Allocator, creds: Credentials) ![]u8 {
+        return std.json.Stringify.valueAlloc(allocator, FileV1{
+            .version = file_version,
+            .server = creds.server,
+            .username = creds.username,
+            .token = creds.token,
+            .created_at = creds.created_at,
+            .expires_at = creds.expires_at,
+            .system_fingerprint = creds.system_fingerprint,
+        }, .{});
     }
 
-    pub fn loadCredentials(self: *CredentialStore) !?Credentials {
-        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
-
-        const io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.openFileAbsolute(io, self.file_path, .{}) catch |err| {
-            if (err == error.FileNotFound) return null;
-            return err;
+    /// Decode `text`; `error.MalformedCredentials` for anything but the
+    /// documented format. The caller deinits the result.
+    pub fn decode(allocator: std.mem.Allocator, text: []const u8) error{ MalformedCredentials, OutOfMemory }!std.json.Parsed(FileV1) {
+        const parsed = std.json.parseFromSlice(FileV1, allocator, text, .{
+            .ignore_unknown_fields = false,
+            .allocate = .alloc_always,
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.MalformedCredentials,
         };
-        defer file.close(io);
+        const v = parsed.value;
+        if (v.version != file_version or v.server.len == 0 or v.username.len == 0 or
+            v.token.len == 0 or v.system_fingerprint.len == 0)
+        {
+            std.crypto.secureZero(u8, @constCast(v.token));
+            parsed.deinit();
+            return error.MalformedCredentials;
+        }
+        return parsed;
+    }
 
-        const file_len = try file.length(io);
-        if (file_len > 4096) return error.FileTooBig;
-        const content = try self.allocator.alloc(u8, @intCast(file_len));
-        defer self.allocator.free(content);
-        _ = try file.readPositionalAll(io, content, 0);
+    pub fn save(self: *CredentialStore, creds: Credentials) !void {
+        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.createDirAbsolute(io, self.dir_path, std.Io.File.Permissions.fromMode(0o700)) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        var dir = std.Io.Dir.openDirAbsolute(io, self.dir_path, .{ .follow_symlinks = false, .iterate = true }) catch |err| switch (err) {
+            error.SymLinkLoop, error.NotDir => return error.CredentialsDirUnsafe,
+            else => return err,
+        };
+        defer dir.close(io);
+        const st = fdStat(dir.handle) orelse return error.CredentialsDirUnsafe;
+        if (st.uid != currentUid()) return error.CredentialsDirUnsafe;
+        if (st.mode & 0o077 != 0) try dir.setPermissions(io, std.Io.File.Permissions.fromMode(0o700));
 
-        // Simple JSON parsing (for basic structure)
-        var token: ?[]const u8 = null;
-        var username: ?[]const u8 = null;
-        var server: ?[]const u8 = null;
-        var created_at: i64 = 0;
-        var system_fingerprint: ?[]const u8 = null;
-
-        var lines = std.mem.tokenizeAny(u8, content, "\n");
-        while (lines.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, " \t,");
-
-            if (std.mem.indexOf(u8, trimmed, "\"token\"")) |_| {
-                if (extractJsonString(trimmed)) |value| {
-                    token = try self.allocator.dupe(u8, value);
-                }
-            } else if (std.mem.indexOf(u8, trimmed, "\"username\"")) |_| {
-                if (extractJsonString(trimmed)) |value| {
-                    username = try self.allocator.dupe(u8, value);
-                }
-            } else if (std.mem.indexOf(u8, trimmed, "\"server\"")) |_| {
-                if (extractJsonString(trimmed)) |value| {
-                    server = try self.allocator.dupe(u8, value);
-                }
-            } else if (std.mem.indexOf(u8, trimmed, "\"created_at\"")) |_| {
-                if (extractJsonNumber(trimmed)) |value| {
-                    created_at = value;
-                }
-            } else if (std.mem.indexOf(u8, trimmed, "\"system_fingerprint\"")) |_| {
-                if (extractJsonString(trimmed)) |value| {
-                    system_fingerprint = try self.allocator.dupe(u8, value);
-                }
-            }
+        const body = try encode(self.allocator, creds);
+        defer {
+            std.crypto.secureZero(u8, body);
+            self.allocator.free(body);
         }
 
-        if (token == null or username == null or server == null or system_fingerprint == null) {
-            return null;
+        var rnd: [8]u8 = undefined;
+        try cb.Csprng.bytes(&rnd);
+        var tmp_buf: [64]u8 = undefined;
+        const tmp_name = try std.fmt.bufPrint(&tmp_buf, file_name ++ ".tmp-{x}", .{&rnd});
+        const file = try dir.createFile(io, tmp_name, .{
+            .exclusive = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        var renamed = false;
+        defer if (!renamed) dir.deleteFile(io, tmp_name) catch {};
+        {
+            defer file.close(io);
+            try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+            try file.writeStreamingAll(io, body);
+            try file.sync(io);
         }
-
-        return Credentials{
-            .token = token.?,
-            .username = username.?,
-            .server = server.?,
-            .created_at = created_at,
-            .system_fingerprint = system_fingerprint.?,
-        };
+        try std.Io.Dir.rename(dir, tmp_name, dir, file_name, io);
+        renamed = true;
     }
 
-    pub fn deleteCredentials(self: *CredentialStore) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
-        std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), self.file_path) catch |err| {
-            if (err != error.FileNotFound) return err;
+    pub fn load(self: *CredentialStore) !LoadResult {
+        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.openDirAbsolute(io, self.dir_path, .{ .follow_symlinks = false, .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return .none,
+            error.SymLinkLoop, error.NotDir => return .{ .ignored = .directory_unsafe },
+            else => return .{ .ignored = .unreadable },
+        };
+        defer dir.close(io);
+        const dst = fdStat(dir.handle) orelse return .{ .ignored = .unreadable };
+        if (dst.uid != currentUid() or dst.mode & 0o022 != 0) return .{ .ignored = .directory_unsafe };
+
+        const file = dir.openFile(io, file_name, .{ .follow_symlinks = false, .allow_directory = false }) catch |err| switch (err) {
+            error.FileNotFound => return .none,
+            error.SymLinkLoop => return .{ .ignored = .symlink },
+            error.IsDir => return .{ .ignored = .not_regular_file },
+            else => return .{ .ignored = .unreadable },
+        };
+        defer file.close(io);
+        const st = fdStat(file.handle) orelse return .{ .ignored = .unreadable };
+        if (st.mode & S_IFMT != S_IFREG) return .{ .ignored = .not_regular_file };
+        if (st.uid != currentUid()) return .{ .ignored = .not_owned };
+        if (st.mode & 0o077 != 0) return .{ .ignored = .permissions_too_open };
+
+        const len = file.length(io) catch return .{ .ignored = .unreadable };
+        if (len > max_file_bytes) return .{ .ignored = .too_large };
+        const content = try self.allocator.alloc(u8, @intCast(len));
+        defer {
+            std.crypto.secureZero(u8, content);
+            self.allocator.free(content);
+        }
+        const n = file.readPositionalAll(io, content, 0) catch return .{ .ignored = .unreadable };
+        const parsed = decode(self.allocator, content[0..n]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedCredentials => return .{ .ignored = .malformed },
+        };
+        return .{ .loaded = .{ .parsed = parsed } };
+    }
+
+    /// Remove `credentials.json` (a symbolic link there is removed, not its
+    /// target). Creates nothing.
+    pub fn delete(self: *CredentialStore) !void {
+        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.openDirAbsolute(io, self.dir_path, .{ .follow_symlinks = false, .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer dir.close(io);
+        dir.deleteFile(io, file_name) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
         };
     }
 };
 
-fn extractJsonString(line: []const u8) ?[]const u8 {
-    // Extract value from: "key": "value"
-    const start_quote = std.mem.lastIndexOf(u8, line, "\"") orelse return null;
-    const before_end = line[0..start_quote];
-    const end_quote = std.mem.lastIndexOf(u8, before_end, "\"") orelse return null;
-    return before_end[end_quote + 1 ..];
+/// What `geode query` may do with a saved session.
+pub const Applies = enum {
+    /// Saved by this OS user on this host, for `server`, not expired.
+    usable,
+    /// `system_fingerprint` differs: another OS user or another host saved it.
+    foreign,
+    other_server,
+    expired,
+};
+
+/// SONNY-6551: `system_fingerprint` (hostname:user:uid) binds the file to the
+/// OS account and host that saved it, so a file that travelled (a copied or
+/// restored home directory, an NFS home shared between hosts) is not
+/// offered. It is not a secret and not authentication: a mismatch guard.
+pub fn applies(creds: Credentials, server: []const u8, now: i64, current_fingerprint: []const u8) Applies {
+    if (!std.mem.eql(u8, creds.system_fingerprint, current_fingerprint)) return .foreign;
+    if (!std.mem.eql(u8, creds.server, server)) return .other_server;
+    if (now >= creds.expires_at or creds.created_at > now + 300) return .expired;
+    return .usable;
 }
 
-fn extractJsonNumber(line: []const u8) ?i64 {
-    // Extract value from: "key": 123
-    const colon = std.mem.lastIndexOf(u8, line, ":") orelse return null;
-    const after_colon = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-    return std.fmt.parseInt(i64, after_colon, 10) catch null;
+/// The reason printed after `Warning: saved session ignored: `.
+pub fn ignoredMessage(why: CredentialStore.Ignored) []const u8 {
+    return switch (why) {
+        .directory_unsafe => "~/.geode is a symbolic link, not a directory, not owned by you, or writable by other users (it must be your own directory, mode 0700)",
+        .symlink => "~/.geode/credentials.json is a symbolic link",
+        .not_regular_file => "~/.geode/credentials.json is not a regular file",
+        .not_owned => "~/.geode/credentials.json is not owned by you",
+        .permissions_too_open => "~/.geode/credentials.json is accessible by other users (chmod 600 it, or log in again)",
+        .too_large => "~/.geode/credentials.json is too large to be a saved session",
+        .unreadable => "~/.geode/credentials.json cannot be read",
+        .malformed => "~/.geode/credentials.json is not a saved session this geode can read (damaged, or written by an older geode); run 'geode auth login --save-session' again",
+    };
+}
+
+/// What is wrong when `save` fails, for an `Error: ...` line.
+pub fn saveErrorMessage(err: anyerror) ?[]const u8 {
+    if (home_dir.errorMessage(err)) |why| return why;
+    return switch (err) {
+        error.CredentialsDirUnsafe => "~/.geode is a symbolic link, not a directory, or not owned by you; the session token is not written there",
+        else => null,
+    };
+}
+
+const S_IFMT: u32 = 0o170000;
+const S_IFREG: u32 = 0o100000;
+
+const FdStat = struct { uid: u32, mode: u32 };
+
+/// Owner and mode of an open descriptor; null when fstat fails.
+fn fdStat(fd: std.posix.fd_t) ?FdStat {
+    switch (comptime builtin.os.tag) {
+        .windows => return null,
+        .linux => {
+            const linux = std.os.linux;
+            var stx: linux.Statx = undefined;
+            const rc = linux.statx(fd, "", linux.AT.EMPTY_PATH, .{ .TYPE = true, .MODE = true, .UID = true }, &stx);
+            if (linux.errno(rc) != .SUCCESS) return null;
+            return .{ .uid = stx.uid, .mode = stx.mode };
+        },
+        else => {
+            var st: std.c.Stat = undefined;
+            if (std.c.fstat(fd, &st) != 0) return null;
+            return .{ .uid = @intCast(st.uid), .mode = @intCast(st.mode) };
+        },
+    }
 }
 
 // Session token registry (server-side storage)
@@ -320,7 +502,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn addSession(self: *SessionRegistry, token_hex: []const u8, session: SessionToken) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
+        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=src/cli/security/session_storage.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -330,7 +512,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn getSession(self: *SessionRegistry, token_hex: []const u8) ?*SessionToken {
-        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
+        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=src/cli/security/session_storage.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -350,7 +532,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn cleanupExpired(self: *SessionRegistry) void {
-        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
+        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=TESTED; TEST=src/cli/security/session_storage.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -537,82 +719,105 @@ const TestHome = struct {
     extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 };
 
-test "CredentialStore.saveCredentials and loadCredentials roundtrip" {
-    const allocator = std.testing.allocator;
-    var home = try TestHome.enter();
-    defer home.leave();
-
-    var store = try CredentialStore.init(allocator);
-    defer store.deinit();
-
-    // Create test credentials
-    const creds = Credentials{
-        .token = "test-session-token-aaaaaaaa-bbbbbbbb-cccccccc-dddddddd",
-        .username = "test_alice",
-        .server = "127.0.0.1:3141",
-        .created_at = 1234567890,
-        .system_fingerprint = "testhost:testuser:1000",
-    };
-
-    // Save credentials
-    try store.saveCredentials(creds);
-
-    // Load credentials
-    const loaded = try store.loadCredentials();
-    try std.testing.expect(loaded != null);
-
-    if (loaded) |l| {
-        defer allocator.free(l.token);
-        defer allocator.free(l.username);
-        defer allocator.free(l.server);
-        defer allocator.free(l.system_fingerprint);
-
-        try std.testing.expectEqualStrings(creds.token, l.token);
-        try std.testing.expectEqualStrings(creds.username, l.username);
-        try std.testing.expectEqualStrings(creds.server, l.server);
-        try std.testing.expectEqual(creds.created_at, l.created_at);
-        try std.testing.expectEqualStrings(creds.system_fingerprint, l.system_fingerprint);
-    }
-
-    // Cleanup test file
-    try store.deleteCredentials();
+fn expectSameCredentials(want: Credentials, got: Credentials) !void {
+    try std.testing.expectEqualStrings(want.server, got.server);
+    try std.testing.expectEqualStrings(want.username, got.username);
+    try std.testing.expectEqualStrings(want.token, got.token);
+    try std.testing.expectEqual(want.created_at, got.created_at);
+    try std.testing.expectEqual(want.expires_at, got.expires_at);
+    try std.testing.expectEqualStrings(want.system_fingerprint, got.system_fingerprint);
 }
 
-test "CredentialStore.deleteCredentials removes file" {
+test "SONNY-6551: CredentialStore.save and load round-trip every field, escaped" {
     const allocator = std.testing.allocator;
-
     var home = try TestHome.enter();
     defer home.leave();
 
     var store = try CredentialStore.init(allocator);
     defer store.deinit();
 
+    // Quotes, backslashes and control characters must be JSON-escaped.
     const creds = Credentials{
-        .token = "testtoken_delete",
-        .username = "test_bob",
+        .token = "tok\"en\\with\nnewline",
+        .username = "test \"alice\" \\ o'brien",
         .server = "127.0.0.1:3141",
         .created_at = 1234567890,
-        .system_fingerprint = "test:fp:123",
+        .expires_at = 1234567890 + 86400,
+        .system_fingerprint = "testhost:testuser:1000",
     };
+    try store.save(creds);
 
-    try store.saveCredentials(creds);
-
-    // Verify file exists
-    var loaded = try store.loadCredentials();
-    try std.testing.expect(loaded != null);
-    if (loaded) |l| {
-        allocator.free(l.token);
-        allocator.free(l.username);
-        allocator.free(l.server);
-        allocator.free(l.system_fingerprint);
+    var result = try store.load();
+    defer result.deinit();
+    switch (result) {
+        .loaded => |*l| try expectSameCredentials(creds, l.credentials()),
+        else => return error.NotLoaded,
     }
 
-    // Delete credentials
-    try store.deleteCredentials();
+    try store.delete();
+    var gone = try store.load();
+    defer gone.deinit();
+    try std.testing.expect(gone == .none);
+}
 
-    // Verify file is gone
-    loaded = try store.loadCredentials();
-    try std.testing.expect(loaded == null);
+test "SONNY-6551: CredentialStore.decode refuses anything but the documented format" {
+    const allocator = std.testing.allocator;
+    const bad = [_][]const u8{
+        "",
+        "{",
+        "[]",
+        // An older geode's file.
+        "{\"server\":\"h:1\",\"username\":\"u\",\"session_token\":\"t\",\"expires_at\":1}",
+        // A missing field.
+        "{\"version\":1,\"server\":\"h:1\",\"username\":\"u\",\"token\":\"t\",\"created_at\":1,\"expires_at\":2}",
+        // An unknown field.
+        "{\"version\":1,\"server\":\"h:1\",\"username\":\"u\",\"token\":\"t\",\"created_at\":1,\"expires_at\":2,\"system_fingerprint\":\"f\",\"x\":1}",
+        // Another version.
+        "{\"version\":2,\"server\":\"h:1\",\"username\":\"u\",\"token\":\"t\",\"created_at\":1,\"expires_at\":2,\"system_fingerprint\":\"f\"}",
+        // An empty token.
+        "{\"version\":1,\"server\":\"h:1\",\"username\":\"u\",\"token\":\"\",\"created_at\":1,\"expires_at\":2,\"system_fingerprint\":\"f\"}",
+        // A mistyped field.
+        "{\"version\":1,\"server\":7,\"username\":\"u\",\"token\":\"t\",\"created_at\":1,\"expires_at\":2,\"system_fingerprint\":\"f\"}",
+    };
+    for (bad) |text| {
+        try std.testing.expectError(error.MalformedCredentials, CredentialStore.decode(allocator, text));
+    }
+    const good = "{\"version\":1,\"server\":\"h:1\",\"username\":\"u\",\"token\":\"t\",\"created_at\":1,\"expires_at\":2,\"system_fingerprint\":\"f\"}";
+    const parsed = try CredentialStore.decode(allocator, good);
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("t", parsed.value.token);
+}
+
+test "SONNY-6551: a load creates no ~/.geode, and a missing file is none" {
+    const allocator = std.testing.allocator;
+    var home = try TestHome.enter();
+    defer home.leave();
+
+    var store = try CredentialStore.init(allocator);
+    defer store.deinit();
+    var result = try store.load();
+    defer result.deinit();
+    try std.testing.expect(result == .none);
+    try store.delete();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    try std.testing.expectError(error.FileNotFound, home.tmp.dir.statFile(io, ".geode", .{}));
+}
+
+test "SONNY-6551: applies() checks fingerprint, then server, then expiry" {
+    const creds = Credentials{
+        .token = "t",
+        .username = "u",
+        .server = "h:1",
+        .created_at = 100,
+        .expires_at = 200,
+        .system_fingerprint = "fp",
+    };
+    try std.testing.expectEqual(Applies.usable, applies(creds, "h:1", 150, "fp"));
+    try std.testing.expectEqual(Applies.foreign, applies(creds, "h:1", 150, "other"));
+    try std.testing.expectEqual(Applies.other_server, applies(creds, "h:2", 150, "fp"));
+    try std.testing.expectEqual(Applies.expired, applies(creds, "h:1", 200, "fp"));
+    // Created in the future (a clock moved back, or a forged file).
+    try std.testing.expectEqual(Applies.expired, applies(creds, "h:1", -400, "fp"));
 }
 
 test "SessionRegistry.addSession and getSession" {
@@ -702,24 +907,4 @@ test "getSystemFingerprint returns valid format" {
 
     // Should be non-empty
     try std.testing.expect(fp.len > 0);
-}
-
-test "extractJsonString parses JSON value" {
-    const line = "  \"token\": \"abc123\",";
-    const value = extractJsonString(line);
-
-    try std.testing.expect(value != null);
-    if (value) |v| {
-        try std.testing.expectEqualStrings("abc123", v);
-    }
-}
-
-test "extractJsonNumber parses integer value" {
-    const line = "  \"created_at\": 1234567890,";
-    const value = extractJsonNumber(line);
-
-    try std.testing.expect(value != null);
-    if (value) |v| {
-        try std.testing.expectEqual(@as(i64, 1234567890), v);
-    }
 }

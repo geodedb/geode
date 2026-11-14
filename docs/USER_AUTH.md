@@ -385,6 +385,55 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 - **Cross-platform**: Windows and Unix support
 - **Policy Enforcement**: Sessions invalidated for policy violations
 
+### Saved sessions (`--save-session`)
+
+`geode auth login --save-session` writes, and `geode query`, `geode auth
+token`, `geode session info|rotate` read, one file through one writer and
+one reader (`src/cli/security/session_storage.zig`, SONNY-6551):
+
+```json
+{"version":1,"server":"127.0.0.1:3141","username":"alice","token":"...","created_at":1763100000,"expires_at":1763186400,"system_fingerprint":"host:alice:1000"}
+```
+
+- **Encoding**: std.json, every string escaped. A file with a missing,
+  extra or mistyped field is not read. Files written before SONNY-6551 (the
+  `session_token` key, no fingerprint) are not read and not migrated:
+  `geode query` says `Warning: saved session ignored: ...`; run `geode auth
+  login --save-session` again.
+- **Times**: `created_at` / `expires_at` are Unix seconds; a session is
+  offered for 24 hours.
+- **`system_fingerprint`** (`hostname:USER:uid`) binds the file to the OS
+  account and host that saved it, so a file that travelled (a copied or
+  restored home directory, an NFS home shared between hosts) is ignored
+  with a warning. It is not a secret and not authentication.
+- **Server**: a session is offered only to the `--server` (or `--dsn`)
+  address it was saved for, compared as written (`localhost:3141` is not
+  `127.0.0.1:3141`).
+- **Writing**: `~/.geode` is created mode 0700, opened without following a
+  symbolic link, and must belong to you; group or other access on an
+  existing one (an older geode created it 0755) is removed. The file is
+  written to a new temporary file (mode 0600, `O_EXCL`) in that directory
+  and renamed over `credentials.json`, so a reader sees the old file or the
+  new one and a symbolic link at the final path is replaced, never
+  followed.
+- **Reading** creates nothing. The file is ignored, with the reason, when
+  `~/.geode` is a symbolic link, not yours, or writable by group or other,
+  or when `credentials.json` is a symbolic link, not a regular file, not
+  yours, accessible by group or other (as ssh treats a private key), over
+  16 KiB, not the format above, saved by another account or host, or
+  expired. A token is never printed by `geode query`.
+- **Not yet usable for authentication.** The QUIC HELLO carries a user name
+  and a password only, and the server keeps no record of the session ids
+  it returns, so a saved session cannot authenticate a query. When `geode
+  query` (no `-U`, `--token` or `--dsn` credentials) finds a valid one for
+  its server it prints `Note: found a saved session for <server> (user
+  '<name>'), but geode servers do not accept a saved session token yet, so
+  it is not used; ...` and sends nothing from it; pass `-U` with
+  `--password` / `--password-file`, or `--dsn`. Server-side session
+  resumption (a token field in the HELLO, a server registry of issued
+  tokens with expiry and revocation on password or role change) is open
+  work (SONNY-6551).
+
 ### Audit Trail (CANARY Tracking)
 
 - `REQ-AUTH-POLICY-001`: Password Reset Tracking
@@ -559,7 +608,8 @@ echo "Current Min Words: $GEODE_PASSWORD_MIN_WORDS"
 # Ensure home directory is writable
 ls -la ~/.geode/
 
-# Check permissions
+# geode tightens ~/.geode to 0700 itself on save; it refuses a ~/.geode
+# that is a symbolic link or belongs to another user
 chmod 700 ~/.geode/
 chmod 600 ~/.geode/credentials.json
 ```

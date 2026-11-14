@@ -50,14 +50,36 @@ const cli_auth = @import("cli_auth_helpers.zig");
 const geode = @import("geode");
 const home_dir = @import("security/home_dir.zig");
 
-/// SONNY-6544: `<HOME>/.geode/credentials.json`, or exit with what is wrong
-/// with HOME (unset, empty or relative). A relative HOME reached
+/// SONNY-6551: the one writer and reader of ~/.geode/credentials.json.
+const session_storage = @import("security/session_storage.zig");
+
+/// SONNY-6544: the credential store under `<HOME>/.geode`, or exit with what
+/// is wrong with HOME (unset, empty or relative). A relative HOME reached
 /// `openFileAbsolute`'s absolute-path assert (a Debug panic).
-fn credentialsPathOrExit(allocator: std.mem.Allocator) []u8 {
-    return home_dir.homePathAlloc(allocator, &.{ ".geode", "credentials.json" }) catch |err| {
+fn credentialStoreOrExit(allocator: std.mem.Allocator) session_storage.CredentialStore {
+    return session_storage.CredentialStore.init(allocator) catch |err| {
         home_dir.printError(err);
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
+}
+
+/// SONNY-6551: the saved session, read through the one reader; null (with
+/// the reason on stderr when a file is there but not read) otherwise. The
+/// caller deinits a non-null result.
+fn loadSavedSession(allocator: std.mem.Allocator) ?session_storage.CredentialStore.LoadResult {
+    var store = credentialStoreOrExit(allocator);
+    defer store.deinit();
+    var result = store.load() catch |err| {
+        std.debug.print("Warning: saved session not loaded: {s}\n", .{@errorName(err)});
+        return null;
+    };
+    switch (result) {
+        .loaded => return result,
+        .ignored => |why| std.debug.print("Warning: saved session ignored: {s}\n", .{session_storage.ignoredMessage(why)}),
+        .none => {},
+    }
+    result.deinit();
+    return null;
 }
 
 // CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Management; STATUS=TESTED; TEST=geodetestlab/specs/authn_provider.yml; OWNER=cli; UPDATED=2026-02-04
@@ -172,31 +194,9 @@ fn saveSessionState(allocator: std.mem.Allocator, sessions: std.StringHashMap(St
 }
 
 fn getCurrentToken(allocator: std.mem.Allocator) ?[]const u8 {
-    // Try to read from ~/.geode/credentials.json
-    const creds_path = credentialsPathOrExit(allocator);
-    defer allocator.free(creds_path);
-
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io, creds_path, .{}) catch return null;
-    defer file.close(io);
-
-    const file_len = file.length(io) catch return null;
-    if (file_len > 64 * 1024) return null;
-    const content = allocator.alloc(u8, @intCast(file_len)) catch return null;
-    defer allocator.free(content);
-    _ = file.readPositionalAll(io, content, 0) catch return null;
-
-    // Simple JSON parsing for session_token field
-    if (std.mem.indexOf(u8, content, "\"session_token\"")) |start| {
-        const after_key = content[start + 16 ..]; // Skip '"session_token"'
-        if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1 ..];
-            if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
-                return allocator.dupe(u8, after_q1[0..q2]) catch return null;
-            }
-        }
-    }
-    return null;
+    var result = loadSavedSession(allocator) orelse return null;
+    defer result.deinit();
+    return allocator.dupe(u8, result.loaded.credentials().token) catch null;
 }
 
 /// Session command handler - routes to specific session subcommands
@@ -376,63 +376,16 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     };
     defer allocator.free(token);
 
-    // Get username from credentials
-    const creds_path = credentialsPathOrExit(allocator);
-    defer allocator.free(creds_path);
-
-    const io_cp2 = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io_cp2, creds_path, .{}) catch {
+    var saved = loadSavedSession(allocator) orelse {
         std.debug.print("Error: No session found. Please login first.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close(io_cp2);
-
-    const stat_cp2 = try file.stat(io_cp2);
-    const size_cp2: usize = @intCast(stat_cp2.size);
-    const content = try allocator.alloc(u8, size_cp2);
-    defer allocator.free(content);
-    _ = try file.readPositionalAll(io_cp2, content, 0);
-
-    // Parse basic info from credentials
-    var username: []const u8 = "unknown";
-    var server: []const u8 = "unknown";
-    var expires_at: i64 = 0;
-
-    if (std.mem.indexOf(u8, content, "\"username\"")) |start| {
-        const after_key = content[start + 11 ..];
-        if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1 ..];
-            if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
-                username = after_q1[0..q2];
-            }
-        }
-    }
-
-    if (std.mem.indexOf(u8, content, "\"server\"")) |start| {
-        const after_key = content[start + 9 ..];
-        if (std.mem.indexOf(u8, after_key, "\"")) |q1| {
-            const after_q1 = after_key[q1 + 1 ..];
-            if (std.mem.indexOf(u8, after_q1, "\"")) |q2| {
-                server = after_q1[0..q2];
-            }
-        }
-    }
-
-    if (std.mem.indexOf(u8, content, "\"expires_at\"")) |start| {
-        const after_key = content[start + 13 ..];
-        // Skip whitespace and colon
-        var pos: usize = 0;
-        while (pos < after_key.len and (after_key[pos] == ':' or after_key[pos] == ' ')) : (pos += 1) {}
-        // Find end of number
-        var end: usize = pos;
-        while (end < after_key.len and (after_key[end] >= '0' and after_key[end] <= '9')) : (end += 1) {}
-        if (end > pos) {
-            expires_at = std.fmt.parseInt(i64, after_key[pos..end], 10) catch 0;
-        }
-    }
-
-    const now = compat_milliTimestamp();
-    const created_at = if (expires_at > 0) expires_at - (24 * 60 * 60 * 1000) else now; // Assume 24h sessions
+    defer saved.deinit();
+    const creds = saved.loaded.credentials();
+    const username = creds.username;
+    const server = creds.server;
+    const created_at = creds.created_at;
+    const expires_at = creds.expires_at;
 
     std.debug.print("Session Information:\n", .{});
     std.debug.print("  user: {s}\n", .{username});
@@ -489,62 +442,23 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         new_token[j * 2 + 1] = hex_chars[byte & 0x0f];
     }
 
-    // Update credentials file with new token
-    const creds_path = credentialsPathOrExit(allocator);
-    defer allocator.free(creds_path);
-
-    const io_cp3 = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io_cp3, creds_path, .{}) catch {
-        std.debug.print("Error: No session found. Please login first.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    const stat_cp3 = file.stat(io_cp3) catch {
-        file.close(io_cp3);
-        std.debug.print("Error: Cannot read credentials file.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    const size_cp3: usize = @intCast(stat_cp3.size);
-    const content = allocator.alloc(u8, size_cp3) catch {
-        file.close(io_cp3);
-        std.debug.print("Error: Cannot read credentials file.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    _ = file.readPositionalAll(io_cp3, content, 0) catch {
-        file.close(io_cp3);
-        allocator.free(content);
-        std.debug.print("Error: Cannot read credentials file.\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    file.close(io_cp3);
-    defer allocator.free(content);
-
-    // For simplicity, just regenerate the token part in the JSON
-    // Find and replace the session_token value
-    if (std.mem.indexOf(u8, content, old_token)) |_| {
-        // Build new content with replaced token
-        var new_content: std.ArrayListUnmanaged(u8) = .empty;
-        defer new_content.deinit(allocator);
-
-        var remaining = content;
-        while (std.mem.indexOf(u8, remaining, old_token)) |idx| {
-            new_content.appendSlice(allocator, remaining[0..idx]) catch {};
-            new_content.appendSlice(allocator, &new_token) catch {};
-            remaining = remaining[idx + old_token.len ..];
-        }
-        new_content.appendSlice(allocator, remaining) catch {};
-
-        // Write file with replacement
-        const out_file = std.Io.Dir.createFileAbsolute(io_cp3, creds_path, .{}) catch {
-            std.debug.print("Error: Cannot write credentials file.\n", .{});
+    // SONNY-6551: through the one reader and the one writer (temp file +
+    // rename, 0600); the token was replaced in the raw text and written in
+    // place, following a symbolic link.
+    {
+        var saved = loadSavedSession(allocator) orelse {
+            std.debug.print("Error: No session found. Please login first.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer out_file.close(io_cp3);
-        out_file.writeStreamingAll(io_cp3, new_content.items) catch {
-            std.debug.print("Error: Cannot write credentials file.\n", .{});
+        defer saved.deinit();
+        var creds = saved.loaded.credentials();
+        creds.token = &new_token;
+        var store = credentialStoreOrExit(allocator);
+        defer store.deinit();
+        store.save(creds) catch |err| {
+            std.debug.print("Error: Cannot write credentials file: {s}\n", .{session_storage.saveErrorMessage(err) orelse @errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-    } else {
-        std.debug.print("Warning: Token not found in credentials file.\n", .{});
     }
 
     var rotate_out_buf: [256]u8 = undefined;

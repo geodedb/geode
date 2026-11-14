@@ -240,6 +240,19 @@ quic://localhost:3141?username=admin&password=secret
 - `username`, `user` → Authentication username
 - `password`, `pass` → Authentication password
 
+The values are percent-decoded like the userinfo (a `%` must start a `%XX`
+escape, `+` is a literal plus); if a key appears more than once, the last
+one wins. **Precedence:** per field, a value in the userinfo takes
+precedence over the query parameter, so `quic://admin:s3cret@host:3141?password=other`
+logs in with `s3cret`, and `quic://admin@host:3141?password=s3cret` takes the
+user name from the userinfo and the password from the query (an empty
+userinfo user name counts as absent). geode's CLI (`geode query` /
+`geode shell` `--dsn`) reads them (SONNY-6551; it read only the userinfo
+before, so the harness form `localhost:3141?insecure=true&user=geode&pass=...`
+sent no credentials). Of the other query parameters the CLI reads none.
+geode-client-zig v0.3.x lets the query parameter win over the userinfo and
+decodes `+` as a space.
+
 ## Query Parameters
 
 ### Standard Parameters

@@ -4,6 +4,55 @@
 
 ### Security
 
+- **Saved sessions: one std.json writer and reader, a private file, never
+  through a symbolic link (SONNY-6551 items 1 and 2).** `geode auth login
+  --save-session` wrote hand-built, unescaped JSON with the key
+  `session_token` and no `system_fingerprint`, while `geode query` looked for
+  `token` and `system_fingerprint`, so a saved session was never read back;
+  the save followed a symbolic link at `~/.geode/credentials.json`, wrote in
+  place, and in a Debug build panicked (fchmod of an `O_PATH` directory
+  handle) whenever `~/.geode` existed; and a read-only `geode query`
+  created `~/.geode` mode 0755. `session_storage.CredentialStore` is now the
+  only writer and reader (`auth login`, `auth logout`, `auth token`,
+  `query`, `session info|rotate`): std.json both ways, `~/.geode` 0700
+  (group/other access removed, a symbolic link or another user's directory
+  refused), a 0600 temporary file renamed over the final path, and a read
+  that creates nothing and ignores, with a warning, a file that is garbage,
+  in another format, a symbolic link, not yours, accessible by others,
+  saved by another account or host (`system_fingerprint`), expired, or for
+  another server. **Breaking:** files written before this change are not
+  read (`Warning: saved session ignored: ...`) and not migrated; log in
+  again. **Not fixed:** the QUIC HELLO has no session-token field and the
+  server keeps no record of the session ids it returns, so a saved session
+  still cannot authenticate a query; `geode query` now says so instead of
+  silently doing nothing (docs/USER_AUTH.md, "Saved sessions"). The dead
+  `tests/session_storage_integration_test.zig` (never compiled, wrote the
+  real `~/.geode`) is removed. Regression: `zig build
+  test-sonny6551-saved-session`.
+- **The shell's history keeps no passwords and is never written to the
+  working directory (SONNY-6551 item 3).** `CREATE USER` / `ALTER USER ...
+  SET PASSWORD '...'`, `geode.auth.user_create(..., '<password>')` and
+  `\connect user:password@host` were saved verbatim, to `<HOME>/.geode_history`
+  for any HOME (a relative one included) or `.geode_history` in the working
+  directory when HOME was unset, with the umask's mode. Following the mysql
+  client, a line containing `password`, `identified` or `secret`, or calling
+  `geode.auth.user_create` / `user_import` / `mfa_*`, is not recorded;
+  `\connect` is recorded without its userinfo; the file is 0600; with no
+  absolute HOME (or `GEODE_HISTORY`) there is no history file. Regression:
+  `zig build test-sonny6551-repl-history` (pseudo-terminal, real server).
+- **`geode serve` never puts its default data directory under the working
+  directory (SONNY-6551 item 4).** With no `--data-dir` / `GEODE_DATA_DIR`,
+  a relative `XDG_STATE_HOME` or HOME placed the data directory, HMAC key
+  included, at `<cwd>/relstate/geode` or `<cwd>/relhome/.local/state/geode`.
+  Both now count only when absolute (XDG Base Directory specification); an
+  explicit relative `--data-dir` still works. Regression: `zig build
+  test-sonny6551-relative-state-home`.
+- **`--dsn` query-parameter credentials are read (SONNY-6551 item 5).**
+  `geode query` / `geode shell` ignored `user=` / `pass=` and `username=` /
+  `password=` (documented in docs/DSN.md, and the form test-harness DSNs
+  use), so such a DSN logged in with no credentials. They are now read,
+  percent-decoded; per field the userinfo takes precedence. Regression:
+  `zig build test-sonny6551-dsn-query-credentials`.
 - **A `--dsn` password may hold `@` and `:`, and no part of it is printed
   (SONNY-6544 item 1).** `geode query` and `geode shell` split `--dsn` at
   the first `@`, so `quic://admin:p@ss@host:3141` logged in with the
@@ -2388,6 +2437,18 @@
 - **Time-Series Audit Report:** `docs/TIMESERIES_AUDIT_REPORT.md` tracking all timeseries gap status
 
 ### Fixed
+
+- **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
+  tests passed, but the one that replaces the security graph's engine
+  directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
+  the registered security graph cannot be opened`) made
+  `StorageAdapter.openGraphLocked` log `failed to open ShardedGraphEngine`
+  through `std.log.err` four times, and the Zig test runner fails a test
+  that logs at `err`. The error is real and expected there (the caller fails
+  closed on it); it now goes through geode's structured logger at ERROR
+  (`geode.storage`, `graph=`, `error=`), as this file's other
+  operator-facing errors do (GAP-ENT-0038), so operators still see it and
+  the test no longer counts it as a failure.
 
 - **Every `tests/*.zig` file is compiled by a build step or listed with the
   reason it is not, and configuration fails otherwise (SONNY-6542).** 564
