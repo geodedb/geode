@@ -5469,7 +5469,8 @@ REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup
 REQ-SONNY-6517-PARSE-OOM,ParserErrors,OutOfMemoryIdentity,TESTED,src/lib.zig,tests/test_sonny6517_parse_oom.zig,,parser,2026-11-13
 REQ-SONNY-6517-PARSE-OOM,ParserErrors,OutOfMemoryIdentity,TESTED,tests/test_sonny6517_parse_oom.zig,,,parser,2026-11-13
 REQ-SONNY-6518-BUILTIN-ERRORS,BuiltinFunctions,ArgumentErrors,TESTED,tests/test_sonny6518_builtin_errors.zig,tests/test_sonny6518_builtin_errors.zig,,eval,2026-11-13
-REQ-SONNY-6518-CONVERSION-FUNCTIONS,TypeConversionFunctions,SameAsCast,TESTED,tests/test_sonny6518_conversion_functions.zig,tests/test_sonny6518_conversion_functions.zig,,eval,2026-11-13
+REQ-SONNY-6518-CONVERSION-FUNCTIONS,TypeConversionFunctions,SameAsCast,TESTED,src/eval/call_handlers.zig,tests/test_sonny6518_conversion_functions.zig,,eval,2026-11-13
+REQ-SONNY-6518-CONVERSION-FUNCTIONS,TypeConversionFunctions,SameAsCast,TESTED,tests/test_sonny6518_conversion_functions.zig,,,eval,2026-11-13
 REQ-SONNY-6518-EXEC-ORDER,StandaloneExec,ReferenceOrder,TESTED,src/exec.zig,tests/test_sonny6518_exec_order.zig,,engine,2026-11-13
 REQ-SONNY-6518-EXEC-ORDER,StandaloneExec,ReferenceOrder,TESTED,tests/test_sonny6518_exec_order.zig,,,engine,2026-11-13
 REQ-SONNY-6518-SUBSTRING-POSITIONS,StringFunctions,CharacterPositions,TESTED,tests/test_sonny6518_substring_positions.zig,tests/test_sonny6518_substring_positions.zig,,eval,2026-11-13

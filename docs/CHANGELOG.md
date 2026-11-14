@@ -2298,6 +2298,23 @@
 
 ### Fixed
 
+- **toFloat, toInteger, toBoolean and toString are the CAST of their
+  target (SONNY-6518 item 2, BREAKING).** They answer what `CAST(x AS
+  FLOAT / INTEGER / BOOLEAN / STRING)` answers (ISO/IEC 39075:2024 20.8,
+  the SONNY-6499 matrix), value and exception; none is documented as a
+  lenient "try" conversion. Changes: `toFloat` / `toDouble` give a
+  DOUBLE (was a DECIMAL at scale 6: `toFloat(1)` was 1.000000);
+  `toInteger(-1.5)` is -1 (CAST truncates; it floored to -2);
+  `toInteger(' 42 ')`, `toInteger('1e3')` and `toBoolean(' FALSE ')` read
+  the trimmed literal (were NULL); text that is no literal of the target
+  (`toInteger('abc')`, `toFloat('abc')`, `toBoolean('yes')`) is 22018 and
+  an out-of-range integer text 22003 (were NULL); a type CAST does not
+  convert (`toFloat(true)`) is 22G03 (was NULL); `toString(true)` is
+  'TRUE' (was 'true'), `toString(date(...))` its ISO text (was ''); a
+  wrong arity is 22023 (was NULL). The evaluator's `InvalidFormat` (a text
+  that does not parse) maps to 22018, not 22G03. `call_handlers.castValue`
+  is the one CAST body both paths run. Regression: `zig build
+  test-sonny6518-conversion-functions`.
 - **An aggregating WITH after the first part groups and aggregates
   (SONNY-6525 item 4, BREAKING).** `MATCH (z) WITH z WITH z.g AS g,
   sum(z.k) AS s WITH g, s RETURN g, s`: a part chained by its implicit

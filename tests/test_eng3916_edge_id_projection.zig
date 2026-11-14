@@ -182,9 +182,11 @@ test "ENG-3916(b): toString(NULL) IS NULL — null propagates, it does not strin
         .Text => |s| try testing.expectEqualStrings("5", s),
         else => return error.UnexpectedToStringType,
     }
+    // SONNY-6518 item 2: toString is CAST(x AS STRING), whose BOOLEAN text
+    // is 'TRUE' (ISO/IEC 39075:2024 20.8 GR j v); it answered 'true'.
     switch (try h.scalar("RETURN toString(true)")) {
-        .Str => |s| try testing.expectEqualStrings("true", s),
-        .Text => |s| try testing.expectEqualStrings("true", s),
+        .Str => |s| try testing.expectEqualStrings("TRUE", s),
+        .Text => |s| try testing.expectEqualStrings("TRUE", s),
         else => return error.UnexpectedToStringType,
     }
 }

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T03:32:12.532307829Z",
+  "generated_at": "2026-11-14T04:00:41.060222517Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85847,6 +85847,7 @@
           "aspect": "SameAsCast",
           "status": "TESTED",
           "files": [
+            "src/eval/call_handlers.zig",
             "tests/test_sonny6518_conversion_functions.zig"
           ],
           "tests": [
