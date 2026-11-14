@@ -67,6 +67,7 @@ fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
 }
 const Allocator = std.mem.Allocator;
 const txn_coordinator = @import("txn_coordinator.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
@@ -3425,7 +3426,7 @@ pub const RaftNode = struct {
         const cmd_bytes = try serializeCommand(self.allocator, cmd);
         defer self.allocator.free(cmd_bytes);
         const io = std.Io.Threaded.global_single_threaded.io();
-        self.inner_mutex.lockUncancelable(io);
+        if (!self.lockInnerForRequest()) return error.GraphNotFound;
         defer self.inner_mutex.unlock(io);
         if (self.inner.role != .leader) return error.NotLeader;
         try self.inner.propose(cmd_bytes);
@@ -3478,7 +3479,9 @@ pub const RaftNode = struct {
     /// stale-term mismatch that breaks cross-node term-agreement invariants.
     pub fn currentTerm(self: *RaftNode) u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
-        self.inner_mutex.lockUncancelable(io);
+        // SONNY-6541 (1): a request that must not wait (`lockInnerForRequest`)
+        // reads the term unlocked, as `appliedIndex` reads its index.
+        if (!self.lockInnerForRequest()) return @atomicLoad(u64, &self.inner.current_term, .acquire);
         defer self.inner_mutex.unlock(io);
         return self.inner.current_term;
     }
@@ -3490,9 +3493,37 @@ pub const RaftNode = struct {
     /// admin_ddl.executeShowClusterStatus surfaces this through SHOW CLUSTER STATUS.
     pub fn leaderId(self: *RaftNode) ?u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
-        self.inner_mutex.lockUncancelable(io);
+        // SONNY-6541 (1): see `currentTerm`; no leader known then.
+        if (!self.lockInnerForRequest()) return null;
         defer self.inner_mutex.unlock(io);
         return self.inner.leader_id;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK; FEATURE="DistributedCluster"; ASPECT=RequestInnerMutexYields; STATUS=TESTED; TEST=tests/test_sonny6541_drop_apply_deadlock.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6541 (1): take `inner_mutex` for a request (a propose, a term or
+    /// leader read), or return false, without it, when the calling thread
+    /// holds the lock of a graph a Raft `drop_graph` apply is waiting for
+    /// (`graph_storage_adapter.threadHoldsGraphAwaitedByReplicatedDrop`).
+    /// That apply holds `inner_mutex` until the graph's lock is free, so
+    /// waiting for it here never ends. Lock order: a graph's `rwlock` ->
+    /// `inner_mutex`; the one apply that takes a graph's `rwlock` under
+    /// `inner_mutex` (drop_graph) announces it first, and every request that
+    /// holds a graph's lock gives up instead of waiting for it. A thread
+    /// that holds no graph lock waits as before.
+    fn lockInnerForRequest(self: *RaftNode) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (self.inner_mutex.tryLock()) return true;
+        if (!graph_storage_adapter.threadHoldsAnyGraphLock()) {
+            self.inner_mutex.lockUncancelable(io);
+            return true;
+        }
+        var sleep_ns: u64 = 20 * std.time.ns_per_us;
+        while (true) {
+            if (graph_storage_adapter.threadHoldsGraphAwaitedByReplicatedDrop()) return false;
+            io.sleep(.fromNanoseconds(sleep_ns), .awake) catch {};
+            if (self.inner_mutex.tryLock()) return true;
+            sleep_ns = @min(sleep_ns * 2, 500 * std.time.ns_per_us);
+        }
     }
 
     pub fn startElection(self: *RaftNode) void {

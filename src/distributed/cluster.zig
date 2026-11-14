@@ -66,6 +66,7 @@ const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
 const graph_store = @import("../graph_store.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 // SONNY-6487: the shared host:port grammar.
 const host_port = @import("../client/host_port.zig");
 const dist_schema = @import("distributed_schema");
@@ -2582,7 +2583,16 @@ pub const ClusterCoordinator = struct {
                 // Commit not confirmed in budget — a genuine unknown.
                 .commit_unknown_timeout => return error.Timeout,
                 // Still within budget and not yet committed — keep polling.
-                .keep_waiting => compat_sleepNs(2 * std.time.ns_per_ms),
+                // SONNY-6541 (1): unless this thread holds the lock of a
+                // graph a Raft drop_graph apply waits for: that apply holds
+                // the node's `inner_mutex`, so no commit advances until this
+                // thread lets go. The outcome is unknown (Timeout); the entry
+                // comes after the drop, and its writes to the graph are
+                // refused when it applies.
+                .keep_waiting => {
+                    if (graph_storage_adapter.threadHoldsGraphAwaitedByReplicatedDrop()) return error.Timeout;
+                    compat_sleepNs(2 * std.time.ns_per_ms);
+                },
             }
         }
     }

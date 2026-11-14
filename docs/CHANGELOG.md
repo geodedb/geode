@@ -2298,6 +2298,27 @@
 
 ### Fixed
 
+- **A Raft `drop_graph` apply no longer deadlocks the Raft node with a
+  leader request on the graph (SONNY-6541 item 1).** The apply runs under
+  the Raft node's `inner_mutex` and drops the graph under its write lock,
+  waiting for every holder (SONNY-3350). A statement on the leader holds
+  its graph's lock until its writes are proposed and committed, and the
+  propose takes `inner_mutex`: with a drop of that graph applying, each
+  waited for the other forever, and the node stopped ticking, sending
+  heartbeats and applying (forced in the regression: the request's propose
+  never returned). The apply now announces its wait on the graph
+  (`StorageAdapter.beginReplicatedDrop`); a request that holds the graph's
+  lock no longer waits for `inner_mutex` or for a commit while it is
+  announced (`RaftNode.lockInnerForRequest`,
+  `waitForCommittedThenApplied`): a propose fails with GraphNotFound
+  (nothing proposed), a commit wait with Timeout (the entry comes after the
+  drop, and its writes to the graph are refused when it applies), and
+  SHOW CLUSTER STATUS reads the term and leader unlocked. The request lets
+  go of the lock and the drop proceeds. Lock order: a graph's rwlock ->
+  `inner_mutex` -> `replicated_apply_mutex`. Nothing in the server proposes
+  a `schema_change` today (CREATE and DROP GRAPH are not replicated in
+  cluster mode), so no deployment reached this. Regression: `zig build
+  test-sonny6541-drop-apply-deadlock`.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

@@ -49,11 +49,14 @@ const backing: std.mem.Allocator = if (builtin.is_test) std.testing.allocator el
 /// What a statement's writes fail with here: not replicable (nothing
 /// proposed), not the leader, the proposal refused, its commit not confirmed
 /// in time (the outcome unknown), out of memory.
-pub const Error = error{ ClusterWriteNotReplicable, ClusterNotLeader, ClusterProposeFailed, Timeout, OutOfMemory };
+/// SONNY-6541 (1): or the graph whose lock the statement holds is being
+/// dropped by a Raft drop_graph apply (GraphNotFound, nothing proposed).
+pub const Error = error{ ClusterWriteNotReplicable, ClusterNotLeader, ClusterProposeFailed, Timeout, OutOfMemory, GraphNotFound };
 
 fn narrow(err: anyerror) Error {
     return switch (err) {
         error.ClusterNotLeader, error.NotLeader => error.ClusterNotLeader,
+        error.GraphNotFound => error.GraphNotFound,
         error.ClusterWriteNotReplicable => error.ClusterWriteNotReplicable,
         error.Timeout => error.Timeout,
         error.OutOfMemory => error.OutOfMemory,
