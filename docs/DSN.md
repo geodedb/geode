@@ -85,16 +85,28 @@ Refused with `InvalidAddress`, never reinterpreted:
   lenient `parseDSN` behind the MCP endpoint to 3141).
 
 **Port 0.** The grammar accepts `0`: for a listener (`geode serve --listen :0`) it
-means "any free port". A client cannot
-dial it, so every client address refuses it: `--server` and `--dsn` (CLI),
-and the MCP endpoint DSN. geode-client-zig's `parseDSN` itself parses
-`host:0` as port 0; geode checks it before building a client. (A client
+means "any free port". A client cannot dial it, so geode refuses it, with
+`InvalidPort`, on every client address it parses before building a client:
+`--server` and the host part of `--dsn` (`geode query`, `shell`, `auth
+login`, `backup create`, `restore`, `migrate run`; `parseHostPort` in
+`src/client/zig_quic_bridge.zig`) and the MCP endpoint DSN (`parseEndpoint`
+in `src/mcp/client.zig`). geode-client-zig itself does not: its `parseDSN`
+and `parseDSNStrict` (v0.3.16) return port 0 for `host:0`, and its tests pin
+that (`src/config.zig`, "the port boundaries geode's host_port.parsePort
+accepts"); its `validate.port` rejects 0 (`PortOutOfRange`) but neither
+parser nor `connect` calls it. Another program that builds a client from a
+DSN with that library gets port 0 and fails when it dials. (A geode client
 port 0 used to fail at the first send with a bare `Unexpected`.)
 
 **How the MCP endpoint reports a bad DSN** (`geode mcp --endpoint`,
 SONNY-6494). geode-client-zig v0.3.16 parses the DSN with this grammar and
 names the fault; geode turns each error into a message (the DSN itself is
-never echoed, since it may carry a password). `geode mcp` refuses a bad
+never echoed, since it may carry a password). The CLI reports a bad
+`--server` or `--dsn` (`geode query`, `shell`, `auth login`, `backup
+create`, `restore`, `migrate run`) with the same messages, printed as
+`Error: <message>` (SONNY-6531; one mapping,
+`zig_quic_bridge.endpointErrorMessage`): the grammar's `InvalidAddress` is
+reported as `InvalidDSN`, and the address is not echoed either. `geode mcp` refuses a bad
 `--endpoint` at startup (exit 2, `Error: --endpoint: <message>`); a tool
 call answers `Error: <message>` (`isError: true`) and a resource read
 `{"error": "<message>"}`:
@@ -376,8 +388,13 @@ Implementations MUST return an error for:
 
 - Unsupported scheme (e.g., `http://`, `https://`, `tcp://`)
 - Missing host when scheme is present
-- Invalid port number (not 1-65535)
-- Invalid IPv6 address format
+- Invalid port text: not 1-5 decimal digits, or above 65535
+- Invalid IPv6 address format (unbracketed, or brackets around a non-IPv6 host)
+
+Port 0 is valid DSN syntax (see "Port 0" under Host Specification): a
+client MUST refuse it before dialling, and MAY do so when parsing. geode
+refuses it in its own address checks (`InvalidPort`); geode-client-zig
+v0.3.16 parses it and does not refuse it (see above).
 
 ### Optional Strict Mode
 
@@ -393,7 +410,7 @@ Implementations SHOULD validate:
 
 - Hostnames for security (null bytes, excessive length)
 - Page size within valid range (1-100,000)
-- Port numbers within valid range (1-65535)
+- Port numbers within valid range (1-65535) before dialling
 
 ## Security Considerations
 
