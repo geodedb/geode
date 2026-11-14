@@ -13462,6 +13462,14 @@ pub fn build(b: *std.Build) void {
     const run_sonny6525_gk_tests = b.addRunArtifact(sonny6525_gk_tests);
     shardDep(test_step, &run_sonny6525_gk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6525-with-group-keys", "Run SONNY-6525 item 4 regression (an aggregating WITH between parts groups 1 and '1', 'null' and NULL apart and reads $parameters in its keys and aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6525_gk_tests.step);
+    // SONNY-6540 item 9: abs('x'), abs(1, 2) and toString(1, 2) are syntax-rule violations, 42000. See tests/test_sonny6540_syntax_rule_refusals.zig.
+    const sonny6540_syn_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_syntax_rule_refusals.zig"), .target = target, .optimize = optimize });
+    sonny6540_syn_mod.addImport("geode", root_mod);
+    sonny6540_syn_mod.link_libc = true;
+    const sonny6540_syn_tests = b.addTest(.{ .root_module = sonny6540_syn_mod });
+    const run_sonny6540_syn_tests = b.addRunArtifact(sonny6540_syn_tests);
+    shardDep(test_step, &run_sonny6540_syn_tests.step, 0, test_shard_loads, test_shard_index);
+    b.step("test-sonny6540-syntax-rule-refusals", "Run SONNY-6540 item 9 pin (abs('x'), abs(1, 2) and toString(1, 2) are refused by the parser with 42000, as ISO/IEC 39075:2024 4.7.3 and 20.21 SR 3 give)").dependOn(&run_sonny6540_syn_tests.step);
     // SONNY-6540 item 3: the adjacency hydrate frees its edge slice at every allocation failure. See tests/test_sonny6540_adjacency_hydrate_oom.zig.
     const sonny6540_adj_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_adjacency_hydrate_oom.zig"), .target = target, .optimize = optimize });
     sonny6540_adj_mod.addImport("geode", root_mod);
