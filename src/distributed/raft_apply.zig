@@ -434,6 +434,18 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
         else => return err,
     };
 
+    // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=ApplyHoldsReplicatedApplyMutex; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+    // SONNY-6528 (1): the write holds the graph's `replicated_apply_mutex`,
+    // so a checkpoint of the graph waits for it (every local writer holds
+    // the graph's rwlock, which this thread must not take: see
+    // `ManagedGraph.replicated_apply_mutex`). The graph is hydrated first,
+    // outside it: a first hydration persists its products with a checkpoint
+    // of the graph.
+    store.ensureGraphHydrated(graph_name);
+    const apply_adapter = graph_store_mod.getGlobalAdapter();
+    const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
+    defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);
+
     // CANARY: REQ=REQ-SONNY-3348-CLUSTER-BATCH; FEATURE="DistributedCluster"; ASPECT=ApplyStatementBatch; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
     // SONNY-3348 (round 19): one statement's writes, as one entry (GBAT,
     // proposed as a `.create`). Every entry of the batch is checked before

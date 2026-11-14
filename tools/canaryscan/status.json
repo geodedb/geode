@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T04:38:19.295018395Z",
+  "generated_at": "2026-11-14T05:01:16.742905112Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -55436,23 +55436,6 @@
       ]
     },
     {
-      "id": "REQ-PERF-MERGE-002",
-      "features": [
-        {
-          "feature": "Execution",
-          "aspect": "IndexRebuild",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0511_regression.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-PERF-MERGE-003",
       "features": [
         {
@@ -55521,18 +55504,6 @@
           ],
           "owner": "engine",
           "updated": "2026-04-08"
-        },
-        {
-          "feature": "IndexRebuild",
-          "aspect": "RebuildMutex",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0511_regression.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -72954,7 +72925,7 @@
         },
         {
           "feature": "TransactionManagement",
-          "aspect": "UnbatchedSpanningTxn",
+          "aspect": "SpanningTxnKeepsWalBatch",
           "status": "TESTED",
           "files": [
             "src/storage/graph_storage_adapter.zig"
@@ -72964,7 +72935,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-11-13"
+          "updated": "2026-11-14"
         }
       ]
     },
@@ -86154,6 +86125,199 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyHoldsReplicatedApplyMutex",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_apply_checkpoint_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "CheckpointWaitsForApply",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_apply_checkpoint_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6528_apply_checkpoint_exclusion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_apply_checkpoint_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6528-CORRUPTION-MESSAGES",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "OperatorMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_corruption_messages.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6528_corruption_messages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_corruption_messages.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6528-EVICTED-NODE-CREATE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "DurableExistenceCheck",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_evicted_node_create.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6528_evicted_node_create.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_evicted_node_create.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6528-QUARANTINE-IN-PROCESS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "CrossGraphListingsFailClosed",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_quarantine_in_process.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ExecutorProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_quarantine_in_process.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6528_quarantine_in_process.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_quarantine_in_process.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION",
+      "features": [
+        {
+          "feature": "GQL Auth DDL Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6528_security_write_exclusion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_security_write_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "GQL Auth DDL Persistence",
+          "aspect": "SecurityGraphWriteLock",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6528_security_write_exclusion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93715,7 +93879,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4945
+      "TESTED": 4955
     },
     "by_aspect": {
       "2PC": 3,
@@ -93857,6 +94021,7 @@
       "ApplyDoesNotRecreateDroppedGraph": 1,
       "ApplyEdgeCreate": 1,
       "ApplyErrorCount": 1,
+      "ApplyHoldsReplicatedApplyMutex": 1,
       "ApplyKeyedCreate": 1,
       "ApplyMerge": 1,
       "ApplyMergeIntegration": 1,
@@ -94203,6 +94368,7 @@
       "CheckedStoredCasts": 1,
       "CheckpointFailureLogLimit": 1,
       "CheckpointPolicy": 1,
+      "CheckpointWaitsForApply": 1,
       "ChecksOnThrowawayCopy": 1,
       "ChildVerifier": 1,
       "ChunkFailureDetection": 1,
@@ -94491,6 +94657,7 @@
       "CreationWindowConcurrency": 1,
       "CreationWindowLockUnification": 1,
       "CrossConnectionReuse": 1,
+      "CrossGraphListingsFailClosed": 1,
       "CrossGraphQueryBlock": 1,
       "CrossModule": 1,
       "CrossPathConcurrency": 1,
@@ -94751,6 +94918,7 @@
       "DurableAuthStateOrRefuse": 1,
       "DurableDdl": 1,
       "DurableDroppedNames": 1,
+      "DurableExistenceCheck": 1,
       "DurableFleRoleGrants": 1,
       "DurableOrError": 1,
       "DurablePersistTestSuite": 1,
@@ -94964,6 +95132,7 @@
       "ExecutorFunction": 1,
       "ExecutorGates": 1,
       "ExecutorPerTableVerdict": 1,
+      "ExecutorProgramGate": 1,
       "ExecutorProposeDelete": 1,
       "ExecutorProposeMerge": 1,
       "ExecutorProposeNodeCreate": 1,
@@ -95475,7 +95644,6 @@
       "IndexPerformance": 3,
       "IndexProbeAuthority": 1,
       "IndexQueryableDuringRebuild": 1,
-      "IndexRebuild": 1,
       "IndexRepairCollector": 1,
       "IndexResultsScoped": 1,
       "IndexSeekOpKind": 1,
@@ -96138,6 +96306,7 @@
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
+      "OperatorMessage": 1,
       "OperatorParsing": 1,
       "Operators": 1,
       "Optimization": 3,
@@ -96779,7 +96948,6 @@
       "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
       "RebuildGuard": 1,
-      "RebuildMutex": 1,
       "RebuildOrRequestAgain": 1,
       "RebuildPasses": 1,
       "RebuildProc": 1,
@@ -96816,7 +96984,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 346,
+      "Regression": 351,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97052,6 +97220,7 @@
       "SecurityBoundaries": 1,
       "SecurityContext": 1,
       "SecurityEnforcement": 1,
+      "SecurityGraphWriteLock": 1,
       "SecurityIndep": 1,
       "SecurityInit": 1,
       "SecurityManager": 2,
@@ -97277,6 +97446,7 @@
       "SourceAudit": 2,
       "SourceFileSpinner": 1,
       "SourcePreserved": 1,
+      "SpanningTxnKeepsWalBatch": 1,
       "SpatialTypes": 3,
       "SpecExecution": 1,
       "Split": 1,
@@ -97592,7 +97762,6 @@
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
-      "UnbatchedSpanningTxn": 1,
       "UnboundedWithoutLimit": 1,
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,

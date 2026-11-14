@@ -1809,6 +1809,18 @@ pub const Quarantine = enum(u8) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION; FEATURE="GQL Auth DDL Persistence"; ASPECT=SecurityGraphWriteLock; STATUS=TESTED; TEST=tests/test_sonny6528_security_write_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+/// SONNY-6528 (2): what `StorageAdapter.holdSecurityGraphForWrite` took;
+/// `release` lets it go (a no-op when it took nothing).
+pub const SecurityWriteHold = struct {
+    adapter: ?*StorageAdapter = null,
+    mg: ?*ManagedGraph = null,
+
+    pub fn release(self: SecurityWriteHold) void {
+        if (self.mg) |mg| self.adapter.?.releaseGraphWriteLock(mg);
+    }
+};
+
 /// SONNY-6523: refuse a write to a quarantined graph before it reaches the
 /// engine. The graph's hydration found its store damaged (REQ-GQL-028); a
 /// write would build on it, and its WAL records would be replayed onto it.
@@ -1832,6 +1844,19 @@ pub const ManagedGraph = struct {
     /// `markGraphQuarantined`, never cleared for the process lifetime. Every
     /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
     quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
+    /// SONNY-6528 (1): held by a Raft apply for each replicated write to this
+    /// graph (`beginReplicatedApply`) and by a checkpoint of it right after
+    /// it takes `rwlock` EXCLUSIVE (`checkpointOneGraph`). The apply cannot
+    /// take `rwlock`: it runs on the Raft tick thread under the Raft node's
+    /// `inner_mutex`, and a request on the leader holds its graph's `rwlock`
+    /// while it proposes (taking `inner_mutex`). Lock order: `rwlock` ->
+    /// this; the apply never takes `rwlock` while it holds this.
+    replicated_apply_mutex: std.Io.Mutex = .init,
+    /// SONNY-6528 (1): the thread holding `replicated_apply_mutex` for an
+    /// apply (`StorageAdapter.currentThreadTag`), 0 when none. A checkpoint
+    /// the apply itself starts (its hydration's persist-on-complete) does
+    /// not wait for it.
+    replicated_apply_holder: std.atomic.Value(u64) = .init(0),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -3600,28 +3625,6 @@ fn threadTxnOn(mg: *const ManagedGraph) bool {
 /// Adapter mutation methods consult this to decide whether to batch into an
 /// existing transaction or spin their own (the R7 behaviour).  Priority:
 /// 1. per-statement txn (R8), 2. session txn (R9).
-// CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=UnbatchedSpanningTxn; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-13
-/// SONNY-2978: give back the shard WAL record batch (GAP-0900) that
-/// `beginTxn` opened for the engine transaction `txn_id` of `mg`, before
-/// anything is logged in it. Its page images are then written to the log
-/// as they are made, like any other transaction's.
-///
-/// A batched transaction's images are numbered when made but written only
-/// at its commit, and recovery replays the log in written order. A
-/// statement or session engine transaction stays open across many adapter
-/// calls, and some of them commit their own engine transaction on its shard
-/// (a REMOVE, a DELETE, an edge-property REMOVE, any change on a shard the
-/// statement transaction is not on that later gets one). Batched, the
-/// spanning transaction's older image of a page they share reached the log
-/// after theirs, and after a crash undid their committed change. Only
-/// `beginStatementTxnForShard` (group commit) keeps its batch: its worker
-/// writes only its own shard (REQ-QUIC-HC-016), and no writer holds the
-/// graph's write lock while the batch is open (SONNY-3029).
-fn releaseSpanningTxnWalBatch(mg: *ManagedGraph, txn_id: gs.TxnId) !void {
-    const shard = mg.engine.shards[shardedTxnShard(txn_id)];
-    try shard.txn_manager.wal.flushBatchFor(shardedTxnLocal(txn_id));
-}
-
 pub fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
     if (t_current_statement_txn) |txn| {
         if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
@@ -4238,6 +4241,46 @@ pub const StorageAdapter = struct {
         return self.getOrCreateGraphLocked(name);
     }
 
+    /// SONNY-6528 (1): a Raft apply of one replicated write to `graph_name`
+    /// (`raft_apply.applyGraphMutation`) holds the graph's
+    /// `replicated_apply_mutex` for the write: a checkpoint of the graph
+    /// waits for it, as it waits for every local writer through `rwlock`.
+    /// The graph is pinned until `endReplicatedApply`. Errors as
+    /// `pinOrCreateGraph` (a graph dropped since the store opened:
+    /// GraphNotFound).
+    pub fn beginReplicatedApply(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        const mg = try self.pinOrCreateGraph(graph_name);
+        mg.replicated_apply_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        return mg;
+    }
+
+    pub fn endReplicatedApply(self: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.replicated_apply_holder.store(0, .release);
+        mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.unpinGraph(mg);
+    }
+
+    /// SONNY-6528 (2): a write to the `__geode_security` graph holds the
+    /// graph's write lock (rwlock EXCLUSIVE) for the engine operation. The
+    /// security graph is written through `UserStorageBackend` and the auth
+    /// graph manager, by the auth and policy DDL (under `auth_ddl_lock`) and
+    /// by the login-state, password and legacy-hash writes (under no common
+    /// lock), and none of them held a lock of the graph's: two of them wrote
+    /// its shards at once (`GraphEngine.allocNode` and the page writes are
+    /// not synchronized), and a checkpoint of the graph, which drains its
+    /// writers by taking that lock, did not wait for them. No user statement
+    /// runs on the security graph, so nothing else writes it under its lock.
+    /// Taken last: the caller may hold any auth lock and its session graph's
+    /// lock, and nothing is acquired while it is held but the store's leaf
+    /// mutexes. A nested write on the same thread holds nothing more.
+    /// Every other graph: a no-op.
+    pub fn holdSecurityGraphForWrite(self: *StorageAdapter, mg: *const ManagedGraph) !SecurityWriteHold {
+        if (!std.mem.eql(u8, mg.name, graph_store.SECURITY_GRAPH_NAME)) return .{};
+        if (self.threadHoldsGraphWriteLock(mg.name)) return .{};
+        return .{ .adapter = self, .mg = try self.acquireGraphWriteLock(mg.name) };
+    }
+
     /// SONNY-6523: the graph's first-touch hydration failed with `err`
     /// (`GraphStore.ensureGraphHydrated`): its store is damaged, and every
     /// write to it is refused from now on (`refuseQuarantinedWrite`). A graph
@@ -4603,6 +4646,8 @@ pub const StorageAdapter = struct {
         // after it waits for this pin before freeing the graph.
         const mg = try self.pinOrCreateGraph(graph_name);
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
@@ -6712,6 +6757,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
 
@@ -6825,6 +6872,8 @@ pub const StorageAdapter = struct {
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
@@ -6907,6 +6956,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
         if (currentStatementTxnForGraph(graph_name)) |s| {
@@ -7037,6 +7088,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7123,6 +7176,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7204,6 +7259,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -8957,6 +9014,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
@@ -10148,6 +10207,14 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlock(io_cp);
             return .ok;
         }
+        // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=CheckpointWaitsForApply; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (1): and for the Raft apply's writes, which hold no
+        // `rwlock` (`replicated_apply_mutex`), unless this checkpoint runs
+        // inside one on its own thread. Taken before any other lock this
+        // checkpoint takes under `rwlock`.
+        const apply_excluded = mg.replicated_apply_holder.load(.acquire) != currentThreadTag();
+        if (apply_excluded) mg.replicated_apply_mutex.lockUncancelable(io_cp);
+        defer if (apply_excluded) mg.replicated_apply_mutex.unlock(io_cp);
         // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
         // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
         // checkpoint so a restart loads the derived indexes without a rebuild.
@@ -11919,6 +11986,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (adding a label re-indexes the node's properties under the new label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11952,6 +12021,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (removing a label drops the node's postings under that label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11998,6 +12069,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
                 const from_shard = mg.shardEngineForNode(from_id);
@@ -12469,15 +12542,15 @@ pub const StorageAdapter = struct {
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SpanningTxnKeepsWalBatch; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (7): the transaction keeps the shard WAL record batch
+        // `beginTxn` opened (GAP-0900), though it spans adapter calls that
+        // commit their own transactions on its shard. Its images reach the
+        // log at its commit, after those transactions' newer ones; recovery
+        // (graph-storage 0.4.14, SONNY-6473) applies per page only the
+        // highest-LSN committed image, so the late older image no longer
+        // undoes their committed change after a crash (SONNY-2978).
         const txn_id = try mg.engine.beginTxn();
-        // SONNY-2978: the statement's transaction must not hold its shard's
-        // WAL batch across the adapter calls it spans.
-        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
-            // error-policy: A — nothing was logged in it; the abort record
-            // is best-effort, recovery treats an unfinished txn as aborted.
-            mg.engine.abortTxn(txn_id) catch {};
-            return err;
-        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,
@@ -12553,15 +12626,8 @@ pub const StorageAdapter = struct {
         };
         try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // SONNY-6528 (7): keeps its WAL batch, as `beginStatementTxn`.
         const txn_id = try mg.engine.beginTxn();
-        // SONNY-2978: the session's transaction must not hold its shard's
-        // WAL batch across the adapter calls it spans.
-        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
-            // error-policy: A — nothing was logged in it; the abort record
-            // is best-effort, recovery treats an unfinished txn as aborted.
-            mg.engine.abortTxn(txn_id) catch {};
-            return err;
-        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,

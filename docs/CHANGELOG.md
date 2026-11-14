@@ -2317,6 +2317,93 @@
   (SONNY-2697), which `test-sonny6436-quic-retry-stops` and
   `test-sonny6447-quic-retry-connect-stops` never installed. Regression:
   `zig build test-sonny6377-query-no-resend`.
+- **`tests/test_gap_0511_regression.zig` runs again (SONNY-6528 item 6).**
+  `tests/all_tests.zig` imported it, but nothing compiled it (it used std
+  APIs Zig 0.16 removed). Its MERGE and DELETE cases (node and relationship
+  MERGE and DELETE take no read snapshot and no label scan; DELETE finds
+  its nodes through the exact property index, MERGE through the MERGE
+  property index since GAP-0894, which the old exact-lookup count no
+  longer saw) and its `commitDeferRebuilds` case had no live counterpart;
+  they are ported and run as `zig build test-gap0511-regression`. Two cases were dropped as superseded and covered
+  by live steps: the per-transaction vector-index rebuild (an indexed write
+  is an incremental insert since geode#875:
+  `test-geode875-incremental-index`) and the sequential
+  `rebuildAdvancedIndex` case (the function is gone; the rebuild mutex is
+  covered by `test-vector-index-reader-quiescence`,
+  `test-sonny6421-index-maintenance`, `test-geode875-nonblocking-backfill`).
+- **Writes to the security graph exclude each other and its checkpoint
+  (SONNY-6528 item 2).** The `__geode_security` records (users, roles,
+  permissions, policies, grants, the HMAC chain root) were written with no
+  lock of the graph's. The auth and policy DDL hold `auth_ddl_lock`, but the
+  login-state write after a failed login, the password and legacy-hash
+  writes do not, so two engine writers could work on the graph's shards at
+  once, and a checkpoint of the graph did not wait for them (both forced in
+  the regression: a permission record create, and a full checkpoint,
+  completed inside a role record's node create). Every storage-adapter write
+  to the security graph now holds the graph's write lock for the engine
+  operation (`StorageAdapter.holdSecurityGraphForWrite`). Regression: `zig
+  build test-sonny6528-security-write-exclusion`.
+- **A checkpoint of a graph waits for a Raft apply's write to it (SONNY-6528
+  item 1).** A checkpoint takes the graph's rwlock exclusively to drain its
+  writers before it writes the shard manifests, the label index and the
+  dirty pages; every local writer holds that lock, but the Raft apply of a
+  replicated write (`raft_apply.applyGraphMutation`, which creates nodes
+  through `createNodeWithId` -> `StorageAdapter.createNode` and sets
+  properties, deletes and updates) held none, so on a cluster member a
+  checkpoint ran in the middle of an apply's node create (forced in the
+  regression: the full checkpoint completed between the engine counting the
+  node and writing its record). The apply cannot take the rwlock (it runs
+  under the Raft node's `inner_mutex`, which a leader's request takes while
+  it holds its graph's rwlock to propose), so each replicated write now
+  holds a per-graph `replicated_apply_mutex`, and a checkpoint takes it
+  right after the rwlock. Regression: `zig build
+  test-sonny6528-apply-checkpoint-exclusion`.
+- **A quarantined graph refuses reads to in-process callers too (SONNY-6528
+  item 4).** SONNY-6523 made the QUIC and gRPC handlers refuse a program on
+  a quarantined graph (REQ-GQL-028: its hydration found its store damaged).
+  A caller that runs the executor in process, or calls the store directly,
+  was not covered: once the graph was quarantined, the executor still
+  answered the engine-direct reads (filtered and exact-index counts, ORDER
+  BY ... LIMIT, `max(n.i)`), `CALL geode.fts.search`, an index-served `MATCH
+  ... SET` (0 rows, success), and `db.labels()`, `db.relationshipTypes()`,
+  `db.propertyKeys()` and SHOW TABLES answered from the graph's partial label
+  maps, as did the store's schema listings the LSP schema provider calls
+  (`listNodeLabels`, `listEdgeTypes`, `listPropertiesForLabel`: their
+  hydration skipped every graph whose hydration had already run, a failed
+  one included). The executor now runs the transports' check itself at its
+  outermost entry point (a program that changes data hydrates its graph
+  first), and the listings fail with the quarantine error while any graph
+  is quarantined. CREATE and DROP GRAPH of a quarantined graph still run; a
+  dropped graph is no longer quarantined. **Operator-visible:** while any
+  graph is quarantined, the cross-graph schema listings (`db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()`, SHOW TABLES, LSP schema
+  completion) fail with the quarantine error, from every session, until the
+  graph is restored or dropped. Regression: `zig build
+  test-sonny6528-quarantine-in-process` (in process, zeroed node pages; 23
+  statement shapes and the six direct listings).
+- **A replayed create of a node the node cache evicted is refused, not made
+  twice (SONNY-6528 item 3).** `GraphStore.createNodeWithId` (the Raft apply
+  of a replicated create, and every other create with a given id) decided
+  whether the id existed by asking the node cache, which is bounded
+  (`GEODE_NODE_CACHE_ENTRIES`, default 1,000,000): a node it had evicted, or
+  one not read back since a restart, was not found, and the create wrote a
+  second engine record under the same public id. A restarted cluster member
+  re-applying its committed log duplicated every such node on disk (200
+  re-applied creates on a 16-entry cache: 400 engine records live, 600 after
+  a restart and a second replay). The engine-backed create now also checks
+  the durable IdMaps and answers `NodeAlreadyExists`, which the apply treats
+  as the idempotent no-op it is. Regression: `zig build
+  test-sonny6528-evicted-node-create`.
+- **The storage corruption errors say what happened and what to do
+  (SONNY-6528 item 5).** `DataCorruption`, `ChecksumMismatch` and
+  `InvalidData` (a read that found a graph's stored data damaged, and every
+  statement on a quarantined graph) reached the client as SQLSTATE 58000
+  with the bare error name. Each now names what failed, says the statement
+  returned no partial result and that a graph found damaged when it was
+  loaded refuses every read and write, and tells the operator to restore it
+  from a backup or remove it with DROP GRAPH (the server log names the
+  graph). The code is still 58000; no message carries a path. Regression:
+  `zig build test-sonny6528-corruption-messages`.
 - **A quarantined graph refuses every read and every write (SONNY-6523
   item 1).** A graph whose first-touch hydration fails (REQ-GQL-028: its
   store is damaged) is quarantined, and the executor failed a statement that
@@ -6152,6 +6239,18 @@
 
 ### Removed
 
+- **A statement or session transaction keeps its shard's WAL record batch
+  (SONNY-6528 item 7).** `beginStatementTxn` and `beginSessionTxn` wrote out
+  the batch `beginTxn` had opened (`releaseSpanningTxnWalBatch`), so a
+  transaction spanning many adapter calls logged its page images one write
+  at a time: with graph-storage before 0.4.14 its late-written older image
+  of a page could follow a newer committed one and undo it after a crash
+  (SONNY-2978). graph-storage 0.4.14 (pinned here) applies per page only the
+  highest-LSN committed image (SONNY-6473), so the release is removed.
+  Evidence: `zig build test-sonny2978-overlapping-engine-txn-crash` passed
+  five runs out of five without it; `zig build
+  test-sonny6492-edge-prop-image-cost` reports the same WAL bytes per SET
+  before and after (8342 / 24826 B), in both sync modes.
 - **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
   `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
   `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)

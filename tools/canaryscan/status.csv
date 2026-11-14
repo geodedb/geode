@@ -3604,12 +3604,10 @@ REQ-PERF-MEMORY-OPT-001,Performance,MemoryOptimization,TESTED,tests/test_gap_019
 REQ-PERF-MERGE-001,IndexRebuild,DeferredRebuild,IMPL,src/index/index_manager.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-001,MergeThroughput,BulkInsert,BENCHED,benchmarks/benchmark_merge_throughput.zig,,benchmark_merge_throughput,perf,2026-04-09
 REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,build.zig,,,build,2026-04-09
-REQ-PERF-MERGE-002,Execution,IndexRebuild,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-004,Execution,AdapterMergeVarianceEnvelope,BENCHED,tests/benchmark_merge_adapter_variance.zig,,BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope,engine,2026-04-08
 REQ-PERF-MERGE-006,Execution,RelationshipMergeEndpointLookup,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-007,Execution,RelationshipMergeAdjacencyEnvelope,BENCHED,tests/benchmark_merge_adapter_variance.zig,,BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope,engine,2026-04-08
-REQ-PERF-MERGE-007,IndexRebuild,RebuildMutex,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-008,IndexRebuild,CommitDeferRebuilds,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-NO-SNAPSHOT-CLONE,MergeStatementIsMutating,Regression,TESTED,tests/test_merge_query_is_mutating.zig,tests/test_merge_query_is_mutating.zig,,performance,2026-06-21
 REQ-PERF-METRICS-001,RuntimeMetrics,RegistryInit,TESTED,src/server/main.zig,src/server/runtime_metrics.zig,,server,2026-06-11
@@ -4680,7 +4678,7 @@ REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,BulkMergeTenantScope,TESTED
 REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,TenantScopedMergeLookup,TESTED,src/graph_store.zig,tests/test_sonny2976_merge_fast_path_tenant_scope.zig,,security,2026-11-11
 REQ-SONNY-2977-INLINE-MAP-SET,MatchSet,EveryInlineMapHolder,TESTED,tests/test_sonny2977_inline_map_set.zig,tests/test_sonny2977_inline_map_set.zig,,engine,2026-09-27
 REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,Regression,TESTED,tests/test_sonny2978_overlapping_engine_txn_crash.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
-REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,UnbatchedSpanningTxn,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
+REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,SpanningTxnKeepsWalBatch,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-14
 REQ-SONNY-3025-WRITE-RETURN-ROWS,WriteBehindAggregate,PlainReturnPerRow,TESTED,tests/test_sonny3025_match_write_return_rows.zig,tests/test_sonny3025_match_write_return_rows.zig,,engine,2026-11-12
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,ExplainProfileTarget,TESTED,src/query/query_traits.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
@@ -5494,6 +5492,18 @@ REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,src/execu
 REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,tests/test_sonny6525_statement_scope.zig,,,engine,2026-11-13
 REQ-SONNY-6525-WITH-GROUP-KEYS,ChainedWithAggregation,TypedGroupKeys,TESTED,src/execution/query_execution.zig,tests/test_sonny6525_with_group_keys.zig,,engine,2026-11-13
 REQ-SONNY-6525-WITH-GROUP-KEYS,ChainedWithAggregation,TypedGroupKeys,TESTED,tests/test_sonny6525_with_group_keys.zig,,,engine,2026-11-13
+REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,ApplyHoldsReplicatedApplyMutex,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6528_apply_checkpoint_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,CheckpointWaitsForApply,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6528_apply_checkpoint_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION,DistributedCluster,Regression,TESTED,tests/test_sonny6528_apply_checkpoint_exclusion.zig,tests/test_sonny6528_apply_checkpoint_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6528-CORRUPTION-MESSAGES,StorageIntegrity,OperatorMessage,TESTED,src/server/proto_util.zig,tests/test_sonny6528_corruption_messages.zig,,storage,2026-11-14
+REQ-SONNY-6528-CORRUPTION-MESSAGES,StorageIntegrity,Regression,TESTED,tests/test_sonny6528_corruption_messages.zig,tests/test_sonny6528_corruption_messages.zig,,storage,2026-11-14
+REQ-SONNY-6528-EVICTED-NODE-CREATE,StorageIntegrity,DurableExistenceCheck,TESTED,src/graph_store.zig,tests/test_sonny6528_evicted_node_create.zig,,storage,2026-11-14
+REQ-SONNY-6528-EVICTED-NODE-CREATE,StorageIntegrity,Regression,TESTED,tests/test_sonny6528_evicted_node_create.zig,tests/test_sonny6528_evicted_node_create.zig,,storage,2026-11-14
+REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,CrossGraphListingsFailClosed,TESTED,src/graph_store.zig,tests/test_sonny6528_quarantine_in_process.zig,,storage,2026-11-14
+REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,ExecutorProgramGate,TESTED,src/execution.zig,tests/test_sonny6528_quarantine_in_process.zig,,storage,2026-11-14
+REQ-SONNY-6528-QUARANTINE-IN-PROCESS,StorageIntegrity,Regression,TESTED,tests/test_sonny6528_quarantine_in_process.zig,tests/test_sonny6528_quarantine_in_process.zig,,storage,2026-11-14
+REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,Regression,TESTED,tests/test_sonny6528_security_write_exclusion.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
+REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION,GQL Auth DDL Persistence,SecurityGraphWriteLock,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6528_security_write_exclusion.zig,,storage,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

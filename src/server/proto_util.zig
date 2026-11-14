@@ -701,6 +701,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // (class 53, insufficient resources), as the read and write budgets
         // are; it fell through to 58000.
         error.OutOfMemory => .{ .code = "53200", .message = "OutOfMemory: the server could not allocate the memory this request needs. Retry, or narrow the request" },
+        // CANARY: REQ=REQ-SONNY-6528-CORRUPTION-MESSAGES; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6528_corruption_messages.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (5): the storage corruption errors (a read that found
+        // the damage, every statement on a quarantined graph) said only
+        // their name. 58000 still (the class GraphQuarantined uses); no path.
+        error.DataCorruption => .{ .code = "58000", .message = "DataCorruption: the graph's stored data is damaged (records the storage engine counts are missing or inconsistent). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the check that failed" },
+        error.ChecksumMismatch => .{ .code = "58000", .message = "ChecksumMismatch: a page of the graph's stored data failed its checksum (the bytes read back are not the bytes written). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the page" },
+        error.InvalidData => .{ .code = "58000", .message = "InvalidData: a record of the graph's stored data could not be decoded (it is malformed). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the record" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

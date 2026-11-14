@@ -10203,6 +10203,57 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6523_ck_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6523_ck_step = b.step("test-sonny6523-checkpoint-settings", "Run SONNY-6523 item 6 regression (the deferred-mode checkpoint interval counts from the adapter's open, not from boot; a failing light checkpoint is counted in adapter_checkpoint_failures_total and logged at ERROR once per cause, again at most every 10 minutes, and its recovery once)");
     sonny6523_ck_step.dependOn(&run_sonny6523_ck_tests.step);
+    // SONNY-6528 (3): a replayed create of an evicted node is refused.
+    const sonny6528_ev_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_evicted_node_create.zig"), .target = target, .optimize = optimize });
+    sonny6528_ev_test_mod.addImport("geode", root_mod);
+    const sonny6528_ev_tests = b.addTest(.{ .root_module = sonny6528_ev_test_mod });
+    const run_sonny6528_ev_tests = b.addRunArtifact(sonny6528_ev_tests);
+    shardDep(test_step, &run_sonny6528_ev_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6528_ev_step = b.step("test-sonny6528-evicted-node-create", "Run SONNY-6528 item 3 regression (a create with a given node id of a node that already exists is refused whether or not the bounded node cache holds it: 200 replicated creates re-applied on a 16-entry cache, live and after a clean restart, leave 200 nodes)");
+    sonny6528_ev_step.dependOn(&run_sonny6528_ev_tests.step);
+    // SONNY-6528 (4): a quarantined graph refuses in-process reads.
+    const sonny6528_qi_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_quarantine_in_process.zig"), .target = target, .optimize = optimize });
+    sonny6528_qi_test_mod.addImport("geode", root_mod);
+    const sonny6528_qi_tests = b.addTest(.{ .root_module = sonny6528_qi_test_mod });
+    const run_sonny6528_qi_tests = b.addRunArtifact(sonny6528_qi_tests);
+    shardDep(test_step, &run_sonny6528_qi_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6528_qi_step = b.step("test-sonny6528-quarantine-in-process", "Run SONNY-6528 item 4 regression (in process, without the transports: every read shape of a quarantined graph through the executor, db.labels/relationshipTypes/propertyKeys, SHOW TABLES and fulltext search included, and the store's schema listings the LSP calls fail closed; DROP GRAPH of a quarantined graph runs and the listings answer again)");
+    sonny6528_qi_step.dependOn(&run_sonny6528_qi_tests.step);
+    // SONNY-6528 (5): the corruption errors carry a message.
+    const sonny6528_cm_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_corruption_messages.zig"), .target = target, .optimize = optimize });
+    sonny6528_cm_test_mod.addImport("geode", root_mod);
+    const sonny6528_cm_tests = b.addTest(.{ .root_module = sonny6528_cm_test_mod });
+    const run_sonny6528_cm_tests = b.addRunArtifact(sonny6528_cm_tests);
+    shardDep(test_step, &run_sonny6528_cm_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6528_cm_step = b.step("test-sonny6528-corruption-messages", "Run SONNY-6528 item 5 regression (DataCorruption, ChecksumMismatch and InvalidData map to 58000 with an operator-facing message: what happened, that the graph refuses its statements, restore from a backup or DROP GRAPH; no file path)");
+    sonny6528_cm_step.dependOn(&run_sonny6528_cm_tests.step);
+    // SONNY-6528 (1): a checkpoint waits for a Raft apply's write.
+    const sonny6528_ac_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_apply_checkpoint_exclusion.zig"), .target = target, .optimize = optimize });
+    sonny6528_ac_test_mod.addImport("geode", root_mod);
+    const sonny6528_ac_tests = b.addTest(.{ .root_module = sonny6528_ac_test_mod });
+    const run_sonny6528_ac_tests = b.addRunArtifact(sonny6528_ac_tests);
+    shardDep(test_step, &run_sonny6528_ac_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6528_ac_step = b.step("test-sonny6528-apply-checkpoint-exclusion", "Run SONNY-6528 item 1 regression (a full checkpoint of a graph started while a Raft apply's node create is between the engine counting the node and writing its record does not complete until the apply's write is done)");
+    sonny6528_ac_step.dependOn(&run_sonny6528_ac_tests.step);
+    // SONNY-6528 (2): security-graph writes exclude each other and its checkpoint.
+    const sonny6528_sw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6528_security_write_exclusion.zig"), .target = target, .optimize = optimize });
+    sonny6528_sw_test_mod.addImport("geode", root_mod);
+    sonny6528_sw_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny6528_sw_tests = b.addTest(.{ .root_module = sonny6528_sw_test_mod });
+    const run_sonny6528_sw_tests = b.addRunArtifact(sonny6528_sw_tests);
+    shardDep(test_step, &run_sonny6528_sw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6528_sw_step = b.step("test-sonny6528-security-write-exclusion", "Run SONNY-6528 item 2 regression (a permission record create and a full checkpoint of __geode_security started while a role record's node create is in flight do not complete until it is done)");
+    sonny6528_sw_step.dependOn(&run_sonny6528_sw_tests.step);
+    // SONNY-6528 (6): GAP-0511 adapter-backed MERGE / DELETE (no snapshot, no
+    // label scan) and commitDeferRebuilds; imported only by all_tests.zig
+    // before, so never compiled.
+    const gap0511_reg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_0511_regression.zig"), .target = target, .optimize = optimize });
+    gap0511_reg_test_mod.addImport("geode", root_mod);
+    const gap0511_reg_tests = b.addTest(.{ .root_module = gap0511_reg_test_mod });
+    const run_gap0511_reg_tests = b.addRunArtifact(gap0511_reg_tests);
+    shardDep(test_step, &run_gap0511_reg_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0511_reg_step = b.step("test-gap0511-regression", "Run GAP-0511 regressions (node and relationship MERGE and DELETE resolve their nodes through the exact property index with no read snapshot and no label scan; commitDeferRebuilds leaves queued advanced-index rebuilds for the separate flush)");
+    gap0511_reg_step.dependOn(&run_gap0511_reg_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
     // real server, on every label-creating write shape.

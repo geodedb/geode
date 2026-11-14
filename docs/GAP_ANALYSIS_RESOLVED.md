@@ -7722,6 +7722,8 @@ Three changes eliminate the write-lock stall during MERGE:
 
 **Tests:** `tests/test_gap_0511_regression.zig` (6 tests covering deferred rebuild, adapter-backed MERGE/DELETE snapshot elision, relationship endpoint lookup, startup metadata repair)
 
+SONNY-6528 (item 6, 2026-11-14): the file was never compiled (imported only by `tests/all_tests.zig`); its adapter-backed MERGE/DELETE and `commitDeferRebuilds` cases now run as `zig build test-gap0511-regression`. The per-transaction batched rebuild case (superseded by geode#875's incremental insert, `test-geode875-incremental-index`) and the sequential `rebuildAdvancedIndex` case (function removed; rebuild mutex covered by `test-vector-index-reader-quiescence`, `test-sonny6421-index-maintenance`, `test-geode875-nonblocking-backfill`) were not revived.
+
 ---
 
 ## GAP-0514: CANARY IMPL Coverage Sprint
