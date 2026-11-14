@@ -2298,6 +2298,14 @@
 
 ### Fixed
 
+- **The `gql` tool's ORDER BY orders as the server does (SONNY-6518 item
+  3, BREAKING).** `src/exec.zig` `stableOrderByTemporal` compared every
+  non-temporal key by its printed text (10 before 9, -1 after 1) and put
+  NULLs last ascending and first descending. Keys are now compared by the
+  server's reference comparison (`return_and_sorting.compareValuesWithNullsPolicy`:
+  numbers by exact value across INT and DECIMAL, strings by their NFC
+  forms) with NULLS FIRST by default in either direction, as the server's
+  full sort. Regression: `zig build test-sonny6518-exec-order`.
 - **An allocation failure while parsing is OutOfMemory, not a syntax error
   (SONNY-6517 item 1, BREAKING for the status code).** `parseGqlOutcome`
   (`src/lib.zig`), the parse entry of the QUIC and gRPC servers, the LSP

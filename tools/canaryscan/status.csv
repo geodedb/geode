@@ -5470,7 +5470,8 @@ REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup
 REQ-SONNY-6517-PARSE-OOM,ParserErrors,OutOfMemoryIdentity,TESTED,src/lib.zig,tests/test_sonny6517_parse_oom.zig,,parser,2026-11-13
 REQ-SONNY-6517-PARSE-OOM,ParserErrors,OutOfMemoryIdentity,TESTED,tests/test_sonny6517_parse_oom.zig,,,parser,2026-11-13
 REQ-SONNY-6518-BUILTIN-ERRORS,BuiltinFunctions,ArgumentErrors,TESTED,tests/test_sonny6518_builtin_errors.zig,tests/test_sonny6518_builtin_errors.zig,,eval,2026-11-13
-REQ-SONNY-6518-EXEC-ORDER,StandaloneExec,ReferenceOrder,TESTED,tests/test_sonny6518_exec_order.zig,tests/test_sonny6518_exec_order.zig,,engine,2026-11-13
+REQ-SONNY-6518-EXEC-ORDER,StandaloneExec,ReferenceOrder,TESTED,src/exec.zig,tests/test_sonny6518_exec_order.zig,,engine,2026-11-13
+REQ-SONNY-6518-EXEC-ORDER,StandaloneExec,ReferenceOrder,TESTED,tests/test_sonny6518_exec_order.zig,,,engine,2026-11-13
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,src/execution/evaluator_adapter.zig,tests/test_sonny6525_correlated_subquery.zig,,engine,2026-11-13
 REQ-SONNY-6525-CORRELATED-SUBQUERY,SubqueryEvaluation,Correlation,TESTED,tests/test_sonny6525_correlated_subquery.zig,,,engine,2026-11-13
 REQ-SONNY-6525-ORDER-BY-SCOPE,LinearComposition,OrderByAfterAggregation,TESTED,src/execution/scope_check.zig,tests/test_sonny6525_order_by_scope.zig,,engine,2026-11-13
