@@ -25,9 +25,8 @@ pub const GeodeClientError = error{
 /// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
 /// on; null when `err` is not about the DSN. SONNY-6531: the one mapping is
 /// `zig_quic_bridge.endpointErrorMessage`, shared with the CLI's `--server`
-/// and `--dsn`. Port 0 and an IPv6 zone parse but cannot be dialled
-/// (`parseEndpoint`). The DSN itself is not part of the message: it may
-/// carry a password.
+/// and `--dsn`. An IPv6 zone parses but cannot be dialled (`parseEndpoint`).
+/// The DSN itself is not part of the message: it may carry a password.
 pub const endpointErrorMessage = geode.zig_quic_bridge.endpointErrorMessage;
 
 /// `endpointErrorMessage`, or `fallback` for any other error.
@@ -35,16 +34,46 @@ pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
     return endpointErrorMessage(err) orelse fallback;
 }
 
-/// Parse `endpoint` as geode-client-zig does, and refuse what parses but
-/// cannot be dialled: port 0 (`error.InvalidPort`) and an IPv6 zone
+/// Parse `endpoint` as geode-client-zig does (since v0.3.17 it refuses
+/// port 0 itself, SONNY-6550), name a fragment (`error.DsnFragment`), and
+/// refuse an IPv6 zone, which parses but cannot be dialled
 /// (`error.Ipv6ZoneUnsupported`). The returned config's host slices
 /// `endpoint`.
 fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
-    var cfg = try zig_client.config.parseDSN(allocator, endpoint);
+    var cfg = zig_client.config.parseDSN(allocator, endpoint) catch |err|
+        return geode.zig_quic_bridge.dsnError(err, endpoint);
     errdefer cfg.deinit(allocator);
-    if (cfg.port == 0) return error.InvalidPort;
     if (geode.zig_quic_bridge.isZonedIpv6(cfg.host)) return error.Ipv6ZoneUnsupported;
+    try preferUserinfoCredentials(allocator, &cfg, endpoint);
     return cfg;
+}
+
+/// SONNY-6550: docs/DSN.md (and the CLI's `--dsn`, SONNY-6551) give a
+/// userinfo credential precedence over a `user=` / `pass=` query parameter,
+/// per field, with an empty userinfo user name counting as absent.
+/// geode-client-zig's `parseDSN` (v0.3.17) lets the query parameter
+/// overwrite the userinfo, so put the userinfo's values back.
+fn preferUserinfoCredentials(allocator: std.mem.Allocator, cfg: *zig_client.config.Config, endpoint: []const u8) !void {
+    const redact = zig_client.config.redact;
+    const start = if (redact.schemeEnd(endpoint)) |sep| sep + 3 else 0;
+    const authority = try redact.splitAuthority(endpoint[start..]);
+    const userinfo = authority.userinfo orelse return;
+    const creds = try redact.decodeUserinfo(allocator, userinfo);
+    if (creds.username.len > 0) {
+        replaceSecret(allocator, &cfg.username, creds.username);
+    } else {
+        allocator.free(creds.username);
+    }
+    if (creds.password) |p| replaceSecret(allocator, &cfg.password, p);
+}
+
+/// Zero and free the secret in `field`, then store `value` (owned).
+fn replaceSecret(allocator: std.mem.Allocator, field: *?[]const u8, value: []u8) void {
+    if (field.*) |old| {
+        std.crypto.secureZero(u8, @constCast(old));
+        allocator.free(old);
+    }
+    field.* = value;
 }
 
 /// SONNY-6494: check an endpoint DSN without building a client (`geode mcp`

@@ -4,6 +4,35 @@
 
 ### Security
 
+- **geode-client-zig v0.3.17: one set of DSN rules on every client path
+  (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
+  geode-client-zig, which split the userinfo at the first `@` anywhere in
+  the DSN (a password holding `@` was cut short and its tail dialled as the
+  host; an `@` in a query value moved the host into it), decoded `+` as a
+  space, passed malformed `%` escapes through as typed and did not decode
+  the graph path. v0.3.17 reads the userinfo by RFC 3986 §3.2 like the
+  CLI's `--dsn`, and geode's `dsn_credentials` is now a re-export of the
+  library's `config.redact` (one implementation; its decoder allocates a
+  credential once at its exact size, where geode's resized the buffer and
+  could free an unzeroed copy). The MCP endpoint now gives a userinfo
+  credential precedence over a `user=` / `pass=` query parameter, per field,
+  as docs/DSN.md and the CLI do (the library lets the query parameter win;
+  geode puts the userinfo back). `geode query` / `geode shell` `--dsn`
+  percent-decode the graph path like the library (`/my%5Fgraph` binds
+  `my_graph`). A fragment and an out-of-range timeout get their own
+  messages; no message echoes the DSN. **BREAKING (MCP endpoint):** a `%`
+  in the user name, password, graph path or any query value must start a
+  `%XX` escape (`50%off` is refused, `%25` is a literal `%`), `+` is a
+  literal plus, and an `@` after the host (a raw `/`, `?` or `#` in a
+  password, an `@` in the graph path or a query value) is refused; encode
+  it as `%40`. **BREAKING (MCP endpoint and `--dsn`):** a fragment
+  (`#...`) is refused (`--dsn` ignored it and dialled). **BREAKING (`--dsn`):**
+  a `%` in the graph path must start a `%XX` escape. Port 0 is refused by
+  the library itself now (`parseDSN` and `GeodeClient.connect`), so geode's
+  own MCP port-0 check is gone; the IPv6 zone check stays. Regressions:
+  `zig build test-sonny6550-dsn-rules`, `test-sonny6551-dsn-query-credentials`
+  (shell and MCP endpoint precedence against a real server),
+  `test-sonny6494-mcp-dsn-errors`, `test-sonny6531-cli-address-errors`.
 - **Saved sessions: one std.json writer and reader, a private file, never
   through a symbolic link (SONNY-6551 items 1 and 2).** `geode auth login
   --save-session` wrote hand-built, unescaped JSON with the key

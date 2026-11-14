@@ -5018,6 +5018,7 @@ REQ-SONNY-6547-SHOW-GRAPHS-ERRORS,SHOW GRAPHS,Regression,TESTED,tests/test_sonny
 REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,SharedHandlerErrorAnswer,TESTED,src/server/proto_util.zig,tests/test_sonny6547_transport_parity.zig,,transport,2026-11-14
 REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,GrpcExecuteFallbackAnswer,TESTED,src/transport/grpc_server.zig,tests/test_sonny6547_transport_parity.zig,,transport,2026-11-14
 REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,Regression,TESTED,tests/test_sonny6547_transport_parity.zig,tests/test_sonny6547_transport_parity.zig,,transport,2026-11-14
+REQ-SONNY-6550-DSN-RULES,DSN credentials,OneImplementation,TESTED,tests/test_sonny6550_dsn_rules.zig,tests/test_sonny6550_dsn_rules.zig,,cli,2026-11-14
 REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE,DataDirLock,RelativeXdgAndHomeIgnored,TESTED,tests/test_sonny6551_relative_state_home.zig,tests/test_sonny6551_relative_state_home.zig,,storage,2026-11-14
 REQ-SONNY-6551-DSN-QUERY-CREDENTIALS,DSN credentials,QueryParameterCredentials,TESTED,tests/test_sonny6551_dsn_query_credentials.zig,tests/test_sonny6551_dsn_query_credentials.zig,,cli,2026-11-14
 REQ-SONNY-6551-REPL-HISTORY-SECRETS,REPL history,AbsoluteHistoryPathOnly,TESTED,src/client/repl/repl_config.zig,tests/test_sonny6551_repl_history.zig,,cli,2026-11-14
