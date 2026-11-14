@@ -13468,6 +13468,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6525_gk_tests = b.addRunArtifact(sonny6525_gk_tests);
     shardDep(test_step, &run_sonny6525_gk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6525-with-group-keys", "Run SONNY-6525 item 4 regression (an aggregating WITH between parts groups 1 and '1', 'null' and NULL apart and reads $parameters in its keys and aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6525_gk_tests.step);
+    // SONNY-6540 item 5: a later part's aggregating, DISTINCT or windowed WITH reads every row reaching it. See tests/test_sonny6540_chain_with_stage.zig.
+    const sonny6540_cws_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6540_chain_with_stage.zig"), .target = target, .optimize = optimize });
+    sonny6540_cws_mod.addImport("geode", root_mod);
+    sonny6540_cws_mod.addImport("logging", logging_mod);
+    sonny6540_cws_mod.addImport("rls_types", rls_types_mod);
+    const sonny6540_cws_tests = b.addTest(.{ .root_module = sonny6540_cws_mod });
+    const run_sonny6540_cws_tests = b.addRunArtifact(sonny6540_cws_tests);
+    shardDep(test_step, &run_sonny6540_cws_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6540-chain-with-stage", "Run SONNY-6540 item 5 regression (an aggregating, DISTINCT or windowed WITH in a later part of a chain is computed over every row reaching it, with its WHERE, ORDER BY, SKIP and LIMIT, whatever parts come before it: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6540_cws_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
