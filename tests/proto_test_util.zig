@@ -239,6 +239,9 @@ pub fn spawnServerRandom(
 
     // Wait for server to be ready
     waitForServerReady(allocator, addr, 10000) catch |err| {
+        // SONNY-6542: the errdefer above frees addr; deinit must not free it
+        // again (a server that missed the deadline crashed the test binary).
+        handle.addr = "";
         handle.deinit();
         return err;
     };
