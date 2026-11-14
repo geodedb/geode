@@ -1693,12 +1693,23 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     args[i] = valueToExtValue(allocator, arg_value) catch |err| return builtinError(err);
                     initialized_args += 1;
                 }
+                // SONNY-6555 item 4: a NULL argument gives NULL, as the
+                // standard's own functions answer a null operand (ISO/IEC
+                // 39075:2024 20.22 GR 1 b, 5 a, 6 a); the extension
+                // functions raised 22G03 for one. The function still runs, so an operand
+                // count it refuses is refused whatever the operands hold.
+                var has_null = false;
+                for (args) |a| {
+                    if (a == .Null) has_null = true;
+                }
 
                 // Call the extended function and handle validation errors
                 if (func(allocator, args)) |result| {
+                    if (has_null) break :blk_call .{ .Null = {} };
                     // Convert result back to eval.Value
                     break :blk_call extValueToValue(result);
                 } else |err| {
+                    if (has_null and err != error.InvalidArgs and err != error.OutOfMemory) break :blk_call .{ .Null = {} };
                     // Propagate validation errors instead of converting to null
                     const err_name = @errorName(err);
                     if (std.mem.eql(u8, err_name, "InvalidIpAddress")) {
@@ -3530,6 +3541,8 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     switch (arg) {
         .Node => {},
         .Int => |raw_id| if (std.math.cast(u64, raw_id) == null) return absent,
+        // SONNY-6555 item 4: NULL in is NULL out (it was 0).
+        .Null => return Value{ .Null = {} },
         else => return absent,
     }
     const store = graph_store.getGlobalStore(allocator);

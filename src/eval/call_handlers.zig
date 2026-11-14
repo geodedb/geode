@@ -103,6 +103,28 @@ fn charOffset(s: []const u8, n: usize) usize {
     return at;
 }
 
+/// SONNY-6555 item 4: the number of characters of `s` (4.16.3), counted
+/// as `charOffset` steps: a byte that starts no UTF-8 sequence is one.
+fn charCount(s: []const u8) usize {
+    var at: usize = 0;
+    var seen: usize = 0;
+    while (at < s.len) : (seen += 1) {
+        const width = std.unicode.utf8ByteSequenceLength(s[at]) catch 1;
+        at = @min(s.len, at + width);
+    }
+    return seen;
+}
+
+/// SONNY-6555 item 4: whether an operand is the null value; the function's
+/// result is then the null value (NULL in is NULL out), not the heap
+/// function's 22G03 for a value of no type it takes.
+fn anyNull(values: []const Value) bool {
+    for (values) |v| {
+        if (v == .Null) return true;
+    }
+    return false;
+}
+
 /// SONNY-6518: a text argument of a constructor: null for the null value
 /// (the result is then null); a value that is no text is 22G03 (it was
 /// NULL).
@@ -1542,9 +1564,16 @@ pub fn evalCollectionFunction(
     if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // CANARY: REQ=REQ-SONNY-6555-NULL-ARGUMENTS; FEATURE="SizeFunction"; ASPECT=NullAndCharacterLength; STATUS=TESTED; TEST=tests/test_sonny6555_null_arguments.zig; OWNER=eval; UPDATED=2026-11-14
+        // SONNY-6555 item 4: ISO/IEC 39075:2024 20.22 GR 1 b), 3 b), 4 e):
+        // the length or cardinality of the null value is the null value (it
+        // was 0); GR 1 a) and NOTE 331: a character string's length is its
+        // number of characters (it was its bytes). A value of no sized type
+        // is 22G03 (it was 0).
+        if (arg == .Null) return Value{ .Null = {} };
+        if (textLike(arg)) |s| return Value{ .Int = @intCast(charCount(s)) };
         switch (arg) {
             .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
             .Path => |p| return Value{ .Int = @intCast(p.edges.len) },
             // CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
@@ -1553,13 +1582,20 @@ pub fn evalCollectionFunction(
             // every stored embedding — a silent lie that read as "empty".
             // `data.len` (not the u16 `dim` field) is authoritative so an
             // overflow-stored vector reports its real element count.
+            // BYTE_LENGTH (GR 2 a): a byte string's length is its bytes.
+            .Bytea => |b| return Value{ .Int = @intCast(b.len) },
             .ExtValue => |ext| switch (ext) {
+                .Null => return Value{ .Null = {} },
                 .List => |l| return Value{ .Int = @intCast(l.len) },
+                .Str, .Text => |t| return Value{ .Int = @intCast(charCount(t)) },
+                .Char => |t| return Value{ .Int = @intCast(charCount(t.data)) },
+                .Varchar => |t| return Value{ .Int = @intCast(charCount(t.data)) },
+                .Bytea => |b| return Value{ .Int = @intCast(b.len) },
                 .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
                 .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                else => return Value{ .Int = 0 },
+                else => return EvalError.TypeMismatch,
             },
-            else => return Value{ .Int = 0 },
+            else => return EvalError.TypeMismatch,
         }
     }
 
@@ -1591,7 +1627,10 @@ pub fn evalCollectionFunction(
                 @memcpy(tail_slice, l[1..]);
                 return Value{ .List = tail_slice };
             },
-            else => return Value{ .List = &[_]Value{} },
+            // SONNY-6555 item 4: NULL in is NULL out, and a value that is no
+            // list is 22G03 (both were the empty list).
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
@@ -2204,6 +2243,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const path = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ doc, path })) return Value{ .Null = {} };
         const path_text = (try textArg(path)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_get(evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
@@ -2213,6 +2253,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const key = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ doc, key })) return Value{ .Null = {} };
         const key_text = (try textArg(key)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_exists(evalValueToHeapValue(doc), key_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
@@ -2221,12 +2262,15 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "xml_is_well_formed")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6555 item 4: NULL in is NULL out (it was false).
+        if (arg == .Null) return Value{ .Null = {} };
         return heapValueToEvalValue(evaluator_functions.xml_is_well_formed(evalValueToHeapValue(arg)));
     }
 
     if (std.mem.eql(u8, function_name, "url_host")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_host(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2234,6 +2278,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "url_scheme")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_scheme(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2241,6 +2286,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "url_path")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_path(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2274,6 +2320,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "domain_labels")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.domain_labels(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2312,6 +2359,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.uuid_equal(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2319,6 +2367,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "to_hex")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.to_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2326,6 +2375,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "from_hex")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.from_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2333,6 +2383,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "array_length")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.array_length(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2341,6 +2392,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const array_arg = try eval.evalExpr(allocator, args[0].*, env);
         const value_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ array_arg, value_arg })) return Value{ .Null = {} };
         const result = evaluator_functions.array_contains(evalValueToHeapValue(array_arg), evalValueToHeapValue(value_arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2349,6 +2401,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.bit_and(allocator, evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2356,6 +2409,7 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "bit_count")) {
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.bit_count(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2364,6 +2418,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const range_arg = try eval.evalExpr(allocator, args[0].*, env);
         const element_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ range_arg, element_arg })) return Value{ .Null = {} };
         const result = evaluator_functions.range_contains(evalValueToHeapValue(range_arg), evalValueToHeapValue(element_arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2372,6 +2427,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.range_overlaps(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2380,6 +2436,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 2) return Value{ .Null = {} };
         const domain_arg = try eval.evalExpr(allocator, args[0].*, env);
         const suffix_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ domain_arg, suffix_arg })) return Value{ .Null = {} };
         const suffix_text = (try textArg(suffix_arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.domain_suffix_match(evalValueToHeapValue(domain_arg), suffix_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);

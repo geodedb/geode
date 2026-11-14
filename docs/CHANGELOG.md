@@ -2438,6 +2438,22 @@
 
 ### Fixed
 
+- **`length(NULL)` and `size(NULL)` are NULL, and a string's length counts
+  characters (SONNY-6555 item 4, BREAKING: results change).** ISO/IEC
+  39075:2024 20.22 GR 1 b), 3 b) and 4 e): the length or cardinality of the
+  null value is the null value; GR 1 a) with NOTE 331: a character string's
+  length is its number of characters. `length(NULL)`, `size(NULL)` and
+  `size(n.missing)` answered 0, `length('héllo')` 6 (bytes), and
+  `length(1)` / `size(true)` 0; they now answer NULL, 5 and 22G03. A sweep
+  of every function the dispatch knows, called with NULL arguments, found
+  the same defect in `tail(NULL)` (`[]`; a non-list is now 22G03 too),
+  `indegree(NULL)` / `outdegree(NULL)` (0), `xml_is_well_formed(NULL)`
+  (false), and every extension-registry function (`ipaddr`, `st_x`,
+  `currency`, `hash`, `latlon`, ...) and the `url_*`, `domain_*`,
+  `uuid_equal`, `to_hex`, `from_hex`, `array_*`, `bit_*`, `range_contains` /
+  `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
+  22G03 for a NULL argument: each now answers NULL. Regression: `zig build
+  test-sonny6555-null-arguments`.
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
