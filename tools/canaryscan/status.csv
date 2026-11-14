@@ -2328,7 +2328,6 @@ REQ-GQL-AUTH-DDL-004,GQL Auth DDL,SetUserActive,TESTED,tests/test_auth_persisten
 REQ-GQL-BACKUP-REFUSAL-001,GqlBackupRestoreRefusal,StableUnsupportedContract,TESTED,src/execution.zig,tests/test_gap0871_gql_backup_refusal.zig,,engine,2026-06-11
 REQ-GQL-BACKUP-REFUSAL-001,GqlBackupRestoreRefusal,StableUnsupportedContract,TESTED,tests/test_gap0871_gql_backup_refusal.zig,,,engine,2026-06-11
 REQ-GQL-BACKUP-RESTORE,BackupRestore,Core,TESTED,tests/integration/test_backup_restore.zig,test_backup_restore.zig,,team,2025-10-02
-REQ-GQL-BENCH,Distributed Features Benchmark,Performance,TESTED,benchmarks/benchmark_distributed_features.zig,BenchmarkCANARY_Distributed,,bench,2025-09-29
 REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,src/execution/centrality_algorithms.zig,geodetestlab/specs/geode_graph_algorithms.yml,,graph,2026-04-01
 REQ-GQL-BOOL-INT-COERCE-001,GQLExpressions,BoolIntCoerce,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
 REQ-GQL-BOOL-INT-COERCE-001,TypeCoercion,BoolToInt,TESTED,src/eval.zig,geodetestlab/specs/gql_type_system_comprehensive.yml,,eval,2025-12-27
@@ -2445,7 +2444,6 @@ REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",ReadOnlyClassifica
 REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,SearchLatencyGate,TESTED,tests/test_fts_latency.zig,tests/test_fts_latency.zig,,storage,2026-05-31
 REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,VarianceEnvelope,BENCHED,benchmarks/benchmark_fts_storage.zig,,BenchmarkCANARY_REQ_GQL_FTS_STORAGE_PERF_001_FtsStorageVarianceEnvelope,storage,2026-05-31
 REQ-GQL-FTS-TEST,FTS Test Suite,Testing,TESTED,tests/test_fulltext_bm25.zig,TestCANARY_FTS_Suite,,test,2026-05-30
-REQ-GQL-FUZZ,Distributed Features Fuzzing,Fuzzing,TESTED,fuzz/fuzz_distributed_features.zig,FuzzCANARY_Distributed,,fuzz,2025-09-29
 REQ-GQL-GEO-FUNC-001,GeographicFunctions,BuiltinFunctions,TESTED,src/types/geographic.zig,geodetestlab/specs/spatial_wkb_functions.yml,,types,2025-10-19
 REQ-GQL-GEO-FUNC-EVAL-001,GeographicFunctionsEvaluation,BuiltinFunctions,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,eval,2025-10-19
 REQ-GQL-GEO-TYPES-001,GeoTypes,Implementation,IMPL,tests/test_gap_0193_batch2_engine.zig,,,types,2026-11-12

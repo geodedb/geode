@@ -2298,6 +2298,24 @@
 
 ### Fixed
 
+- **Orphan test, fuzz and benchmark files: run or removed (SONNY-6517
+  items 3, 4).** `tests/test_gql_conformance_rq.zig` and
+  `tests/e2e_multi_graph_security.zig` were unreferenced `all_tests.zig`
+  constants that never ran (their CANARY markers said TESTED). They are
+  named steps now: `test-e2e-multi-graph-security` (stale `User` and
+  `EnvironmentInfo` fields fixed) passes in the aggregate;
+  `test-gql-conformance-rq` passes 23 of 24 and stays out of the
+  aggregate: RQ-0019 finds the gql dependency's `status.privilegeViolation`
+  answering 42501 where ISO/IEC 39075 names 42000 (KNOWN_TEST_ISSUES).
+  Removed, as they name removed code and no build compiled them:
+  `tests/test_feature_completion.zig` (`src/graph/builtin_algorithms.zig`),
+  `fuzz/fuzz_distributed_features.zig` and
+  `benchmarks/benchmark_distributed_features.zig` (`lib.planner_wcoj`,
+  `lib.graph.leiden`, `std.rand`), `tests/memory_mapped_io_validation.zig`
+  (`std.fs.cwd`, the removed `ChunkedMemoryMap`). `src/planner.zig`'s 14
+  inline tests are ported and run by `test-sonny6511-lib-inline`; they
+  found two defects in its `PathExpand` operator (managed ArrayLists; a
+  result whose edge ids it had freed), both fixed.
 - **substring, left and right count characters; substring's start follows
   the 1-based rule (SONNY-6518 item 5, BREAKING).** ISO/IEC 39075:2024
   20.24 LEFT / RIGHT take the first / last NC characters; Geode's

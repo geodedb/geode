@@ -535,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-gql-conformance-rq", .reason = "red on a gql dependency defect (SONNY-6517 item 4, KNOWN_TEST_ISSUES): gql 0.1.21 status.privilegeViolation answers 42501 where ISO/IEC 39075 names access rule violations 42000 (RQ-0019); 23/24 pass; compiled by test-compile; register it through shardDep in the commit that pins a gql release with the fix" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
 };
 
@@ -13049,6 +13050,22 @@ pub fn build(b: *std.Build) void {
     const run_sonny6517_oom_tests = b.addRunArtifact(sonny6517_oom_tests);
     shardDep(test_step, &run_sonny6517_oom_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6517-parse-oom", "Run SONNY-6517 item 1 regression (parseGqlOutcome with its N-th allocation failing, every N, answers error.OutOfMemory with nothing leaked, never a refused statement (42000))").dependOn(&run_sonny6517_oom_tests.step);
+    // SONNY-6517 item 4: tests/test_gql_conformance_rq.zig was an unreferenced all_tests.zig constant (never analysed, never run).
+    const sonny6517_rq_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gql_conformance_rq.zig"), .target = target, .optimize = optimize });
+    sonny6517_rq_mod.addImport("geode", root_mod);
+    sonny6517_rq_mod.addImport("logging", logging_mod);
+    const sonny6517_rq_tests = b.addTest(.{ .root_module = sonny6517_rq_mod });
+    const run_sonny6517_rq_tests = b.addRunArtifact(sonny6517_rq_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6517_rq_tests.step);
+    b.step("test-gql-conformance-rq", "Run SONNY-6517 item 4: the ISO/IEC 39075 conformance-requirement unit tests (RQ-0001 .. RQ-0024), which all_tests.zig named but never ran").dependOn(&run_sonny6517_rq_tests.step);
+    // SONNY-6517 item 4: tests/e2e_multi_graph_security.zig was an unreferenced all_tests.zig constant (never analysed, never run).
+    const sonny6517_mgs_mod = b.createModule(.{ .root_source_file = b.path("tests/e2e_multi_graph_security.zig"), .target = target, .optimize = optimize });
+    sonny6517_mgs_mod.addImport("geode", root_mod);
+    sonny6517_mgs_mod.addImport("logging", logging_mod);
+    const sonny6517_mgs_tests = b.addTest(.{ .root_module = sonny6517_mgs_mod });
+    const run_sonny6517_mgs_tests = b.addRunArtifact(sonny6517_mgs_tests);
+    shardDep(test_step, &run_sonny6517_mgs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-e2e-multi-graph-security", "Run SONNY-6517 item 4: the multi-graph security end-to-end tests, which all_tests.zig named but never ran").dependOn(&run_sonny6517_mgs_tests.step);
 
     const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
     sonny2848_mod.addImport("geode", root_mod);

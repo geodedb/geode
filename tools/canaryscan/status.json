@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T04:02:18.609469856Z",
+  "generated_at": "2026-11-14T04:04:55.293644153Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -34891,25 +34891,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-BENCH",
-      "features": [
-        {
-          "feature": "Distributed Features Benchmark",
-          "aspect": "Performance",
-          "status": "TESTED",
-          "files": [
-            "benchmarks/benchmark_distributed_features.zig"
-          ],
-          "tests": [
-            "BenchmarkCANARY_Distributed"
-          ],
-          "benches": [],
-          "owner": "bench",
-          "updated": "2025-09-29"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-BICONNECTED-001",
       "features": [
         {
@@ -36781,25 +36762,6 @@
           "benches": [],
           "owner": "test",
           "updated": "2026-05-30"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-FUZZ",
-      "features": [
-        {
-          "feature": "Distributed Features Fuzzing",
-          "aspect": "Fuzzing",
-          "status": "TESTED",
-          "files": [
-            "fuzz/fuzz_distributed_features.zig"
-          ],
-          "tests": [
-            "FuzzCANARY_Distributed"
-          ],
-          "benches": [],
-          "owner": "fuzz",
-          "updated": "2025-09-29"
         }
       ]
     },
@@ -93572,7 +93534,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4936
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -95012,7 +94974,6 @@
       "FunctionsAndProcedures": 1,
       "FutexWakeOnRelease": 1,
       "FutexWakeOnReleaseBuild": 1,
-      "Fuzzing": 1,
       "GA08DiagnosticGating": 1,
       "GG01GG02GG20-23": 1,
       "GPUFlagger": 1,
@@ -96192,7 +96153,7 @@
       "PerThreadRole": 1,
       "PerThreadTenant": 2,
       "PerfMicrobenchmark": 1,
-      "Performance": 6,
+      "Performance": 5,
       "PerformanceBaselines": 1,
       "PerformanceBenchmarks": 1,
       "PerformanceMonitoring": 1,
