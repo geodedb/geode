@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T07:36:45.48328795Z",
+  "generated_at": "2026-11-14T07:51:13.168005012Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83867,6 +83867,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6552-MCP-RESULT-SHAPES",
+      "features": [
+        {
+          "feature": "MCPResultShapes",
+          "aspect": "SpecResultObjects",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6552_mcp_result_shapes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6552_mcp_result_shapes.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -91068,7 +91087,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 862,
-      "TESTED": 4265
+      "TESTED": 4266
     },
     "by_aspect": {
       "2PC": 3,
@@ -94546,6 +94565,7 @@
       "SpanningTxnKeepsWalBatch": 1,
       "SpatialTypes": 3,
       "SpecExecution": 1,
+      "SpecResultObjects": 1,
       "Split": 1,
       "SplitPoint": 1,
       "SplitRequestAnsweredOnce": 1,
