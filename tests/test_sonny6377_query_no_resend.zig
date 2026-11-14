@@ -38,11 +38,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 const linux = std.os.linux;
 
-pub const binary_path = "./zig-out/bin/geode";
+/// SONNY-6534: the geode this build emitted (SONNY-2697). It was
+/// `./zig-out/bin/geode`, whatever the last install left there: the steps
+/// that import this file without installing (test-sonny6436-quic-retry-stops,
+/// test-sonny6447-quic-retry-connect-stops) ran a stale binary, possibly of
+/// another optimize mode, or skipped.
+pub const binary_path = geode_test_bin.geode_exe;
 pub const admin_user = util.DefaultAuth.username;
 pub const admin_pw = util.DefaultAuth.password;
 
@@ -202,19 +208,29 @@ pub const Server = struct {
     grpc_addr: ?[]const u8 = null,
 
     pub fn start(allocator: std.mem.Allocator, dir: []const u8, grpc_port: ?u16) !Server {
+        return startWith(allocator, dir, grpc_port, &.{});
+    }
+
+    /// `start` with `extra` appended to `geode serve`'s arguments.
+    pub fn startWith(allocator: std.mem.Allocator, dir: []const u8, grpc_port: ?u16, extra: []const []const u8) !Server {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
         var grpc_addr: ?[]const u8 = null;
         errdefer if (grpc_addr) |g| allocator.free(g);
-        var proc = if (grpc_port) |gp| blk: {
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(allocator);
+        try argv.appendSlice(allocator, &.{ binary_path, "serve", "--listen", addr, "--data-dir", dir });
+        if (grpc_port) |gp| {
             grpc_addr = try util.formatAddr(allocator, gp);
-            break :blk try util.spawnServer(
-                allocator,
-                &.{ binary_path, "serve", "--listen", addr, "--data-dir", dir, "--listen-grpc", grpc_addr.? },
-                util.TestEnv.grpcPlaintext(),
-            );
-        } else try util.spawnServer(allocator, &.{ binary_path, "serve", "--listen", addr, "--data-dir", dir }, util.TestEnv.standard());
+            try argv.appendSlice(allocator, &.{ "--listen-grpc", grpc_addr.? });
+        }
+        try argv.appendSlice(allocator, extra);
+        var proc = try util.spawnServer(
+            allocator,
+            argv.items,
+            if (grpc_port != null) util.TestEnv.grpcPlaintext() else util.TestEnv.standard(),
+        );
         errdefer proc.deinit();
         try util.waitForServerReady(allocator, addr, 60_000);
         if (grpc_addr) |g| try util.waitForGrpcServerReady(allocator, g, 60_000);
@@ -231,6 +247,89 @@ pub const Server = struct {
 // ---------------------------------------------------------------------------
 // 1. A chunk the client timed out on is not replayed.
 // ---------------------------------------------------------------------------
+
+/// Bytes the server has passed to write(2) (`wchar` in /proc/<pid>/io; disk
+/// and log writes, not its QUIC datagrams), or null once it is gone.
+fn serverWriteBytes(pid: linux.pid_t) ?u64 {
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/io", .{pid}) catch return null;
+    const fd_rc = linux.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    if (linux.errno(fd_rc) != .SUCCESS) return null;
+    const fd: i32 = @intCast(fd_rc);
+    defer _ = linux.close(fd);
+    var buf: [512]u8 = undefined;
+    const n_rc = linux.read(fd, &buf, buf.len);
+    if (linux.errno(n_rc) != .SUCCESS) return null;
+    const text = buf[0..n_rc];
+    const key = "wchar:";
+    const at = std.mem.indexOf(u8, text, key) orelse return null;
+    var i = at + key.len;
+    while (i < text.len and text[i] == ' ') i += 1;
+    const start = i;
+    while (i < text.len and std.ascii.isDigit(text[i])) i += 1;
+    return std.fmt.parseInt(u64, text[start..i], 10) catch null;
+}
+
+/// SONNY-6534: makes the server outlast the client's deadline once it is
+/// applying a request, whatever its build and the host's speed. The fixture
+/// used to rely on the server needing longer than the 4 s `--timeout` for
+/// 400 CREATEs. That time follows disk-sync latency and host load, not the
+/// build: 4.3-10.7 s for the run on one Debug host, 8.7 s on ReleaseSafe. On
+/// a quick host the answer came within 4 s (error.FixtureChunkDidNotTimeOut).
+///
+/// A thread watches the server's write(2) bytes. When they pass
+/// `trigger_bytes` over the count before the client started, a write
+/// statement is being applied, so its whole request has arrived: the thread
+/// stops the server (SIGSTOP), and continues it (SIGCONT) when the client has
+/// exited. Logging in writes under 1 KiB; the first applied CREATE writes
+/// over 50 KiB (measured on a Debug server: 77 B and 62 KiB). The server, the
+/// CLI and the wire protocol are real, and the server applies the whole
+/// request after it continues: only its answer comes late.
+pub const Freezer = struct {
+    pid: linux.pid_t,
+    base: u64,
+    client_done: std.atomic.Value(bool) = .init(false),
+    froze: std.atomic.Value(bool) = .init(false),
+    thread: ?std.Thread = null,
+
+    const trigger_bytes: u64 = 16 * 1024;
+    /// Longest wait for the request to arrive, and for the client to exit.
+    const wait_ms: i64 = 120_000;
+
+    /// Start watching `server`. Call before the client starts; `finish` once
+    /// it has exited.
+    pub fn start(self: *Freezer, server: *const util.ServerHandle) !void {
+        const pid = server.child.id orelse return error.NoPid;
+        self.* = .{ .pid = pid, .base = serverWriteBytes(pid) orelse return error.NoServerIo };
+        self.thread = try std.Thread.spawn(.{}, run, .{self});
+    }
+
+    fn run(self: *Freezer) void {
+        const t0 = nowMillis();
+        while (!self.client_done.load(.acquire) and nowMillis() - t0 < wait_ms) {
+            const written = serverWriteBytes(self.pid) orelse return;
+            if (written -| self.base >= trigger_bytes) {
+                std.posix.kill(self.pid, .STOP) catch return;
+                self.froze.store(true, .release);
+                break;
+            }
+            sleepMs(1);
+        }
+        if (!self.froze.load(.acquire)) return;
+        const t1 = nowMillis();
+        while (!self.client_done.load(.acquire) and nowMillis() - t1 < wait_ms) sleepMs(20);
+        std.posix.kill(self.pid, .CONT) catch {};
+    }
+
+    /// The client has exited: continue the server. True if it was stopped.
+    pub fn finish(self: *Freezer) bool {
+        self.client_done.store(true, .release);
+        if (self.thread) |t| t.join();
+        self.thread = null;
+        std.posix.kill(self.pid, .CONT) catch {};
+        return self.froze.load(.acquire);
+    }
+};
 
 /// 400 padded CREATEs: over the 16 KiB chunking threshold, inside one 32 KiB
 /// chunk (the shape of test_cli_file_chunked.zig's fixture).
@@ -254,7 +353,9 @@ test "SONNY-6377: geode query --file does not replay a chunk whose request was s
     const aa = arena.allocator();
     const dir = try freshDir(aa, "chunk");
     defer removeDir(dir);
-    var s = try Server.start(testing.allocator, dir, null);
+    // No persistence tick: nothing but the chunk writes while the Freezer
+    // watches.
+    var s = try Server.startWith(testing.allocator, dir, null, &.{ "--persist-interval", "86400000" });
     defer s.stop(testing.allocator);
 
     const label = "Sonny6377Chunk";
@@ -263,17 +364,25 @@ test "SONNY-6377: geode query --file does not replay a chunk whose request was s
     const path = try std.fmt.allocPrint(aa, "{s}/chunk.gql", .{dir});
     try std.Io.Dir.cwd().writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = path, .data = content });
 
-    // A 4 s deadline for a chunk the server needs far longer for (~38 s in a
-    // Debug build): the client gives up while the server is applying it.
-    const r = try runGeode(aa, &.{ binary_path, "query", "--server", s.addr, "--insecure", "--no-saved-session", "--format", "json", "-U", admin_user, "-P", admin_pw, "--timeout", "4", "--file", path }, 300_000);
+    // SONNY-6534: the server is stopped once it applies the chunk, so the
+    // client's 4 s deadline expires after the request was sent, however fast
+    // the server is.
+    var freezer: Freezer = undefined;
+    try freezer.start(&s.proc);
+    const run_result = runGeode(aa, &.{ binary_path, "query", "--server", s.addr, "--insecure", "--no-saved-session", "--format", "json", "-U", admin_user, "-P", admin_pw, "--timeout", "4", "--file", path }, 300_000);
+    const froze = freezer.finish();
+    const r = try run_result;
 
     if (!contains(r.output, "using chunked execution")) {
         std.debug.print("fixture did not chunk:\n{s}\n", .{r.output});
         return error.FixtureDidNotChunk;
     }
+    if (!froze) {
+        std.debug.print("the server never started applying the chunk:\n{s}\n", .{r.output});
+        return error.FixtureServerNotStopped;
+    }
     // Guard: the chunk really did outlast the client's deadline. Without it
-    // this test would pass for the wrong reason on a server fast enough to
-    // answer a 400-statement program in 4 s.
+    // this test would pass for the wrong reason (an answer within 4 s).
     if (!contains(r.output, "Timeout") and !contains(r.output, "timed out")) {
         std.debug.print("the chunk did not time out (server answered within 4 s):\n{s}\n", .{r.output});
         return error.FixtureChunkDidNotTimeOut;
@@ -504,7 +613,11 @@ test "SONNY-6377: geode query over gRPC does not resend a query whose connection
         std.debug.print("the query never reached the server through the relay:\n{s}\n", .{r.output});
         return error.FixtureNoExecute;
     }
-    const persisted = try readCount(aa, s.addr, label);
+    // SONNY-6534: wait for the server to finish the statement. The relay
+    // resets the client 1 s after the request; a fresh server's first write
+    // opens the graph (~2 s in a Debug build), so a single read right after
+    // the client exits could run before the CREATE committed and count 0.
+    const persisted = try settledCount(aa, s.addr, label);
 
     var violations: usize = 0;
     if (executes != 1) {

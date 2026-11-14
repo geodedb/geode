@@ -16495,7 +16495,7 @@ pub fn build(b: *std.Build) void {
     sonny6425_retry_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6425_retry_tests = b.addTest(.{ .root_module = sonny6425_retry_test_mod });
     const run_sonny6425_retry_tests = b.addRunArtifact(sonny6425_retry_tests);
-    run_sonny6425_retry_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6425_retry_tests);
     shardDep(test_step, &run_sonny6425_retry_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6425_retry_step = b.step("test-sonny6425-grpc-retry-summary", "Run SONNY-6425 item 6 regression (geode query --grpc --file: a statement of a rejected chunk, retried on its own, whose connection fails after it was sent is not sent again, the run stops and the chunked summary is printed; spawns the CLI, a server and a TCP relay)");
     sonny6425_retry_step.dependOn(&run_sonny6425_retry_tests.step);
@@ -17909,7 +17909,7 @@ pub fn build(b: *std.Build) void {
     sonny6377_resend_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6377_resend_tests = b.addTest(.{ .root_module = sonny6377_resend_test_mod });
     const run_sonny6377_resend_tests = b.addRunArtifact(sonny6377_resend_tests);
-    run_sonny6377_resend_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6377_resend_tests);
     shardDep(test_step, &run_sonny6377_resend_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6377_resend_step = b.step("test-sonny6377-query-no-resend", "Run the SONNY-6377 item 1 regression (geode query --file does not replay a chunk whose request was sent and timed out; over gRPC a query whose connection failed after it was sent is not resent; spawns the CLI and a server)");
     sonny6377_resend_step.dependOn(&run_sonny6377_resend_tests.step);
@@ -17962,7 +17962,7 @@ pub fn build(b: *std.Build) void {
     sonny6384_chunk_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6384_chunk_tests = b.addTest(.{ .root_module = sonny6384_chunk_test_mod });
     const run_sonny6384_chunk_tests = b.addRunArtifact(sonny6384_chunk_tests);
-    run_sonny6384_chunk_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny6384_chunk_tests);
     shardDep(test_step, &run_sonny6384_chunk_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6384_chunk_step = b.step("test-sonny6384-grpc-chunk-summary", "Run the SONNY-6384 item 6 regression (geode query --grpc --file: a chunk whose connection fails after it was sent is not sent again, the run stops and the chunked summary is printed; spawns the CLI, a server and a TCP relay)");
     sonny6384_chunk_step.dependOn(&run_sonny6384_chunk_tests.step);
