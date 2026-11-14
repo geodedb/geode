@@ -11631,7 +11631,16 @@ pub const StorageAdapter = struct {
             cfg,
         ) catch |err| {
             // LabelDictionaryDiverged is logged there, with the shape and the repair.
-            if (err != error.LabelDictionaryDiverged) log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
+            // SONNY-6551: through the structured logger, as the other
+            // operator-facing errors of this file are (GAP-ENT-0038): the
+            // std.log line was counted by the Zig test runner as a failure of
+            // every test that opens a damaged graph on purpose
+            // (test-admin-bootstrap), though the error is returned and the
+            // caller fails closed on it.
+            if (err != error.LabelDictionaryDiverged) slog.err("failed to open ShardedGraphEngine for graph", &.{
+                SAttr.string("graph", name),
+                SAttr.err("error", err),
+            });
             return err;
         };
         // error-policy: A — best-effort close on an already-failing path.
