@@ -2298,6 +2298,16 @@
 
 ### Fixed
 
+- **The storage corruption errors say what happened and what to do
+  (SONNY-6528 item 5).** `DataCorruption`, `ChecksumMismatch` and
+  `InvalidData` (a read that found a graph's stored data damaged, and every
+  statement on a quarantined graph) reached the client as SQLSTATE 58000
+  with the bare error name. Each now names what failed, says the statement
+  returned no partial result and that a graph found damaged when it was
+  loaded refuses every read and write, and tells the operator to restore it
+  from a backup or remove it with DROP GRAPH (the server log names the
+  graph). The code is still 58000; no message carries a path. Regression:
+  `zig build test-sonny6528-corruption-messages`.
 - **A quarantined graph refuses every read and every write (SONNY-6523
   item 1).** A graph whose first-touch hydration fails (REQ-GQL-028: its
   store is damaged) is quarantined, and the executor failed a statement that
