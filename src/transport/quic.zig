@@ -1435,9 +1435,9 @@ pub const QuicConnection = struct {
     /// mechanism on the routine server-stop path: the frame was already on the
     /// wire by the time `destroyConnectionWithError` ran, so its named code was
     /// a no-op. Latched here so the code is assertable without a live peer —
-    /// vendored quic v0.1.40 discards the received code on the receiving side
-    /// (`endpoint/frame_handler.zig handleConnectionClose`), so no client can
-    /// observe it yet (review follow-up T-8).
+    /// vendored quic (v0.1.40 through v0.1.51) discards the received code on
+    /// the receiving side (`endpoint/frame_handler.zig handleConnectionClose`),
+    /// so no client can observe it yet (review follow-up T-8).
     close_app_error: std.atomic.Value(u64) = std.atomic.Value(u64).init(app_error.no_error),
     /// SONNY-1219c (m-9): lock-free mirror of `streams.items.len`, maintained
     /// under `streams_mu` at every append/release. The `quic_max_tracked_streams`
@@ -1784,6 +1784,10 @@ pub const QuicConnection = struct {
 ///
 /// Generic over `conn` so the fallback policy is unit-testable with a fake
 /// connection that simulates the no-TX `error.InvalidStream` path.
+///
+/// Still needed on quic v0.1.51: its stream retirement (SONNY-6478) did not
+/// change this case; `closeStream` still returns `error.InvalidStream` for a
+/// stream with no TX entry (`connection/methods_b.zig closeStream`).
 fn finalizeStreamSend(conn: anytype, stream_id: u64) void {
     conn.closeStream(stream_id, 0) catch |err| {
         // Stream already FIN'd/aborted: a terminator was already emitted and
@@ -3129,7 +3133,7 @@ test "tracked streams: destroyStream proves liveness by list membership, never t
 // The code each path hands to `api.closeConnection` is latched in
 // `close_app_error`, which is what these assert. (The peer-side assertion the
 // SONNY-1219c addendum asks for is not expressible against vendored quic
-// v0.1.40: `endpoint/frame_handler.zig:308 handleConnectionClose` discards the
+// v0.1.40 through v0.1.51: `endpoint/frame_handler.zig handleConnectionClose` discards the
 // received error code entirely — it returns only `saw_close` — so no
 // `QuicClient` can observe it. That is review follow-up T-8.)
 // =============================================================================
