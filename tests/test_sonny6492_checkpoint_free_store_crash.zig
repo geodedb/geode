@@ -1,30 +1,51 @@
-// SONNY-6492 (1): nodes written before a checkpoint that stopped between its
-// manifest and its free.store survive a SIGKILL.
+// SONNY-6492 (1): nodes survive the free.store states a crash during a
+// checkpoint leaves, before and since graph-storage 0.4.14.
 //
-// graph-storage's checkpoint (0.4.13 `engine_persist.checkpointEx`) flushes
-// the pages, writes the shard manifest and truncates the shard WAL, and only
-// then saves the shard's page bitmaps (`free.store`). The server runs a light
-// checkpoint on every persistence tick (--persist-interval, 30 s by default),
-// whatever GEODE_CHECKPOINT_INTERVAL_MS says. A SIGKILL between the two left the
-// previous checkpoint's bitmaps beside a manifest and an empty WAL: the
-// restart replayed nothing and loaded them, so every node page allocated
-// since that checkpoint read as free. The hydration scan skips free pages:
-// the nodes on them were gone from every read, and the live-count check
-// (REQ-GQL-028) failed the first query with DataCorruption. Caught by a
-// 15-iteration SIGKILL loop of test-sonny6471-edge-prop-crash (iteration 8:
-// "hydration scan found 42 live node record(s) but the shard manifest counts
-// 84"; the 42 were the shard's nodes on pages 4-7, unmarked in a free.store
-// 35 s older than the manifest).
+// graph-storage <= 0.4.13's checkpoint (`engine_persist.checkpointEx`)
+// flushed the pages, wrote the shard manifest and truncated the shard WAL,
+// and only then saved the shard's page bitmaps (`free.store`). The server
+// runs a light checkpoint on every persistence tick (--persist-interval, 30 s
+// by default), whatever GEODE_CHECKPOINT_INTERVAL_MS says. A SIGKILL between
+// the two left the previous checkpoint's bitmaps beside a newer manifest and
+// an empty WAL; the restart replayed nothing and loaded them, so every node
+// page allocated since read as free: the hydration scan skipped the nodes on
+// it and the live-count check (REQ-GQL-028) failed the first query with
+// DataCorruption ("found 42 live node record(s) but the shard manifest counts
+// 84", caught by a SIGKILL loop of test-sonny6471-edge-prop-crash).
 //
-// The window is made certain without guessing the kill time: a directory at
-// each shard's `free.store.tmp` makes graph-storage's free.store save fail
-// (EISDIR) right after the checkpoint truncated the WAL -- the state a kill
-// there leaves, and the one a failed save (ENOSPC, EIO) leaves without a
-// crash. A real `geode serve` writes the first nodes, checkpoints (bitmaps
-// saved), writes more nodes on new pages, checkpoints (bitmaps NOT saved),
-// and is SIGKILLed; the obstacle is removed and the server restarted. Every
-// node must be there, by label, by an unlabeled scan, and a node created
-// after the restart too. Without and with page encryption (GEODE_TDE_KEY).
+// graph-storage 0.4.14 (SONNY-6491) writes free.store durably BEFORE the
+// manifest and fsyncs the manifest's directory before the WAL truncate, and
+// `loadFreeStore` rebuilds the bitmaps from the store files when the loaded
+// ones trail the manifest (fewer allocated pages than it recorded, or an
+// unallocated node page below its highest issued node id). Three cases, each
+// against a real `geode serve`, with real SIGKILLs, without and with TDE:
+//
+//   1. A store an OLD release left after a crash in its window, opened by
+//      this build: batch 1, a checkpoint, a copy of every shard's free.store
+//      (modification times kept); batch 2 on new pages, a checkpoint, SIGKILL;
+//      the older copies put back beside the newer manifests and empty WALs.
+//      Every node is there after the restart, by label, by an unlabeled scan,
+//      with its property; nodes created after it go to fresh pages: after
+//      many more creates, a checkpoint, a SIGKILL and another restart, the old
+//      nodes still hold their properties (page reuse was the second half of
+//      the damage).
+//   2. 0.4.14 itself, a free.store save that fails (a directory at each
+//      shard's free.store.tmp: EISDIR): the checkpoint fails before the
+//      manifest, so no manifest advances and no WAL is truncated, and the
+//      server logs the failing checkpoint on every tick. After a SIGKILL every
+//      node comes back through WAL replay.
+//   3. A checkpoint that completed, then a SIGKILL: the restart rebuilds no
+//      bitmaps. geode's own pre-0.4.14 workaround (truncate a free.store older
+//      than its manifest) truncated EVERY free.store 0.4.14 writes, since it
+//      now precedes its manifest, and rebuilt every shard's bitmaps on every
+//      open.
+//
+// Not covered, and not reachable through the server: a bitmap stale only in
+// WHICH pages it marks (as many pages freed as allocated since its save)
+// passes graph-storage's checks. Pages are freed only by a legacy (non-slab)
+// var-store chain (`VarStore.free`) and by an operation releasing the page it
+// just allocated; with slab packing on (the default) a stored page is never
+// freed, so the allocated count of a store only grows.
 //
 // CANARY: REQ=REQ-SONNY-6492-STALE-FREE-STORE; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6492_checkpoint_free_store_crash.zig; OWNER=storage; UPDATED=2026-11-13
 
@@ -35,6 +56,7 @@ const util = @import("proto_test_util.zig");
 
 const batch1 = 64;
 const batch2 = 400;
+const batch3 = 800;
 const tde_key_hex = "6492" ** 16;
 
 fn io() std.Io {
@@ -45,11 +67,15 @@ const Server = struct {
     handle: util.ServerHandle,
     addr: []u8,
 
-    fn start(allocator: std.mem.Allocator, data_dir: []const u8, env: []const []const u8) !Server {
+    /// The server's stderr goes to `log_path` (appended); the persistence
+    /// tick checkpoints every 300 ms, so the waits stay short.
+    fn start(allocator: std.mem.Allocator, data_dir: []const u8, env: []const []const u8, log_path: []const u8) !Server {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, env);
+        const cmd = try std.fmt.allocPrint(allocator, "exec '{s}' serve --listen {s} --data-dir '{s}' --persist-interval 300 2>>'{s}'", .{ geode_test_bin.geode_exe, addr, data_dir, log_path });
+        defer allocator.free(cmd);
+        var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, env);
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .addr = addr };
@@ -81,7 +107,7 @@ fn queryOk(client: *util.QuicProtoClient, allocator: std.mem.Allocator, q: []con
     }
 }
 
-fn queryCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, q: []const u8) !i64 {
+fn queryInt(client: *util.QuicProtoClient, allocator: std.mem.Allocator, q: []const u8) !i64 {
     var r = try client.executeAndCollect(allocator, q, util.emptyParams(), 1000);
     defer r.deinit(allocator);
     if (r.error_code) |code| {
@@ -100,6 +126,22 @@ fn createNodes(client: *util.QuicProtoClient, allocator: std.mem.Allocator, from
         var qb: [96]u8 = undefined;
         try queryOk(client, allocator, try std.fmt.bufPrint(&qb, "CREATE (:S6492 {{i: {d}}})", .{i}));
     }
+}
+
+/// Every node with i in [0, n) is there exactly once, holding its property.
+fn expectNodes(client: *util.QuicProtoClient, allocator: std.mem.Allocator, n: usize, tag: []const u8) !void {
+    var qb: [160]u8 = undefined;
+    const by_label = try queryInt(client, allocator, "MATCH (n:S6492) RETURN count(n) AS c");
+    const unlabeled = try queryInt(client, allocator, "MATCH (n) RETURN count(n) AS c");
+    const in_range = try queryInt(client, allocator, try std.fmt.bufPrint(&qb, "MATCH (n:S6492) WHERE n.i >= 0 AND n.i < {d} RETURN count(n) AS c", .{n}));
+    const sum = try queryInt(client, allocator, try std.fmt.bufPrint(&qb, "MATCH (n:S6492) WHERE n.i >= 0 AND n.i < {d} RETURN sum(n.i) AS s", .{n}));
+    const want: i64 = @intCast(n);
+    const want_sum: i64 = @intCast(n * (n - 1) / 2);
+    std.debug.print("SONNY-6492 (1) {s}: {d} by label, {d} unlabeled, {d} with i < {d} summing {d}; want {d} summing {d}\n", .{ tag, by_label, unlabeled, in_range, n, sum, want, want_sum });
+    try testing.expectEqual(want, by_label);
+    try testing.expectEqual(want, unlabeled);
+    try testing.expectEqual(want, in_range);
+    try testing.expectEqual(want_sum, sum);
 }
 
 /// The shard directories (`<graph root>/graphs/<shard>`) of the one user
@@ -148,129 +190,280 @@ fn newestManifest(allocator: std.mem.Allocator, dir: []const u8) !i96 {
     return newest;
 }
 
-/// Waits until every shard's WAL is empty (a checkpoint ran after the last
-/// write) and `ready` holds for it.
-fn waitShards(allocator: std.mem.Allocator, shards: []const []u8, ctx: anytype, comptime ready: fn (@TypeOf(ctx), std.mem.Allocator, usize, []const u8) anyerror!bool) !void {
+fn walSize(allocator: std.mem.Allocator, shard: []const u8) !u64 {
+    const wal = try std.fmt.allocPrint(allocator, "{s}/wal", .{shard});
+    defer allocator.free(wal);
+    return if (try fileInfo(allocator, wal, "graph.wal")) |w| w.size else 0;
+}
+
+/// The newest manifest of each shard, and its node store's size.
+const Snapshot = struct {
+    manifest: []i96,
+    nodes: []u64,
+
+    fn take(allocator: std.mem.Allocator, shards: []const []u8) !Snapshot {
+        const s: Snapshot = .{ .manifest = try allocator.alloc(i96, shards.len), .nodes = try allocator.alloc(u64, shards.len) };
+        for (shards, s.manifest, s.nodes) |d, *m, *n| {
+            m.* = try newestManifest(allocator, d);
+            n.* = if (try fileInfo(allocator, d, "nodes.store")) |f| f.size else 0;
+        }
+        return s;
+    }
+
+    fn deinit(self: Snapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.manifest);
+        allocator.free(self.nodes);
+    }
+};
+
+/// Waits until a checkpoint ran after the last write on every shard: every
+/// WAL is empty (a shard written since its last checkpoint has a WAL tail),
+/// every shard with nodes has a non-empty free.store, and (with `before`) at
+/// least one manifest is newer than in it.
+fn waitCheckpointed(allocator: std.mem.Allocator, shards: []const []u8, before: ?Snapshot) !void {
     var waited_ms: u64 = 0;
-    while (waited_ms < 60_000) : (waited_ms += 50) {
+    while (waited_ms < 90_000) : (waited_ms += 100) {
         var all = true;
+        var advanced = before == null;
         for (shards, 0..) |s, i| {
-            const wal = try std.fmt.allocPrint(allocator, "{s}/wal", .{s});
-            defer allocator.free(wal);
-            const w = (try fileInfo(allocator, wal, "graph.wal")) orelse FileInfo{ .size = 0, .mtime = 0 };
-            if (w.size != 0 or !try ready(ctx, allocator, i, s)) {
+            if (try walSize(allocator, s) != 0) {
                 all = false;
                 break;
             }
+            const f = (try fileInfo(allocator, s, "free.store")) orelse FileInfo{ .size = 0, .mtime = 0 };
+            const has_nodes = if (try fileInfo(allocator, s, "nodes.store")) |n| n.size > 0 else false;
+            if (has_nodes and f.size == 0) {
+                all = false;
+                break;
+            }
+            if (before) |b| {
+                if (try newestManifest(allocator, s) > b.manifest[i]) advanced = true;
+            }
         }
-        if (all) return;
-        io().sleep(.fromMilliseconds(50), .awake) catch {};
+        if (all and advanced) return;
+        io().sleep(.fromMilliseconds(100), .awake) catch {};
     }
     return error.CheckpointNotObserved;
 }
 
-fn nodePages(allocator: std.mem.Allocator, s: []const u8) !u64 {
-    return if (try fileInfo(allocator, s, "nodes.store")) |f| f.size else 0;
+fn run(argv: []const []const u8) !void {
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const r = try std.process.run(testing.allocator, threaded.io(), .{ .argv = argv });
+    testing.allocator.free(r.stdout);
+    testing.allocator.free(r.stderr);
+    switch (r.term) {
+        .exited => |c| if (c != 0) return error.CommandFailed,
+        else => return error.CommandFailed,
+    }
 }
 
-const Checkpointed = struct {
-    /// After the first batch: the bitmaps of a shard with nodes were saved.
-    fn saved(_: void, allocator: std.mem.Allocator, _: usize, s: []const u8) anyerror!bool {
-        if (try nodePages(allocator, s) == 0) return true;
-        const f = (try fileInfo(allocator, s, "free.store")) orelse return false;
-        return f.size > 0 and f.mtime >= try newestManifest(allocator, s);
+fn readLog(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io(), path, allocator, .limited(64 << 20));
+}
+
+const Env = struct {
+    allocator: std.mem.Allocator,
+    data_dir: []u8,
+    log_path: []u8,
+    env: []const []const u8,
+    shards: std.ArrayList([]u8) = .empty,
+
+    fn init(allocator: std.mem.Allocator, tde: bool, tag: []const u8) !Env {
+        const port = try util.getRandomPort();
+        const data_dir = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6492-{s}-{d}", .{ tag, port });
+        errdefer allocator.free(data_dir);
+        try std.Io.Dir.cwd().createDirPath(io(), data_dir);
+        const log_path = try std.fmt.allocPrint(allocator, "{s}.server.log", .{data_dir});
+        return .{
+            .allocator = allocator,
+            .data_dir = data_dir,
+            .log_path = log_path,
+            .env = if (tde) &.{"GEODE_TDE_KEY=" ++ tde_key_hex} else &.{},
+        };
+    }
+
+    fn deinit(self: *Env) void {
+        for (self.shards.items) |p| self.allocator.free(p);
+        self.shards.deinit(self.allocator);
+        std.Io.Dir.cwd().deleteTree(io(), self.data_dir) catch {};
+        std.Io.Dir.cwd().deleteFile(io(), self.log_path) catch {};
+        self.allocator.free(self.data_dir);
+        self.allocator.free(self.log_path);
+    }
+
+    fn start(self: *Env) !Server {
+        return Server.start(self.allocator, self.data_dir, self.env, self.log_path);
+    }
+
+    /// CREATE GRAPH and batch 1, checkpointed; the graph's shard directories.
+    fn seed(self: *Env, client: *util.QuicProtoClient) !void {
+        try queryOk(client, self.allocator, "CREATE GRAPH g6492");
+        try queryOk(client, self.allocator, "USE GRAPH g6492");
+        try createNodes(client, self.allocator, 0, batch1);
+        self.shards = try shardDirs(self.allocator, self.data_dir);
+        try testing.expectEqual(@as(usize, 16), self.shards.items.len);
+        try waitCheckpointed(self.allocator, self.shards.items, null);
+    }
+
+    fn countInLog(self: *Env, needle: []const u8) !usize {
+        const log = readLog(self.allocator, self.log_path) catch return 0;
+        defer self.allocator.free(log);
+        return std.mem.count(u8, log, needle);
     }
 };
 
-const Stale = struct {
-    manifest_before: []const i96,
-    nodes_before: []const u64,
-    /// After the second batch: a shard whose node store grew has a manifest
-    /// newer than the one before it, and bitmaps older than it (not saved).
-    fn notSaved(self: *const Stale, allocator: std.mem.Allocator, i: usize, s: []const u8) anyerror!bool {
-        if (try nodePages(allocator, s) == self.nodes_before[i]) return true;
-        const m = try newestManifest(allocator, s);
-        const f = (try fileInfo(allocator, s, "free.store")) orelse return false;
-        return m > self.manifest_before[i] and f.mtime < m;
-    }
-};
-
-fn run(allocator: std.mem.Allocator, tde: bool) !void {
-    var dir_buf: [96]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6492-{d}", .{try util.getRandomPort()});
-    try std.Io.Dir.cwd().createDirPath(io(), data_dir);
-    defer std.Io.Dir.cwd().deleteTree(io(), data_dir) catch {};
-    const env: []const []const u8 = if (tde) &.{"GEODE_TDE_KEY=" ++ tde_key_hex} else &.{};
-
-    var shards: std.ArrayList([]u8) = .empty;
-    defer {
-        for (shards.items) |p| allocator.free(p);
-        shards.deinit(allocator);
-    }
+/// Case 1: the state an old release's crash left, opened by this build.
+fn oldReleaseCrash(allocator: std.mem.Allocator, tde: bool) !void {
+    var e = try Env.init(allocator, tde, if (tde) "old-tde" else "old");
+    defer e.deinit();
     {
-        var server = try Server.start(allocator, data_dir, env);
+        var server = try e.start();
         defer server.kill(allocator);
         var client = try server.connect(allocator);
         defer client.deinit();
-        try queryOk(&client, allocator, "CREATE GRAPH g6492");
-        try queryOk(&client, allocator, "USE GRAPH g6492");
-        try createNodes(&client, allocator, 0, batch1);
-
-        shards = try shardDirs(allocator, data_dir);
-        try testing.expectEqual(@as(usize, 16), shards.items.len);
-        try waitShards(allocator, shards.items, {}, Checkpointed.saved);
-
-        // The free.store save fails from here on (after the WAL truncate).
-        const before = try allocator.alloc(i96, shards.items.len);
-        defer allocator.free(before);
-        const nodes_before = try allocator.alloc(u64, shards.items.len);
-        defer allocator.free(nodes_before);
-        for (shards.items, before, nodes_before) |s, *b, *nb| {
-            b.* = try newestManifest(allocator, s);
-            nb.* = try nodePages(allocator, s);
-            const obstacle = try std.fmt.allocPrint(allocator, "{s}/free.store.tmp", .{s});
-            defer allocator.free(obstacle);
-            try std.Io.Dir.cwd().createDirPath(io(), obstacle);
+        try e.seed(&client);
+        // The checkpoint's bitmaps, modification times kept.
+        for (e.shards.items) |s| {
+            const src = try std.fmt.allocPrint(allocator, "{s}/free.store", .{s});
+            defer allocator.free(src);
+            const dst = try std.fmt.allocPrint(allocator, "{s}/free.store.old", .{s});
+            defer allocator.free(dst);
+            try run(&.{ "cp", "-p", src, dst });
         }
+        const before = try Snapshot.take(allocator, e.shards.items);
+        defer before.deinit(allocator);
         try createNodes(&client, allocator, batch1, batch2);
-        const stale: Stale = .{ .manifest_before = before, .nodes_before = nodes_before };
-        try waitShards(allocator, shards.items, &stale, Stale.notSaved);
-        // Batch 2 put nodes on new pages of most shards (170 slots a page,
-        // ids 16 apart per shard).
+        try waitCheckpointed(allocator, e.shards.items, before);
         var grown: usize = 0;
-        for (shards.items, nodes_before) |s, nb| {
-            if (try nodePages(allocator, s) > nb) grown += 1;
+        const after = try Snapshot.take(allocator, e.shards.items);
+        defer after.deinit(allocator);
+        for (before.nodes, after.nodes) |b, a| {
+            if (a > b) grown += 1;
         }
+        // Batch 2 put nodes on new pages of most shards.
         try testing.expect(grown >= 8);
-        try testing.expectEqual(@as(i64, batch1 + batch2), try queryCount(&client, allocator, "MATCH (n:S6492) RETURN count(n) AS c"));
     }
-
-    // SIGKILLed. The operator clears the obstacle (the disk is fixed).
-    for (shards.items) |s| {
-        const obstacle = try std.fmt.allocPrint(allocator, "{s}/free.store.tmp", .{s});
-        defer allocator.free(obstacle);
-        try std.Io.Dir.cwd().deleteDir(io(), obstacle);
+    // SIGKILLed. What a crash between a <= 0.4.13 checkpoint's WAL truncate
+    // and its free.store save left: the newer manifest, an empty WAL, the
+    // previous bitmaps (older than the manifest).
+    for (e.shards.items) |s| {
+        try testing.expectEqual(@as(u64, 0), try walSize(allocator, s));
+        const old = try std.fmt.allocPrint(allocator, "{s}/free.store.old", .{s});
+        defer allocator.free(old);
+        const cur = try std.fmt.allocPrint(allocator, "{s}/free.store", .{s});
+        defer allocator.free(cur);
+        try run(&.{ "mv", old, cur });
+        const f = (try fileInfo(allocator, s, "free.store")).?;
+        try testing.expect(f.mtime < try newestManifest(allocator, s));
     }
-
-    var server = try Server.start(allocator, data_dir, env);
+    {
+        var server = try e.start();
+        defer server.kill(allocator);
+        var client = try server.connect(allocator);
+        defer client.deinit();
+        try queryOk(&client, allocator, "USE GRAPH g6492");
+        try expectNodes(&client, allocator, batch1 + batch2, if (tde) "old-release crash, TDE, restart" else "old-release crash, restart");
+        // New nodes: new node pages, new property pages.
+        const before = try Snapshot.take(allocator, e.shards.items);
+        defer before.deinit(allocator);
+        try createNodes(&client, allocator, batch1 + batch2, batch3);
+        try waitCheckpointed(allocator, e.shards.items, before);
+    }
+    // SIGKILLed again: what the new nodes' pages overwrote is on disk now.
+    var server = try e.start();
     defer server.kill(allocator);
     var client = try server.connect(allocator);
     defer client.deinit();
     try queryOk(&client, allocator, "USE GRAPH g6492");
-    const by_label = try queryCount(&client, allocator, "MATCH (n:S6492) RETURN count(n) AS c");
-    const unlabeled = try queryCount(&client, allocator, "MATCH (n) RETURN count(n) AS c");
-    std.debug.print("SONNY-6492 (1) tde={}: {d} nodes by label, {d} by an unlabeled scan after the kill; want {d}\n", .{ tde, by_label, unlabeled, batch1 + batch2 });
-    try testing.expectEqual(@as(i64, batch1 + batch2), by_label);
-    try testing.expectEqual(@as(i64, batch1 + batch2), unlabeled);
-    // Pages allocated before the kill are not handed out again.
-    try createNodes(&client, allocator, batch1 + batch2, 16);
-    try testing.expectEqual(@as(i64, batch1 + batch2 + 16), try queryCount(&client, allocator, "MATCH (n:S6492) RETURN count(n) AS c"));
+    try expectNodes(&client, allocator, batch1 + batch2 + batch3, if (tde) "old-release crash, TDE, after new nodes" else "old-release crash, after new nodes");
+    // graph-storage detected the stale bitmaps and rebuilt them.
+    try testing.expect(try e.countInLog("free.store is older than the manifest") >= 1);
 }
 
-test "SONNY-6492 (1): nodes survive a kill after a checkpoint that did not save free.store (no TDE)" {
-    try run(testing.allocator, false);
+test "SONNY-6492 (1): a store an old release crashed in its checkpoint window keeps every node (no TDE)" {
+    try oldReleaseCrash(testing.allocator, false);
 }
 
-test "SONNY-6492 (1): nodes survive a kill after a checkpoint that did not save free.store (TDE)" {
-    try run(testing.allocator, true);
+test "SONNY-6492 (1): a store an old release crashed in its checkpoint window keeps every node (TDE)" {
+    try oldReleaseCrash(testing.allocator, true);
+}
+
+/// Case 2: a free.store save that fails on 0.4.14.
+fn failedSave(allocator: std.mem.Allocator, tde: bool) !void {
+    var e = try Env.init(allocator, tde, if (tde) "save-tde" else "save");
+    defer e.deinit();
+    {
+        var server = try e.start();
+        defer server.kill(allocator);
+        var client = try server.connect(allocator);
+        defer client.deinit();
+        try e.seed(&client);
+        const before = try Snapshot.take(allocator, e.shards.items);
+        defer before.deinit(allocator);
+        for (e.shards.items) |s| {
+            const obstacle = try std.fmt.allocPrint(allocator, "{s}/free.store.tmp", .{s});
+            defer allocator.free(obstacle);
+            try std.Io.Dir.cwd().createDirPath(io(), obstacle);
+        }
+        const failed_before = try e.countInLog("light checkpoint failed for graph 'g6492'");
+        try createNodes(&client, allocator, batch1, batch2);
+        // The server reports the failing checkpoint, tick after tick.
+        var waited_ms: u64 = 0;
+        while (try e.countInLog("light checkpoint failed for graph 'g6492'") < failed_before + 2) : (waited_ms += 100) {
+            if (waited_ms > 60_000) return error.CheckpointFailureNotReported;
+            io().sleep(.fromMilliseconds(100), .awake) catch {};
+        }
+        // No manifest advanced and no WAL was truncated.
+        var wal_total: u64 = 0;
+        for (e.shards.items, before.manifest) |s, m| {
+            try testing.expectEqual(m, try newestManifest(allocator, s));
+            wal_total += try walSize(allocator, s);
+        }
+        try testing.expect(wal_total > 0);
+        try testing.expectEqual(@as(i64, batch1 + batch2), try queryInt(&client, allocator, "MATCH (n:S6492) RETURN count(n) AS c"));
+    }
+    // SIGKILLed; the operator clears the obstacle.
+    for (e.shards.items) |s| {
+        const obstacle = try std.fmt.allocPrint(allocator, "{s}/free.store.tmp", .{s});
+        defer allocator.free(obstacle);
+        try std.Io.Dir.cwd().deleteDir(io(), obstacle);
+    }
+    var server = try e.start();
+    defer server.kill(allocator);
+    var client = try server.connect(allocator);
+    defer client.deinit();
+    try queryOk(&client, allocator, "USE GRAPH g6492");
+    try expectNodes(&client, allocator, batch1 + batch2, if (tde) "failed free.store save, TDE" else "failed free.store save");
+}
+
+test "SONNY-6492 (1): a failed free.store save fails the checkpoint before its manifest; WAL replay keeps every node (no TDE)" {
+    try failedSave(testing.allocator, false);
+}
+
+test "SONNY-6492 (1): a failed free.store save fails the checkpoint before its manifest; WAL replay keeps every node (TDE)" {
+    try failedSave(testing.allocator, true);
+}
+
+test "SONNY-6492 (1): a restart after a completed checkpoint rebuilds no page bitmaps" {
+    const allocator = testing.allocator;
+    var e = try Env.init(allocator, false, "clean");
+    defer e.deinit();
+    {
+        var server = try e.start();
+        defer server.kill(allocator);
+        var client = try server.connect(allocator);
+        defer client.deinit();
+        try e.seed(&client);
+    }
+    var server = try e.start();
+    defer server.kill(allocator);
+    var client = try server.connect(allocator);
+    defer client.deinit();
+    try queryOk(&client, allocator, "USE GRAPH g6492");
+    try expectNodes(&client, allocator, batch1, "completed checkpoint");
+    const geode_rebuilds = try e.countInLog("free.store predates the shard's last manifest");
+    const gs_rebuilds = try e.countInLog("free.store is older than the manifest");
+    std.debug.print("SONNY-6492 (1): {d} geode and {d} graph-storage bitmap rebuild(s) on a restart after a completed checkpoint; want 0\n", .{ geode_rebuilds, gs_rebuilds });
+    try testing.expectEqual(@as(usize, 0), geode_rebuilds + gs_rebuilds);
 }

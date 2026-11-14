@@ -5447,7 +5447,6 @@ REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE,StorageIntegrity,Regression,TESTED,test
 REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,ApplyDoesNotRecreateDroppedGraph,TESTED,src/graph_store.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
 REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,Regression,TESTED,tests/test_sonny6492_replicated_write_dropped_graph.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
 REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,Regression,TESTED,tests/test_sonny6492_checkpoint_free_store_crash.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
-REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,StaleFreeStoreRebuild,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-6494-AUDIT-FAILCLOSED,CLI Audit Configuration,FailClosed,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6494_audit_failclosed.zig,,audit,2026-11-13
 REQ-SONNY-6496-EXPLAIN-TAIL-START,EXPLAIN,PlanMatchesRunStart,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6496_explain_start.zig,,engine,2026-11-13
 REQ-SONNY-6496-EXPLAIN-TAIL-START,EXPLAIN,Regression,TESTED,tests/test_sonny6496_explain_start.zig,tests/test_sonny6496_explain_start.zig,,engine,2026-11-13
