@@ -2298,6 +2298,31 @@
 
 ### Fixed
 
+- **A quarantined graph refuses every read and every write (SONNY-6523
+  item 1).** A graph whose first-touch hydration fails (REQ-GQL-028: its
+  store is damaged) is quarantined, and the executor failed a statement that
+  touched it. The transports' fast paths did not: over QUIC, `MATCH (n:L)
+  RETURN count(n)`, `MATCH (n) RETURN count(n)`, `count(*)`, the
+  relationship counts and the filtered counts answered 0 (from the products
+  the failed hydration left partial), an exact-index count answered from the
+  index, `max(n.i)` answered NULL, `CALL db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()` and `geode.fts.search`
+  answered, and every write shape (the default and bulk CREATE and MERGE
+  fast paths, `/*+BATCH*/`, MATCH ... CREATE of a relationship, the
+  executor's SET) was accepted and written to the damaged store. The QUIC
+  and gRPC handlers now refuse a program on a quarantined graph's data
+  before any path serves it (`graph_store.programQuarantineError`; a
+  program that changes data hydrates the graph first, so its damage is
+  found before anything is written), the count fast paths and the
+  engine-direct count check the quarantine their own hydration may have
+  just found, and every storage-adapter write path refuses a quarantined
+  graph (`ManagedGraph.quarantine`, set when the hydration fails). DROP
+  GRAPH of a quarantined graph still runs, and CREATE GRAPH of the name
+  makes a fresh graph. **Operator-visible:** the first write to a graph
+  after a restart now waits for that graph's hydration, as its first read
+  already did. Regression: `zig build test-sonny6523-quarantine-fail-closed`
+  (real server, zeroed node pages; 27 read and write shapes, each as the
+  first statement after the restart and again).
 - **The Prometheus exporter frees its metric names; three server files'
   inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
   copied each metric's name and help text and nothing freed them (20

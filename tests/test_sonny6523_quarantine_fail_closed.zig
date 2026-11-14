@@ -19,7 +19,8 @@
 // damaged store, as the first statement after the restart (the first touch
 // hydrates) and again (the graph is quarantined by then). Every read must
 // fail; none may answer, an empty or zero answer included. Every write must
-// be refused before it reaches the engine: the shard WALs stay empty.
+// be refused before it reaches the engine: the shard WALs stay empty. DROP
+// GRAPH of a quarantined graph still runs.
 //
 // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
 
@@ -283,7 +284,8 @@ test "SONNY-6523 (1): every read and write of a quarantined graph fails closed o
     defer allocator.free(log_path);
     try std.Io.Dir.cwd().createDirPath(io(), pristine);
     defer std.Io.Dir.cwd().deleteTree(io(), base) catch {};
-    defer std.Io.Dir.cwd().deleteFile(io(), log_path) catch {};
+    var keep_log = false;
+    defer if (!keep_log) std.Io.Dir.cwd().deleteFile(io(), log_path) catch {};
 
     // Seed a healthy store, run every read shape on it (each one answers),
     // checkpoint and SIGKILL.
@@ -301,6 +303,14 @@ test "SONNY-6523 (1): every read and write of a quarantined graph fails closed o
             var qb: [200]u8 = undefined;
             try queryOk(&client, allocator, try std.fmt.bufPrint(&qb, "MATCH (a:P {{name: 'p-{d:0>5}'}}), (b:P {{name: 'p-{d:0>5}'}}) CREATE (a)-[:R {{w: {d}}}]->(b)", .{ i, i + 1, i }));
         }
+        // A second graph, damaged with the default one: DROP GRAPH of it,
+        // quarantined, must still run (that is how an operator removes it).
+        try queryOk(&client, allocator, "CREATE GRAPH g6523");
+        for (0..40) |i| {
+            var qb: [120]u8 = undefined;
+            try queryOk(&client, allocator, try std.fmt.bufPrint(&qb, "USE GRAPH g6523; CREATE (:Q {{i: {d}}})", .{i}));
+        }
+        try queryOk(&client, allocator, "USE GRAPH default");
         try queryOk(&client, allocator, "CREATE INDEX p_name FOR (n:P) ON (n.name)");
         try queryOk(&client, allocator, "CREATE INDEX p_body FOR (n:P) ON (n.body) USING fulltext");
         for (shapes) |s| {
@@ -368,8 +378,37 @@ test "SONNY-6523 (1): every read and write of a quarantined graph fails closed o
             }
         }
     }
+    // DROP GRAPH of a quarantined graph runs, and CREATE GRAPH of the name
+    // then makes a fresh, empty graph.
+    {
+        std.Io.Dir.cwd().deleteTree(io(), work) catch {};
+        try run(&.{ "cp", "-a", pristine, work });
+        var server = try Server.start(allocator, work, &.{}, log_path);
+        defer server.kill(allocator);
+        var client = try server.connect(allocator);
+        defer client.deinit();
+        const a = try ask(&client, allocator, "USE GRAPH g6523; MATCH (n:Q) RETURN count(n) AS c");
+        if (a.ok) {
+            failures += 1;
+            std.debug.print("FAIL-OPEN: the damaged graph g6523 answered a count: {any}\n", .{a.first});
+        }
+        const d = try ask(&client, allocator, "DROP GRAPH g6523");
+        if (!d.ok) {
+            failures += 1;
+            std.debug.print("DROP GRAPH of the quarantined graph failed: {s} {s}\n", .{ d.code[0..d.code_len], d.message[0..d.message_len] });
+        } else {
+            try queryOk(&client, allocator, "CREATE GRAPH g6523");
+            const c = try ask(&client, allocator, "USE GRAPH g6523; MATCH (n) RETURN count(n) AS c");
+            if (!c.ok or c.first == null or c.first.?.int != 0) {
+                failures += 1;
+                std.debug.print("the graph created again under the dropped name is not empty: ok={} {any} {s}\n", .{ c.ok, c.first, c.message[0..c.message_len] });
+            }
+        }
+    }
+
     if (failures > 0) {
-        std.debug.print("SONNY-6523 (1): {d} fail-open answer(s) for a quarantined graph\n", .{failures});
+        keep_log = true;
+        std.debug.print("SONNY-6523 (1): {d} fail-open answer(s) for a quarantined graph (server log kept: {s})\n", .{ failures, log_path });
         return error.QuarantineFailOpen;
     }
 }

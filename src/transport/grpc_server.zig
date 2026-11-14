@@ -3379,6 +3379,16 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     return encodeMessage(allocator, resp);
                 }
             }
+            // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=GrpcProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-6523: as the QUIC handler (`programQuarantineError`).
+            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs) {
+                if (graph_store.programQuarantineError(allocator, &.{lock_graph}, is_mutation)) |qerr| {
+                    const info = proto_util.mapError(qerr);
+                    var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            } else graph_store.clearQuarantinedReadError();
 
             // SONNY-2799: a failed statement's transaction is rolled back
             // after the request's lock is released: this defer is registered

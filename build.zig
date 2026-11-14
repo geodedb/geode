@@ -536,7 +536,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
-    .{ .name = "test-sonny6523-quarantine-fail-closed", .reason = "intentionally red TDD reproduction (SONNY-6523 item 1): the transport fast paths answer a quarantined graph; compiled by test-compile; registered through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10153,7 +10152,7 @@ pub fn build(b: *std.Build) void {
     const sonny6523_q_tests = b.addTest(.{ .root_module = sonny6523_q_test_mod });
     const run_sonny6523_q_tests = b.addRunArtifact(sonny6523_q_tests);
     spawnsBuiltGeode(sonny6523_q_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6523_q_tests.step);
+    shardDep(test_step, &run_sonny6523_q_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6523_q_step = b.step("test-sonny6523-quarantine-fail-closed", "Run SONNY-6523 item 1 regression against a real server: after a hydration that met a damaged node store, every read shape (label, unlabeled, relationship and filtered counts, index seeks, ordered reads, scans, db.labels/relationshipTypes/propertyKeys, fulltext search) and every write shape (default, bulk and batch fast paths, the executor) of the quarantined graph fails closed; no write reaches the engine");
     sonny6523_q_step.dependOn(&run_sonny6523_q_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the

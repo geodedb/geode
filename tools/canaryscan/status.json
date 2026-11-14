@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:44:37.925190052Z",
+  "generated_at": "2026-11-14T01:23:02.944815861Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85810,10 +85810,66 @@
       "features": [
         {
           "feature": "StorageIntegrity",
+          "aspect": "GrpcProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "QuarantinedGraphRefusesWrites",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "QuicProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
             "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6523_quarantine_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "TransportProgramGate",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
           ],
           "tests": [
             "tests/test_sonny6523_quarantine_fail_closed.zig"
@@ -93398,7 +93454,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4927
+      "TESTED": 4931
     },
     "by_aspect": {
       "2PC": 3,
@@ -95002,6 +95058,7 @@
       "GrpcNoRetryAfterSend": 1,
       "GrpcProfileSettle": 1,
       "GrpcProfileTxn": 1,
+      "GrpcProgramGate": 1,
       "GrpcReadGate": 1,
       "GrpcRollbackTo": 1,
       "GrpcSavepoint": 1,
@@ -96316,6 +96373,7 @@
       "QuantifierCallHandlers": 1,
       "QuantifierTieBreakStress": 1,
       "QuarantinedGraphFailClosed": 1,
+      "QuarantinedGraphRefusesWrites": 1,
       "Query": 7,
       "QueryCache": 1,
       "QueryCommand": 2,
@@ -96369,6 +96427,7 @@
       "QuicPerMessage": 2,
       "QuicProfileSettle": 1,
       "QuicProfileTxn": 1,
+      "QuicProgramGate": 1,
       "QuicProgressHookFollowup": 1,
       "QuicProgressHookIntegration": 1,
       "QuicReadGate": 1,
@@ -97217,6 +97276,7 @@
       "TransportIntegration": 1,
       "TransportParitySmokeWiring": 1,
       "TransportProfile": 1,
+      "TransportProgramGate": 1,
       "TransportSend": 1,
       "Traversal": 1,
       "TraversalBuffers": 1,

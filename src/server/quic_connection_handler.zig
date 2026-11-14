@@ -697,6 +697,17 @@ fn executeBulkSimpleCreate(
     updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
+/// SONNY-6523: a count fast path's answer, when computing it found the
+/// graph quarantined (its first-touch hydration failed: the resident counts
+/// it read are partial), is replaced by the quarantine error. True when the
+/// error was sent.
+fn refuseQuarantinedAnswer(gpa: std.mem.Allocator, stream: *quic_transport.QuicStream) !bool {
+    const err = graph_store.takeQuarantinedReadError() orelse return false;
+    const info = proto_util.mapError(err);
+    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+    return true;
+}
+
 /// Shared helper: send the "0 rows affected, success" wire response of an
 /// edge fast path that wrote nothing (an orphan skip) or a MATCH ... MERGE
 /// edge. Matches the regular executor's answer to a no-RETURN MATCH ...
@@ -7895,6 +7906,22 @@ fn handleClientMessage(
                     return;
                 }
             }
+            // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=QuicProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-6523: a program on a quarantined graph's data fails
+            // before any fast path serves it (`programQuarantineError`; a
+            // change hydrates the graph first, so it is not written to
+            // before its damage can be found).
+            // CREATE / DROP GRAPH of it run (`lock_graph_may_be_missing`):
+            // dropping a damaged graph is how an operator removes it. A read
+            // of several graphs is checked by its snapshot
+            // (`snapshotUnderReadLocks`).
+            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs) {
+                if (graph_store.programQuarantineError(gpa, &.{lock_graph}, is_mutation)) |qerr| {
+                    const info = proto_util.mapError(qerr);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                }
+            } else graph_store.clearQuarantinedReadError();
 
             // SONNY-2799: a failed statement's transaction is rolled back
             // after the request's lock is released: this defer is registered
@@ -8031,6 +8058,7 @@ fn handleClientMessage(
                     if (fast_result_opt) |fast_result| {
                         var exec_result = fast_result;
                         defer exec_result.deinit(gpa);
+                        if (try refuseQuarantinedAnswer(gpa, stream)) return; // SONNY-6523
 
                         for (flags.items) |flag| {
                             try appendFlagToResult(gpa, &exec_result, flag);
@@ -8061,6 +8089,7 @@ fn handleClientMessage(
                 if (fast_result_opt) |fast_result| {
                     var exec_result = fast_result;
                     defer exec_result.deinit(gpa);
+                    if (try refuseQuarantinedAnswer(gpa, stream)) return; // SONNY-6523
 
                     graph_store.releaseGraphLock(count_lock);
                     count_lock_held = false;
@@ -8089,6 +8118,7 @@ fn handleClientMessage(
                 if (edge_fast_result_opt) |edge_fast_result| {
                     var exec_result = edge_fast_result;
                     defer exec_result.deinit(gpa);
+                    if (try refuseQuarantinedAnswer(gpa, stream)) return; // SONNY-6523
 
                     graph_store.releaseGraphLock(count_lock);
                     count_lock_held = false;
@@ -8116,6 +8146,7 @@ fn handleClientMessage(
                 if (filtered_count_opt) |filtered_count_result| {
                     var exec_result = filtered_count_result;
                     defer exec_result.deinit(gpa);
+                    if (try refuseQuarantinedAnswer(gpa, stream)) return; // SONNY-6523
 
                     graph_store.releaseGraphLock(count_lock);
                     count_lock_held = false;

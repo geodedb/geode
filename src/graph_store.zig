@@ -13561,6 +13561,9 @@ pub const GraphStore = struct {
             // partial-but-counter-current snapshot forever.
             entry.failure.store(@intFromEnum(QuarantineCause.of(err)), .release);
             entry.failed.store(true, .release);
+            // SONNY-6523: and the adapter refuses every write to it (the
+            // security graph excepted, as for reads: `noteQuarantinedRead`).
+            if (!std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME)) adapter.markGraphQuarantined(graph_name, err);
             break :blk null;
         };
         entry.done.store(true, .release);
@@ -18824,6 +18827,36 @@ pub fn getWritableGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 /// read store this thread has pushed: a snapshot copy has no hydration state.
 pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const u8) ?GraphQuarantineError {
     return getPrimaryGlobalStore(allocator).graphQuarantineError(graph_name);
+}
+
+// CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=TransportProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523: the transports' gate. A program on the data of `graph_names`
+/// (the graphs its statements run on) fails with the first quarantined
+/// one's error, before any path serves it: the fast paths answered counts,
+/// metadata and fulltext reads from the products a failed hydration left
+/// partial (`MATCH (n:L) RETURN count(n)` answered 0), and took writes.
+/// Also clears this thread's quarantined-read note, so a fast path that
+/// hydrates a graph for the first time can be checked afterwards
+/// (`takeQuarantinedReadError`).
+///
+/// `writes`: the program changes data. A graph not hydrated yet is then
+/// hydrated first, so its damage is found before anything is written to it:
+/// the write fast paths read no resident product, and wrote to a damaged
+/// store whose hydration had not run yet. A read is not hydrated here (the
+/// engine-direct read paths need no resident product, and a read that does
+/// hydrates and is checked after it).
+pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, writes: bool) ?GraphQuarantineError {
+    clearQuarantinedReadError();
+    const store = getPrimaryGlobalStore(allocator);
+    for (graph_names) |g| {
+        if (writes) store.ensureGraphHydrated(g);
+        if (store.graphQuarantineError(g)) |err| {
+            clearQuarantinedReadError();
+            return err;
+        }
+    }
+    clearQuarantinedReadError();
+    return null;
 }
 
 /// The live global store, never the calling thread's active query read

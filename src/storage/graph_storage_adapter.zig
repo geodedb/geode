@@ -1727,6 +1727,45 @@ pub fn shouldExposePropertyKey(key: []const u8) bool {
 
 const merge_tuple_lock_count: usize = 16384;
 
+// CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=QuarantinedGraphRefusesWrites; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523: `ManagedGraph.quarantine`'s codes, one per
+/// `graph_store.GraphQuarantineError`.
+pub const Quarantine = enum(u8) {
+    none,
+    quarantined,
+    checksum_mismatch,
+    data_corruption,
+    invalid_data,
+
+    fn of(err: anyerror) Quarantine {
+        return switch (err) {
+            error.ChecksumMismatch => .checksum_mismatch,
+            error.DataCorruption => .data_corruption,
+            error.InvalidData => .invalid_data,
+            else => .quarantined,
+        };
+    }
+
+    fn toError(q: Quarantine) ?graph_store.GraphQuarantineError {
+        return switch (q) {
+            .none => null,
+            .quarantined => error.GraphQuarantined,
+            .checksum_mismatch => error.ChecksumMismatch,
+            .data_corruption => error.DataCorruption,
+            .invalid_data => error.InvalidData,
+        };
+    }
+};
+
+/// SONNY-6523: refuse a write to a quarantined graph before it reaches the
+/// engine. The graph's hydration found its store damaged (REQ-GQL-028); a
+/// write would build on it, and its WAL records would be replayed onto it.
+/// Called by every adapter write entry point once it has the graph.
+fn refuseQuarantinedWrite(mg: *const ManagedGraph) graph_store.GraphQuarantineError!void {
+    const q: Quarantine = @enumFromInt(mg.quarantine.load(.acquire));
+    if (q.toError()) |err| return err;
+}
+
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
 pub const ManagedGraph = struct {
@@ -1735,6 +1774,12 @@ pub const ManagedGraph = struct {
     exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// SONNY-6523: why the graph is quarantined (REQ-GQL-028: its first-touch
+    /// hydration failed, so the store is known to be damaged), as a
+    /// `Quarantine` code; `.none` while it is not. Set once by
+    /// `markGraphQuarantined`, never cleared for the process lifetime. Every
+    /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
+    quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -4074,6 +4119,17 @@ pub const StorageAdapter = struct {
         return self.getOrCreateGraphLocked(name);
     }
 
+    /// SONNY-6523: the graph's first-touch hydration failed with `err`
+    /// (`GraphStore.ensureGraphHydrated`): its store is damaged, and every
+    /// write to it is refused from now on (`refuseQuarantinedWrite`). A graph
+    /// not open in this adapter has no writes to refuse.
+    pub fn markGraphQuarantined(self: *StorageAdapter, name: []const u8, err: anyerror) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(name) orelse return;
+        mg.quarantine.store(@intFromEnum(Quarantine.of(err)), .release);
+    }
+
     fn freeDroppedGraphNames(self: *StorageAdapter) void {
         var it = self.dropped_graph_names.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
@@ -4344,6 +4400,7 @@ pub const StorageAdapter = struct {
         // mutex, so a dropped graph is never found (GraphNotFound); a drop
         // after it waits for this pin before freeing the graph.
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
@@ -4618,6 +4675,7 @@ pub const StorageAdapter = struct {
         for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         // Build it FIRST (before any node/index write below) so this insert's
         // posting lands on top of the fully-rebuilt index. No-op (one atomic
@@ -4690,6 +4748,9 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        // SONNY-6523: also here, after the bulk MERGE paths' probe (its
+        // hydration may have just quarantined the graph).
+        try refuseQuarantinedWrite(mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4900,6 +4961,7 @@ pub const StorageAdapter = struct {
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -5030,6 +5092,7 @@ pub const StorageAdapter = struct {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
         if (mg.isDropped()) return error.GraphNotFound;
@@ -5226,6 +5289,7 @@ pub const StorageAdapter = struct {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         if (edges.len == 0) return;
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -5386,6 +5450,7 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // ENG-3914 (RC-2): the delegated insert below runs under THIS
         // function's SHARED hold, so its deferred exact-index build has to
         // happen out here — before that hold is taken. Idempotent; a no-op
@@ -5584,6 +5649,7 @@ pub const StorageAdapter = struct {
 
         // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
         const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
         if (mg.isDropped()) return error.GraphNotFound;
@@ -6346,6 +6412,7 @@ pub const StorageAdapter = struct {
         // registered; subsequent engine operations don't need the adapter
         // mutex.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Resolve label strings → label ids once; apply to every new slot.
         var label_ids_buf: [8]gs.LabelId = undefined;
@@ -6418,6 +6485,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
 
@@ -6530,6 +6598,7 @@ pub const StorageAdapter = struct {
         // span emission. The `_om12e.recordEdgeMutation` counter below
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
@@ -6611,6 +6680,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
         if (currentStatementTxnForGraph(graph_name)) |s| {
@@ -6740,6 +6810,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -6825,6 +6896,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -6905,6 +6977,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -7372,6 +7445,7 @@ pub const StorageAdapter = struct {
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // CANARY: REQ=REQ-SONNY-6491-ORDERBY-LABEL-INTERN; FEATURE="CrashRecovery"; ASPECT=OrderedIndexLabelViaEngine; STATUS=TESTED; TEST=tests/test_sonny6491_orderby_label_intern.zig; OWNER=storage; UPDATED=2026-11-13
         // SONNY-6491: a new label is named through the engine, as every other
         // writer names it (`resolvePersistedLabelId`): on all 16 shards, made
@@ -8656,6 +8730,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
@@ -8782,6 +8857,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
@@ -9309,6 +9385,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         return mg.engine.beginTxn();
     }
 
@@ -11656,6 +11733,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (adding a label re-indexes the node's properties under the new label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11688,6 +11766,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (removing a label drops the node's postings under that label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -11733,6 +11812,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
                 const from_shard = mg.shardEngineForNode(from_id);
@@ -12202,6 +12282,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         const txn_id = try mg.engine.beginTxn();
         // SONNY-2978: the statement's transaction must not hold its shard's
@@ -12245,6 +12326,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Open a local txn on the shard directly, then re-encode it in the
         // ShardedGraphEngine wire format so commitTxn/abortTxn route back.
@@ -12284,6 +12366,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         const txn_id = try mg.engine.beginTxn();
         // SONNY-2978: the session's transaction must not hold its shard's

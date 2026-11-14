@@ -5466,7 +5466,11 @@ REQ-SONNY-6499-GQLSTATE-RESIDUALS,ErrorMapping,DataExceptionGqlstatusResiduals,T
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,OrderedIndex,ColumnEntriesAndNfc,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,storage,2026-11-13
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,TopKOrderedFastPath,FastPathsReturnFullSortPrefix,TESTED,tests/test_sonny6499_orderby_fastpath_nulls.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,execution,2026-11-13
 REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup,TESTED,tests/test_sonny6499_relative_data_dir.zig,tests/test_sonny6499_relative_data_dir.zig,,security,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,GrpcProgramGate,TESTED,src/transport/grpc_server.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuarantinedGraphRefusesWrites,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,QuicProgramGate,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
 REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,Regression,TESTED,tests/test_sonny6523_quarantine_fail_closed.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
+REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED,StorageIntegrity,TransportProgramGate,TESTED,src/graph_store.zig,tests/test_sonny6523_quarantine_fail_closed.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
