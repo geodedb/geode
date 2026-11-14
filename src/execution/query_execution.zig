@@ -421,6 +421,20 @@ fn chainFinalAggregate(allocator: std.mem.Allocator, current_result_in: Executio
     return projected;
 }
 
+/// SONNY-6525 item 4: the items a part after the first projects for the
+/// part after it: its WITH's, or, for a part chained by its implicit RETURN
+/// (`... WITH x WITH sum(x.k) AS s WITH s ...`), its RETURN's when the part
+/// is that projection alone. The aggregating form of the latter was taken
+/// for a per-row projection: no grouping, and every aggregate NULL.
+fn projectionItems(q: ast.Query) ?[]ast.ReturnItem {
+    if (q.with_clause) |wc| return wc.items;
+    const projection_only = q.next_query != null and q.ret.items.len > 0 and !q.ret.distinct and
+        q.match.chains.len == 0 and q.where_clause == null and q.filter_clause == null and
+        q.group_by == null and q.having == null and q.order_by == null and q.limit == null and q.offset == null and
+        q.unwind_clause == null and q.call_clause == null and q.for_statement == null;
+    return if (projection_only) q.ret.items else null;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
@@ -478,8 +492,8 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     var intermediate_with_agg_query: ?*ast.Query = null;
     var query_check: ?*ast.Query = next_query_ptr;
     while (query_check) |q| {
-        if (q.with_clause) |with_clause| {
-            for (with_clause.items) |item| {
+        if (projectionItems(q.*)) |items| {
+            for (items) |item| {
                 if (return_and_sorting.isAggregationExpr(item.expr)) {
                     has_intermediate_with_agg = true;
                     intermediate_with_agg_query = q;
@@ -494,7 +508,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     // E25 Fix: Handle intermediate WITH clause with aggregation (grouping)
     if (has_intermediate_with_agg and intermediate_with_agg_query != null) {
         const agg_query = intermediate_with_agg_query.?;
-        const with_clause = agg_query.with_clause.?;
+        const with_clause: ast.WithClause = .{ .items = projectionItems(agg_query.*).? };
 
         // Collect all input rows
         // GAP-0220 FIX: Use try for proper error propagation
@@ -514,12 +528,14 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 env_names[i] = col;
                 env_values[i] = val;
             }
+            // SONNY-6525 item 4: the statement's parameters (a `$m` in a
+            // grouping key or an aggregate read NULL).
             try input_envs.append(allocator, Env{
                 .allocator = allocator,
                 .names = env_names,
                 .values = env_values,
-                .param_names = &.{},
-                .param_values = &.{},
+                .param_names = context.query_param_names,
+                .param_values = context.query_param_values,
                 .exec_context = exec_ctx,
             });
         }
@@ -550,23 +566,30 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
             groups.deinit();
         }
 
+        // CANARY: REQ=REQ-SONNY-6525-WITH-GROUP-KEYS; FEATURE="ChainedWithAggregation"; ASPECT=TypedGroupKeys; STATUS=TESTED; TEST=tests/test_sonny6525_with_group_keys.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-6525 item 4: each row's group key is the typed key every
+        // other grouping site writes (`distinct_set.writeGroupKeyPart`,
+        // SONNY-2675). It was `formatValue` text joined with '|', under which
+        // 1 and '1', 'null' and NULL, and every value it had no text for
+        // were one group.
+        var key_w: std.Io.Writer.Allocating = .init(allocator);
+        defer key_w.deinit();
+        var key_scratch = std.heap.ArenaAllocator.init(allocator);
+        defer key_scratch.deinit();
         for (input_envs.items) |env| {
-            // Compute group key from non-aggregated expressions
-            var key_parts = try std.ArrayList(u8).initCapacity(allocator, 256);
-            defer key_parts.deinit(allocator);
-
+            key_w.clearRetainingCapacity();
             for (group_by_indices.items) |idx| {
                 const item = with_clause.items[idx];
                 // SONNY-6498: a key that fails fails the statement (it
                 // grouped as NULL).
                 const val = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
-                var buf: [256]u8 = undefined;
-                const val_str = formatValue(val, &buf);
-                try key_parts.appendSlice(allocator, val_str);
-                try key_parts.append(allocator, '|');
+                distinct_set.writeGroupKeyPart(&key_w.writer, key_scratch.allocator(), val) catch |err| switch (err) {
+                    error.WriteFailed => return error.OutOfMemory,
+                    else => |e| return e,
+                };
             }
 
-            const key = try allocator.dupe(u8, key_parts.items);
+            const key = try allocator.dupe(u8, key_w.written());
 
             if (groups.get(key)) |_| {
                 // Key already exists, add to existing list
@@ -909,29 +932,6 @@ fn projectGroupedReturn(allocator: std.mem.Allocator, result: *ExecutionResult, 
     result.columns = columns;
     result.column_buffer = null;
     result.rows = rows;
-}
-
-// E25 Fix: Format a Value to string for group key building
-// CANARY: REQ=REQ-GQL-WITH-GROUP-KEY-001; FEATURE="WithGroupKey"; ASPECT=FormatValue; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-fn formatValue(val: Value, buf: []u8) []const u8 {
-    switch (val) {
-        .Int => |i| {
-            const result = std.fmt.bufPrint(buf, "{d}", .{i}) catch return "<int>";
-            return result;
-        },
-        .Str => |s| return s,
-        .Bool => |b| return if (b) "true" else "false",
-        .Null => return "<null>",
-        .Node => |n| {
-            const result = std.fmt.bufPrint(buf, "{d}", .{n.id}) catch return "<node>";
-            return result;
-        },
-        .Decimal => |d| {
-            const result = std.fmt.bufPrint(buf, "{d}", .{d.coeff}) catch return "<decimal>";
-            return result;
-        },
-        else => return "<complex>",
-    }
 }
 
 // E24/E35 Fix: Compute aggregation over chained WITH clause environments

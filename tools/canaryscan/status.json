@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T03:30:53.203548566Z",
+  "generated_at": "2026-11-14T03:31:06.919372649Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -42675,25 +42675,6 @@
         {
           "feature": "ChainedWithAggregation",
           "aspect": "ComputeAggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/query_execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WITH-GROUP-KEY-001",
-      "features": [
-        {
-          "feature": "WithGroupKey",
-          "aspect": "FormatValue",
           "status": "TESTED",
           "files": [
             "src/execution/query_execution.zig"
@@ -85965,6 +85946,7 @@
           "aspect": "TypedGroupKeys",
           "status": "TESTED",
           "files": [
+            "src/execution/query_execution.zig",
             "tests/test_sonny6525_with_group_keys.zig"
           ],
           "tests": [
@@ -93550,7 +93532,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4935
+      "TESTED": 4934
     },
     "by_aspect": {
       "2PC": 3,
@@ -94950,7 +94932,6 @@
       "ForeachIsolation": 1,
       "ForkJoin": 1,
       "FormatString": 1,
-      "FormatValue": 1,
       "ForwardToShard": 1,
       "Foundation": 1,
       "FrameBudget": 1,

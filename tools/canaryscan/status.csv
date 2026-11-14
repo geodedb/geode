@@ -2800,7 +2800,6 @@ REQ-GQL-WITH-CHAIN-002,ChainedWithClauseExecution,BindingTransform,TESTED,src/ex
 REQ-GQL-WITH-CHAIN-003,ConsecutiveWithClauses,ParserSupport,TESTED,src/gql/parser.zig,geodetestlab/specs/gql_query_comprehensive.yml,,parser,2025-12-24
 REQ-GQL-WITH-CHAIN-AGG-001,ChainedWithAggregation,AggregateOverAllRows,TESTED,src/execution/query_execution.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-26
 REQ-GQL-WITH-CHAIN-AGG-002,ChainedWithAggregation,ComputeAggregation,TESTED,src/execution/query_execution.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-26
-REQ-GQL-WITH-GROUP-KEY-001,WithGroupKey,FormatValue,TESTED,src/execution/query_execution.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-26
 REQ-GQL-WITH-GROUPBY-001,WithGroupBy,Aggregation,IMPL,tests/test_gap_0193_batch2_engine.zig,,,execution,2026-11-12
 REQ-GQL-WITH-GROUPBY-001,WithGroupByAggregation,Execution,TESTED,src/execution.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-22
 REQ-GQL-WITH-GROUPBY-001,WithGroupByAggregation,Execution,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,execution,2026-01-15
@@ -5479,7 +5478,8 @@ REQ-SONNY-6525-ORDER-BY-SCOPE,LinearComposition,OrderByAfterAggregation,TESTED,t
 REQ-SONNY-6525-STAR-ITEMS,LinearComposition,AsteriskProjection,TESTED,tests/test_sonny6525_star_items.zig,tests/test_sonny6525_star_items.zig,,parser,2026-11-13
 REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,src/execution/scope_check.zig,tests/test_sonny6525_statement_scope.zig,,engine,2026-11-13
 REQ-SONNY-6525-STATEMENT-SCOPE,LinearComposition,StatementScope,TESTED,tests/test_sonny6525_statement_scope.zig,,,engine,2026-11-13
-REQ-SONNY-6525-WITH-GROUP-KEYS,ChainedWithAggregation,TypedGroupKeys,TESTED,tests/test_sonny6525_with_group_keys.zig,tests/test_sonny6525_with_group_keys.zig,,engine,2026-11-13
+REQ-SONNY-6525-WITH-GROUP-KEYS,ChainedWithAggregation,TypedGroupKeys,TESTED,src/execution/query_execution.zig,tests/test_sonny6525_with_group_keys.zig,,engine,2026-11-13
+REQ-SONNY-6525-WITH-GROUP-KEYS,ChainedWithAggregation,TypedGroupKeys,TESTED,tests/test_sonny6525_with_group_keys.zig,,,engine,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

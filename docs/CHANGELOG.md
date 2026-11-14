@@ -2298,6 +2298,18 @@
 
 ### Fixed
 
+- **An aggregating WITH after the first part groups and aggregates
+  (SONNY-6525 item 4, BREAKING).** `MATCH (z) WITH z WITH z.g AS g,
+  sum(z.k) AS s WITH g, s RETURN g, s`: a part chained by its implicit
+  RETURN keeps its items there, and the chain executor
+  (`query_execution.executeQueryChain`) looked for an aggregating WITH in
+  `with_clause` only, so it projected that part per row: no grouping, and
+  every aggregate NULL. It now finds it (`projectionItems`) and groups its
+  rows; the groups are keyed by `distinct_set.writeGroupKeyPart` as at
+  every other grouping site (they were `formatValue` text, under which 1
+  and '1', 'null' and NULL were one group), and the keys and aggregates
+  read the statement's `$` parameters (they read NULL). Regression: `zig
+  build test-sonny6525-with-group-keys`.
 - **The `gql` tool's ORDER BY orders as the server does (SONNY-6518 item
   3, BREAKING).** `src/exec.zig` `stableOrderByTemporal` compared every
   non-temporal key by its printed text (10 before 9, -1 after 1) and put
