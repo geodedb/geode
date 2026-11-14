@@ -550,8 +550,12 @@ Be precise about provenance when reading any cost or row number Geode reports:
    profile path (`src/server/profile_payload.zig:buildProfilePayload`) derives
    per-op `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes`, and
    the `mem_curve` from a fixed per-op model so the wire shape and its
-   internal invariants stay deterministic and testable (pinned by the
-   `e2e_protocol_profile_*` battery); the trace-backed v2 path reports
+   internal invariants stay deterministic and testable (pinned by
+   `tests/e2e_protocol_profile_schema_validate.zig`,
+   `e2e_protocol_profile_memcurve_invariants.zig` and
+   `profile_allocator_sums.zig` in `zig build test-sonny6542-revived`; the
+   rest of the `e2e_protocol_profile_*` battery never ran and was removed,
+   SONNY-6548); the trace-backed v2 path reports
    honest zeros for memory. Real per-op attribution would require
    per-operator allocator threading — a PROFILE redesign, not planned. Real
    process-level memory telemetry is available via the OTel

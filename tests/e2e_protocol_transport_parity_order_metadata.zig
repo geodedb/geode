@@ -24,8 +24,8 @@ test "protocol: transport parity order metadata (ordered + order_keys)" {
         util.TestEnv.grpcPlaintext(),
     ) catch |err| {
         util.progress("Parity run failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     defer parity_run.server.deinit();
     defer parity_run.result.quic.deinit(allocator);

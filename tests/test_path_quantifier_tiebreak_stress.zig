@@ -1,7 +1,7 @@
 const std = @import("std");
 const planner = @import("geode").planner;
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=QuantifierTieBreakStress; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_QuantifierTieBreakStress; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=QuantifierTieBreakStress; STATUS=TESTED; TEST=tests/test_path_quantifier_tiebreak_stress.zig; OWNER=planner; UPDATED=2026-11-14
 
 // Stress test for bounded variable-length path expansion with deterministic tie-break ordering (UA005/UA006).
 // Builds a branching graph with multiple paths of varying lengths between a start and set of end nodes.
@@ -77,10 +77,12 @@ test "TestCANARY_REQ_GQL_016_QuantifierTieBreakStress" {
     var seen = std.AutoHashMap(u128, void).init(alloc);
     defer seen.deinit();
     for (results1) |r| {
-        // Hash combine: (len<<96) | (start_id<<64) | (end_id<<32) | (edge_ids[0] & 0xffffffff)
-        // (Simplified uniqueness proxy including first edge id sequence) plus length of path for differentiation.
-        const first_edge: u64 = if (r.edge_ids.len > 0) r.edge_ids[0] else 0;
-        const key: u128 = (@as(u128, r.path_length) << 96) | (@as(u128, r.start_id) << 64) | (@as(u128, r.end_id) << 32) | (@as(u128, first_edge & 0xffffffff));
+        // SONNY-6548: the key used only the first edge id, so two distinct
+        // paths sharing their first edge (1->2->4->7 and 1->2->5->7) collided
+        // and the test failed on a correct result. Key on the whole edge
+        // sequence: (start_id, end_id) and a hash of every edge id in order.
+        const seq_hash: u64 = std.hash.Wyhash.hash(r.path_length, std.mem.sliceAsBytes(r.edge_ids));
+        const key: u128 = (@as(u128, seq_hash) << 64) | (@as(u128, r.start_id & 0xffffffff) << 32) | @as(u128, r.end_id & 0xffffffff);
         try std.testing.expect(!seen.contains(key));
         try seen.put(key, {});
     }

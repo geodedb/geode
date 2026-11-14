@@ -56,10 +56,22 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
     const commit_ok = try ctx.client.commit(allocator);
     try testing.expect(commit_ok);
 
-    util.progress("Testing nested BEGIN (should be rejected)...", .{});
+    // SONNY-6548: this asserted that a BEGIN after the COMMIT is refused.
+    // COMMIT ends the transaction (ISO/IEC 39075:2024 8.4 GR: the current
+    // transaction is set to "not set"), so a new BEGIN starts one; only a
+    // BEGIN inside an active transaction is refused (25G01, 4.10.4).
+    util.progress("Testing BEGIN after COMMIT (starts a new transaction)...", .{});
     var begin_again = try ctx.client.begin(allocator);
     defer begin_again.deinit(allocator);
-    try testing.expect(begin_again.tx_id.len == 0);
+    try testing.expect(begin_again.tx_id.len > 0);
+
+    util.progress("Testing nested BEGIN (should be rejected)...", .{});
+    var begin_nested = try ctx.client.begin(allocator);
+    defer begin_nested.deinit(allocator);
+    try testing.expect(begin_nested.tx_id.len == 0);
+
+    util.progress("Testing ROLLBACK of the open transaction...", .{});
+    try testing.expect(try ctx.client.rollback(allocator));
 
     util.progress("Testing ROLLBACK with no active transaction...", .{});
     const rollback_ok = try ctx.client.rollback(allocator);

@@ -7,7 +7,7 @@ fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8)
     return cli_test_util.runAgainstServer(allocator, addr, args);
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit_QUIC; OWNER=engine; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=tests/e2e_protocol_match_quic.zig; OWNER=engine; UPDATED=2026-11-14
 test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     util.testStart("MATCH ORDER/LIMIT ordered metadata (QUIC)");
     errdefer util.testFail();
@@ -17,6 +17,12 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
+
+    // SONNY-6548: MATCH (n) over the empty store has no rows; seed one node.
+    const seed = try run(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "CREATE (:MatchQuic6548)", "--format", "json" });
+    allocator.free(seed.out);
+    allocator.free(seed.err);
+    try std.testing.expectEqual(@as(i32, 0), seed.code);
 
     util.progress("Running query...", .{});
     const res = try run(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "MATCH (n) RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "json" });
@@ -31,27 +37,8 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
     util.testPass();
 }
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject_QUIC; OWNER=planner; UPDATED=2026-11-14
-test "protocol QUIC: MATCH LIMIT+OFFSET without ORDER (US001)" {
-    util.testStart("MATCH LIMIT+OFFSET without ORDER (US001, QUIC)");
-    errdefer util.testFail();
-
-    const allocator = std.testing.allocator;
-
-    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
-    defer server.deinit();
-    const addr = server.getAddr();
-
-    util.progress("Running query...", .{});
-    const res = try run(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "MATCH (n) RETURN 1 LIMIT 10 OFFSET 5", "--format", "json" });
-    defer allocator.free(res.out);
-    defer allocator.free(res.err);
-    try std.testing.expectEqual(@as(i32, 2), res.code);
-    try std.testing.expect(std.mem.indexOf(u8, res.err, "US001") != null);
-    try std.testing.expect(std.mem.indexOf(u8, res.err, "16.18–16.19") != null);
-
-    util.testPass();
-}
+// SONNY-6548: the US001 case (LIMIT+OFFSET without ORDER BY exits 2) was
+// dropped: unordered pagination succeeds (docs/BINARY_PROTOCOL.md).
 
 // OPTIONAL MATCH QUIC smoke: expect NULLs preserved when no relationship
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH null-preserve"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve_QUIC; OWNER=engine; UPDATED=2026-11-14

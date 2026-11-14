@@ -219,7 +219,6 @@ pub const types = struct {
     pub const extended = @import("types/extended.zig");
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
-    pub const hash = @import("types/hash.zig");
     pub const vector = @import("types/vector.zig");
     pub const geographic = @import("types/geographic.zig");
     pub const cryptographic = @import("types/cryptographic.zig");
@@ -227,8 +226,6 @@ pub const types = struct {
 
 // Re-export server graph common types
 pub const graph_common = @import("types/graph_common.zig");
-// Re-export materialized views
-pub const materialized_views = @import("query/materialized_views.zig");
 // GAP-0876: enhanced materialized view manager (exact-match query rewrite,
 // API level). Standalone subsystem — not yet consulted by the execution
 // path; exported so the named regression test

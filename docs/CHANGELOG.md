@@ -2389,6 +2389,43 @@
 
 ### Fixed
 
+- **A failed transport-parity run fails its smoke (SONNY-6548 item 4).**
+  Four `test-transport-parity` smokes (order metadata, US001, illegal order
+  key, varlen dataset rows) caught a failed parity run, a port allocation
+  or a server that never became ready, printed a skip mark and returned, so
+  the step passed; they now return the error. The CASE 3VL smoke bound `a`
+  with the deleted client's array `--param` expansion, compared two equal
+  error outputs, and passed until a failed query exited 1 (SONNY-6369); it
+  now uses `FOR a IN [null, true, false]` and checks the three rows.
+  `test-cluster-3node-subprocess` and `test-datadir-lock-subprocess` spawn
+  the geode this build emitted, so a missing binary now fails them instead
+  of skipping with "run `zig build` first to populate zig-out/bin".
+  `benchmarks/benchmark_rls_abac_variance.zig`, which no step built, timed a
+  placeholder policy mock (`tests/canary_rls_abac.zig`), not geode's
+  RLS/ABAC; both are removed and BENCHMARK_REPORT.md no longer cites it.
+- **The 67 allowlisted test files that compiled but failed are triaged
+  (SONNY-6548 item 1).** 21 had a stale expectation (behaviour that changed
+  on purpose: `Catalog.addGraph` no longer persists, a PATH renders as
+  `{"nodes","edges"}`, a DECIMAL as a JSON string, ExecutionGuardTrip is a
+  flagger finding, the variance thresholds were raised, a read takes the
+  version-2 PROFILE) or a test defect (a dataset nothing seeds, a data dir
+  in the checkout, a duplicate check keyed on the first edge only, a BEGIN
+  after COMMIT expected to fail, a BEGIN before HELLO, op counts that also
+  counted `peak_contributors`); they are corrected and run in
+  `zig build test-sonny6542-revived`. 46 are removed: written for the
+  deleted client's options (`--begin`/`--commit`, `--utf16-input`,
+  `--dist-enable-*`, `--no-estimates`, `--profile-memcurve`, array
+  `--param` expansion), for US001 (never emitted; docs/BINARY_PROTOCOL.md),
+  for exit 2 on a query error (it is 1, SONNY-6369), for the old
+  `"result":{"type":"PROFILE"}` shape and the version-1 synthetic PROFILE
+  of a read (the 25-file `e2e_protocol_profile_*` battery), or vacuous
+  (`test_gap_0193_*`: ~420 parse-only and `@hasDecl` checks under feature
+  CANARY markers; `e2e_hash_functions.zig`: mocked execution). Product bugs
+  they exposed are intentionally red reproductions, out of the aggregate
+  and listed in docs/KNOWN_TEST_ISSUES.md: `test-sonny6548-cli-query-options`,
+  `-quic-cdc-control`, `-wire-result-metadata`,
+  `-raft-persistent-voted-for`, `-gql-identifier-words`.
+
 - **Every `tests/*.zig` file is compiled by a build step or listed with the
   reason it is not, and configuration fails otherwise (SONNY-6542).** 564
   test files ran in no step: `tests/all_tests.zig` imported 92 of them as
@@ -6519,6 +6556,27 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **Product code no build reached, which no longer compiled (SONNY-6548 item
+  3).** Zig analyzes lazily, so these compiled only because nothing in the
+  server referenced them: `src/types/hash.zig` (`hash`, `argon2idStrHash`,
+  `argon2idStrVerify`, `blake2bKdf` did not compile; `lib.zig` re-exported
+  it as `types.hash`, and `HashData`/`Blake2bKdf`/`Blake2sKdf`/
+  `Argon2idHash` in `src/types/evaluator_functions.zig` and
+  `cryptographic.hashString` called it, none of them called; GQL has no
+  such functions, `RETURN HashData(...)` is 42883),
+  `src/query/materialized_views.zig` (exported as `materialized_views`, no
+  caller; the GAP-0876 manager in `src/query/enhanced_materialized_views.zig`
+  stays), `src/optimizer/selectivity_estimator.zig` (imported only by two
+  dead tests; the server's estimator is `index_selectivity`), and
+  `GraphStore.findPaths`, `findPathsBidirectional`, `findPathsFiltered`,
+  `shortestPath`, `allShortestPaths`, `kShortestPaths`, `expandFromNode` with
+  their helpers and `PathOptions`/`ExpandOptions`/`Path`/`PathFilter` in
+  `src/graph_store.zig` (`std.ArrayList.init`; the executor's path matching
+  is in `src/execution/match_operations.zig`). The seven listed tests that
+  named them go too. CANARY markers that claimed TESTED for this code
+  (`REQ-MATERIALIZED-VIEWS-001..005`, `REQ-GQL-HASH-FUNC-001`,
+  `REQ-GQL-PATH-UTIL-001`) go with it.
 
 - **`tests/benchmark_merge_adapter_variance.zig` (SONNY-6541 item 6).**
   `tests/all_tests.zig` imported it as an unreferenced constant, so nothing

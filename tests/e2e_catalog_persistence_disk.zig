@@ -29,7 +29,10 @@ test "catalog persists to disk via Catalog.init" {
         }
 
         try cat1.addSchema("s1");
-        try cat1.addGraph("g1");
+        // SONNY-6548: addGraph only registers the name in memory (catalog.zig:
+        // "without persisting it yet"); a graph is persisted with the storage
+        // UUID its engine was created under.
+        try cat1.addGraphWithUuid("g1", .{ 0x65, 0x48 } ++ .{0} ** 13 ++ .{1});
     }
 
     const cat2 = try catalog.Catalog.init(allocator, path);
@@ -40,4 +43,5 @@ test "catalog persists to disk via Catalog.init" {
 
     try std.testing.expect(cat2.hasSchema("s1"));
     try std.testing.expect(cat2.hasGraph("g1"));
+    try std.testing.expect(!cat2.hasGraph("g2"));
 }
