@@ -6195,6 +6195,22 @@
 
 ### Removed
 
+- **Dead code: the `tryBasicFunction` branches the call handlers answer
+  first (SONNY-6540 item 7).** `evalExpr` tries `src/eval/call_handlers.zig`
+  (math, string, type-cast, collection, aggregate and advanced-type
+  handlers) before `tryBasicFunction` (`src/eval.zig`), and each of those
+  handlers answers every call of the names it owns (a value or an error,
+  never "not mine"), so `tryBasicFunction`'s own branches for keys, values,
+  length, size, upper, lower, trim, abs, sqrt, ceil, floor, pow, sin, cos,
+  tan, asin, acos, log, exp, toString, toInteger, toFloat, toBoolean, head,
+  tail, last, substring, replace, icontains, reverse, count, sum, avg, min,
+  max, random, interval and range, and its second and third `type()`
+  branches, never ran. They are removed; `power`, `log10`, `toReal`,
+  `rand`, `duration` and the `decimal_*` functions, which only it answers,
+  stay. No behaviour changes. One of the removed branches carried a
+  CANARY claiming `length(NULL)` is NULL (REQ-BUG731-MATCH-SCOPING
+  PathLength/NullPropagation); the live handler answers 0, so the claim
+  was never true (reported for a follow-up).
 - **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
   `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
   `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)
