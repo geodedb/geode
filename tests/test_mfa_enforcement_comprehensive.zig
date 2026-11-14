@@ -1,5 +1,5 @@
 // Comprehensive MFA Enforcement Tests
-// CANARY: REQ=REQ-MFA-TEST-COMPREHENSIVE; FEATURE="MFA Enforcement Verification"; ASPECT=SECURITY; STATUS=TESTED; OWNER=security; UPDATED=2026-01-29
+// CANARY: REQ=REQ-MFA-TEST-COMPREHENSIVE; FEATURE="MFA Enforcement Verification"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 //
 // This test suite verifies that MFA is PROPERLY ENFORCED everywhere when enabled,
 // and that admins/users can enroll themselves and their MFA systems correctly.

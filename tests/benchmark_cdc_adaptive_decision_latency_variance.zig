@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope; OWNER=cdc; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_042_CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope; OWNER=cdc; UPDATED=2026-11-14
 
 fn simulateAdaptiveDecision(iteration: usize) u64 {
     // Model an adaptive heuristic deciding on batch flush or backpressure adjustments.

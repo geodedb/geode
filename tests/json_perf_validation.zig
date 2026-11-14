@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const time = std.time;
 
-// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceValidation"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_JSONPerfValidation; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceValidation"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_JSONPerfValidation; OWNER=performance; UPDATED=2026-11-14
 
 test "JSON performance optimization validation" {
     const allocator = testing.allocator;
@@ -164,7 +164,7 @@ test "Large result set JSON generation performance" {
 
 // CANARY integration test
 test "CANARY: REQ=REQ-PERF-JSON-001 - JSON optimization integration" {
-    // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceValidation"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_JSON_001; OWNER=performance; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="JSONPerformanceValidation"; ASPECT=Integration; STATUS=IMPL; TEST=TestCANARY_REQ_PERF_JSON_001; OWNER=performance; UPDATED=2026-11-14
 
     const allocator = testing.allocator;
 

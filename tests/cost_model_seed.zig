@@ -1,7 +1,7 @@
 const std = @import("std");
 const seed = @import("../src/planner/cost_seed.zig");
 
-// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=EstimatorPrimitives; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=EstimatorPrimitives; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates; OWNER=planner; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates" {
     const cfg = seed.EstimatorConfig{};

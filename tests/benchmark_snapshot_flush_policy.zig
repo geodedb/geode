@@ -1,7 +1,7 @@
 const std = @import("std");
 const graph_store = @import("geode").graph_store;
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Policy"; ASPECT=GraphStoreFlushPolicyBench; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_GraphStoreFlushPolicy; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Policy"; ASPECT=GraphStoreFlushPolicyBench; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_GraphStoreFlushPolicy; OWNER=storage; UPDATED=2026-11-14
 
 const FlushMode = enum { always, every_n, time_window_ms };
 

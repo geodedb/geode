@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // Integration test for Vector K-NN optimization with IndexOptimizer
-// CANARY: REQ=REQ-GQL-203; FEATURE="VectorKNNIntegration"; ASPECT=IndexIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_203_VectorKNNIntegration; OWNER=index; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-203; FEATURE="VectorKNNIntegration"; ASPECT=IndexIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_203_VectorKNNIntegration; OWNER=index; UPDATED=2026-11-14
 
 // Simplified vector structures for testing
 const VectorF32 = struct {

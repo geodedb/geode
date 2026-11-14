@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-GQL-022; FEATURE="DistributedQueryPlanning"; ASPECT=FederationAwareOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_022_FederationAwareOptimization; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-022; FEATURE="DistributedQueryPlanning"; ASPECT=FederationAwareOptimization; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_022_FederationAwareOptimization; OWNER=distributed; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_022_FederationAwareOptimization" {
     // Federation-aware query optimization implemented in distributed/query_planner.zig
     const allocator = testing.allocator;
@@ -24,7 +24,7 @@ test "TestCANARY_REQ_GQL_022_FederationAwareOptimization" {
     try testing.expect(federation_manager.min_shards_for_distribution >= 2);
 }
 
-// CANARY: REQ=REQ-GQL-023; FEATURE="DistributedQueryPlanning"; ASPECT=ShardAffinityAnalysis; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_ShardAffinityAnalysis; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-023; FEATURE="DistributedQueryPlanning"; ASPECT=ShardAffinityAnalysis; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_023_ShardAffinityAnalysis; OWNER=distributed; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_023_ShardAffinityAnalysis" {
     // Shard affinity analysis for optimal query distribution implemented
     const allocator = testing.allocator;
@@ -52,7 +52,7 @@ test "TestCANARY_REQ_GQL_023_ShardAffinityAnalysis" {
     try testing.expect(analysis.distribution_factor == 1.5);
 }
 
-// CANARY: REQ=REQ-GQL-024; FEATURE="DistributedQueryPlanning"; ASPECT=InterShardCommunication; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_InterShardCommunication; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="DistributedQueryPlanning"; ASPECT=InterShardCommunication; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_InterShardCommunication; OWNER=distributed; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_024_InterShardCommunication" {
     // Inter-shard communication optimization implemented
     _ = testing.allocator; // suppress unused warning
@@ -87,7 +87,7 @@ test "TestCANARY_REQ_GQL_024_InterShardCommunication" {
     try testing.expect(std.mem.eql(u8, bottleneck.operation, "inter_shard_transfer"));
 }
 
-// CANARY: REQ=REQ-GQL-025; FEATURE="DistributedQueryPlanning"; ASPECT=CoordinatorOperations; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_025_CoordinatorOperations; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-025; FEATURE="DistributedQueryPlanning"; ASPECT=CoordinatorOperations; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_025_CoordinatorOperations; OWNER=distributed; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_025_CoordinatorOperations" {
     // Distributed coordinator operations (joins, aggregations, sorts) implemented
     const allocator = testing.allocator;
@@ -120,7 +120,7 @@ test "TestCANARY_REQ_GQL_025_CoordinatorOperations" {
     try testing.expect(coordinator_plan.target_shards.items[1] == 2);
 }
 
-// CANARY: REQ=REQ-GQL-026; FEATURE="DistributedQueryPlanning"; ASPECT=ExecutionPhasing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_026_ExecutionPhasing; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-GQL-026; FEATURE="DistributedQueryPlanning"; ASPECT=ExecutionPhasing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_026_ExecutionPhasing; OWNER=distributed; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_026_ExecutionPhasing" {
     // Multi-phase distributed execution planning implemented
     _ = testing.allocator; // suppress unused warning

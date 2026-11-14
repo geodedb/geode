@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -10,7 +11,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 }
 
 test "protocol: PROFILE memory invariants (sum vs peak/total, percent_net)" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 3", "--param", "a", "[1,2,2,3,4,5,6,7]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');

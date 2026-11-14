@@ -1,10 +1,10 @@
 const std = @import("std");
 
 // Combined governance automation: NEXT freshness + CANARY verify (GAP_ANALYSIS strict) + doc drift checks.
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceCombinedCheck; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceReadmeRealityConsistency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=NextSliceStructureGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=SliceReqCrosscheckGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceCombinedCheck; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceReadmeRealityConsistency; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=NextSliceStructureGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=SliceReqCrosscheckGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2026-11-14
 // Exit codes:
 //  0 = all governance checks passed
 //  2 = governance failure (stale NEXT, canary verify fail, or drift)
@@ -750,7 +750,7 @@ fn slicePrefix(a: std.mem.Allocator, s: []const u8) []u8 {
     return dup(a, s[0..max]);
 }
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=EvidenceDeltaGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_EvidenceDeltaGuard; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=EvidenceDeltaGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_EvidenceDeltaGuard; OWNER=tooling; UPDATED=2026-11-14
 fn evidenceDeltaCheck(_: *Summary) !bool {
     // Compare status_prev.json to status.json; fail if any REQ-GQL- ids removed unless ALLOW_REQ_REMOVAL env set.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -818,7 +818,7 @@ fn evidenceDeltaCheck(_: *Summary) !bool {
     return false;
 }
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=RealityFreshnessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_RealityFreshnessGuard; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=RealityFreshnessGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_RealityFreshnessGuard; OWNER=tooling; UPDATED=2026-11-14
 fn realityFreshnessCheck(_: *Summary) !bool {
     // Extract generated_at from status.json (RFC3339) and compare date in IMPLEMENTATION_REALITY.md.
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

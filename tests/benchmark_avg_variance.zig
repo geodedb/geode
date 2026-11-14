@@ -3,7 +3,7 @@ const exec = @import("../src/exec.zig");
 const ast = @import("../src/gql/ast.zig");
 const eval = @import("../src/eval.zig");
 
-// CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=AvgVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=AvgVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope; OWNER=engine; UPDATED=2026-11-14
 
 fn stats(values: []i128) struct { mean: f64, stddev: f64, cv: f64, p95: i128 } {
     var sum: f128 = 0;

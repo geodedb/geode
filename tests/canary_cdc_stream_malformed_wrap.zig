@@ -1,7 +1,7 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBufferWrap; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBufferWrap; OWNER=streaming; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBufferWrap; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBufferWrap; OWNER=streaming; UPDATED=2026-11-14
 
 fn feedMalformed(engine: *cdc.CDCEngine, n: usize) void {
     var i: usize = 0;

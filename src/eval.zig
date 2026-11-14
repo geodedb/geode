@@ -899,7 +899,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             }
             if (l == .Str and r == .Str) {
                 // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
-                // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2025-09-27
+                // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2026-11-14
                 //
                 // PERF: NFC normalization is the IDENTITY for pure-ASCII input, so when BOTH
                 // operands are ASCII we compare the raw bytes directly — no allocator, no

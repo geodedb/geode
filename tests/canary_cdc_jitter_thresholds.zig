@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=AdaptiveJitterThresholds; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_JitterThresholds; OWNER=streaming; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=AdaptiveJitterThresholds; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_JitterThresholds; OWNER=streaming; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_042_CDC_JitterThresholds" {
     // Placeholder dynamic threshold jitter adaptation
     var high: f64 = 0.85;

@@ -37,10 +37,10 @@
 //   4. a genuine non-timeout failure still exits 1, so code 4 keeps its
 //      meaning.
 //
-// This is a subprocess e2e lane: it spawns a real `./zig-out/bin/geode serve`
-// and drives the real `./zig-out/bin/geode query` against it, so nothing here
-// can pass by mocking the wire. Structure, skip semantics and the bounded
-// hand-rolled waitpid loop mirror tests/test_cli_batch_mode.zig.
+// This is a subprocess e2e lane: it spawns a real `geode serve` and drives the
+// real `geode query` against it (this build's executable, geode_test_bin), so
+// nothing here can pass by mocking the wire. Structure, skip semantics and
+// the bounded hand-rolled waitpid loop mirror tests/test_cli_batch_mode.zig.
 
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
@@ -340,7 +340,7 @@ const DeadPortFixture = struct {
         const io_fs = std.Io.Threaded.global_single_threaded.io();
         std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
             std.debug.print(
-                "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+                "geode binary missing at {s}; build it with `zig build`\n",
                 .{binary_path},
             );
             return null;
@@ -486,7 +486,7 @@ fn setUpWithGrpc(gpa: std.mem.Allocator, tag: []const u8, port: u16, grpc_port: 
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
         std.debug.print(
-            "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+            "geode binary missing at {s}; build it with `zig build`\n",
             .{binary_path},
         );
         return null;

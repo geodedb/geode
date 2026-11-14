@@ -10,7 +10,7 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 
 // Bounded variable-length path determinism over QUIC
 // Graph: Alice->Bob KNOWS, Bob->Charlie KNOWS
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
     util.testStart("MATCH varlen 1..2 determinism");

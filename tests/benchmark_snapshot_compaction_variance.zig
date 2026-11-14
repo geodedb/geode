@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Compaction"; ASPECT=SnapshotCompactionVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotCompactionVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Compaction"; ASPECT=SnapshotCompactionVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotCompactionVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 // Simulate snapshot compaction time variance: scanning records, rewriting live entries, skipping tombstones.
 

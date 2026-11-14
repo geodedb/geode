@@ -7,7 +7,7 @@ const repl_util = @import("repl_test_util.zig");
 // Since it's in the CLI module, we'll test the interface behavior
 const repl_dispatch = geode.repl.repl_dispatch;
 
-// CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=TESTED; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_transport_interface; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=IMPL; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_transport_interface; OWNER=repl; UPDATED=2026-11-14
 
 test "transport interface - quic connectivity" {
     const allocator = testing.allocator;
@@ -228,7 +228,7 @@ test "protocol messages - comprehensive validation" {
     }
 }
 
-// CANARY: REQ=REQ-QUIC-CLIENT-READLINE-002; FEATURE="QuicClientReadLine"; ASPECT=RegressionTests; STATUS=TESTED; OWNER=transport; UPDATED=2026-01-30
+// CANARY: REQ=REQ-QUIC-CLIENT-READLINE-002; FEATURE="QuicClientReadLine"; ASPECT=RegressionTests; STATUS=IMPL; OWNER=transport; UPDATED=2026-11-14
 // Issue #413: Regression tests for WouldBlock and memory leak fixes
 
 test "session cleanup - deinitSourcedFileCache called on deinit" {

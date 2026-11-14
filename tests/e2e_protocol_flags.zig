@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -11,7 +12,7 @@ inline fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: US001 error includes flagger findings" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 LIMIT 5 OFFSET 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -22,7 +23,7 @@ test "protocol: US001 error includes flagger findings" {
 }
 
 test "protocol: IllegalOrderKey error includes ident-only policy flag" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a ORDER BY f(a)" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -32,7 +33,7 @@ test "protocol: IllegalOrderKey error includes ident-only policy flag" {
 }
 
 test "flags: DISTINCT unordered emits DistinctOutputUnordered" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -41,7 +42,7 @@ test "flags: DISTINCT unordered emits DistinctOutputUnordered" {
 }
 
 test "flags: ordered query has OrderTiebreak but not DistinctOutputUnordered" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -51,7 +52,7 @@ test "flags: ordered query has OrderTiebreak but not DistinctOutputUnordered" {
 }
 
 test "flags: NullsFirstPolicy present in DISTINCT unordered set where NULL participates" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN null AS a UNION RETURN 1 AS a" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -60,7 +61,7 @@ test "flags: NullsFirstPolicy present in DISTINCT unordered set where NULL parti
 }
 
 test "flags: EXPLAIN includes base policy flags" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -71,7 +72,7 @@ test "flags: EXPLAIN includes base policy flags" {
 }
 
 test "flags: PROFILE includes base policy flags and per-op timings" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -84,7 +85,7 @@ test "flags: PROFILE includes base policy flags and per-op timings" {
 }
 
 test "flags: transaction ACK frames carry policy flags" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x", "--begin", "--commit" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

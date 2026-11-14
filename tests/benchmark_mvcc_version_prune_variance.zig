@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=MVCCVersionPruneVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_013_MVCCVersionPruneVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=MVCCVersionPruneVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_013_MVCCVersionPruneVarianceEnvelope; OWNER=txn; UPDATED=2026-11-14
 
 fn simulatePrune(chains: usize, avg_versions: usize) u64 {
     // Simulate scanning version chains and pruning obsolete versions (e.g., below global min active txn).

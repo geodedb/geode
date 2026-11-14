@@ -1,11 +1,12 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) ![]u8 {
     var child = std.process.Child.init(
         &.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -52,7 +53,7 @@ test "protocol: PROFILE golden simple query" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

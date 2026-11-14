@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -7,7 +8,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 }
 
 test "protocol: Valid ORDER/LIMIT" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "query", "RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -32,7 +33,7 @@ test "protocol: Valid ORDER/LIMIT" {
 }
 
 test "protocol: Invalid LIMIT+OFFSET without ORDER (US001)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 LIMIT 10 OFFSET 5" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -42,7 +43,7 @@ test "protocol: Invalid LIMIT+OFFSET without ORDER (US001)" {
 }
 
 test "protocol: Invalid ORDER BY key (IllegalOrderKey)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a ORDER BY f(a)" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -52,7 +53,7 @@ test "protocol: Invalid ORDER BY key (IllegalOrderKey)" {
 }
 
 test "protocol: Set operation DISTINCT (UNION)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -63,7 +64,7 @@ test "protocol: Set operation DISTINCT (UNION)" {
 }
 
 test "protocol: Set operation ALL (UNION ALL) duplicate preserved" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION ALL RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -82,7 +83,7 @@ test "protocol: Set operation ALL (UNION ALL) duplicate preserved" {
 }
 
 test "protocol: text format simple query" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -92,7 +93,7 @@ test "protocol: text format simple query" {
 }
 
 test "protocol: text format union distinct" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1 AS x", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -103,7 +104,7 @@ test "protocol: text format union distinct" {
 }
 
 test "protocol: text format union all duplicates" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION ALL RETURN 1 AS x", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -119,7 +120,7 @@ test "protocol: text format union all duplicates" {
 }
 
 test "protocol: CASE expression sanity with params" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{
         exe,
         "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r",
@@ -137,7 +138,7 @@ test "protocol: CASE expression sanity with params" {
 }
 
 test "protocol: decimal ordering scale alignment" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Expect stable ordering of decimals with different scales; query returns two identical logical values
     const res = try run(&.{ exe, "RETURN 1.20 AS a, 1.2 AS b ORDER BY a,b" });
     defer std.testing.allocator.free(res.out);
@@ -148,7 +149,7 @@ test "protocol: decimal ordering scale alignment" {
 }
 
 test "protocol: decimal distinct dedup different scales" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1.2 AS x UNION RETURN 1.20 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -163,7 +164,7 @@ test "protocol: decimal distinct dedup different scales" {
 }
 
 test "protocol: multi-diagnostic precedence US001 primary" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a ORDER BY f(a) LIMIT 5 OFFSET 2" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -176,7 +177,7 @@ test "protocol: multi-diagnostic precedence US001 primary" {
 }
 
 test "protocol: EXPLAIN logical ops" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -185,9 +186,9 @@ test "protocol: EXPLAIN logical ops" {
     try std.testing.expect(std.mem.indexOf(u8, res.out, "Project") != null);
 }
 
-// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolBasic; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolBasic; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolBasic; OWNER=planner; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_075_ExplainProtocolBasic" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -197,9 +198,9 @@ test "TestCANARY_REQ_GQL_075_ExplainProtocolBasic" {
     try std.testing.expect(std.mem.indexOf(u8, res.out, "cost_explain.v1") != null);
 }
 
-// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolCalibrated; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainProtocolCalibrated; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated; OWNER=planner; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN CALIBRATED RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -210,7 +211,7 @@ test "TestCANARY_REQ_GQL_075_ExplainProtocolCalibrated" {
 }
 
 test "protocol: PROFILE includes timing" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

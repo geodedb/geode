@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -11,7 +12,7 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: txn demarcation happy path (BEGIN/COMMIT)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x", "--begin", "--commit" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -22,7 +23,7 @@ test "protocol: txn demarcation happy path (BEGIN/COMMIT)" {
 }
 
 test "protocol: txn demarcation error (COMMIT without BEGIN)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x", "--commit" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -32,7 +33,7 @@ test "protocol: txn demarcation error (COMMIT without BEGIN)" {
 }
 
 test "protocol: txn demarcation (BEGIN/ROLLBACK)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x", "--begin", "--rollback" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

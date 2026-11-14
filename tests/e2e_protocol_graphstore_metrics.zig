@@ -12,8 +12,7 @@ test "protocol: PROFILE graph_store metrics" {
     // Get random port
     const port = util.getRandomPort() catch |err| {
         util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
@@ -29,8 +28,7 @@ test "protocol: PROFILE graph_store metrics" {
 
     util.waitForServerReady(allocator, addr, 10000) catch |err| {
         util.progress("Server readiness timeout: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
 
     util.progress("Connecting client...", .{});

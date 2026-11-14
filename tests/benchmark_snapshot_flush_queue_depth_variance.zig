@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Queue Depth"; ASPECT=SnapshotFlushQueueDepthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Queue Depth"; ASPECT=SnapshotFlushQueueDepthVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushQueueDepthVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 // Simulate queue depth dynamics for snapshot flush scheduling.
 // Model components:

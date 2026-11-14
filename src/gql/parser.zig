@@ -1,8 +1,8 @@
-// CANARY: REQ=REQ-0001; FEATURE="Standards & Conformance Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
-// CANARY: REQ=REQ-0002; FEATURE="Language Surface Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
-// CANARY: REQ=REQ-GQL-006; FEATURE="GQL Parser"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-007; FEATURE="MATCH/OPTIONAL Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_graph_match.zig; OWNER=parser; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
+// CANARY: REQ=REQ-0001; FEATURE="Standards & Conformance Requirements"; ASPECT=Compliance; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-11-14
+// CANARY: REQ=REQ-0002; FEATURE="Language Surface Requirements"; ASPECT=Compliance; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-006; FEATURE="GQL Parser"; ASPECT=Parser; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-007; FEATURE="MATCH/OPTIONAL Parsing"; ASPECT=Parser; STATUS=IMPL; TEST=tests/e2e_graph_match.zig; OWNER=parser; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2026-11-14
 
 const std = @import("std");
 const builtin = @import("builtin");

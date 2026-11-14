@@ -1,10 +1,11 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 fn run_server_and_query(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) ![]const u8 {
     var argv = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         query,
         "--server",
@@ -55,7 +56,7 @@ test "MATCH node scan returns nodes" {
     try env.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword());
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -110,7 +111,7 @@ test "MATCH edge traversal returns pairs" {
     try env.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword());
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -161,7 +162,7 @@ test "MATCH with label and property filter" {
     try env.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword());
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -211,7 +212,7 @@ test "MATCH traversal with edge type filter" {
     try env.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword());
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,

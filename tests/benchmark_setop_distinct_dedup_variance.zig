@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-015; FEATURE="Set Operations"; ASPECT=SetOpDistinctDedupVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_015_SetOpDistinctDedupVarianceEnvelope; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-015; FEATURE="Set Operations"; ASPECT=SetOpDistinctDedupVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_015_SetOpDistinctDedupVarianceEnvelope; OWNER=engine; UPDATED=2026-11-14
 
 fn simulateDistinctDedup(rows: usize, cardinality: usize) u64 {
     var prng = std.rand.DefaultPrng.init(0x5345544F50); // 'SETOP'

@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-UNICODE-002; FEATURE="UnicodeTableGenerator"; ASPECT=Tooling; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-002; FEATURE="UnicodeTableGenerator"; ASPECT=Tooling; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun; OWNER=unicode; UPDATED=2026-11-14
 // Minimal Unicode table generator: parses a reduced UCD subset and emits Zig tables.
 // This is intentionally lightweight; full UCD integration can extend this tool.
 
@@ -83,7 +83,7 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(file.writer());
     const w = bw.writer();
     try w.writeAll("// AUTO-GENERATED: minimal decomposition table\n");
-    try w.writeAll("// CANARY: REQ=REQ-GQL-UNICODE-003; FEATURE=\"UnicodeGeneratedTables\"; ASPECT=Decomposition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_003_DecompLookup; OWNER=unicode; UPDATED=2025-09-27\n");
+    try w.writeAll("// CANARY: REQ=REQ-GQL-UNICODE-003; FEATURE=\"UnicodeGeneratedTables\"; ASPECT=Decomposition; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_003_DecompLookup; OWNER=unicode; UPDATED=2026-11-14\n");
     try writeDecompTable(w, &decomp_map);
     try bw.flush();
 }

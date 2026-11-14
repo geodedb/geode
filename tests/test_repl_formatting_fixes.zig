@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-REPL-FORMAT-002; FEATURE="REPL Output Formatting Fixes"; ASPECT=UnitTesting; STATUS=TESTED; TEST=test_repl_formatting_fixes; OWNER=repl; UPDATED=2025-11-17
+// CANARY: REQ=REQ-REPL-FORMAT-002; FEATURE="REPL Output Formatting Fixes"; ASPECT=UnitTesting; STATUS=IMPL; TEST=test_repl_formatting_fixes; OWNER=repl; UPDATED=2026-11-14
 
 // Mock types to match the REPL structure
 const Format = enum { table, csv, json };

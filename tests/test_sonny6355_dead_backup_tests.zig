@@ -69,7 +69,9 @@ test "SONNY-6355 (4) the mock S3 backup tests are gone and all_tests.zig imports
             failures += 1;
         }
     }
-    try testing.expect(imports > 50);
+    // SONNY-6542: all_tests.zig imports only the files it compiles now (it
+    // named about 100, most as unused constants that never compiled).
+    try testing.expect(imports > 0);
     try testing.expectEqual(@as(usize, 0), failures);
 }
 

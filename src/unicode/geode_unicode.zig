@@ -1,6 +1,6 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=NormalizationNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_004_NfcRoundTrip; OWNER=unicode; UPDATED=2025-09-27
-// CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CaseFolding; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_005_FoldSharpS; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=NormalizationNfc; STATUS=IMPL; OWNER=unicode; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CaseFolding; STATUS=IMPL; OWNER=unicode; UPDATED=2026-11-14
 
 pub const DecompEntry = struct { cp: u32, map: []const u32 };
 

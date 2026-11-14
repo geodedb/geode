@@ -21,9 +21,9 @@
 // a single stream, and send each line as its own ExecuteRequest on that
 // stream (the REPL transport's shape).
 //
-// These are subprocess e2e lanes: they spawn a real `./zig-out/bin/geode
-// serve` and drive a real `./zig-out/bin/geode query --batch` against it, so
-// nothing here can pass by mocking the wire. Skip semantics mirror
+// These are subprocess e2e lanes: they spawn a real `geode serve` and drive a
+// real `geode query --batch` against it (this build's executable,
+// geode_test_bin), so nothing here can pass by mocking the wire. Skip semantics mirror
 // tests/test_datadir_lock_subprocess.zig (skip when the binary is missing or
 // $GEODE_SKIP_SUBPROC_CLUSTER is set).
 
@@ -257,7 +257,7 @@ fn setUp(gpa: std.mem.Allocator, tag: []const u8, port: u16, start_server: bool)
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
         std.debug.print(
-            "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+            "geode binary missing at {s}; build it with `zig build`\n",
             .{binary_path},
         );
         return null;

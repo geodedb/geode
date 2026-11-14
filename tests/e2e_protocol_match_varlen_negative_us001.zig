@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -6,9 +7,9 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
     return .{ .code = res.code, .out = res.out, .err = res.err };
 }
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="US001 Unordered Pagination (varlen)"; ASPECT=Execution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_VarLenUnorderedPaginationReject; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-010; FEATURE="US001 Unordered Pagination (varlen)"; ASPECT=Execution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_VarLenUnorderedPaginationReject; OWNER=planner; UPDATED=2026-11-14
 test "protocol: MATCH varlen LIMIT+OFFSET without ORDER (US001)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a, b LIMIT 10 OFFSET 2";
     const res = try run(&.{ exe, q });
     defer std.testing.allocator.free(res.out);

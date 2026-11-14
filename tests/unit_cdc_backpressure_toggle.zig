@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const cdc = @import("cdc_enhanced");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureToggle; STATUS=TESTED; TEST=unit_CDC_backpressure_toggle; OWNER=cdc; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureToggle; STATUS=IMPL; TEST=unit_CDC_backpressure_toggle; OWNER=cdc; UPDATED=2026-11-14
 
 fn makeEngine(gpa: std.mem.Allocator, watermark: usize) !*cdc.CDCEngine {
     const cfg = cdc.CDCConfig{

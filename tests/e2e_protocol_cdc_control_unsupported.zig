@@ -3,7 +3,7 @@ const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2EUnsupported; STATUS=TESTED; TEST=protocol_CDC_CONTROL_unsupported; OWNER=cdc; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2EUnsupported; STATUS=IMPL; TEST=protocol_CDC_CONTROL_unsupported; OWNER=cdc; UPDATED=2026-11-14
 
 test "protocol: CDC control unsupported action" {
     util.testStart("CDC control unsupported action");

@@ -522,7 +522,7 @@ test "large social network - complex queries" {
 }
 
 test "CANARY: REQ=REQ-GQL-LARGE-DATASET" {
-    // CANARY: REQ=REQ-GQL-LARGE-DATASET; FEATURE="LargeDataset"; ASPECT=Scalability; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_LARGE_DATASET; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-LARGE-DATASET; FEATURE="LargeDataset"; ASPECT=Scalability; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_LARGE_DATASET; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var data = try SocialNetworkData.init(allocator);

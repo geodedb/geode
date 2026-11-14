@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -16,7 +17,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 // (Server text mode tested separately via direct invocation.)
 
 test "client: --format txt simple RETURN" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 2 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -26,7 +27,7 @@ test "client: --format txt simple RETURN" {
 }
 
 test "client: --format txt EXPLAIN parity" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -36,7 +37,7 @@ test "client: --format txt EXPLAIN parity" {
 }
 
 test "client: --format txt PROFILE parity" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", "--format", "txt" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

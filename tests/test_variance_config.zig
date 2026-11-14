@@ -2,7 +2,7 @@ const std = @import("std");
 const varcfg = @import("geode").benchmarks.variance_config;
 
 // Basic unit tests for computeStatsF128 and thresholds
-// CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigStats; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_VarianceConfigStats; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigStats; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_VarianceConfigStats; OWNER=tooling; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_021_VarianceConfigStats" {
     var gpa = std.heap.DebugAllocator(.{}){};

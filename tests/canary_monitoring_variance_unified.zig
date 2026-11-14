@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=UnifiedVarianceEnvelope; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified; OWNER=ops-team; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-081; FEATURE="MonitoringVariance"; ASPECT=UnifiedVarianceEnvelope; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified; OWNER=ops-team; UPDATED=2026-11-14
 
 // This test validates that the unified monitoring variance benchmark remains within
 // the expected coefficient of variation (cv) envelope (<0.025). Instead of re-running

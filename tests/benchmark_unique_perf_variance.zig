@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=UniquePerfVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope; OWNER=schema; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=UniquePerfVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope; OWNER=schema; UPDATED=2026-11-14
 
 fn simulateUnique(batch: usize, allocator: std.mem.Allocator) u64 {
     var map = std.AutoHashMap(u64, u8).init(allocator);

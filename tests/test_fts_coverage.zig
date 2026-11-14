@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2026 CodePros
 //
-// CANARY: REQ=REQ-GQL-FTS-COVERAGE-001; FEATURE="Fulltext GQL coverage gaps"; ASPECT=E2E; STATUS=TESTED; TEST=self; OWNER=index; UPDATED=2026-05-31
+// CANARY: REQ=REQ-GQL-FTS-COVERAGE-001; FEATURE="Fulltext GQL coverage gaps"; ASPECT=E2E; STATUS=IMPL; TEST=self; OWNER=index; UPDATED=2026-11-14
 //
 //! A5 coverage tests: fill GQL/store-level FTS gaps left by the adapter and
 //! tokenizer unit tests. Everything here drives the REAL parser + executor +

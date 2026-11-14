@@ -3,7 +3,7 @@ const std = @import("std");
 // Shared portable feature flag + test override helper.
 // Each feature registers a Flag struct with an environment variable name.
 // Provides deterministic test overrides without mutating real process env.
-// CANARY: REQ=REQ-GQL-FLAGS-001; FEATURE="Shared Feature Flag Wrapper"; ASPECT=INFRA; STATUS=TESTED; TEST=tests/unit_feature_flags.zig:1; OWNER=core; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-FLAGS-001; FEATURE="Shared Feature Flag Wrapper"; ASPECT=INFRA; STATUS=IMPL; OWNER=core; UPDATED=2026-11-14
 
 /// P2-3: Static GPA for env var checks in feature flags
 var flags_gpa: std.heap.DebugAllocator(.{}) = .{};

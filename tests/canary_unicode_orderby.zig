@@ -1,6 +1,6 @@
 const std = @import("std");
 const unicode = @import("../src/unicode/geode_unicode.zig");
-// CANARY: REQ=REQ-GQL-UNICODE-010; FEATURE="UnicodeOrderBy"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-010; FEATURE="UnicodeOrderBy"; ASPECT=CompareNfc; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc; OWNER=unicode; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc" {
     // Simulate ORDER BY comparator behavior by normalizing precomposed vs decomposed forms

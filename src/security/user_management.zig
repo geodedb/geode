@@ -73,7 +73,7 @@ const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
-// CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 // User management system with Argon2id password hashing and role-based access control
 
 // CANARY: REQ=REQ-NEW8-RESERVED-USERNAME; FEATURE="GeodeClusterReserved"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_new8_envelope_trust.zig; OWNER=security; UPDATED=2026-06-26
@@ -1365,7 +1365,7 @@ fn cachedUserForChange(username: []const u8, store_allocator: std.mem.Allocator)
 /// (no auth_version bump). On a real change, bumps auth_version to invalidate
 /// live sessions (mirrors updateUserPassword). Returns error.Unauthenticated if
 /// the user is not present in the store.
-// CANARY: REQ=REQ-GQL-AUTH-DDL-003; FEATURE="GQL Auth DDL"; ASPECT=RoleAssignment; STATUS=TESTED; TEST=tests/test_user_management.zig; OWNER=auth; UPDATED=2026-05-11
+// CANARY: REQ=REQ-GQL-AUTH-DDL-003; FEATURE="GQL Auth DDL"; ASPECT=RoleAssignment; STATUS=IMPL; TEST=tests/test_user_management.zig; OWNER=auth; UPDATED=2026-11-14
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
 pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role) !void {
     _ = allocator;

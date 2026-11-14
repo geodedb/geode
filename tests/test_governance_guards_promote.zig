@@ -5,8 +5,8 @@ const std = @import("std");
 // We avoid mutating real repo state by using temp copies of status.json / IMPLEMENTATION_REALITY.md
 // and environment variables that trigger negative branches.
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=EvidenceDeltaGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_EvidenceDeltaGuard; OWNER=tooling; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=RealityFreshnessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_RealityFreshnessGuard; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=EvidenceDeltaGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_EvidenceDeltaGuard; OWNER=tooling; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=RealityFreshnessGuard; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_RealityFreshnessGuard; OWNER=tooling; UPDATED=2026-11-14
 
 extern fn evidenceDeltaCheck(summary: *anyopaque) callconv(.Inline) anyerror!bool; // symbol from governance_ci.zig
 extern fn realityFreshnessCheck(summary: *anyopaque) callconv(.Inline) anyerror!bool; // symbol from governance_ci.zig

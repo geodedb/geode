@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -16,7 +17,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // (Future: structured parse when JSON DOM helper exists.)
 
 test "profile: memory block contains total_alloc_bytes (v2)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     try testing.expectEqual(@as(i32, 0), res.code);
     try testing.expect(contains(res.out, "\"profile_version\":2"));
@@ -26,7 +27,7 @@ test "profile: memory block contains total_alloc_bytes (v2)" {
 // Approximate invariant: sum of op-level "bytes_alloc" fields equals memory.total_alloc_bytes.
 // For a lightweight check we extract integers via a simple scan (not full JSON parse) limited to small profile output.
 test "profile: per-op bytes_alloc sum equals memory.total_alloc_bytes" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 2 AS x ORDER BY x" });
     try testing.expectEqual(@as(i32, 0), res.code);
     const out = res.out;

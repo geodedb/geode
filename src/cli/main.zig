@@ -133,26 +133,26 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
 
-// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
 // CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M11: backup_types import removed (#696) — was unused after CLI modularization
 
-// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.1: Import user management CLI module
 const user_mgmt_cli = @import("user_mgmt_cli.zig");
 const cmdUser = user_mgmt_cli.cmdUser;
 const cmdRole = user_mgmt_cli.cmdRole;
 
-// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.2: Import authentication and policy CLI module
 const auth_cli = @import("auth_cli.zig");
 const cmdPolicy = auth_cli.cmdPolicy;
 const cmdGrant = auth_cli.cmdGrant;
 const cmdRevoke = auth_cli.cmdRevoke;
 
-// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.3: Import backup/restore/migrate CLI module
 const backup_cli = @import("backup_cli.zig");
 const cmdBackup = backup_cli.cmdBackup;
@@ -160,7 +160,7 @@ const cmdRestore = backup_cli.cmdRestore;
 const cmdMigrate = backup_cli.cmdMigrate;
 const execution = geode.execution;
 
-// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=IMPL; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.4: Import CLI dispatcher module for command routing
 const cli_dispatcher = @import("cli_dispatcher.zig");
 const fle_cli = @import("fle_cli.zig");
@@ -178,7 +178,7 @@ const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
 
 const VERSION = build_options.version;
 
-// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
+// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=IMPL; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-11-14
 const repl_quic_transport = geode.repl.quic_transport;
 
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
@@ -1478,7 +1478,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         query_text = stdin_allocated;
     }
 
-    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
     // Auto-load saved session credentials if not explicitly provided
     var loaded_token: ?[]u8 = null;
@@ -4316,7 +4316,7 @@ fn printInvalidServerAddress(stderr: std.Io.File, err: anyerror) void {
 }
 
 /// GAP-0150: Real QUIC authentication to server
-/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool, ca_cert: ?[]const u8) !AuthResult {
     // SONNY-6531: the MCP path's message for the fault; the caller exits
     // without a second line that echoes the address.
@@ -4435,7 +4435,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
     if (insecure) insecure_tls_gate.enforceOrExit();
 
-    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
     // Prompt for username if not provided (always dupe to ensure heap allocation)
     const final_username = if (username) |u| try allocator.dupe(u8, u) else blk: {

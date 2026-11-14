@@ -3,7 +3,7 @@ const testing = std.testing;
 const planner = @import("../src/planner.zig");
 const ast = @import("../src/gql/ast.zig");
 
-// CANARY: REQ=REQ-GQL-012; FEATURE="Planner ISO Enforcement"; ASPECT=OrderByEnforcement; STATUS=TESTED; TEST=e2e_planner_order_enforcement; OWNER=planner; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-012; FEATURE="Planner ISO Enforcement"; ASPECT=OrderByEnforcement; STATUS=IMPL; TEST=e2e_planner_order_enforcement; OWNER=planner; UPDATED=2026-11-14
 
 test "ORDER BY required with LIMIT" {
     const allocator = testing.allocator;

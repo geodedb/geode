@@ -1,7 +1,7 @@
 const std = @import("std");
 const planner = @import("../src/planner.zig");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathExpandAllocVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandAllocVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathExpandAllocVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandAllocVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 // Simple counting allocator wrapper
 const CountingAllocator = struct {

@@ -2,6 +2,7 @@
 // Integration tests for CLI subprocess elimination with actual binary execution
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const expect = testing.expect;
 const proto_util = @import("proto_test_util.zig");
@@ -55,7 +56,7 @@ test "integration query executes with configured server" {
     const addr = server.getAddr();
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1 AS test",
         "--server",
@@ -91,7 +92,7 @@ test "integration query without text returns usage error" {
     const allocator = testing.allocator;
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
     };
 
@@ -117,7 +118,7 @@ test "integration complex query with --insecure" {
     const complex_query = "MATCH (person:Person)-[:KNOWS]->(friend:Person) WHERE person.age > 25 RETURN person.name, friend.name";
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         complex_query,
         "--server",
@@ -142,7 +143,7 @@ test "integration server address in error message" {
     const allocator = testing.allocator;
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1",
         "--server",
@@ -170,7 +171,7 @@ test "integration no subprocess spawning verification" {
 
     // Test with --insecure to ensure it doesn't try to spawn external helpers
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 'subprocess test' AS message",
         "--server",
@@ -197,7 +198,7 @@ test "integration help command without subprocess" {
     const allocator = testing.allocator;
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "--help",
     };
 
@@ -222,7 +223,7 @@ test "integration shell command compatibility" {
     const allocator = testing.allocator;
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "shell",
         "--help",
     };
@@ -259,7 +260,7 @@ test "integration output format consistency" {
 
     for (test_cases) |test_case| {
         const args = [_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             test_case.query,
             "--server",
@@ -295,7 +296,7 @@ test "integration performance timing" {
     const start_time = std.time.milliTimestamp();
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 'performance test' AS message",
         "--server",
@@ -331,7 +332,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001" {
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-001
 
     const args = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CANARY INTEGRATION TEST",
         "--server",

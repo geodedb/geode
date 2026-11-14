@@ -3,7 +3,7 @@ const geode = @import("geode");
 const Parser = geode.gql.parser.Parser;
 const Lexer = geode.gql.lexer.Lexer;
 
-// CANARY: REQ=REQ-GQL-KEYWORD-001; FEATURE="GQL Keyword Handling"; ASPECT=Parser; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_KEYWORD_001_Parser; OWNER=parser; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-KEYWORD-001; FEATURE="GQL Keyword Handling"; ASPECT=Parser; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_KEYWORD_001_Parser; OWNER=parser; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_KEYWORD_001_Parser: Path variable assignment with PATH keyword" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

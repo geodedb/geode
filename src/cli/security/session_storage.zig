@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
 const std = @import("std");
 
@@ -193,7 +193,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn saveCredentials(self: *CredentialStore, creds: Credentials) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
         // SONNY-6463: Zig 0.16 file API (std.fs.createFileAbsolute and
         // ArrayList.writer are gone; this did not compile, and no step built it).
@@ -207,7 +207,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn loadCredentials(self: *CredentialStore) !?Credentials {
-        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const file = std.Io.Dir.openFileAbsolute(io, self.file_path, .{}) catch |err| {
@@ -270,7 +270,7 @@ pub const CredentialStore = struct {
     }
 
     pub fn deleteCredentials(self: *CredentialStore) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
         std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), self.file_path) catch |err| {
             if (err != error.FileNotFound) return err;
         };
@@ -320,7 +320,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn addSession(self: *SessionRegistry, token_hex: []const u8, session: SessionToken) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -330,7 +330,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn getSession(self: *SessionRegistry, token_hex: []const u8) ?*SessionToken {
-        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -350,7 +350,7 @@ pub const SessionRegistry = struct {
     }
 
     pub fn cleanupExpired(self: *SessionRegistry) void {
-        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+        // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=IMPL; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-11-14
 
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());

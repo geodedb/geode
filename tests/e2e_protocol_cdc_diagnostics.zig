@@ -18,8 +18,7 @@ test "protocol: CDC diagnostics protobuf roundtrip" {
 
     var server = util.spawnServerRandom(allocator, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     defer server.deinit();
 

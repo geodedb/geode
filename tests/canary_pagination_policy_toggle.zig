@@ -1,7 +1,7 @@
 const std = @import("std");
 const diagnostics = @import("../src/diagnostics.zig");
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Policy Override"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Policy Override"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle; OWNER=planner; UPDATED=2026-11-14
 
 // This test simulates policy override by directly invoking diagnostics precedence with US001 present and ensuring UA002 like flag simulation.
 

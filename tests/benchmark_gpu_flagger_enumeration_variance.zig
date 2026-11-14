@@ -2,7 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const gpu_mod = geode.gpu.flagger;
 
-// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=GPUFlaggerEnumerationVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_051_GPUFlaggerEnumerationVarianceEnvelope; OWNER=exec; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=GPUFlaggerEnumerationVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_051_GPUFlaggerEnumerationVarianceEnvelope; OWNER=exec; UPDATED=2026-11-14
 
 fn simulateEnumeration(iterations: usize) u64 {
     var work: u64 = 0;

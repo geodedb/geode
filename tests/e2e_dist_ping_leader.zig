@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -11,25 +12,22 @@ test "PING ok in single-node raft mode" {
     // Get random port
     const port = util.getRandomPort() catch |err| {
         util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d} with Raft enabled...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     defer server.deinit();
 
     // Wait for server readiness
     util.waitForServerReady(allocator, addr, 10000) catch |err| {
         util.progress("Server readiness timeout: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
 
     util.progress("Connecting to server...", .{});

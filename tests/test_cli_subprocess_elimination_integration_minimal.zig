@@ -2,6 +2,7 @@
 // Minimal integration tests for CLI subprocess elimination - focus on exit codes
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const expect = testing.expect;
 const proto_util = @import("proto_test_util.zig");
@@ -38,7 +39,7 @@ test "integration --insecure returns exit code 0" {
     const addr = server.getAddr();
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1 AS test",
         "--server",
@@ -54,7 +55,7 @@ test "integration query without text returns exit code 2" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
     });
 
@@ -66,7 +67,7 @@ test "integration help returns exit code 0" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "--help",
     });
 
@@ -78,7 +79,7 @@ test "integration invalid command returns non-zero exit code" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "invalid-command",
     });
 
@@ -102,7 +103,7 @@ test "integration various queries with --insecure return success" {
 
     for (test_queries) |query| {
         const exit_code = try getExitCode(allocator, &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -119,7 +120,7 @@ test "integration invalid server address returns error" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1",
         "--server",
@@ -139,7 +140,7 @@ test "integration binary execution smoke test" {
 
     // Just verify we can execute the binary without crashing
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 'smoke test'",
         "--server",
@@ -163,7 +164,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-003
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CANARY TEST",
         "--server",

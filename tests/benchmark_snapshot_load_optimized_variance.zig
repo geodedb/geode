@@ -1,7 +1,7 @@
 const std = @import("std");
 const graph_store = @import("geode").graph_store;
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot/Recovery"; ASPECT=LoadOptimizedVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot/Recovery"; ASPECT=LoadOptimizedVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 // Benchmark comparing baseline loadFromFile vs warmed-cache loadFromFile measuring elapsed ns.
 // Enforces variance guard on optimized runs and expects optimized mean <= baseline mean.

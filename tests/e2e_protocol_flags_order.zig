@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -17,7 +18,7 @@ fn extractProfileLine(out: []const u8) ?[]const u8 {
 }
 
 test "protocol: flag list invariants (I: first, unique, known set)" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // UNION DISTINCT triggers Distinct + UnionPhase flags, unordered => DistinctOutputUnordered
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 2 AS x" });
     defer testing.allocator.free(out);

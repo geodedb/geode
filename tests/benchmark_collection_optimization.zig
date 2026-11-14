@@ -414,7 +414,7 @@ test "Collection pool thread safety simulation" {
 
 // Integration test validating collection optimization against performance targets
 test "CANARY: REQ=REQ-PERF-COLLECTION-001" {
-    // CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_COLLECTION_001; OWNER=performance; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Integration; STATUS=IMPL; TEST=TestCANARY_REQ_PERF_COLLECTION_001; OWNER=performance; UPDATED=2026-11-14
 
     const allocator = testing.allocator;
 

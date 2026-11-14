@@ -45,7 +45,7 @@ pub const EstimatorConfig = struct {
 // Each kind begins with neutral bias=1.0. After observing actual row counts, update
 // with: bias = alpha*(actual/estimate) + (1-alpha)*bias. Applied multiplicatively
 // to subsequent estimates of same op kind. Clamped to [0.05, 20.0] to avoid runaway.
-// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity; OWNER=planner; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=AdaptiveEstimatorBias; STATUS=IMPL; OWNER=planner; UPDATED=2026-11-14
 pub const AdaptiveBiasRegistry = struct {
     // NOTE: Zig 0.15 reflection: direct .Enum.fields access not available; keep constant in sync with LogicalOpKind.
     pub const KIND_COUNT: comptime_int = 9; // Scan, Expand, Filter, Project, Aggregate, Sort, Limit, SetOp, IndexSeek

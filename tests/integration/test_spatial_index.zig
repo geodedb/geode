@@ -241,7 +241,7 @@ test "spatial index MBR operations" {
 }
 
 test "CANARY: REQ=REQ-GQL-SPATIAL-INDEX" {
-    // CANARY: REQ=REQ-GQL-SPATIAL-INDEX; FEATURE="SpatialIndex"; ASPECT=Core; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SPATIAL_INDEX; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-SPATIAL-INDEX; FEATURE="SpatialIndex"; ASPECT=Core; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_SPATIAL_INDEX; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var index_mgr = geode.index.IndexManager.init(allocator);

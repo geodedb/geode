@@ -436,7 +436,7 @@ fn projectionItems(q: ast.Query) ?[]ast.ReturnItem {
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
-// CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
+// CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-11-14
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
     const exec_ctx: *ExecutionContext = @constCast(&context);
     // SONNY-3040: no part after the first writes (the dispatcher refused or

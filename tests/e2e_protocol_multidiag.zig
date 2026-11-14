@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -15,7 +16,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // Expected: exit code 2, stderr line contains both "IllegalOrderKey" and "additional_statuses" and "US001".
 
 test "protocol: multi-diagnostic IllegalOrderKey + US001 additional" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a ORDER BY f(a) LIMIT 5" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

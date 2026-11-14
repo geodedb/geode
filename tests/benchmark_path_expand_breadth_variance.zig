@@ -2,7 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const planner = @import("planner"); // if planner module exposed; otherwise fallback to synthetic expansion
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Planner Paths"; ASPECT=PathExpandBreadthVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Planner Paths"; ASPECT=PathExpandBreadthVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 // Synthetic expansion benchmark approximating breadth expansion cost by traversing an adjacency list
 // with fixed branching factor and depth, measuring total traversal time.

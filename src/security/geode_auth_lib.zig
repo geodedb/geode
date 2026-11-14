@@ -1,5 +1,5 @@
 // (Removed duplicated preamble section)
-// CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-11-14
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
 const build_options = @import("build_options");
@@ -323,7 +323,7 @@ pub const Session = struct {
     // High-assurance / step-up metadata. Null when no recent MFA elevation.
     last_mfa_ts: ?i64, // timestamp of last successful MFA event applied to this session
     elevation_expires_at: ?i64, // boundary after which high-assurance privileges lapse
-    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 };
 // CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="Enhanced Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy; OWNER=security; UPDATED=2025-09-30
 pub const PasswordPolicy = struct {
@@ -1378,7 +1378,7 @@ pub const SecurityManager = struct {
 
     /// Marks the session as having completed a successful step-up (MFA) for a bounded lifetime.
     /// lifetime_ms: duration the elevation should remain valid.
-    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
+    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
     pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
         self.auth_mu.lock();
         defer self.auth_mu.unlock();

@@ -1,6 +1,6 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=EarlyConflictDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_EarlyConflictDetection; BENCH=BenchmarkCANARY_REQ_GQL_073_EarlyConflictDetection; OWNER=txn; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=FalsePositiveReduction; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_FalsePositiveReduction; OWNER=txn; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=FalsePositiveReduction; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_073_FalsePositiveReduction; OWNER=txn; UPDATED=2026-11-14
 
 /// Early conflict detector builds a speculative dependency graph between active transactions.
 pub const EarlyDetector = struct {

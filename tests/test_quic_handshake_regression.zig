@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICHandshakeRegression; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICHandshakeRegression; OWNER=wire; UPDATED=2025-10-01
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICHandshakeRegression; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICHandshakeRegression; OWNER=wire; UPDATED=2026-11-14
 //! Regression tests for QUIC handshake fixes
 //!
 //! These tests verify the fixes implemented for:

@@ -1,7 +1,7 @@
 const std = @import("std");
 const cdc = @import("cdc_enhanced");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCApplyBatchLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope; OWNER=streaming; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCApplyBatchLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope; OWNER=streaming; UPDATED=2026-11-14
 
 // Measures stability of apply-batch latency under mixed record sizes.
 

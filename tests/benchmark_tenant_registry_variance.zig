@@ -2,7 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const registry_mod = geode.multitenancy.registry;
 
-// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistryVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_050_TenantRegistryVarianceEnvelope; OWNER=dist; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistryVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_050_TenantRegistryVarianceEnvelope; OWNER=dist; UPDATED=2026-11-14
 
 fn simulateTenantOps(iterations: usize, alloc: std.mem.Allocator) u64 {
     var reg = registry_mod.Registry.init(alloc);

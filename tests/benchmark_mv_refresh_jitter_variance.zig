@@ -1,7 +1,7 @@
 const std = @import("std");
 // NOTE: Avoid direct dependency on internal materialized view module to keep benchmark decoupled.
 
-// CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=MvRefreshLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_076_MvRefreshLatencyVarianceEnvelope; OWNER=engine; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=MvRefreshLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_076_MvRefreshLatencyVarianceEnvelope; OWNER=engine; UPDATED=2026-11-14
 
 fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
     var sum: f128 = 0;

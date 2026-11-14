@@ -2,9 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-001; FEATURE="Distributed Query Integration"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_001_ServerIntegration; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-002; FEATURE="Distributed Query Integration"; ASPECT=QueryPlanningFlow; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_002_QueryPlanningFlow; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-003; FEATURE="Distributed Query Integration"; ASPECT=FederatedOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_003_FederatedOptimization; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-001; FEATURE="Distributed Query Integration"; ASPECT=ServerIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_001_ServerIntegration; OWNER=distributed; UPDATED=2026-11-14
+// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-002; FEATURE="Distributed Query Integration"; ASPECT=QueryPlanningFlow; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_002_QueryPlanningFlow; OWNER=distributed; UPDATED=2026-11-14
+// CANARY: REQ=REQ-DISTRIBUTED-INTEGRATION-003; FEATURE="Distributed Query Integration"; ASPECT=FederatedOptimization; STATUS=IMPL; TEST=TestCANARY_REQ_DISTRIBUTED_INTEGRATION_003_FederatedOptimization; OWNER=distributed; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_DISTRIBUTED_INTEGRATION_001_ServerIntegration" {
     // Test distributed query planner integration with server state

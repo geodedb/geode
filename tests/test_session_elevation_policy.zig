@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-MFA-010; FEATURE="ConfigurableElevationTTL"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_010_ElevationTTL; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-010; FEATURE="ConfigurableElevationTTL"; ASPECT=TEST; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_010_ElevationTTL; OWNER=security; UPDATED=2026-11-14
 
 test "custom elevation ttl applied" {
     var gpa = std.heap.DebugAllocator(.{}){};

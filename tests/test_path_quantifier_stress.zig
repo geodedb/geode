@@ -1,9 +1,9 @@
 const std = @import("std");
 const planner = @import("../src/planner.zig");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathCycleStressDeterminism; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathCycleStressDeterminism; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathZeroLengthInclusionPolicy; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathZeroLengthInclusionPolicy; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathHighBranchDeterminism; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathHighBranchDeterminism; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathCycleStressDeterminism; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathCycleStressDeterminism; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathZeroLengthInclusionPolicy; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathZeroLengthInclusionPolicy; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathHighBranchDeterminism; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathHighBranchDeterminism; OWNER=planner; UPDATED=2026-11-14
 
 fn buildCycleGraph(allocator: std.mem.Allocator) !planner.AdjacencyList {
     // Graph with overlapping cycles to stress ordering:

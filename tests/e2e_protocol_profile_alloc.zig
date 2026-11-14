@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -28,7 +29,7 @@ pub fn parseNumberField(json: []const u8, field: []const u8) ?usize {
 }
 
 test "protocol: PROFILE allocation deltas non-negative" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // All stages: DISTINCT + ORDER BY + OFFSET + LIMIT.
     const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,2,2,3]" });
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, res.stdout, .{});

@@ -1,7 +1,7 @@
 const std = @import("std");
 const registry_mod = @import("../src/multitenancy/registry.zig");
 
-// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistryBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_050_TenantRegistryBasic; OWNER=dist; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistryBasic; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_050_TenantRegistryBasic; OWNER=dist; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_050_TenantRegistryBasic" {
     var gpa = std.heap.DebugAllocator(.{}){};

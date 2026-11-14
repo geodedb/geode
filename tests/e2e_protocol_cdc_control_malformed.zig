@@ -1,8 +1,9 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocolMalformed; STATUS=TESTED; TEST=protocol_CDC_CONTROL_malformed_missing_action; OWNER=wire; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=CDCControlProtocolMalformed; STATUS=IMPL; TEST=protocol_CDC_CONTROL_malformed_missing_action; OWNER=wire; UPDATED=2026-11-14
 
 test "protocol: CDC control missing action treated as UNSUPPORTED" {
     util.testStart("CDC control missing action treated as UNSUPPORTED");
@@ -24,7 +25,7 @@ test "protocol: CDC control missing action treated as UNSUPPORTED" {
     };
 
     util.progress("Starting server on port {d} with CDC enabled...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

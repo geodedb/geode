@@ -1,7 +1,7 @@
 const std = @import("std");
 const txn_mod = @import("txn");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=SSIPhantomPrevention; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=txn; UPDATED=2026-11-14
 
 // Simplified phantom prevention test: we model a predicate read as scanning keys with prefix "acct:".
 // We begin T1 and T2. T1 performs a predicate read capturing existing keys set. T2 inserts a new matching key

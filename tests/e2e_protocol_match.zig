@@ -2,7 +2,7 @@ const std = @import("std");
 const util = @import("proto_test_util.zig");
 
 // Basic E2E over QUIC for MATCH ORDER/LIMIT and US001 policy
-// CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchOrderLimit; OWNER=engine; UPDATED=2026-11-14
 test "protocol: MATCH ORDER/LIMIT ordered metadata" {
     util.testStart("MATCH ORDER/LIMIT ordered metadata");
     errdefer util.testFail();
@@ -34,7 +34,7 @@ test "protocol: MATCH ORDER/LIMIT ordered metadata" {
     util.testPass();
 }
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject; OWNER=planner; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-010; FEATURE="Pagination Legality (US001)"; ASPECT=Execution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_MatchUnorderedPaginationReject; OWNER=planner; UPDATED=2026-11-14
 test "protocol: MATCH LIMIT+OFFSET without ORDER (US001)" {
     util.testStart("MATCH LIMIT+OFFSET without ORDER (US001)");
     errdefer util.testFail();

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-046; FEATURE="TDE"; ASPECT=EncryptionKeyDeriveVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_046_EncryptionKeyDeriveVarianceEnvelope; OWNER=security; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-046; FEATURE="TDE"; ASPECT=EncryptionKeyDeriveVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_046_EncryptionKeyDeriveVarianceEnvelope; OWNER=security; UPDATED=2026-11-14
 
 fn simulateKdf(batch: usize, rounds: u32) u64 {
     // Simulate PBKDF/HKDF style derivation: iterative hash mixing with memory touch.

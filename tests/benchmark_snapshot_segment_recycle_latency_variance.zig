@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Segment Recycle"; ASPECT=SnapshotSegmentRecycleLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotSegmentRecycleLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Segment Recycle"; ASPECT=SnapshotSegmentRecycleLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotSegmentRecycleLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 fn simulateSegmentRecycle(iteration: usize) u64 {
     // Simulate operations required to recycle a snapshot segment:

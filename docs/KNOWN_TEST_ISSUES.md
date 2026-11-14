@@ -207,6 +207,27 @@ adopted in `d8709a2a` refuses (too short, no uppercase, one word); it now uses
 a compliant passphrase and runs in the aggregate. Read the list in
 `build.zig` for the current set; this document does not copy it.
 
+### tests/ files no build step compiles (SONNY-6542, 2026-11-14)
+
+Every `tests/*.zig` file is either compiled by some step (the root of a test
+module, or a tests/ file such a root reaches through an `@import` the
+compiler analyzes) or listed, with its reason, in
+`scripts/ci/unreachable_test_sources.zig`. `checkTestSourcesReachable` in
+`build.zig` enforces this at configure time (`zig build -l`). An unreferenced
+container-level `const _x = @import("x.zig");` does not count: Zig never
+analyzes it, which is how `tests/all_tests.zig` carried ~90 imports whose
+tests never ran. Of the 564 files found: 33 pass and run in
+`test-sonny6542-revived`, 142 were removed, 2 turned out to be reached (a
+helper and a fixture built through an options path), and 387 are listed: 218
+do not compile under Zig 0.16, 96 import `../src/` by relative path (outside
+a tests/ module root), 67 fail when run and are untriaged (a stale assertion
+or a product bug; the entry names the first failing test), 3 leak under the
+testing allocator, 1 only skips, 1 has no test block, and
+`tests/windows_stdio_smoke.zig` is built by a Makefile target. Their
+CANARY markers say `IMPL` until they run. Reviving one: port it, register a
+named step through `shardDep`, delete its entry; a failure that is a product
+bug stays out of the aggregate and is listed in this document.
+
 ### Reproduction
 
 ```bash

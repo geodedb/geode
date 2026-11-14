@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-DECIMAL-001; FEATURE="DecimalPrecision"; ASPECT=UnitTest; STATUS=TESTED; TEST=tests/test_decimal_property_precision.zig; OWNER=core; UPDATED=2026-01-25
+// CANARY: REQ=REQ-GQL-DECIMAL-001; FEATURE="DecimalPrecision"; ASPECT=UnitTest; STATUS=IMPL; TEST=tests/test_decimal_property_precision.zig; OWNER=core; UPDATED=2026-11-14
 //! Unit tests for Decimal property value precision preservation
 //!
 //! These tests verify that Decimal values stored as node/edge properties

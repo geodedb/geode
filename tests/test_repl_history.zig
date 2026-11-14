@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-REPL-HISTORY-001; FEATURE="REPL Persistent History"; ASPECT=UnitTesting; STATUS=TESTED; TEST=geodetestlab/specs/shell_comprehensive_tests.yml; TEST=test_repl_history; OWNER=repl; UPDATED=2025-10-05
+// CANARY: REQ=REQ-REPL-HISTORY-001; FEATURE="REPL Persistent History"; ASPECT=UnitTesting; STATUS=IMPL; TEST=geodetestlab/specs/shell_comprehensive_tests.yml; TEST=test_repl_history; OWNER=repl; UPDATED=2026-11-14
 
 // Unit tests for REPL persistent command history support
 // These tests validate the HistoryStore functionality

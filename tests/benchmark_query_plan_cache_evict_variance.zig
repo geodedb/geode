@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=QueryPlanCacheEvictVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=QueryPlanCacheEvictVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn simulateEvict(capacity: usize, iterations: usize) u64 {
     // Simulate LRU-ish eviction sweep where some entries are protected (recent) and others scanned.

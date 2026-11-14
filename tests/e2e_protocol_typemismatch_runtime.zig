@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -14,7 +15,7 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 // Query: RETURN ("a" + 1) AS x  (our evaluator only supports Int+Int, so this yields TypeMismatch)
 
 test "protocol: runtime TypeMismatch surfaced as error" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN (\"a\" + 1) AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

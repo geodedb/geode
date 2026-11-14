@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Delta Detection"; ASPECT=DeltaGuardPreview; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceDelta; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance Delta Detection"; ASPECT=DeltaGuardPreview; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceDelta; OWNER=tooling; UPDATED=2026-11-14
 
 pub fn main() !void {}
 

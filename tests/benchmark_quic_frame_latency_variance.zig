@@ -2,7 +2,7 @@ const std = @import("std");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QuicFrameLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QuicFrameLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope; OWNER=wire; UPDATED=2026-11-14
 // Bench objective: capture encode/decode + round-trip (simulated) latencies for QUIC-like frame sends.
 // We currently use the TCP-backed shim; once real QUIC is wired, this benchmark remains stable evidence.
 

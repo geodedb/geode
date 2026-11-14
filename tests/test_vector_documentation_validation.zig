@@ -2,9 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-001; FEATURE="Vector Documentation Validation"; ASPECT=DocumentationAccuracy; STATUS=TESTED; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_001_VectorF32Examples; OWNER=docs; UPDATED=2025-10-05
-// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-002; FEATURE="Vector Documentation Validation"; ASPECT=DistanceMetrics; STATUS=TESTED; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_002_DistanceMetrics; OWNER=docs; UPDATED=2025-10-05
-// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-003; FEATURE="Vector Documentation Validation"; ASPECT=PerformanceBenchmarks; STATUS=TESTED; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_003_PerformanceBenchmarks; OWNER=docs; UPDATED=2025-10-05
+// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-001; FEATURE="Vector Documentation Validation"; ASPECT=DocumentationAccuracy; STATUS=IMPL; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_001_VectorF32Examples; OWNER=docs; UPDATED=2026-11-14
+// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-002; FEATURE="Vector Documentation Validation"; ASPECT=DistanceMetrics; STATUS=IMPL; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_002_DistanceMetrics; OWNER=docs; UPDATED=2026-11-14
+// CANARY: REQ=REQ-VECTOR-DOCS-VALIDATION-003; FEATURE="Vector Documentation Validation"; ASPECT=PerformanceBenchmarks; STATUS=IMPL; TEST=TestCANARY_REQ_VECTOR_DOCS_VALIDATION_003_PerformanceBenchmarks; OWNER=docs; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_VECTOR_DOCS_VALIDATION_001_VectorF32Examples" {
     // Validate VectorF32 constructor examples from documentation

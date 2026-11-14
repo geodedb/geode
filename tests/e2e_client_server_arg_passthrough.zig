@@ -1,15 +1,16 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
 // Simple evidence test: start server with explicit --data_dir and ensure query runs.
-// CANARY: REQ=REQ-GQL-091; FEATURE="ServerDataDirFlag"; ASPECT=CliErgonomics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_091_ServerDataDirFlag; OWNER=client; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-091; FEATURE="ServerDataDirFlag"; ASPECT=CliErgonomics; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_091_ServerDataDirFlag; OWNER=client; UPDATED=2026-11-14
 test "client: explicit server data_dir allows dataset query" {
     util.testStart("explicit server data_dir allows dataset query");
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const data_dir = "./data/varlen_determinism";
 
     // Get random port

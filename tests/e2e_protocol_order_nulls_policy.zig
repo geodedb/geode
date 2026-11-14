@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const proto_test_util = @import("proto_test_util.zig");
 const testing = std.testing;
@@ -36,7 +37,7 @@ fn extractRows(out: []const u8) [][]const u8 {
 }
 
 test "protocol: ORDER BY nulls policy toggle" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Use params to produce rows: param vector [2,null,1]
     const res_first = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--param", "a", "[2,null,1]" }, false);
     defer testing.allocator.free(res_first.out);

@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=PropertyAccessHotPathVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPathVarianceEnvelope; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access"; ASPECT=PropertyAccessHotPathVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPathVarianceEnvelope; OWNER=engine; UPDATED=2026-11-14
 
 // This variance benchmark builds a synthetic property store and performs repeated hot-path lookups to
 // ensure runtime stability (low CV). We reuse a simple hashmap-like API if exposed; otherwise we
