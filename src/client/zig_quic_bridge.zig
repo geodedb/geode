@@ -91,6 +91,9 @@ pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
         error.InvalidPort => "Invalid Geode endpoint DSN: the port must be 1-65535, written as 1-5 digits; port 0 cannot be dialled (docs/DSN.md)",
         error.UnsupportedScheme => "Invalid Geode endpoint DSN: unsupported scheme; use quic:// or grpc:// (docs/DSN.md)",
         error.InputTooLong => "Invalid Geode endpoint DSN: a credential or parameter value is too long",
+        // SONNY-6544: dsn_credentials (the CLI's --dsn userinfo).
+        error.InvalidPercentEncoding => "Invalid Geode endpoint DSN: in the user name or password, % must start a %XX escape of two hex digits; write a literal % as %25",
+        error.UnencodedCredentialDelimiter => "Invalid Geode endpoint DSN: an @ follows the host; a user name or password holding /, ? or # must percent-encode it (%2F, %3F, %23), and an @ in a graph name or parameter as %40",
         error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
         error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
         else => null,

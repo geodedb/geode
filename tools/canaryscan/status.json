@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:17:06.892591829Z",
+  "generated_at": "2026-11-14T06:30:44.336095902Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86355,6 +86355,20 @@
       "features": [
         {
           "feature": "DSN credentials",
+          "aspect": "UserinfoAndRedaction",
+          "status": "TESTED",
+          "files": [
+            "src/client/dsn_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_redaction.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DSN credentials",
           "aspect": "LastAtSplitAndRedaction",
           "status": "TESTED",
           "files": [
@@ -86362,6 +86376,20 @@
           ],
           "tests": [
             "tests/test_sonny6544_dsn_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "DSN credentials",
+          "aspect": "RedactionTable",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6544_dsn_redaction.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_dsn_redaction.zig"
           ],
           "benches": [],
           "owner": "cli",
@@ -93931,7 +93959,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4958
+      "TESTED": 4960
     },
     "by_aspect": {
       "2PC": 3,
@@ -97017,6 +97045,7 @@
       "RecursiveCheck": 1,
       "RedReproduction": 1,
       "RedactionOnDenial": 1,
+      "RedactionTable": 1,
       "ReduceIsolation": 1,
       "ReduceUnadvertised": 1,
       "ReentrantLock": 1,
@@ -97924,6 +97953,7 @@
       "UserSpecificPolicyIncluded": 1,
       "UserWriteThroughs": 1,
       "UserWriterCallbacks": 1,
+      "UserinfoAndRedaction": 1,
       "UsernameRowAccess": 1,
       "UsingCaptureExcludesTerminator": 1,
       "UtcSlsDeclaration": 1,

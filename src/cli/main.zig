@@ -764,8 +764,8 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
         // last colon.
         const listen_hp = geode.host_port.split(stripped, null) catch |err| {
             switch (err) {
-                error.InvalidPort => std.debug.print("Error: --listen '{s}' has no valid port (expected host:port, port 0-65535)\n", .{addr_raw}),
-                error.InvalidAddress => std.debug.print("Error: --listen address must be host:port or [ipv6]:port (got '{s}')\n", .{addr_raw}),
+                error.InvalidPort => std.debug.print("Error: --listen '{f}' has no valid port (expected host:port, port 0-65535)\n", .{dsn_credentials.redacted(addr_raw)}),
+                error.InvalidAddress => std.debug.print("Error: --listen address must be host:port or [ipv6]:port (got '{f}')\n", .{dsn_credentials.redacted(addr_raw)}),
             }
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
@@ -912,12 +912,31 @@ const markActiveQuerySent = query_deadline.markActiveQuerySent;
 const DsnParseResult = struct {
     host_port: []const u8, // "host:port" string
     use_grpc: bool, // true if grpc:// scheme
-    username: ?[]const u8, // embedded credentials
-    password: ?[]const u8, // embedded credentials
+    /// SONNY-6544: embedded credentials, percent-decoded (owned; `deinit`).
+    credentials: ?dsn_credentials.Credentials = null,
     graph: ?[]const u8 = null, // graph name from URL path
+
+    fn username(self: *const DsnParseResult) ?[]const u8 {
+        return if (self.credentials) |c| c.username else null;
+    }
+
+    fn password(self: *const DsnParseResult) ?[]const u8 {
+        return if (self.credentials) |c| c.password else null;
+    }
+
+    fn deinit(self: *DsnParseResult, allocator: std.mem.Allocator) void {
+        if (self.credentials) |*c| c.deinit(allocator);
+        self.credentials = null;
+    }
 };
 
-fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
+const dsn_credentials = geode.dsn_credentials;
+
+/// SONNY-6544: the userinfo ends at the LAST '@' of the authority and is
+/// percent-decoded (RFC 3986 §3.2, `dsn_credentials`); a first-'@' split
+/// cut a password holding '@' short and made its tail part of the address,
+/// which `geode shell` then printed.
+fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
     // Parse scheme
     var use_grpc = false;
     var rest: []const u8 = dsn;
@@ -941,48 +960,40 @@ fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
         return null;
     }
 
-    // Strip query parameters (everything after '?')
-    if (std.mem.indexOf(u8, rest, "?")) |qpos| {
-        rest = rest[0..qpos];
-    }
-
-    // Check for embedded credentials: user:pass@host:port
-    var username: ?[]const u8 = null;
-    var password: ?[]const u8 = null;
-    if (std.mem.indexOf(u8, rest, "@")) |at_pos| {
-        const creds = rest[0..at_pos];
-        rest = rest[at_pos + 1 ..];
-        if (std.mem.indexOf(u8, creds, ":")) |colon_pos| {
-            username = creds[0..colon_pos];
-            password = creds[colon_pos + 1 ..];
-        } else {
-            username = creds;
-        }
-    }
-
-    if (rest.len == 0) {
+    // [userinfo@]host[:port] up to the first '/', '?' or '#'. Query
+    // parameters are not read by the CLI.
+    const authority = dsn_credentials.splitAuthority(rest) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return null;
+    };
+    if (authority.host_port.len == 0) {
         zig_quic_bridge.printEndpointError(error.InvalidDSN);
         return null;
     }
 
     // Extract graph name from URL path (e.g. host:3141/mygraph -> graph = "mygraph")
     var graph: ?[]const u8 = null;
-    var host_port = rest;
-    if (std.mem.indexOf(u8, rest, "/")) |slash_idx| {
-        host_port = rest[0..slash_idx];
-        const path = rest[slash_idx + 1 ..];
+    if (authority.rest.len > 0 and authority.rest[0] == '/') {
+        const path_end = std.mem.indexOfAny(u8, authority.rest, "?#") orelse authority.rest.len;
+        const path = authority.rest[1..path_end];
         if (path.len > 0) {
             graph = path;
         }
     }
 
-    // Validate host:port - at minimum there should be content
+    const credentials: ?dsn_credentials.Credentials = if (authority.userinfo) |userinfo|
+        dsn_credentials.decodeUserinfo(allocator, userinfo) catch |err| {
+            zig_quic_bridge.printEndpointError(err);
+            return null;
+        }
+    else
+        null;
+
     // The host_port is passed directly to --server logic which expects "host:port"
     return DsnParseResult{
-        .host_port = host_port,
+        .host_port = authority.host_port,
         .use_grpc = use_grpc,
-        .username = username,
-        .password = password,
+        .credentials = credentials,
         .graph = graph,
     };
 }
@@ -1519,7 +1530,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                     token = loaded_token;
                     user = loaded_username;
                 } else if (fp_match and !server_match) {
-                    std.debug.print("Note: saved session is for {s}, not {s}. Use --save-session to update.\n", .{ creds.server, server_addr });
+                    std.debug.print("Note: saved session is for {f}, not {f}. Use --save-session to update.\n", .{ dsn_credentials.redacted(creds.server), dsn_credentials.redacted(server_addr) });
                 } else if (fp_match and !not_expired) {
                     std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{});
                 }
@@ -1540,15 +1551,18 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Issue #417: Apply DSN if provided (takes precedence over --server and --grpc)
+    var dsn_parsed: ?DsnParseResult = null;
+    defer if (dsn_parsed) |*p| p.deinit(allocator);
     if (dsn) |dsn_str| {
-        const parsed = parseDsnArg(dsn_str) orelse {
+        dsn_parsed = parseDsnArg(allocator, dsn_str) orelse {
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        const parsed = &dsn_parsed.?;
         server = parsed.host_port;
         use_grpc = parsed.use_grpc;
         // DSN credentials override -U/-P flags
-        if (parsed.username) |u| user = u;
-        if (parsed.password) |p| password = p;
+        if (parsed.username()) |u| user = u;
+        if (parsed.password()) |p| password = p;
         // DSN graph path overrides --graph flag; server handles via HELLO (no USE GRAPH prepend)
         if (parsed.graph) |g| {
             graph = g;
@@ -3995,17 +4009,20 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Issue #417: Apply DSN if provided (takes precedence over --server)
+    var dsn_parsed: ?DsnParseResult = null;
+    defer if (dsn_parsed) |*p| p.deinit(allocator);
     if (dsn) |dsn_str| {
-        const parsed = parseDsnArg(dsn_str) orelse {
+        dsn_parsed = parseDsnArg(allocator, dsn_str) orelse {
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        const parsed = &dsn_parsed.?;
         server = parsed.host_port;
         if (parsed.use_grpc) {
-            std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {s}\n", .{parsed.host_port});
+            std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {f}\n", .{dsn_credentials.redacted(parsed.host_port)});
         }
         // DSN credentials override -U/-P flags
-        if (parsed.username) |u| username = u;
-        if (parsed.password) |p| password = p;
+        if (parsed.username()) |u| username = u;
+        if (parsed.password()) |p| password = p;
         // DSN graph path for HELLO handshake
         if (parsed.graph) |g| graph = g;
     }
@@ -4041,15 +4058,16 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     std.debug.print("Geode Shell " ++ VERSION ++ "\r\n", .{});
     // GAP-0113: Display TLS certificate status
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
+    // SONNY-6544: a --server may carry a userinfo part; never print it.
     if (insecure) {
-        std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\r\n", .{server});
+        std.debug.print("Connecting to {f} (insecure mode - TLS verification disabled)\r\n", .{dsn_credentials.redacted(server)});
     } else if (client_cert_path != null) {
-        std.debug.print("Connecting to {s} (TLS with mutual authentication)\r\n", .{server});
+        std.debug.print("Connecting to {f} (TLS with mutual authentication)\r\n", .{dsn_credentials.redacted(server)});
         if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\r\n", .{cert});
         if (client_key_path) |key| std.debug.print("  Client key: {s}\r\n", .{key});
         if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\r\n", .{ca});
     } else {
-        std.debug.print("Connecting to {s} (TLS enabled)\r\n", .{server});
+        std.debug.print("Connecting to {f} (TLS enabled)\r\n", .{dsn_credentials.redacted(server)});
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\r\n", .{});
 
@@ -4347,7 +4365,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
     );
 
     client.connect() catch |err| {
-        std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ parsed.host, parsed.port, @errorName(err) });
+        std.debug.print("Error: Could not connect to server {f}:{d}: {s}\n", .{ dsn_credentials.redacted(parsed.host), parsed.port, @errorName(err) });
         return error.ConnectionFailed;
     };
 
@@ -4510,7 +4528,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             // SONNY-6531: connectToServer printed what is wrong with --server.
             error.InvalidServerAddress => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => {
-                std.debug.print("Error: Failed to connect to server '{s}': {s}\n", .{ server, @errorName(err) });
+                std.debug.print("Error: Failed to connect to server '{f}': {s}\n", .{ dsn_credentials.redacted(server), @errorName(err) });
                 std.debug.print("Check server address and network connectivity\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             },
@@ -4537,7 +4555,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     };
 
     // Write to stdout for pipe-friendly output (test harness checks stdout_contains)
-    const msg = try std.fmt.allocPrint(allocator, "Successfully authenticated as '{s}' on server '{s}'\n", .{ final_username, server });
+    const msg = try std.fmt.allocPrint(allocator, "Successfully authenticated as '{s}' on server '{f}'\n", .{ final_username, dsn_credentials.redacted(server) });
     defer allocator.free(msg);
     const stdout_handle = getStdoutHandle() catch {
         std.debug.print("{s}", .{msg});

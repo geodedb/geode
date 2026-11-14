@@ -8168,6 +8168,16 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6544-dsn-credentials", "Run SONNY-6544 item 1 regression (geode query and shell log in to a real server whose admin password holds '@' and ':' through a raw or percent-encoded --dsn - the userinfo ends at the last '@' - and no output line of query, shell or auth login holds any piece of the password; a malformed percent-escape or an unencoded '/' in it is refused unprinted)").dependOn(&run_tests.step);
     }
+    // SONNY-6544 (1): the table for src/client/dsn_credentials.zig (std-only).
+    {
+        const dsn_mod = b.createModule(.{ .root_source_file = b.path("src/client/dsn_credentials.zig"), .target = target, .optimize = optimize });
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6544_dsn_redaction.zig"), .target = target, .optimize = optimize });
+        mod.addImport("dsn_credentials", dsn_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6544-dsn-redaction", "Run SONNY-6544 item 1 table (dsn_credentials: the userinfo ends at the last '@' of the authority and is percent-decoded, a malformed escape is refused; redacted() prints an address or DSN without its userinfo - IPv6 literals, '@' and ':' in the password, percent-encoded, empty user, no userinfo - and with secret query values masked)").dependOn(&run_tests.step);
+    }
     // SONNY-6511 (4): MCP validate places each recommendation on its token.
     const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
     sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);

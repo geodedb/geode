@@ -119,6 +119,8 @@ call answers `Error: <message>` (`isError: true`) and a resource read
 | `InputTooLong` | a percent-decoded credential or parameter over the client's limit | `Invalid Geode endpoint DSN: a credential or parameter value is too long` |
 | `Ipv6ZoneUnsupported` | an IPv6 address with a zone (`[fe80::1%eth0]`) | `Invalid Geode endpoint DSN: an IPv6 address with a zone ...` |
 | `InsecureTlsRefused` | `insecure=true` under production posture (SONNY-6453) | `Refused: the endpoint DSN sets insecure=true ...` |
+| `InvalidPercentEncoding` | CLI `--dsn`: a `%` in the user name or password not followed by two hex digits (SONNY-6544) | `Invalid Geode endpoint DSN: in the user name or password, % must start ...` |
+| `UnencodedCredentialDelimiter` | CLI `--dsn`: an `@` after the host, e.g. a password with a raw `/`, `?` or `#` (SONNY-6544) | `Invalid Geode endpoint DSN: an @ follows the host ...` |
 
 Any other failure (the server cannot be reached, TLS, authentication)
 keeps the generic `Failed to initialize client` / `Failed to connect to
@@ -197,16 +199,33 @@ quic://username:password@localhost:3141
 Special characters in credentials MUST be percent-encoded:
 
 - `@` → `%40`
-- `:` → `%3A`
-- `/` → `%2F`
+- `:` → `%3A` (in the user name; see below)
+- `/` → `%2F`, `?` → `%3F`, `#` → `%23`
 - `%` → `%25`
-- Space → `%20` or `+`
+- Space → `%20`
 
 Example with special characters:
 
 ```
 quic://user%40domain:p%40ss%3Dword@localhost:3141
 ```
+
+**Where the userinfo ends (RFC 3986 §3.2).** The authority runs from after
+`scheme://` to the first `/`, `?` or `#`. The userinfo is everything before
+the **last** `@` of the authority, and it splits into user name and password
+at its **first** `:`. So a password that holds a raw `@` or `:` still parses:
+`quic://admin:p@ss:word@[::1]:3141` is user `admin`, password `p@ss:word`,
+host `[::1]`, port 3141. Both parts are then percent-decoded (RFC 3986
+§2.1): a `%` must start `%` followed by two hex digits, and anything else is
+an error (`InvalidPercentEncoding`), never passed through as typed; `+` is a
+literal plus. A raw `/`, `?` or `#` in a credential ends the authority early,
+so a DSN with an `@` after the host is refused
+(`UnencodedCredentialDelimiter`) instead of being dialled at a host made of
+part of the password. geode's CLI (`geode query` / `geode shell` `--dsn`,
+`src/client/dsn_credentials.zig`) applies these rules (SONNY-6544).
+geode-client-zig v0.3.16 (the `geode mcp --endpoint` DSN) still splits at
+the first `@` anywhere in the DSN and decodes `+` as a space, so a password
+holding `@` must be written `%40` there.
 
 ### Query Parameter Credentials
 
@@ -419,6 +438,15 @@ Implementations SHOULD validate:
 1. Credentials in DSN strings SHOULD NOT be logged
 2. Implementations MUST provide a way to redact credentials from DSN strings for logging
 3. Password memory SHOULD be zeroed before deallocation (where language allows)
+
+geode's redaction is `geode.dsn_credentials.redacted` (`{f}`), used by every
+client-side line that shows a server address or DSN (SONNY-6544): the
+userinfo is dropped (`quic://admin:s@cret@[::1]:3141/g` prints as
+`quic://[::1]:3141/g`), the value of a query parameter whose name contains
+`pass`, `pwd`, `secret`, `token`, `auth`, `credential`, `key`, `session`,
+`cookie` or `signature` (any case) prints as `***`, a fragment is not shown,
+and a DSN with an `@` after the authority prints as `<address redacted>`.
+The error messages for a malformed DSN never include the DSN.
 
 ### TLS
 

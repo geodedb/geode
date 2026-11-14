@@ -188,6 +188,9 @@ pub const zig_client = @import("geode_client_zig");
 pub const zig_quic_bridge = @import("client/zig_quic_bridge.zig");
 /// SONNY-6487: the one host:port grammar (docs/DSN.md) every address uses.
 pub const host_port = @import("client/host_port.zig");
+/// SONNY-6544: DSN userinfo (last '@', percent-decoded) and the one
+/// redaction every printed address or DSN goes through.
+pub const dsn_credentials = @import("client/dsn_credentials.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");

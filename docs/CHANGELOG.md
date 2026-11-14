@@ -4,6 +4,27 @@
 
 ### Security
 
+- **A `--dsn` password may hold `@` and `:`, and no part of it is printed
+  (SONNY-6544 item 1).** `geode query` and `geode shell` split `--dsn` at
+  the first `@`, so `quic://admin:p@ss@host:3141` logged in with the
+  password `p` at the address `ss@host:3141`, and `geode shell` printed the
+  rest of the password in its `Connecting to ...` line. The userinfo now
+  ends at the last `@` of the authority (RFC 3986 §3.2), user name and
+  password are percent-decoded (`%40`, `%3A`, `%20`), and `+` is a literal
+  plus. **Breaking:** a `%` in a DSN user name or password must start a
+  `%XX` escape (write `%` as `%25`; `50%off` is refused instead of being
+  sent as typed), and a DSN with an `@` after the host (a password holding
+  an unencoded `/`, `?` or `#`, or an `@` in a graph name or parameter) is
+  refused instead of being dialled at part of the password. Every client
+  place that prints an address or DSN (`geode shell`'s `Connecting to`,
+  `auth login`, the saved-session note, `session info`, `backup create`,
+  `restore`, `--output`/remote-URI errors, REPL `\connect`, the
+  `--audit-syslog` / `GEODE_AUDIT_SYSLOG_HOST` and LSP `--listen` errors)
+  goes through `geode.dsn_credentials.redacted`: no userinfo, and secret
+  query values (`pass=`, `password=`, `token=`, `*key*`, `*secret*`, ...)
+  shown as `***`. Regressions: `zig build test-sonny6544-dsn-credentials`
+  (real server whose admin password holds `@` and `:`, real CLI) and
+  `zig build test-sonny6544-dsn-redaction` (table).
 - **The mTLS client CAs are no longer trusted for server certificates
   (SONNY-6490 item 1).** Loading `GEODE_MTLS_CLIENT_CA` for
   `GEODE_MTLS_REQUIRED` also installed the bundle as the process-wide x509

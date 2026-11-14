@@ -55,6 +55,8 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const builtin = @import("builtin");
 const cli_auth = @import("cli_auth_helpers.zig");
+/// SONNY-6544: the printed server goes through dsn_credentials.redacted.
+const geode = @import("geode");
 
 // CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Management; STATUS=TESTED; TEST=geodetestlab/specs/authn_provider.yml; OWNER=cli; UPDATED=2026-02-04
 // Session management CLI commands
@@ -455,7 +457,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     std.debug.print("Session Information:\n", .{});
     std.debug.print("  user: {s}\n", .{username});
-    std.debug.print("  server: {s}\n", .{server});
+    std.debug.print("  server: {f}\n", .{geode.dsn_credentials.redacted(server)});
     std.debug.print("  created: {d} (timestamp)\n", .{created_at});
     std.debug.print("  expires: {d} (timestamp)\n", .{expires_at});
     std.debug.print("  token: {s}...\n", .{token[0..@min(16, token.len)]});

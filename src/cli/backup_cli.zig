@@ -443,7 +443,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
     if (isRemoteUri(output.?)) {
-        std.debug.print("Error: --output {s}: writing a backup to object storage is not supported; write a local file and copy it with your own tool\n", .{output.?});
+        std.debug.print("Error: --output {f}: writing a backup to object storage is not supported; write a local file and copy it with your own tool\n", .{geode.dsn_credentials.redacted(output.?)});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
     // SONNY-6355: the --output directory must exist, on both paths, and is
@@ -500,7 +500,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
             // SONNY-6531: executeRemoteBackup said what is wrong with --server.
             if (err == error.InvalidServerAddress) std.process.exit(@intFromEnum(ExitCode.general_error));
-            std.debug.print("Error: Backup from server {s} failed: {}. No backup was created.\n", .{ server, err });
+            std.debug.print("Error: Backup from server {f} failed: {}. No backup was created.\n", .{ geode.dsn_credentials.redacted(server), err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
@@ -1189,7 +1189,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             std.mem.startsWith(u8, src, "https://") or
             std.mem.startsWith(u8, src, "http://"))
         {
-            std.debug.print("Error: restoring from a remote URI ({s}) is not supported: download the backup file and run geode restore <file> --data-dir <path>\n", .{src});
+            std.debug.print("Error: restoring from a remote URI ({f}) is not supported: download the backup file and run geode restore <file> --data-dir <path>\n", .{geode.dsn_credentials.redacted(src)});
             std.debug.print("error: RemoteRestoreSourceNotSupported\nRestore failed; nothing was restored.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
@@ -2224,7 +2224,7 @@ fn executeRemoteBackup(
     }
 
     const backup_size = backup_resp.size_bytes;
-    std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
+    std.debug.print("Receiving backup ({} bytes) from {f}...\n", .{ backup_size, geode.dsn_credentials.redacted(server) });
 
     // CANARY: REQ=REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC; FEATURE="CLI Backup"; ASPECT=RemoteOutputAtomicDurable; STATUS=TESTED; TEST=tests/test_sonny6386_remote_backup_atomic_output.zig; OWNER=cli; UPDATED=2026-11-12
     // SONNY-6386: the backup used to be streamed into --output in place
@@ -2375,7 +2375,7 @@ fn executeRemoteRestore(
     password: ?[]const u8,
     timeout_s: u32,
 ) !void {
-    std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
+    std.debug.print("RESTORE: Connecting to server {f} for remote restore...\n", .{geode.dsn_credentials.redacted(server)});
 
     // SONNY-6531: say what is wrong with --server, as the MCP path does.
     const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
