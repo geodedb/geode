@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T23:53:34.186321973Z",
+  "generated_at": "2026-11-14T00:23:04.860347562Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85539,20 +85539,6 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-13"
-        },
-        {
-          "feature": "CrashRecovery",
-          "aspect": "StaleFreeStoreRebuild",
-          "status": "TESTED",
-          "files": [
-            "src/storage/graph_storage_adapter.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6492_checkpoint_free_store_crash.zig"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-11-13"
         }
       ]
     },
@@ -93259,7 +93245,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4920
+      "TESTED": 4919
     },
     "by_aspect": {
       "2PC": 3,
@@ -96813,7 +96799,6 @@
       "StagedRestoreIntoEmptyTarget": 1,
       "StagedVerifiedRestore": 1,
       "StaleDetection": 1,
-      "StaleFreeStoreRebuild": 1,
       "StallEvictDecision": 1,
       "StandaloneCallReturn": 1,
       "StandardCastMatrix": 1,
