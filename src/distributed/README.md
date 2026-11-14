@@ -122,7 +122,7 @@ federation-aware query optimization.
 | `nonce_tracker.zig` | Replay prevention for cluster frames |
 | `principal_envelope.zig` | Serialized principal carried with cluster requests |
 | `distributed_explain.zig` | `DistributedExplainUnsupported` error and message (mapped in `proto_util.zig`) |
-| `txn_coordinator.zig`, `twophase.zig` | Two-phase commit coordinator, transport and undo application |
+| `txn_coordinator.zig` | `TxnCoordinator`: the apply target of committed `txn_prepare` / `txn_decide` entries (instantiated by `ClusterCoordinator.init`). No server code proposes those entries, so no distributed transaction ever runs (SONNY-6547) |
 | `query_planner.zig` | Partition-aware planning helpers; the QUIC handler creates a `DistributedQueryPlanner` per stream and stores it as an opaque pointer, but no executor consults it |
 | `value_convert.zig` | Value conversion between wire and engine types |
 
@@ -131,6 +131,7 @@ federation-aware query optimization.
 | File | Purpose |
 |------|---------|
 | `consistent_hash.zig`, `sharding.zig` | Consistent-hash ring and shard management |
+| `twophase.zig` | Two-phase commit coordinator, transport and undo application; referenced only by `src/lib.zig`'s re-export and tests, not compiled into the `geode` binary (SONNY-6547) |
 | `network_transport.zig`, `enhanced_query_transport.zig` | Inter-node transport helpers |
 | `node_registry.zig` | `NodeRegistry` (tested by `test_query_transport_node_registry.zig`) |
 | `federation_flag.zig`, `federation_latency_aggregate.zig` | Mismatch flag and latency aggregates; nothing in the tree sets the flag now |
@@ -150,8 +151,6 @@ federation-aware query optimization.
 | `enhanced_query_coordinator.zig` | Full-featured distributed query coordinator (caching, CBO, push-down) |
 | `query_coordinator.zig` | Basic scatter-gather query coordinator (deprecated) |
 | `query_planner.zig` | Partition-aware distributed query planning |
-| `txn_coordinator.zig` | Distributed transaction coordination across shards |
-| `twophase.zig` | Two-phase commit coordinator (prepare/commit/abort) |
 
 ### Federation & Merge
 
@@ -195,7 +194,16 @@ federation-aware query optimization.
   shard failover.
 - **Writes:** Replicated within the documented slice; other write surfaces
   fail closed in cluster mode.
-- **Two-phase commit:** Coordinator and participant roles are implemented.
-  Undo/rollback path is partially implemented.
+- **Two-phase commit / distributed transactions:** not available. Nothing in
+  the server proposes a `txn_prepare` or `txn_decide` entry (the only
+  proposer, `statement_proposals.zig`, proposes `graph_mutation` entries), so
+  the `TxnCoordinator` apply arms run only in tests; `twophase.zig` is not in
+  the server binary (SONNY-6547).
+- **DDL:** not replicated. Nothing proposes a `schema_change` entry; in
+  cluster mode CREATE/DROP GRAPH, index, constraint, policy, auth and tenant
+  DDL are refused by `cluster.gateUnreplicatedWrite()` (follower:
+  `ClusterNotLeader`, leader: `ClusterWriteNotReplicable`). The
+  `schema_change` apply arm in `raft_apply.zig` is the receiving side of a
+  future replicated DDL, exercised only by tests (SONNY-6547).
 - **Distributed / federated query coordination:** not implemented (removed
   2026-11-11, SONNY-6279; the code was never wired into a build artifact).

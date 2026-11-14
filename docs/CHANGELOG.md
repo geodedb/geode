@@ -2550,6 +2550,22 @@
   Remaining: on a follower, or for entries replayed after a restart, the
   hydration scan itself (no lock wait) still runs under `inner_mutex`.
   Regression: `zig build test-sonny6547-apply-hydration-stall`.
+- **Docs no longer claim two-phase commit or replicated DDL in cluster mode
+  (SONNY-6547 item 6).** The only server code that proposes a Raft entry is
+  `statement_proposals.zig` (through `ClusterCoordinator.proposeWrite`), and
+  it proposes `graph_mutation` entries only: no `schema_change`,
+  `config_change`, `snapshot_pointer`, `txn_prepare` or `txn_decide`. CREATE
+  / DROP GRAPH, index, constraint, policy, auth and tenant DDL are refused in
+  cluster mode (`cluster.gateUnreplicatedWrite`). The apply arms for those
+  entries (`raft_apply.zig`, `TxnCoordinator`) stay, as the tested receiving
+  side of future features, and say so. `src/distributed/twophase.zig` is
+  not compiled into the `geode` binary (no symbol of it in a Debug build;
+  only `src/lib.zig`'s re-export and tests reference it); its removal waits
+  for the `tests/all_tests.zig` cleanup (SONNY-6542), which imports its
+  unit test. Corrected: CLAUDE.md (Phase 5), docs/FEATURES_OVERVIEW.md,
+  docs/CURRENT_ARCHITECTURE.md, docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md,
+  docs/KNOWN_TEST_ISSUES.md (the coordinator IS instantiated in cluster
+  mode) and src/distributed/README.md.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;

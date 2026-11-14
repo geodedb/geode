@@ -73,7 +73,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **Phase 2: Parser Extensions** - Map literals, deep nesting (8+ levels)
 2. **Phase 3: Set Operations** - UNION/INTERSECT/EXCEPT, 22/22 tests passing
 3. **Phase 4: Transaction Isolation** - NOT implemented in the server: no isolation levels, SSI, phantom-read prevention or deadlock detection. `src/server/txn/enhanced_isolation.zig` and `isolation_integration.zig` were never compiled and were removed 2026-11-11 (SONNY-6298). Writes are serialized per graph, each read sees one snapshot, and explicit transactions roll back through an undo log; see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md)
-4. **Phase 5: Distributed Coordination** - Raft consensus, cluster management and two-phase commit; `src/distributed/` now holds 22,458 lines in 26 files. The phase's federation / scatter-gather query coordination code was never compiled and was removed 2026-11-11 (SONNY-6279)
+4. **Phase 5: Distributed Coordination** - Raft consensus and cluster management, replicating the documented write slice (see Cluster-mode fail-closed surfaces). No two-phase commit and no replicated DDL: nothing proposes a `txn_prepare`/`txn_decide` or `schema_change` entry, so their apply arms run only in tests, and `src/distributed/twophase.zig` is not compiled into the server (SONNY-6547); `src/distributed/` now holds 22,458 lines in 26 files. The phase's federation / scatter-gather query coordination code was never compiled and was removed 2026-11-11 (SONNY-6279)
 5. **Phase 6: Materialized Views** - 3 refresh strategies, query rewriting
 6. **Phase 7: Graph Algorithms** - 20-90% performance improvements
 

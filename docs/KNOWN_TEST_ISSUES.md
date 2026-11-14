@@ -160,9 +160,11 @@ the `std.Io.Dir`/`File` API; stale managed-`ArrayList` calls; the protobuf
    compiles and the four tests self-skip (`error.SkipZigTest`) until the protobuf
    dependency gains union-as-submessage support (or `TwoPhaseOperation` is
    reshaped into a struct-with-oneof). Production never reaches the union-encode
-   path: `distributed/txn_coordinator.TxnCoordinator` is held as a
-   `?*TxnCoordinator = null` field on raft_consensus and is never instantiated.
-   No server code path runs a 2PC protocol: `src/distributed/twophase.zig` is
+   path. `distributed/txn_coordinator.TxnCoordinator` IS instantiated in
+   cluster mode (`ClusterCoordinator.init`, `src/distributed/cluster.zig`) as
+   the apply target of committed `txn_prepare` / `txn_decide` entries, but
+   nothing in the server proposes such an entry (SONNY-6547), so no 2PC
+   ever runs. No server code path runs a 2PC protocol: `src/distributed/twophase.zig` is
    compiled only by its tests (`zig build test-gap0889`), and
    `src/transactions/two_phase_commit.zig`, named here before, was never
    compiled and was removed (SONNY-6298).

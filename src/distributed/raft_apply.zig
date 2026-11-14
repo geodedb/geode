@@ -9,6 +9,17 @@
 // Thread-safety: the callback runs inside the Raft tick loop which is
 // single-threaded per RaftNode.  The GraphStore itself uses internal locking,
 // so concurrent access from the query engine is safe.
+//
+// What reaches this module (SONNY-6547 (6)): the server proposes only
+// `graph_mutation` entries (`statement_proposals.zig`, through
+// `ClusterCoordinator.proposeWrite`), plus the raft library's own no-op.
+// Nothing in the server proposes `schema_change`, `config_change`,
+// `snapshot_pointer`, `txn_prepare` or `txn_decide`: their arms below are
+// the receiving side of features that do not exist yet (replicated DDL,
+// dynamic membership, log truncation, distributed transactions), kept
+// because they are safe and tested, and exercised only by tests that
+// propose or apply such entries directly. In cluster mode the DDL they
+// would carry is refused (`cluster.gateUnreplicatedWrite`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -165,7 +176,8 @@ pub fn resetSnapshotPointer() void {
 // Committed txn_prepare / txn_decide entries route into the existing 2PC
 // machinery (`txn_coordinator.TxnCoordinator`): prepare buffers the write
 // set + takes locks, decide(commit) applies the write set to the store,
-// decide(abort) releases without applying.
+// decide(abort) releases without applying. No server code proposes such an
+// entry (SONNY-6547 (6)): geode runs no distributed transaction.
 // ---------------------------------------------------------------------------
 
 var g_txn_coordinator: ?*TxnCoordinator = null;
@@ -373,7 +385,9 @@ fn applySnapshotPointer(allocator: Allocator, sp: SnapshotPointer) ![]u8 {
 // The APPLY path below does not depend on it: write sets use the native G2PC
 // codec (txn_coordinator.serializeWriteSet / deserializeWriteSet), so the
 // full prepare → decide → store-mutation path is real and exercised by
-// in-process tests constructing commands directly (test-gap0870).
+// in-process tests constructing commands directly (test-gap0870). It is
+// reached only that way: nothing in the server proposes these entries
+// (SONNY-6547 (6)).
 // ---------------------------------------------------------------------------
 
 // CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyTxnPrepare; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
@@ -675,6 +689,9 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
 // Schema change handler
 // ---------------------------------------------------------------------------
 
+/// SONNY-6547 (6): nothing in the server proposes a `schema_change`; CREATE
+/// and DROP GRAPH are refused in cluster mode (`gateUnreplicatedWrite`).
+/// This is the receiving side of a future replicated DDL, reached by tests.
 fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaChange) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: schema_change received but no store registered", &.{});
