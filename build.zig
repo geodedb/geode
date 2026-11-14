@@ -401,6 +401,98 @@ fn disableEmbeddedLspForTestServers(b: *std.Build) void {
     }
 }
 
+/// SONNY-6535: the path a test must not spawn. Whatever the last install
+/// left there ran instead of this build's geode (or the test skipped); a
+/// spawning test imports `geode_test_bin` through `spawnsBuiltGeode`.
+const stale_geode_path = "zig-out/bin/geode";
+/// SONNY-6535: a line naming `stale_geode_path` without spawning it (a path
+/// string a test only parses) carries this trailing comment.
+const stale_geode_path_not_spawned = "not spawned (SONNY-6535)";
+
+/// SONNY-6535: appends to `out` every line of tests/ source `sub_path`, and
+/// of the tests/ files it reaches through a relative `@import("x.zig")`,
+/// whose code (not a `//` comment) names `stale_geode_path`. `seen` holds
+/// the files already scanned; each is scanned once.
+fn findStaleGeodePath(
+    b: *std.Build,
+    sub_path: []const u8,
+    seen: *std.StringHashMapUnmanaged(void),
+    out: *std.ArrayList(u8),
+) void {
+    if (!std.mem.startsWith(u8, sub_path, "tests/")) return;
+    const gop = seen.getOrPut(b.allocator, sub_path) catch @panic("OOM");
+    if (gop.found_existing) return;
+    const src = b.build_root.handle.readFileAlloc(b.graph.io, sub_path, b.allocator, .limited(64 << 20)) catch return;
+    var line_no: usize = 0;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |line| {
+        line_no += 1;
+        if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "//")) continue;
+        const at = std.mem.indexOf(u8, line, stale_geode_path) orelse continue;
+        const comment = std.mem.indexOf(u8, line, "//");
+        if (comment != null and comment.? < at and std.mem.count(u8, line[0..comment.?], "\"") % 2 == 0) continue;
+        if (std.mem.indexOf(u8, line, stale_geode_path_not_spawned) != null) continue;
+        out.print(b.allocator, "  {s}:{d}\n", .{ sub_path, line_no }) catch @panic("OOM");
+    }
+    var rest: []const u8 = src;
+    const marker = "@import(\"";
+    while (std.mem.indexOf(u8, rest, marker)) |i| {
+        rest = rest[i + marker.len ..];
+        const end = std.mem.indexOfScalar(u8, rest, '"') orelse break;
+        const name = rest[0..end];
+        if (!std.mem.endsWith(u8, name, ".zig")) continue;
+        const dir = std.fs.path.dirname(sub_path) orelse ".";
+        const joined = std.fs.path.resolvePosix(b.allocator, &.{ dir, name }) catch @panic("OOM");
+        findStaleGeodePath(b, joined, seen, out);
+    }
+}
+
+/// SONNY-6535: a test that spawned `./zig-out/bin/geode` ran whatever the
+/// last install left there (another commit, another optimize mode) unless
+/// its step happened to depend on the install step, or skipped when none
+/// was there. Configuration fails when the sources of any test artifact a
+/// step runs (its tests/ modules and the tests/ files they `@import`) name
+/// that path; such a test reaches the executable this build emits through
+/// `spawnsBuiltGeode` and `@import("geode_test_bin")`. Runs once, when
+/// build() returns, so `zig build -l` checks it without compiling anything.
+fn checkSpawningTestsUseBuiltGeode(b: *std.Build) void {
+    var seen_steps: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen_steps.deinit(b.allocator);
+    var runs: std.ArrayList(*std.Build.Step) = .empty;
+    defer runs.deinit(b.allocator);
+    for (b.top_level_steps.values()) |tls| collectRunSteps(b, &tls.step, &seen_steps, &runs);
+    var it = g_aggregate_runs.keyIterator();
+    while (it.next()) |run| collectRunSteps(b, run.*, &seen_steps, &runs);
+
+    var seen_files: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen_files.deinit(b.allocator);
+    var seen_mods: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    defer seen_mods.deinit(b.allocator);
+    var pending: std.ArrayList(*std.Build.Module) = .empty;
+    defer pending.deinit(b.allocator);
+    var offenders: std.ArrayList(u8) = .empty;
+    for (runs.items) |step| {
+        const run = step.cast(std.Build.Step.Run) orelse continue;
+        const artifact = run.producer orelse continue;
+        pending.append(b.allocator, artifact.root_module) catch @panic("OOM");
+        while (pending.pop()) |mod| {
+            const gop = seen_mods.getOrPut(b.allocator, mod) catch @panic("OOM");
+            if (gop.found_existing) continue;
+            if (mod.root_source_file) |root| switch (root) {
+                .src_path => |sp| if (sp.owner == b) findStaleGeodePath(b, sp.sub_path, &seen_files, &offenders),
+                else => {},
+            };
+            pending.appendSlice(b.allocator, mod.import_table.values()) catch @panic("OOM");
+        }
+    }
+    if (offenders.items.len > 0) std.debug.panic(
+        "SONNY-6535: these test sources spawn ./" ++ stale_geode_path ++ ", which holds whatever the last install left " ++
+            "(another commit, or nothing: the test then skips). Register the artifact with spawnsBuiltGeode(x_tests) " ++
+            "and spawn `@import(\"geode_test_bin\").geode_exe`, the executable this build emits:\n{s}",
+        .{offenders.items},
+    );
+}
+
 /// SONNY-2772: every named `test-*` step either runs in the aggregate `test`
 /// step or is listed in `not_in_aggregate_steps` with the reason it stays
 /// out. 97 named steps used to run in no aggregate, pre-push shard or CI job
@@ -4211,6 +4303,8 @@ pub fn build(b: *std.Build) void {
     defer checkNamedTestStepsInAggregate(b);
     // SONNY-6332: deferred so it sees every Run step of a geode-spawning test.
     defer disableEmbeddedLspForTestServers(b);
+    // SONNY-6535: deferred so it sees every Run step of a test artifact.
+    defer checkSpawningTestsUseBuiltGeode(b);
     // SONNY-6328: deferred so it sees every TSan Run step.
     defer checkTsanTestsUseLlvm(b);
     // SONNY-2772: named regression steps declared above that had joined no
