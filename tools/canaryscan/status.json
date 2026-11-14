@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T06:35:17.236450585Z",
+  "generated_at": "2026-11-14T06:44:06.520859029Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86404,6 +86404,20 @@
       "features": [
         {
           "feature": "CLI home directory",
+          "aspect": "AbsoluteHomeOnly",
+          "status": "TESTED",
+          "files": [
+            "src/cli/security/home_dir.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6544_relative_home.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "CLI home directory",
           "aspect": "RelativeHomeRefused",
           "status": "TESTED",
           "files": [
@@ -93999,7 +94013,7 @@
       "COMPLETE": 2,
       "EXEMPT": 214,
       "IMPL": 326,
-      "TESTED": 4963
+      "TESTED": 4964
     },
     "by_aspect": {
       "2PC": 3,
@@ -94029,6 +94043,7 @@
       "Abort": 1,
       "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
+      "AbsoluteHomeOnly": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
       "AcceptWithoutPoolAndPeerEndpointChange": 1,

@@ -2389,6 +2389,22 @@
 
 ### Fixed
 
+- **A relative or empty HOME no longer panics the CLI or puts its state
+  under the working directory (SONNY-6544 item 2).** `geode query` built
+  `<HOME>/.geode` for the saved session and passed it to
+  `createDirAbsolute`, which asserts an absolute path: `HOME=relhome geode
+  query` panicked in a Debug build (a release build would have created
+  `relhome/.geode` under the working directory). `auth login
+  --save-session`, `auth token`, `session info` / `rotate` and the state
+  directory of `session`, `authn`, `apikey` and `mtls` had the same assert,
+  and the state directory was created relative to the working directory
+  first. One rule now (`src/cli/security/home_dir.zig`): HOME (USERPROFILE
+  on Windows when HOME is unset) must be absolute, else the command says
+  `HOME is empty or not an absolute path ...` and writes nothing (`geode
+  query` warns and runs without a saved session); a relative
+  `XDG_STATE_HOME` is ignored, as the XDG Base Directory specification
+  requires. Regression (real binary): `zig build
+  test-sonny6544-relative-home`.
 - **MCP `completion/complete` answers a CompleteResult (SONNY-6544 item
   3).** It answered `"result":[]`; MCP 2025-11-25 (the pinned mcp library's
   protocol) requires `{"completion":{"values":[...],"total"?,"hasMore"?}}`,

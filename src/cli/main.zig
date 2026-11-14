@@ -931,6 +931,8 @@ const DsnParseResult = struct {
 };
 
 const dsn_credentials = geode.dsn_credentials;
+/// SONNY-6544: the CLI's one HOME rule (absolute only).
+const home_dir = @import("security/home_dir.zig");
 
 /// SONNY-6544: the userinfo ends at the LAST '@' of the authority and is
 /// percent-decoded (RFC 3986 §3.2, `dsn_credentials`); a first-'@' split
@@ -1499,8 +1501,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     if (use_saved_session and token == null and user == null) {
         const session_storage = @import("security/session_storage.zig");
-        var cred_store = session_storage.CredentialStore.init(allocator) catch blk: {
-            // If we can't initialize credential store, just proceed without it
+        var cred_store = session_storage.CredentialStore.init(allocator) catch |err| blk: {
+            // If we can't initialize credential store, just proceed without it.
+            // SONNY-6544: but say so when HOME is unusable (relative or
+            // empty): no saved session is read or created anywhere else.
+            if (err == error.HomeNotAbsolute) {
+                std.debug.print("Warning: saved session not loaded: {s}\n", .{home_dir.errorMessage(err).?});
+            }
             break :blk null;
         };
 
@@ -4191,22 +4198,14 @@ const CredentialStorage = struct {
     expires_at: i64,
 };
 
+/// SONNY-6544: HOME must be absolute (`home_dir`); `error.HomeNotSet` /
+/// `error.HomeNotAbsolute` otherwise. The `*Absolute` calls below assert it.
 fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
-        else => return err,
-    };
-    defer allocator.free(home_dir);
-    return try std.fs.path.join(allocator, &.{ home_dir, ".geode", "credentials.json" });
+    return home_dir.homePathAlloc(allocator, &.{ ".geode", "credentials.json" });
 }
 
 fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
-    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
-        else => return err,
-    };
-    defer allocator.free(home_dir);
-    const geode_dir = try std.fs.path.join(allocator, &.{ home_dir, ".geode" });
+    const geode_dir = try home_dir.homePathAlloc(allocator, &.{".geode"});
     defer allocator.free(geode_dir);
 
     const io_md = std.Io.Threaded.global_single_threaded.io();
@@ -4565,6 +4564,10 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     if (save_session) {
         saveCredentials(allocator, creds) catch |err| {
+            if (home_dir.errorMessage(err)) |why| {
+                std.debug.print("Error: Could not save credentials: {s}\n", .{why});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
             std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -4640,21 +4643,11 @@ fn cmdAuthValidate(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
-    // Get home directory - use std.process for cross-platform compatibility
-    // Windows uses USERPROFILE, Unix uses HOME
-    const home = if (builtin.os.tag == .windows)
-        getEnvVarOwned(allocator, "USERPROFILE") catch {
-            std.debug.print("Error: USERPROFILE environment variable not set\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-    else
-        getEnvVarOwned(allocator, "HOME") catch {
-            std.debug.print("Error: HOME environment variable not set\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-    defer allocator.free(home);
-
-    const credentials_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
+    // SONNY-6544: HOME (USERPROFILE on Windows) must be absolute.
+    const credentials_path = getCredentialsPath(allocator) catch |err| {
+        home_dir.printError(err);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
     defer allocator.free(credentials_path);
 
     // Try to read the credentials file
