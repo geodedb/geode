@@ -1,112 +1,112 @@
 package main
 
 import (
-    "encoding/json"
-    "flag"
-    "fmt"
-    "log"
-    "os"
-    "time"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"time"
 )
 
 type report struct {
-    GeneratedAt  time.Time        `json:"generated_at"`
-    Requirements []requirementRow `json:"requirements"`
-    Summary      summary          `json:"summary"`
+	GeneratedAt  time.Time        `json:"generated_at"`
+	Requirements []requirementRow `json:"requirements"`
+	Summary      summary          `json:"summary"`
 }
 
 type requirementRow struct {
-    ID       string         `json:"id"`
-    Features []featureEntry `json:"features"`
+	ID       string         `json:"id"`
+	Features []featureEntry `json:"features"`
 }
 
 type featureEntry struct {
-    Feature string   `json:"feature"`
-    Aspect  string   `json:"aspect"`
-    Status  string   `json:"status"`
-    Files   []string `json:"files"`
-    Tests   []string `json:"tests"`
-    Benches []string `json:"benches"`
-    Owner   string   `json:"owner,omitempty"`
-    Updated string   `json:"updated,omitempty"`
-    // first is where the entry's first marker is (SONNY-6531); it orders
-    // the entries of one requirement and is not written out.
-    first srcPos
+	Feature string   `json:"feature"`
+	Aspect  string   `json:"aspect"`
+	Status  string   `json:"status"`
+	Files   []string `json:"files"`
+	Tests   []string `json:"tests"`
+	Benches []string `json:"benches"`
+	Owner   string   `json:"owner,omitempty"`
+	Updated string   `json:"updated,omitempty"`
+	// first is where the entry's first marker is (SONNY-6531); it orders
+	// the entries of one requirement and is not written out.
+	first srcPos
 }
 
 type summary struct {
-    ByStatus map[string]int `json:"by_status"`
-    ByAspect map[string]int `json:"by_aspect"`
+	ByStatus map[string]int `json:"by_status"`
+	ByAspect map[string]int `json:"by_aspect"`
 }
 
 func main() {
-    var root, out, csv, verify string
-    var strict bool
-    flag.StringVar(&root, "root", ".", "repository root to scan")
-    flag.StringVar(&out, "out", "status.json", "output JSON file")
-    flag.StringVar(&csv, "csv", "", "optional CSV output file")
-    flag.StringVar(&verify, "verify", "", "verify claims in GAP_ANALYSIS.md")
-    flag.BoolVar(&strict, "strict", false, "strict mode: fail on stale UPDATED (>60 days) for TESTED/BENCHED")
-    flag.Parse()
+	var root, out, csv, verify string
+	var strict bool
+	flag.StringVar(&root, "root", ".", "repository root to scan")
+	flag.StringVar(&out, "out", "status.json", "output JSON file")
+	flag.StringVar(&csv, "csv", "", "optional CSV output file")
+	flag.StringVar(&verify, "verify", "", "verify claims in GAP_ANALYSIS.md")
+	flag.BoolVar(&strict, "strict", false, "strict mode: fail on stale UPDATED (>60 days) for TESTED/BENCHED")
+	flag.Parse()
 
-    rep, err := Scan(root)
-    if err != nil {
-        log.Printf("ERROR scan: %v", err)
-        os.Exit(3)
-    }
-    rep.GeneratedAt = time.Now().UTC()
+	rep, err := Scan(root)
+	if err != nil {
+		log.Printf("ERROR scan: %v", err)
+		os.Exit(3)
+	}
+	rep.GeneratedAt = time.Now().UTC()
 
-    // Strict staleness check
-    if strict {
-        if err := CheckStaleness(rep, 60*24*time.Hour); err != nil {
-            log.Printf("CANARY_STALE %v", err)
-            // still write outputs for inspection
-            writeOutputs(rep, out, csv)
-            os.Exit(2)
-        }
-    }
+	// Strict staleness check
+	if strict {
+		if err := CheckStaleness(rep, 60*24*time.Hour); err != nil {
+			log.Printf("CANARY_STALE %v", err)
+			// still write outputs for inspection
+			writeOutputs(rep, out, csv)
+			os.Exit(2)
+		}
+	}
 
-    // Verify GAP/claims
-    if verify != "" {
-        claims, err := ParseGAPClaims(verify)
-        if err != nil {
-            log.Printf("ERROR verify-parse: %v", err)
-            writeOutputs(rep, out, csv)
-            os.Exit(3)
-        }
-        if err := VerifyClaims(rep, claims); err != nil {
-            log.Printf("CANARY_VERIFY_FAIL %v", err)
-            writeOutputs(rep, out, csv)
-            os.Exit(2)
-        }
-    }
+	// Verify GAP/claims
+	if verify != "" {
+		claims, err := ParseGAPClaims(verify)
+		if err != nil {
+			log.Printf("ERROR verify-parse: %v", err)
+			writeOutputs(rep, out, csv)
+			os.Exit(3)
+		}
+		if err := VerifyClaims(rep, claims); err != nil {
+			log.Printf("CANARY_VERIFY_FAIL %v", err)
+			writeOutputs(rep, out, csv)
+			os.Exit(2)
+		}
+	}
 
-    if err := writeOutputs(rep, out, csv); err != nil {
-        log.Printf("ERROR write: %v", err)
-        os.Exit(3)
-    }
+	if err := writeOutputs(rep, out, csv); err != nil {
+		log.Printf("ERROR write: %v", err)
+		os.Exit(3)
+	}
 }
 
 func writeOutputs(rep report, out, csv string) error {
-    // JSON
-    jf, err := os.Create(out)
-    if err != nil {
-        return err
-    }
-    defer jf.Close()
-    enc := json.NewEncoder(jf)
-    enc.SetEscapeHTML(false)
-    enc.SetIndent("", "  ")
-    if err := enc.Encode(rep); err != nil {
-        return err
-    }
+	// JSON
+	jf, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	defer jf.Close()
+	enc := json.NewEncoder(jf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rep); err != nil {
+		return err
+	}
 
-    // CSV optional
-    if csv != "" {
-        if err := WriteCSV(rep, csv); err != nil {
-            return err
-        }
-    }
-    fmt.Printf("CANARY_OK wrote %s\n", out)
-    return nil
+	// CSV optional
+	if csv != "" {
+		if err := WriteCSV(rep, csv); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("CANARY_OK wrote %s\n", out)
+	return nil
 }

@@ -159,6 +159,27 @@ repos:
     pass_filenames: false
     args: [src/, tests/, tools/, benchmarks/, scripts/, build.zig, build.zig.zon]
     stages: [pre-commit, pre-push]
+
+      # SONNY-6544: Go sources (tools/canaryscan, tests/quic_tests) must be
+      # gofmt-formatted. Runs on the staged .go files only; gofmt -l exits 0
+      # even when it lists files, so the listing itself is the failure.
+  - id: gofmt
+    name: gofmt (check)
+    entry: bash scripts/hook-env.sh bash
+    args:
+    - -c
+    - |
+      command -v gofmt >/dev/null 2>&1 || { echo "gofmt not found: install Go to commit .go files"; exit 1; }
+      unformatted=$(gofmt -l "$@")
+      if [ -n "$unformatted" ]; then
+        echo "Not gofmt-formatted (run gofmt -w on them):"
+        echo "$unformatted"
+        exit 1
+      fi
+    - gofmt
+    language: system
+    files: \.go$
+    exclude: ^(vendor/|dist/|zig-pkg/)
   - id: no-page-allocator
     name: governance — no std.heap.page_allocator in production src/
     entry: bash scripts/hook-env.sh bash
