@@ -18896,17 +18896,17 @@ pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const
 /// hydrates a graph for the first time can be checked afterwards
 /// (`takeQuarantinedReadError`).
 ///
-/// `writes`: the program changes data. A graph not hydrated yet is then
-/// hydrated first, so its damage is found before anything is written to it:
-/// the write fast paths read no resident product, and wrote to a damaged
-/// store whose hydration had not run yet. A read is not hydrated here (the
-/// engine-direct read paths need no resident product, and a read that does
-/// hydrates and is checked after it).
-pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, writes: bool) ?GraphQuarantineError {
+/// `hydrate`: a graph not hydrated yet is hydrated first, so its damage is
+/// found before the program reads or writes it. The transports pass it for a
+/// change (the write fast paths read no resident product, and wrote to a
+/// damaged store whose hydration had not run yet); their reads hydrate in
+/// the read snapshot (`snapshotUnderReadLock`) and are checked after it. The
+/// executor's gate passes it for every program (SONNY-6541 (3)).
+pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, hydrate: bool) ?GraphQuarantineError {
     clearQuarantinedReadError();
     const store = getPrimaryGlobalStore(allocator);
     for (graph_names) |g| {
-        if (writes) store.ensureGraphHydrated(g);
+        if (hydrate) store.ensureGraphHydrated(g);
         if (store.graphQuarantineError(g)) |err| {
             clearQuarantinedReadError();
             return err;

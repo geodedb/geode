@@ -2330,6 +2330,22 @@
   cluster node registers the coordinator (`ClusterCoordinator.init`); no
   geode code proposes `txn_prepare` / `txn_decide` entries yet. Regression:
   `zig build test-sonny6541-2pc-apply-checkpoint-exclusion`.
+- **The first read of a damaged graph fails closed in process too (SONNY-6541
+  item 3).** The executor's quarantine gate (SONNY-6528) hydrated a
+  program's graphs only for a change; the engine-direct reads (a filtered
+  count, an ORDER BY, `max()`) read the pages and never hydrate, so as the
+  first statement after a restart on a graph whose node pages were zeroed
+  they answered from the zeroed pages (a count, no rows, a null maximum),
+  on the default graph and on another one. The gate now hydrates the
+  program's graphs for a read as well, so the damage is found and the read
+  fails with 58000. Over the wire this was already closed: the QUIC and
+  gRPC reads hydrate in their read snapshot (`snapshotUnderReadLock`)
+  first. Cost on a healthy store, in process (the regression prints it):
+  the gate's per-graph check of a hydrated graph is about 0.25 us (317 ns
+  per call before, 569 ns with the hydration check); the first read after a
+  restart now hydrates the graph, as a server's first read already did.
+  Regression: `zig build test-sonny6541-quarantine-first-read` (in process
+  and against a real server).
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
