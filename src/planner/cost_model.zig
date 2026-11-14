@@ -5,7 +5,7 @@ const cbo = @import("cbo.zig");
 // Advanced cost model with cardinality estimation, selectivity prediction,
 // and histogram-based statistics for accurate query planning.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 pub const CostFactors = struct {
     // CPU costs (per tuple)

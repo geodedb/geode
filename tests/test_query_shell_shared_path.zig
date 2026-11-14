@@ -4,13 +4,13 @@ const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
 const proto_test_util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-001; FEATURE="ShellQuerySharedPath"; ASPECT=ParityTesting; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-002; FEATURE="ShellQuerySharedPath"; ASPECT=GraphScopingParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-003; FEATURE="ShellQuerySharedPath"; ASPECT=LargeOrderedStreamingParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-004; FEATURE="ShellQuerySharedPath"; ASPECT=ExplainProfileParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/explain_profile_unit_tests.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-005; FEATURE="ShellQuerySharedPath"; ASPECT=ErrorPayloadParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-006; FEATURE="ShellQuerySharedPath"; ASPECT=BatchFileSourceParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-007; FEATURE="ShellQuerySharedPath"; ASPECT=QueryFileParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-04-02
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-001; FEATURE="ShellQuerySharedPath"; ASPECT=ParityTesting; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-002; FEATURE="ShellQuerySharedPath"; ASPECT=GraphScopingParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-003; FEATURE="ShellQuerySharedPath"; ASPECT=LargeOrderedStreamingParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-004; FEATURE="ShellQuerySharedPath"; ASPECT=ExplainProfileParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/explain_profile_unit_tests.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-005; FEATURE="ShellQuerySharedPath"; ASPECT=ErrorPayloadParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-006; FEATURE="ShellQuerySharedPath"; ASPECT=BatchFileSourceParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-007; FEATURE="ShellQuerySharedPath"; ASPECT=QueryFileParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-11-14
 
 const CliResult = cli_test_util.CliResult;
 

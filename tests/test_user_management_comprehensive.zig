@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // Comprehensive integration tests for Enterprise User Management System
-// CANARY: REQ=REQ-GQL-202; FEATURE="UserManagementComprehensive"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserManagementComprehensive; OWNER=auth; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-202; FEATURE="UserManagementComprehensive"; ASPECT=Integration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_202_UserManagementComprehensive; OWNER=auth; UPDATED=2026-11-14
 
 // Comprehensive user management structures for integration testing
 const UserRole = enum {

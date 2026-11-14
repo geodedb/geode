@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -15,7 +16,7 @@ fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: 
 
 // OPTIONAL MATCH with varlen should null-preserve when no path exists
 // Use Alice with no LIKES path of length 1..2
-// CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_GRPC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_GRPC; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_GRPC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_GRPC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol gRPC: OPTIONAL MATCH varlen null-preserving" {
     util.testStart("gRPC: OPTIONAL MATCH varlen null-preserving");
@@ -42,7 +43,7 @@ test "protocol gRPC: OPTIONAL MATCH varlen null-preserving" {
 
     util.progress("Starting server (QUIC: {d}, gRPC: {d})...", .{ quic_port, grpc_port });
 
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--listen-grpc", grpc_addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;
@@ -94,7 +95,7 @@ test "protocol gRPC: OPTIONAL MATCH varlen null-preserving" {
 }
 
 // QUIC variant
-// CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_QUIC; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_QUIC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: OPTIONAL MATCH varlen null-preserving" {
     util.testStart("QUIC: OPTIONAL MATCH varlen null-preserving");

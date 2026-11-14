@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceCombinedCheck; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceCombinedCheck; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceCombinedCheck; OWNER=tooling; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_010_GovernanceCombinedCheck" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

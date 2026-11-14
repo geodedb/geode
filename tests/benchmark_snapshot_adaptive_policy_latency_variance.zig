@@ -1,5 +1,5 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Adaptive Policy"; ASPECT=SnapshotAdaptivePolicyLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicyLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Adaptive Policy"; ASPECT=SnapshotAdaptivePolicyLatencyVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicyLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 // Synthetic variance benchmark for snapshot adaptive policy latency. We simulate batches of writes
 // with variable size and apply an adaptive flush heuristic (threshold adjusts based on moving avg).

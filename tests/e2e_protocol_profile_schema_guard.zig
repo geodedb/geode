@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -10,7 +11,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 }
 
 test "protocol: PROFILE schema guard (op_index, error stats)" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Use many stages to exercise ordering
     const res = try run(&.{ exe, "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 4", "--param", "a", "[1,2,2,3,4,5,6,7,8]" });
     defer testing.allocator.free(res.out);

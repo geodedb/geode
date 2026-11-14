@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // Test invokes governance-check script and asserts success JSON fields.
-// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=GovernanceScript; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceScript; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="NEXT Backlog Accuracy"; ASPECT=GovernanceScript; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceScript; OWNER=tooling; UPDATED=2026-11-14
 
 fn runScript(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     var child = std.ChildProcess.init(&[_][]const u8{ "bash", path }, alloc);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -24,7 +25,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -40,7 +41,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
 
     util.progress("Creating test data...", .{});
     var client = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CREATE (n:Person {name: 'Alice'})",
         "--server",
@@ -57,7 +58,7 @@ test "OPTIONAL MATCH returns NULL for unmatched patterns" {
 
     util.progress("Testing OPTIONAL MATCH...", .{});
     var client2 = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "MATCH (n:Person) OPTIONAL MATCH (n)-[r:KNOWS]->(m:Person) RETURN n.name, m.name",
         "--server",
@@ -97,7 +98,7 @@ test "Variable-length path expansion" {
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -125,7 +126,7 @@ test "Variable-length path expansion" {
     util.progress("Creating test data...", .{});
     for (queries) |query| {
         var client = std.process.Child.init(&.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -143,8 +144,8 @@ test "Variable-length path expansion" {
 
     util.progress("Testing variable-length path...", .{});
     var client = std.process.Child.init(&.{
-        "./zig-out/bin/geode", "query", "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
-        "--server",            addr,    "--format=json",
+        geode_test_bin.geode_exe, "query", "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
+        "--server",               addr,    "--format=json",
     }, allocator);
     client.stdout_behavior = .Pipe;
     client.stderr_behavior = .Pipe;
@@ -179,7 +180,7 @@ test "MVCC conflict detection - write-write conflict" {
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -195,7 +196,7 @@ test "MVCC conflict detection - write-write conflict" {
 
     util.progress("Creating initial data...", .{});
     var client1 = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CREATE (n:Account {id: 1, balance: 100})",
         "--server",
@@ -214,8 +215,8 @@ test "MVCC conflict detection - write-write conflict" {
     // Start two transactions that will conflict
     // Transaction 1: BEGIN
     var txn1_begin = std.process.Child.init(&.{
-        "./zig-out/bin/geode", "query", "BEGIN",
-        "--server",            addr,    "--format=json",
+        geode_test_bin.geode_exe, "query", "BEGIN",
+        "--server",               addr,    "--format=json",
     }, allocator);
     txn1_begin.stdout_behavior = .Pipe;
     txn1_begin.stderr_behavior = .Pipe;
@@ -226,8 +227,8 @@ test "MVCC conflict detection - write-write conflict" {
 
     // Transaction 2: BEGIN
     var txn2_begin = std.process.Child.init(&.{
-        "./zig-out/bin/geode", "query", "BEGIN",
-        "--server",            addr,    "--format=json",
+        geode_test_bin.geode_exe, "query", "BEGIN",
+        "--server",               addr,    "--format=json",
     }, allocator);
     txn2_begin.stdout_behavior = .Pipe;
     txn2_begin.stderr_behavior = .Pipe;
@@ -266,7 +267,7 @@ test "Storage catalog persistence" {
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -280,7 +281,7 @@ test "Storage catalog persistence" {
 
     util.progress("Creating some data...", .{});
     var client = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CREATE (n:Person {name: 'Alice', age: 30})",
         "--server",
@@ -310,7 +311,7 @@ test "Storage catalog persistence" {
 
     util.progress("Restarting server on port {d}...", .{port2});
     var server2 = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr2,
@@ -328,7 +329,7 @@ test "Storage catalog persistence" {
 
     util.progress("Querying data after restart...", .{});
     var client2 = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "MATCH (n:Person {name: 'Alice'}) RETURN n.name, n.age",
         "--server",

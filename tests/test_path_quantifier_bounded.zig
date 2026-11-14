@@ -1,8 +1,8 @@
 const std = @import("std");
 const planner = @import("../src/planner.zig");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathQuantifierBoundedExecution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathQuantifierBoundedExecution; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Cycle Determinism"; ASPECT=PathTieBreakMultiBranchDeterminism; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathTieBreakMultiBranchDeterminism; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathQuantifierBoundedExecution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathQuantifierBoundedExecution; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Cycle Determinism"; ASPECT=PathTieBreakMultiBranchDeterminism; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_PathTieBreakMultiBranchDeterminism; OWNER=planner; UPDATED=2026-11-14
 
 fn buildLinearGraph(allocator: std.mem.Allocator, n: usize) !planner.AdjacencyList {
     var adj = planner.AdjacencyList.init(allocator);

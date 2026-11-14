@@ -1,7 +1,7 @@
 const std = @import("std");
 const quic = @import("transport/quic");
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICCore" {
     const allocator = std.testing.allocator;
 
@@ -18,7 +18,7 @@ test "TestCANARY_REQ_GQL_074_QUICCore" {
     try std.testing.expect(transport.endpoint == null); // No endpoint until listen
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICListener; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICListener; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICListener; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICListener; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICListener" {
     const allocator = std.testing.allocator;
 
@@ -35,13 +35,13 @@ test "TestCANARY_REQ_GQL_074_QUICListener" {
     try std.testing.expectError(quic.QuicError.CertificateError, err);
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICAccept; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICAccept; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICAccept; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICAccept; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICAccept" {
     // Test would require actual connection, skip for unit test
     // This is tested via e2e tests
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICStream; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICStream; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICStream; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICStream; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICStream" {
     const allocator = std.testing.allocator;
 
@@ -58,13 +58,13 @@ test "TestCANARY_REQ_GQL_074_QUICStream" {
     try std.testing.expect(conn.next_stream_id == 0);
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICStreamOpen; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICStreamOpen; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICStreamOpen; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICStreamOpen; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICStreamOpen" {
     // Test would require actual connection, skip for unit test
     // This is tested via e2e tests
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICClientConnect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICClientConnect; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICClientConnect; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICClientConnect; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICClientConnect" {
     const allocator = std.testing.allocator;
 
@@ -76,7 +76,7 @@ test "TestCANARY_REQ_GQL_074_QUICClientConnect" {
     try std.testing.expect(client.quic_connection == null);
 }
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICMultiplexing; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICMultiplexing; OWNER=wire; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICMultiplexing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICMultiplexing; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_074_QUICMultiplexing" {
     // Test stream multiplexing capability
     const allocator = std.testing.allocator;

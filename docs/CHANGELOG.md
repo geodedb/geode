@@ -2368,6 +2368,34 @@
 
 ### Fixed
 
+- **Every `tests/*.zig` file is compiled by a build step or listed with the
+  reason it is not, and configuration fails otherwise (SONNY-6542).** 564
+  test files ran in no step: `tests/all_tests.zig` imported 92 of them as
+  unreferenced consts (`const _x = @import("x.zig");`), which Zig never
+  analyzes, so only the ten it passed to `refAllDecls` compiled, and 460
+  more were referenced by nothing. Their 1,110 CANARY markers (1,035
+  `STATUS=TESTED`) counted as tested coverage. `checkTestSourcesReachable`
+  in build.zig walks, when `build()` returns, every module of every
+  compile step any step reaches, follows the relative `@import`s the
+  compiler analyzes (scripts/ci/test_source_reachability.zig, unit-tested
+  by `zig build test-sonny6542-test-source-reachability`) and panics on a
+  tests/ file it does not reach that scripts/ci/unreachable_test_sources.zig
+  does not list. 33 passing files now run in `zig build
+  test-sonny6542-revived` (the e2e ones spawn this build's geode through
+  `geode_test_bin` instead of `./zig-out/bin/geode`); 142 are removed:
+  files that name code or files that no longer exist, debug scratch
+  programs, files with no test block, and 19 that import only `std` and
+  assert on their own copies of the structures, so no geode code ran; 387
+  more are listed, each with a `TODO(SONNY-6542)` reason (does not compile
+  under Zig 0.16; fails when run, untriaged; imports `../src/` by relative
+  path; see docs/KNOWN_TEST_ISSUES.md). The CANARY markers in listed files,
+  and 99 implementation-site markers whose only evidence was a dead test,
+  now say `IMPL`. `tests/all_tests.zig` keeps only the
+  imports it compiles. 62 `tests/*.sh` scripts that no Makefile target, CI
+  job, hook, runbook, live source or kept script runs are removed (26 kept).
+  `tests/qualify_backup_ca.py` requires `--binary` instead of defaulting to
+  `zig-out/bin/geode`, and `proto_test_util.spawnServerRandom` no longer
+  frees the listen address twice when a server misses its startup deadline.
 - **No test step spawns `./zig-out/bin/geode` any more, and configuration
   fails if one does (SONNY-6535).** That path holds whatever the last install
   left (built from another commit or optimize mode, or nothing: the test

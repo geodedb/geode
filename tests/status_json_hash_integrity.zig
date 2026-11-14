@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Status JSON Hash Integrity"; ASPECT=StatusJsonHashIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Status JSON Hash Integrity"; ASPECT=StatusJsonHashIntegrity; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity; OWNER=tooling; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity" {
     var gpa = std.heap.DebugAllocator(.{}){};

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=ConstraintPerfVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_ConstraintPerfVarianceEnvelope; OWNER=schema; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Performance"; ASPECT=ConstraintPerfVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_032_ConstraintPerfVarianceEnvelope; OWNER=schema; UPDATED=2026-11-14
 
 // Simulate constraint evaluation workload with varying mix of passes/failures to measure timing variance stability.
 

@@ -1,8 +1,9 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2026-11-14
 // This test triggers the result guard (max_results=1) and expects ExecutionGuardTrip to appear in additional_statuses.
 
 fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
@@ -32,7 +33,7 @@ test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
     };
 
     util.progress("Starting server on port {d} with MATCH_MAX_RESULTS=1...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

@@ -597,7 +597,7 @@ test "IoT network - security alerts and incidents" {
 }
 
 test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
-    // CANARY: REQ=REQ-GQL-IOT-NETWORK; FEATURE="IoTNetwork"; ASPECT=Domain; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_IOT_NETWORK; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-IOT-NETWORK; FEATURE="IoTNetwork"; ASPECT=Domain; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_IOT_NETWORK; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var data = try NetworkData.init(allocator);

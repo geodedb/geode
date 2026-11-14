@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -6,7 +7,7 @@ fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8)
     return cli_test_util.runAgainstServer(allocator, addr, args);
 }
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2026-11-14
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
     util.testStart("MATCH varlen 1..2 determinism (QUIC)");
     errdefer util.testFail();
@@ -18,7 +19,7 @@ test "protocol QUIC: MATCH varlen 1..2 determinism" {
     const addr = server.getAddr();
 
     util.progress("Running query...", .{});
-    const res = try run(allocator, addr, &.{ "./zig-out/bin/geode", "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b", "--format", "json" });
+    const res = try run(allocator, addr, &.{ geode_test_bin.geode_exe, "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b", "--format", "json" });
     defer allocator.free(res.out);
     defer allocator.free(res.err);
     try std.testing.expectEqual(@as(i32, 0), res.code);

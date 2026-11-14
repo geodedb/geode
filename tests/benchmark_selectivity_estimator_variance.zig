@@ -1,7 +1,7 @@
 const std = @import("std");
 const estimator_mod = @import("optimizer/selectivity_estimator.zig");
 
-// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope; OWNER=optimizer; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-084; FEATURE="SelectivityEstimator"; ASPECT=EstimatorVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope; OWNER=optimizer; UPDATED=2026-11-14
 
 test "BenchmarkCANARY_REQ_GQL_084_EstimatorVarianceEnvelope" {
     const Runs = 30; // provide stable percentile

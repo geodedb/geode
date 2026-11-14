@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const Child = if (@hasDecl(std, "ChildProcess")) std.ChildProcess else std.process.Child;
 
 // End-to-end test invoking `geode storage verify` on GraphStore.
@@ -11,7 +12,7 @@ test "graphstore storage verify CLI" {
     defer env.deinit();
     try env.put("GEODE_DATA_DIR", tmp.dir_path);
 
-    var child = Child.init(&.{ "./zig-out/bin/geode", "storage", "verify", "--check", "graph_store" }, allocator);
+    var child = Child.init(&.{ geode_test_bin.geode_exe, "storage", "verify", "--check", "graph_store" }, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

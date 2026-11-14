@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -12,7 +13,7 @@ fn contains(h: []const u8, n: []const u8) bool {
 
 // Ensure AggregateBuild shows non-zero input_rows when params provide multiple rows.
 test "protocol: PROFILE GROUP BY shows agg_rows_in from params" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Provide param array a with three values; query groups by a returning a and COUNT(*)
     const res = try run(&.{ exe, "PROFILE RETURN a, COUNT(*) AS c GROUP BY a", "--param", "a", "[1,1,2]" });
     defer std.testing.allocator.free(res.out);

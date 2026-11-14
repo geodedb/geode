@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 
 fn runWithEnv(args: []const []const u8) ![]u8 {
@@ -17,7 +18,7 @@ fn runWithEnv(args: []const []const u8) ![]u8 {
 }
 
 test "flags: adaptive estimates flag surfaces when env enabled" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const out = try runWithEnv(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "AdaptiveEstimatesPlanned") != null);

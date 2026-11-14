@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Negative drift test: create a temp copy of GAP_ANALYSIS.md with altered total to force failure.
 // We run governance pointing at modified file by temporarily overwriting then restoring.
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceGapDriftDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceGapDriftDetection; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceGapDriftDetection; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceGapDriftDetection; OWNER=tooling; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_010_GovernanceGapDriftDetection" {
     var gpa = std.heap.DebugAllocator(.{}){};

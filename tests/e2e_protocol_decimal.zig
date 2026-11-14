@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -7,7 +8,7 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 }
 
 test "protocol: decimal arithmetic add/sub/mul/div and comparisons" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Mixed int + decimal additions
     const res1 = try run(&.{ exe, "RETURN 1.25 AS a UNION RETURN 2 AS a" });
     defer std.testing.allocator.free(res1.out);

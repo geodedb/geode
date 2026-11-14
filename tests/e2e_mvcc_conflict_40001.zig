@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -22,7 +23,7 @@ fn run_cli(allocator: std.mem.Allocator, args: []const []const u8) ![]const u8 {
 fn send(allocator: std.mem.Allocator, server: []const u8, text: []const u8) ![]const u8 {
     var args = std.ArrayList([]const u8).init(allocator);
     defer args.deinit();
-    try args.appendSlice(&.{ "./zig-out/bin/geode", "query", text, "--server", server });
+    try args.appendSlice(&.{ geode_test_bin.geode_exe, "query", text, "--server", server });
     return try run_cli(allocator, args.items);
 }
 
@@ -47,7 +48,7 @@ test "concurrent UPDATE_VALUE conflicts yield 40001 on one commit" {
     defer env.deinit();
     try env.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
-    var server = std.process.Child.init(&.{ "./zig-out/bin/geode", "serve", "--listen", addr }, allocator);
+    var server = std.process.Child.init(&.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, allocator);
     server.stdin_behavior = .Ignore;
     server.stdout_behavior = .Inherit;
     server.stderr_behavior = .Inherit;

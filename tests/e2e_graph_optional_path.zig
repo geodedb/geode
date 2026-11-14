@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -7,7 +8,7 @@ const util = @import("proto_test_util.zig");
 // Uses QUIC CLI query path.
 
 fn run_query(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !struct { stdout: []const u8, stderr: []const u8, exit_code: i32 } {
-    const res = try cli_test_util.runAgainstServer(allocator, server, &.{ "./zig-out/bin/geode", "query", query, "--format", "json" });
+    const res = try cli_test_util.runAgainstServer(allocator, server, &.{ geode_test_bin.geode_exe, "query", query, "--format", "json" });
     return .{ .stdout = res.out, .stderr = res.err, .exit_code = res.code };
 }
 

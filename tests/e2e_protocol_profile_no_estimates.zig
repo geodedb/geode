@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -10,7 +11,7 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
 }
 
 test "protocol: PROFILE --no-estimates suppresses planner_estimates" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "--no-estimates", "PROFILE RETURN a AS x DISTINCT LIMIT 2", "--param", "a", "[1,2,2,3]" });
     defer testing.allocator.free(res.out);
     var it = std.mem.splitScalar(u8, res.out, '\n');

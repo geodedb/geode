@@ -1,7 +1,7 @@
 const std = @import("std");
 const planner = @import("geode").planner;
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=QuantifierTieBreakStress; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_QuantifierTieBreakStress; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=QuantifierTieBreakStress; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_016_QuantifierTieBreakStress; OWNER=planner; UPDATED=2026-11-14
 
 // Stress test for bounded variable-length path expansion with deterministic tie-break ordering (UA005/UA006).
 // Builds a branching graph with multiple paths of varying lengths between a start and set of end nodes.

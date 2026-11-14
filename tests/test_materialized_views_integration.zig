@@ -5,7 +5,7 @@ const materialized_views = geode.materialized_views;
 // Note: Imports removed - using mock structures instead of external modules
 const graph_storage = geode.graph_common;
 
-// CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="Materialized View Integration"; ASPECT=DistributedQueries; STATUS=TESTED; TEST=test_materialized_views_integration; OWNER=query; UPDATED=2025-10-05
+// CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="Materialized View Integration"; ASPECT=DistributedQueries; STATUS=IMPL; TEST=test_materialized_views_integration; OWNER=query; UPDATED=2026-11-14
 
 // Mock structures for testing
 const Column = struct {

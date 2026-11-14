@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -55,7 +56,7 @@ test "storage: MATCH 1-hop ordered (GraphStore)" {
 
     // Build args with data_dir
     const args = &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,

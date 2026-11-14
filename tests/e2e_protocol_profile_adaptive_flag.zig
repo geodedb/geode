@@ -1,11 +1,12 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) ![]u8 {
     var child = std.process.Child.init(
         &.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -48,7 +49,7 @@ test "protocol: PROFILE adaptive estimates flag when env enabled" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         &.{"GEODE_ADAPT_ESTIMATES=1"},
     );
     defer server.deinit();

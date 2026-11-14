@@ -9,7 +9,7 @@
 //   - Graph-RBAC bind authorization (REQ-MULTI-GRAPH-RBAC-WIRE-002):
 //     the rbac_allowed check runs on every authenticated graph bind.
 //
-// Every test spawns the real ./zig-out/bin/geode server and speaks the real
+// Every test spawns this build's geode server (geode_test_bin) and speaks the real
 // length-prefixed protobuf protocol over QUIC.  No mocks.
 //
 // CANARY: REQ=REQ-GAP-0514-QUIC-HANDLER; FEATURE="CanaryReconciliation"; ASPECT=QuicHandlerRegression; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=server; UPDATED=2026-06-11

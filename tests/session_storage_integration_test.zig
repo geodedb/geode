@@ -2,6 +2,7 @@
 // Tests the full auth login/logout/query workflow
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const proto_util = @import("proto_test_util.zig");
 
@@ -33,7 +34,7 @@ test "auth login with --save-session creates credentials file" {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "login",
             "-U",
@@ -91,7 +92,7 @@ test "auth logout clears credentials file" {
     var result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "login",
             "-U",
@@ -114,7 +115,7 @@ test "auth logout clears credentials file" {
     result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "logout",
         },
@@ -153,7 +154,7 @@ test "query command auto-loads saved session" {
     var result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "login",
             "-U",
@@ -173,7 +174,7 @@ test "query command auto-loads saved session" {
     result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             "--server",
             addr,
@@ -215,7 +216,7 @@ test "query with --no-saved-session ignores credentials file" {
     var result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "login",
             "-U",
@@ -235,7 +236,7 @@ test "query with --no-saved-session ignores credentials file" {
     result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             "--server",
             addr,
@@ -277,7 +278,7 @@ test "session token has correct file permissions (600)" {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "auth",
             "login",
             "-U",

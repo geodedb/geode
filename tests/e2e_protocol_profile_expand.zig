@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -9,7 +10,7 @@ fn run(args: []const []const u8) ![]u8 {
 }
 
 test "protocol: PROFILE includes Expand stage after NodeScan" {
-    const exe = "zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const out = try run(&.{ exe, "PROFILE RETURN 1 AS x LIMIT 1" });
     defer testing.allocator.free(out);
     var it = std.mem.splitScalar(u8, out, '\n');

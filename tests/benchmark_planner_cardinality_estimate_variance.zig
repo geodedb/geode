@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerCardinalityEstimateVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerCardinalityEstimateVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerCardinalityEstimateVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerCardinalityEstimateVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn syntheticPatternComplexity(i: usize) f64 {
     // Derive a pseudo selectivity complexity factor based on mixed hashing of i.

@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -11,7 +12,7 @@ test "quic: EXPLAIN schema then explain (smoke)" {
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const geode = "./zig-out/bin/geode";
+    const geode = geode_test_bin.geode_exe;
 
     var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();

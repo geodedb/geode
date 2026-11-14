@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Batch"; ASPECT=SnapshotFlushBatchVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushBatchVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Flush Batch"; ASPECT=SnapshotFlushBatchVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotFlushBatchVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 inline fn lcgNext(seed_ptr: *u64) u32 {
     seed_ptr.* = seed_ptr.* * 6364136223846793005 + 1;

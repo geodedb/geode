@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expand Breadth"; ASPECT=Planner; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth; OWNER=planner; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expand Breadth"; ASPECT=Planner; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth; OWNER=planner; UPDATED=2026-11-14
 
 fn simulateBreadth(depth: u32, branching: u32) usize {
     // Simulate node visit count for breadth expansion, no actual graph.

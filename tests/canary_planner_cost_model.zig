@@ -3,7 +3,7 @@ const geode = @import("../src/lib.zig");
 const pipeline = geode.planner_pipeline;
 const enumerator = @import("../src/planner/enumerator.zig");
 
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn makeQuery(ret_items: usize, allocator: std.mem.Allocator) geode.planner.ast.Query {
     var items = allocator.alloc(geode.planner.ast.ReturnItem, ret_items) catch unreachable;

@@ -183,7 +183,7 @@ test "vector index with large dataset" {
 }
 
 test "CANARY: REQ=REQ-GQL-VECTOR-INDEX" {
-    // CANARY: REQ=REQ-GQL-VECTOR-INDEX; FEATURE="VectorIndex"; ASPECT=Core; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VECTOR_INDEX; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-VECTOR-INDEX; FEATURE="VectorIndex"; ASPECT=Core; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VECTOR_INDEX; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var index_mgr = geode.index.IndexManager.init(allocator);

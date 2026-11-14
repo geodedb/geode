@@ -11,8 +11,7 @@ test "transactions e2e basic lifecycle" {
 
     var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     defer server.deinit();
 

@@ -2,6 +2,7 @@
 // Tests migration loading and queries using unified geode CLI
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
@@ -11,7 +12,7 @@ const test_timeout = 30 * std.time.ns_per_s;
 // Helper to run geode query commands against a QUIC server
 fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !std.process.Child.RunResult {
     const argv = [_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "--server",
         server,
@@ -84,7 +85,7 @@ test "dataset migration and basic queries" {
     try env_map.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(
-        &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", "./test_data" },
+        &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data_dir", "./test_data" },
         allocator,
     );
     server.env_map = &env_map;
@@ -168,4 +169,4 @@ test "dataset migration and basic queries" {
     util.testPass();
 }
 
-// CANARY: REQ=REQ-GQL-DATASET-E2E; FEATURE="DatasetIntegrationE2E"; ASPECT=Testing; STATUS=TESTED; TEST=e2e_dataset_integration.zig; BENCH=benchmark_dataset_e2e.zig; OWNER=test-team; UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-DATASET-E2E; FEATURE="DatasetIntegrationE2E"; ASPECT=Testing; STATUS=IMPL; TEST=e2e_dataset_integration.zig; BENCH=benchmark_dataset_e2e.zig; OWNER=test-team; UPDATED=2026-11-14

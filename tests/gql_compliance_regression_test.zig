@@ -3,7 +3,7 @@ const geode = @import("geode");
 const Parser = geode.gql.parser.Parser;
 const Lexer = geode.gql.lexer.Lexer;
 
-// CANARY: REQ=REQ-GQL-COMPLIANCE-001; FEATURE="GQL Compliance Regression"; ASPECT=Parser; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_COMPLIANCE_001_Parser; OWNER=parser; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-COMPLIANCE-001; FEATURE="GQL Compliance Regression"; ASPECT=Parser; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_COMPLIANCE_001_Parser; OWNER=parser; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_COMPLIANCE_001_Parser: Full GQL compliance maintained" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

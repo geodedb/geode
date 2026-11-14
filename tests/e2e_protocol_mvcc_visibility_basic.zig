@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
 const proto_util = @import("proto_test_util.zig");
@@ -84,7 +85,7 @@ test "mvcc visibility snapshot isolation (QUIC)" {
 
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         proto_util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -123,7 +124,7 @@ test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
 
     var server = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         proto_util.TestEnv.standard(),
     );
     defer server.deinit();

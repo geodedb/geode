@@ -497,14 +497,12 @@ fn checkSpawningTestsUseBuiltGeode(b: *std.Build) void {
 /// unit tests, `zig build test-sonny6542-test-source-reachability`).
 const test_source_reachability = @import("scripts/ci/test_source_reachability.zig");
 
-/// SONNY-6542: a `tests/` source no step compiles, kept on purpose.
-const UnreachableTestSource = struct { path: []const u8, reason: []const u8 };
-
 /// SONNY-6542: the `tests/*.zig` files that no build step compiles, each with
-/// the reason it is kept. checkTestSourcesReachable fails configuration for an
-/// unreachable file that is not listed here, and for an entry that names no
-/// file or a file a step compiles. Prefer a named step (or `git rm`).
-const unreachable_test_sources = [_]UnreachableTestSource{};
+/// the reason it is kept (scripts/ci/unreachable_test_sources.zig).
+/// checkTestSourcesReachable fails configuration for an unreachable file that
+/// is not listed there, and for an entry that names no file or a file a step
+/// compiles. Prefer a named step (or `git rm`) to listing a file.
+const unreachable_test_sources = @import("scripts/ci/unreachable_test_sources.zig").entries;
 
 /// SONNY-6542: 92 `tests/*.zig` files were compiled by no build step, and
 /// tests/all_tests.zig imported fourteen more as unreferenced consts, which
@@ -525,21 +523,28 @@ fn checkTestSourcesReachable(b: *std.Build) void {
     var pending_mods: std.ArrayList(*std.Build.Module) = .empty;
     var reached: std.StringHashMapUnmanaged(void) = .empty;
     var pending_files: std.ArrayList([]const u8) = .empty;
-    while (pending_steps.pop()) |step| {
-        const gop = seen_steps.getOrPut(gpa, step) catch @panic("OOM");
-        if (gop.found_existing) continue;
-        pending_steps.appendSlice(gpa, step.dependencies.items) catch @panic("OOM");
-        const compile = step.cast(std.Build.Step.Compile) orelse continue;
-        pending_mods.append(gpa, compile.root_module) catch @panic("OOM");
-    }
-    while (pending_mods.pop()) |mod| {
-        const gop = seen_mods.getOrPut(gpa, mod) catch @panic("OOM");
-        if (gop.found_existing) continue;
-        pending_mods.appendSlice(gpa, mod.import_table.values()) catch @panic("OOM");
-        if (mod.root_source_file) |root| switch (root) {
-            .src_path => |sp| if (sp.owner == b) pending_files.append(gpa, sp.sub_path) catch @panic("OOM"),
-            else => {},
-        };
+    // A module whose root is generated (an Options module) reaches the step
+    // that generates it only at make time, so follow that step here: an
+    // `addOptionPath` to another artifact's binary is how a test reaches a
+    // fixture it runs (tests/sonny6328_tsan_race_fixture.zig).
+    while (pending_steps.items.len > 0 or pending_mods.items.len > 0) {
+        while (pending_steps.pop()) |step| {
+            const gop = seen_steps.getOrPut(gpa, step) catch @panic("OOM");
+            if (gop.found_existing) continue;
+            pending_steps.appendSlice(gpa, step.dependencies.items) catch @panic("OOM");
+            const compile = step.cast(std.Build.Step.Compile) orelse continue;
+            pending_mods.append(gpa, compile.root_module) catch @panic("OOM");
+        }
+        while (pending_mods.pop()) |mod| {
+            const gop = seen_mods.getOrPut(gpa, mod) catch @panic("OOM");
+            if (gop.found_existing) continue;
+            pending_mods.appendSlice(gpa, mod.import_table.values()) catch @panic("OOM");
+            if (mod.root_source_file) |root| switch (root) {
+                .src_path => |sp| if (sp.owner == b) pending_files.append(gpa, sp.sub_path) catch @panic("OOM"),
+                .generated => |gen| pending_steps.append(gpa, gen.file.step) catch @panic("OOM"),
+                else => {},
+            };
+        }
     }
     // Every module root is scanned; imports are followed only into tests/.
     var imports: std.ArrayList([]const u8) = .empty;
@@ -2952,10 +2957,10 @@ pub fn build(b: *std.Build) void {
     drainready_dispatch_step.dependOn(&run_drainready_dispatch_tests.step);
 
     // Subprocess 3-node cluster smoke test (Task A6 of the 2026-05-25
-    // distributed cluster testing plan).  Spawns three real
-    // `./zig-out/bin/geode serve` child processes on loopback and asserts
-    // that they reach the "Cluster coordinator started" startup log and
-    // elect a single leader within 30s.  Does NOT use any geode internal
+    // distributed cluster testing plan).  Spawns three real `geode serve`
+    // child processes (this build's executable, through spawnsBuiltGeode) on
+    // loopback and asserts that they reach the "Cluster coordinator started"
+    // startup log and elect a single leader within 30s.  Does NOT use any geode internal
     // module — the test driver only consumes stdout/stderr of the spawned
     // binaries, so it can run without bringing the full `geode` import
     // graph into the test artifact (lets us keep the test cheap to
@@ -9011,8 +9016,8 @@ pub fn build(b: *std.Build) void {
     const default_data_dir_step = b.step("test-default-data-dir", "ENG-3921 R1: default data dir must be user-scoped, not bare /tmp");
     default_data_dir_step.dependOn(&run_default_data_dir_tests.step);
 
-    // ENG-3921 end-to-end: spawns real `./zig-out/bin/geode serve`
-    // processes and asserts that a second server (and an offline
+    // ENG-3921 end-to-end: spawns real `geode serve` processes (this build's
+    // executable, through spawnsBuiltGeode) and asserts that a second server (and an offline
     // `geode auth reseal`) on a LIVE data dir is refused, while a
     // SIGKILLed holder leaves no stale lock.  Same subprocess shape as
     // test-cluster-3node-subprocess: consumes only the child binary's
@@ -13918,7 +13923,8 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-738 Task W fix round 4a: the round-3 re-review's Critical and
     // blocking findings (C1, C2, C3, I2, I8, I11), in the four sessions, and
-    // over gRPC (in process) and QUIC (against ./zig-out/bin/geode).
+    // over gRPC (in process) and QUIC (against this build's geode, through
+    // spawnsBuiltGeode).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -13983,7 +13989,8 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding
     // the key (the ticket's probe matrix): in-memory, persisted, tenant-scoped
-    // and RLS-policy sessions, and over QUIC against ./zig-out/bin/geode.
+    // and RLS-policy sessions, and over QUIC against this build's geode
+    // (spawnsBuiltGeode).
     const sonny2977_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2977_inline_map_set.zig"), .target = target, .optimize = optimize });
     sonny2977_test_mod.link_libc = true;
     sonny2977_test_mod.addImport("geode", root_mod);
@@ -18718,4 +18725,24 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6542_reach_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6542_reach_step = b.step("test-sonny6542-test-source-reachability", "Run the SONNY-6542 guard self-tests (an unreferenced `const _x = @import(\"x.zig\")` does not compile x.zig; used, pub, discarded and refAllDecls imports do)");
     sonny6542_reach_step.dependOn(&run_sonny6542_reach_tests.step);
+
+    // SONNY-6542: tests/ files no step compiled that pass against this build
+    // (tests/test_sonny6542_revived.zig lists them). They were written for
+    // tests/all_tests.zig's module graph, so they get the same imports; the
+    // e2e ones spawn this build's geode.
+    const sonny6542_revived_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6542_revived.zig"), .target = target, .optimize = optimize }) });
+    {
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| sonny6542_revived_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+    }
+    sonny6542_revived_tests.root_module.link_libc = true;
+    if (enable_openssl) {
+        sonny6542_revived_tests.root_module.linkSystemLibrary("ssl", .{});
+        sonny6542_revived_tests.root_module.linkSystemLibrary("crypto", .{});
+    }
+    if (target.result.os.tag == .linux) sonny6542_revived_tests.root_module.linkSystemLibrary("dl", .{});
+    const run_sonny6542_revived_tests = b.addRunArtifact(sonny6542_revived_tests);
+    shardDep(test_step, &run_sonny6542_revived_tests.step, 4, test_shard_loads, test_shard_index);
+    const sonny6542_revived_step = b.step("test-sonny6542-revived", "Run the SONNY-6542 revived tests: tests/ files no build step compiled (all_tests.zig imported some as unreferenced consts) that pass against this build; the e2e ones spawn this build's geode");
+    sonny6542_revived_step.dependOn(&run_sonny6542_revived_tests.step);
 }

@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const cdc = @import("cdc_enhanced");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Backpressure; STATUS=TESTED; TEST=unit_CDC_backpressure_flag; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Backpressure; STATUS=IMPL; TEST=unit_CDC_backpressure_flag; OWNER=streaming; UPDATED=2026-11-14
 
 test "CDC backpressure flag toggles when pending exceeds watermark" {
     const allocator = testing.allocator;

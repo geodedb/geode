@@ -279,7 +279,7 @@ test "path expansion with depth limit" {
 }
 
 test "CANARY: REQ=REQ-GQL-VARIABLE-PATHS" {
-    // CANARY: REQ=REQ-GQL-VARIABLE-PATHS; FEATURE="VariablePaths"; ASPECT=Core; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_VARIABLE_PATHS; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-VARIABLE-PATHS; FEATURE="VariablePaths"; ASPECT=Core; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_VARIABLE_PATHS; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var graph = try geode.graph_store.GraphStore.init(allocator);

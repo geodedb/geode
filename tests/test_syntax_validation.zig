@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GAP-0234; FEATURE="SyntaxValidationTests"; ASPECT=ParserErrors; STATUS=TESTED; TEST=test_syntax_validation; OWNER=parser; UPDATED=2026-01-25
+// CANARY: REQ=REQ-GAP-0234; FEATURE="SyntaxValidationTests"; ASPECT=ParserErrors; STATUS=IMPL; TEST=test_syntax_validation; OWNER=parser; UPDATED=2026-11-14
 // Unit tests for GQL syntax validation - ensures parser correctly rejects malformed input
 
 const std = @import("std");

@@ -28,7 +28,7 @@ fn monoNsRaw() u64 {
 // PollSync uses mutex+condvar instead of atomic spin-loops, QuicConfig heap-allocated
 // to ensure cert/key DER lifetime, quic_connection nullable field on QuicConnection.
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-11-21
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2026-11-14
 
 const logging = @import("logging");
 const tlog = logging.scoped("transport");

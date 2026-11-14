@@ -1,7 +1,7 @@
 const std = @import("std");
 const planner = @import("../src/planner.zig");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathHighBranchVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathHighBranchVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Variable Length Path Expand"; ASPECT=PathHighBranchVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_016_PathHighBranchVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
     var sum: f128 = 0;

@@ -25,7 +25,7 @@ const PolicyCatalog = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCacheInvalidationRace; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=PolicyCacheInvalidationRace; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_080_PolicyCacheInvalidationRace; OWNER=security; UPDATED=2026-11-14
 
 const PolicyCache = struct {
     allocator: std.mem.Allocator,

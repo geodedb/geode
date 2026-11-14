@@ -3,7 +3,7 @@ const expect = std.testing.expect;
 const mfa = @import("../src/security/mfa.zig");
 
 // Negative Base32 decode robustness tests.
-// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=RobustnessBase32Decode; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_Base32DecodeNegatives; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=RobustnessBase32Decode; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_Base32DecodeNegatives; OWNER=security; UPDATED=2026-11-14
 
 // Access internal function via declaration hack (could be moved to public for testing if desired)
 extern fn base32Decode(allocator: std.mem.Allocator, encoded: []const u8) anyerror![]u8; // expected symbol re-export if made pub

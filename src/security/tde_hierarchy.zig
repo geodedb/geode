@@ -1,7 +1,7 @@
 const std = @import("std");
 const cb = @import("crypto_backend");
 
-// CANARY: REQ=REQ-GQL-046; FEATURE="TDE Key Hierarchy"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_046_KeyHierarchy; OWNER=security; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-046; FEATURE="TDE Key Hierarchy"; ASPECT=Storage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_046_KeyHierarchy; OWNER=security; UPDATED=2026-11-14
 
 /// Simple hierarchical key derivation for Transparent Data Encryption (TDE).
 /// We currently derive distinct data and backup keys from the master key using

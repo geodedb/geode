@@ -1,5 +1,5 @@
 // Comprehensive test suite for 2PC distributed transactions
-// CANARY: REQ=REQ-GQL-2PC-TEST; FEATURE="2PC Test Suite"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_2PC_Suite; OWNER=test; UPDATED=2025-09-29
+// CANARY: REQ=REQ-GQL-2PC-TEST; FEATURE="2PC Test Suite"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_2PC_Suite; OWNER=test; UPDATED=2026-11-14
 
 const std = @import("std");
 const testing = std.testing;

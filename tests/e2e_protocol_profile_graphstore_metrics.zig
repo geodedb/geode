@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 // E2E: PROFILE should include GraphStore metrics.
@@ -22,7 +23,7 @@ test "protocol PROFILE graph_store metrics present" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -36,7 +37,7 @@ test "protocol PROFILE graph_store metrics present" {
     util.progress("Running PROFILE query...", .{});
     var child = std.process.Child.init(
         &.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1",
             "--server",

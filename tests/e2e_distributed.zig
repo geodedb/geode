@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const proto_util = @import("proto_test_util.zig");
 
@@ -22,7 +23,7 @@ fn assertSimpleQueryOk(out: []const u8) !void {
 }
 
 test "distributed: single-node raft enabled simple query" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
     defer server.deinit();
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-raft" });
@@ -33,7 +34,7 @@ test "distributed: single-node raft enabled simple query" {
 }
 
 test "distributed: 2pc enabled simple query" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
     defer server.deinit();
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-2pc" });
@@ -44,7 +45,7 @@ test "distributed: 2pc enabled simple query" {
 }
 
 test "distributed: sharding flag no-op simple query" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
     defer server.deinit();
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1", "--server", server.getAddr(), "--insecure", "--dist-enable-sharding" });

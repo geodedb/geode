@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; BENCH=BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2026-11-14
 // Predictive Skew Filter
 // Heuristic early-abort mechanism for hotspot (skew) detection. Tracks per-key access
 // frequencies with exponential decay to avoid unbounded growth. If a key's adjusted

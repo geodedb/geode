@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerRewritePassVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerRewritePassVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerRewritePassVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn simulateRewritePass(rules: usize) u64 {
     // Simulate a rewrite pipeline scanning a small expression graph applying rules until fixpoint.

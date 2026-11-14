@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=MVCCRepairThroughputVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_013_MVCCRepairThroughputVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=MVCCRepairThroughputVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_013_MVCCRepairThroughputVarianceEnvelope; OWNER=txn; UPDATED=2026-11-14
 
 // Simulates MVCC repair/cleanup pass scanning version chains and pruning obsolete versions.
 // We model chains with varying lengths and random garbage ratio; measure stability of total pass time.

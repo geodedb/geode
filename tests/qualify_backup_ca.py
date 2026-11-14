@@ -200,7 +200,9 @@ def qualify(binary, evidence, private_logs=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=Path("zig-out/bin/geode"))
+    # No default: zig-out/bin/geode holds whatever the last install left
+    # (SONNY-6542). The test passes the executable its build emits.
+    parser.add_argument("--binary", type=Path, required=True, help="the geode executable to qualify")
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--private-logs", type=Path, help="retain private server diagnostics for local debugging")
     args = parser.parse_args()

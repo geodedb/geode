@@ -1,8 +1,9 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMappingThreshold2; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMappingThreshold2; OWNER=engine; UPDATED=2026-11-14
 // This test sets max_results=2 and expects ExecutionGuardTrip advisory still surfaces (query produces >2 rows)
 
 fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
@@ -32,7 +33,7 @@ test "protocol: MATCH guard trip with max_results 2 surfaces advisory" {
     };
 
     util.progress("Starting server on port {d} with MATCH_MAX_RESULTS=2...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

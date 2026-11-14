@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001; FEATURE="Enhanced HNSW Vector Index Integration"; ASPECT=DynamicIndexSelection; STATUS=TESTED; TEST=TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_ENHANCEMENT_001_DynamicIndexSelection; OWNER=vector; UPDATED=2025-10-05
+// CANARY: REQ=REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001; FEATURE="Enhanced HNSW Vector Index Integration"; ASPECT=DynamicIndexSelection; STATUS=IMPL; TEST=TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_ENHANCEMENT_001_DynamicIndexSelection; OWNER=vector; UPDATED=2026-11-14
 
 // Enhanced HNSW Vector Index Optimizer Tests (October 2025)
 

@@ -1,10 +1,11 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
 const expectEqualStrings = testing.expectEqualStrings;
 
-// CANARY: REQ=REQ-SERVER-STARTUP-REGRESSION-001; FEATURE="Server Startup Regression Tests"; ASPECT=UnifiedBinaryServerStartup; STATUS=TESTED; TEST=TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup; OWNER=server; UPDATED=2025-10-05
+// CANARY: REQ=REQ-SERVER-STARTUP-REGRESSION-001; FEATURE="Server Startup Regression Tests"; ASPECT=UnifiedBinaryServerStartup; STATUS=IMPL; TEST=TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup; OWNER=server; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup" {
     // Test unified binary server startup functionality
@@ -14,7 +15,7 @@ test "TestCANARY_REQ_SERVER_STARTUP_REGRESSION_001_UnifiedBinaryServerStartup" {
     // Test 1: Verify server command exists and shows help
     const result1 = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--help" },
+        .argv = &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--help" },
         .max_output_bytes = 1024 * 1024,
     }) catch |err| {
         std.debug.print("Failed to run geode serve --help: {}\n", .{err});
@@ -147,7 +148,7 @@ test "server_startup_no_subprocess_spawning" {
 
     const result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--help" },
+        .argv = &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--help" },
         .max_output_bytes = 1024,
     }) catch |err| {
         std.debug.print("Failed to run server help: {}\n", .{err});

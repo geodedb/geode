@@ -3,8 +3,8 @@ const geode = @import("../src/lib.zig");
 const enumerator = @import("../src/planner/enumerator.zig");
 const pipeline = geode.planner_pipeline;
 
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanJoinReorderDiversity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity; OWNER=planner; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanJoinReorderVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanJoinReorderDiversity; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanJoinReorderVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn buildQueryWithReturns(n: usize, allocator: std.mem.Allocator) geode.planner.ast.Query {
     var items = allocator.alloc(geode.planner.ast.ReturnItem, n) catch unreachable;

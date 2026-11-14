@@ -7,7 +7,7 @@ const geode = @import("geode");
 // when properties with string values were not properly deep-copied, causing
 // dangling pointers when AST memory was freed.
 
-// CANARY: REQ=REQ-GQL-PROPERTY-001; FEATURE="PropertyPersistence"; ASPECT=MemoryManagement; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement; OWNER=engine; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-PROPERTY-001; FEATURE="PropertyPersistence"; ASPECT=MemoryManagement; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement; OWNER=engine; UPDATED=2026-11-14
 
 test "Property storage with deep copy memory management" {
     const allocator = testing.allocator;
@@ -67,7 +67,7 @@ test "UNION property access with persisted data simulation" {
 }
 
 // Test that reproduces the exact segfault scenario that was fixed
-// CANARY: REQ=REQ-GQL-PROPERTY-001; FEATURE="PropertyPersistence"; ASPECT=MemoryManagement; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement; OWNER=engine; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-PROPERTY-001; FEATURE="PropertyPersistence"; ASPECT=MemoryManagement; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement; OWNER=engine; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement" {
     const allocator = testing.allocator;

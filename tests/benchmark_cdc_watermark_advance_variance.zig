@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCWatermarkAdvanceVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDCWatermarkAdvanceVarianceEnvelope; OWNER=cdc; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=CDCWatermarkAdvanceVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_042_CDCWatermarkAdvanceVarianceEnvelope; OWNER=cdc; UPDATED=2026-11-14
 
 fn simulateWatermark(streams: usize, events_per_stream: usize) u64 {
     // Simulate computing a global watermark as min over per-stream last-committed timestamps with jitter.

@@ -10,8 +10,7 @@ test "protocol txn basics" {
 
     var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     defer server.deinit();
 

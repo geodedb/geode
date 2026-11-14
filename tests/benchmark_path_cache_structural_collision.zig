@@ -4,8 +4,8 @@ const planner_root = @import("../src/planner.zig");
 
 // Random structural pattern generator collision benchmark.
 // Generates N random queries and derives structural keys; tracks unique ratio.
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionTightened; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionEnvelope; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyCollisionTightened; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 var seed: u64 = 0x9e3779b97f4a7c15;
 fn rng() u64 {

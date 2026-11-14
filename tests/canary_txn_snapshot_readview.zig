@@ -1,7 +1,7 @@
 const std = @import("std");
 const txn = @import("txn");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SnapshotReadView; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SnapshotReadView; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SnapshotReadView; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_013_SnapshotReadView; OWNER=engine; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_013_SnapshotReadView" {
     var mgr: txn.Manager = undefined;

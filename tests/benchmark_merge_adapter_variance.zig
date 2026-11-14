@@ -13,7 +13,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const graph_storage_adapter = geode.graph_storage_adapter;
 
-// CANARY: REQ=REQ-PERF-MERGE-004; FEATURE="Execution"; ASPECT=AdapterMergeVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-MERGE-004; FEATURE="Execution"; ASPECT=AdapterMergeVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope; OWNER=engine; UPDATED=2026-11-14
 
 fn execQuery(
     allocator: std.mem.Allocator,
@@ -139,7 +139,7 @@ test "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope" {
     );
 }
 
-// CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="Execution"; ASPECT=RelationshipMergeAdjacencyEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="Execution"; ASPECT=RelationshipMergeAdjacencyEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope; OWNER=engine; UPDATED=2026-11-14
 test "BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

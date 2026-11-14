@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -11,7 +12,7 @@ fn runProfileWithThreshold(allocator: std.mem.Allocator, query: []const u8) ![]u
         "GEODE_SPILL_THRESHOLD_BYTES=1",
     };
 
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env);
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env);
     errdefer server.deinit();
     try util.waitForServerReady(allocator, addr, 10000);
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -14,7 +15,7 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // Expect TypeMismatch diagnostic (division by zero) with anchor possibly empty.
 
 test "protocol: division by zero TypeMismatch" {
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1/0 AS x" });
     // Error expected
     try testing.expect(res.code == 2);

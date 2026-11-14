@@ -4,7 +4,7 @@ const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 // E2E test for CDC_CONTROL RESET_GUARDRAILS round trip.
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2E; STATUS=TESTED; TEST=protocol_CDC_CONTROL_reset; OWNER=cdc; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2E; STATUS=IMPL; TEST=protocol_CDC_CONTROL_reset; OWNER=cdc; UPDATED=2026-11-14
 
 test "protocol: CDC control reset" {
     util.testStart("CDC control reset");

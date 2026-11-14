@@ -10,7 +10,7 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 
 // Multi-branch varlen determinism via stable ordering across repeated runs.
 // Graph: A->B->C and A->D->C (two 2-hop paths). We validate that ORDER BY is stable.
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: varlen tie-break determinism multi-branch" {
     util.testStart("varlen tie-break determinism multi-branch");

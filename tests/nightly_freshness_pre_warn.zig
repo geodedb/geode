@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Freshness Pre-Warn"; ASPECT=FreshnessPreWarn; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_FreshnessPreWarn; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Freshness Pre-Warn"; ASPECT=FreshnessPreWarn; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_FreshnessPreWarn; OWNER=tooling; UPDATED=2026-11-14
 
 pub fn main() !void {}
 

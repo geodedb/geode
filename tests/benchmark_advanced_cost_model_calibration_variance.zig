@@ -24,7 +24,7 @@ fn estimatePlanCost(plan: LogicalPlan) f64 {
     };
 }
 
-// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModelCalibrationVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModelCalibrationVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn stats(values: []f64) struct { mean: f64, stddev: f64, cv: f64, p95: f64 } {
     var sum: f128 = 0;
