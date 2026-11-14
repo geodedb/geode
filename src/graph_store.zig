@@ -4367,22 +4367,26 @@ pub const GraphStore = struct {
         slot_id: u64,
         dir: AdjDir,
     ) anyerror!?AdjList {
-        var iter = switch (dir) {
-            .outgoing => adapter.iterateOutgoingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
+        // SONNY-6540 item 3: the engine's edge slice (`getOutgoingEdges`,
+        // SONNY-6498). Through `iterateOutgoingEdges` graph_storage boxed it
+        // in an iterator state and leaked it when the box could not be
+        // allocated (0.4.14 / 0.4.15 `interface.zig` `sliceToEdgeIterator`).
+        const edges = switch (dir) {
+            .outgoing => adapter.getOutgoingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
                 error.NodeNotFound => return null,
                 else => return err,
             },
-            .incoming => adapter.iterateIncomingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
+            .incoming => adapter.getIncomingEdges(graph_name, slot_id, allocator) catch |err| switch (err) {
                 error.NodeNotFound => return null,
                 else => return err,
             },
         };
-        defer iter.deinit();
+        defer allocator.free(edges);
 
         var list: std.ArrayList(u64) = .empty;
         errdefer list.deinit(allocator);
 
-        while (try iter.next()) |edge_entry| {
+        for (edges) |edge_entry| {
             // GAP-ENT-0024 inline-first: v2 adjacency entries carry the PUBLIC
             // id inline — no per-edge property fetch (the whole point).
             if (edge_entry.public_id != 0) {
@@ -15420,8 +15424,11 @@ pub const GraphStore = struct {
                     // per-node edge iteration (see skip_edge_scan above).
                     if (skip_edge_scan) continue;
 
-                    var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
-                    defer out_edges.deinit();
+                    // SONNY-6540 item 3: the engine's slice, as in
+                    // `hydrateAdjFromEngine` (the iterator leaked it when its
+                    // box could not be allocated).
+                    const out_edges = try adapter.getOutgoingEdges(graph_name, slot_id, self.allocator);
+                    defer self.allocator.free(out_edges);
 
                     // Hydration self-heal: physical outgoing edge slots with no
                     // INLINE public id (GAP-ENT-0024), no __geode_internal_edge_id
@@ -15441,7 +15448,7 @@ pub const GraphStore = struct {
                     var orphan_edge_slots: std.ArrayList(OrphanEdgeSlot) = .empty;
                     defer orphan_edge_slots.deinit(self.allocator);
 
-                    while (try out_edges.next()) |edge_entry| {
+                    for (out_edges) |edge_entry| {
                         // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
                         const edge_uuid = blk: {
                             // GAP-ENT-0024 inline-first: v2 adjacency entries carry

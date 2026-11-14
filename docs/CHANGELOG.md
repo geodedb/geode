@@ -2298,6 +2298,19 @@
 
 ### Fixed
 
+- **The lazy adjacency hydrate and the full graph load no longer leak a
+  node's edge slice when an allocation fails (SONNY-6540 item 3).**
+  `GraphStore.hydrateAdjFromEngine` (the adjacency caches' hydrate-on-miss
+  hook, on the query path) and `loadOneGraphFromAdapterFull` read a node's
+  edges through `StorageAdapter.iterateOutgoingEdges` /
+  `iterateIncomingEdges`; graph_storage (0.4.14, and 0.4.15) boxes the
+  engine's edge slice in an iterator state and leaks the slice when the box
+  cannot be allocated (`interface.zig` `sliceToEdgeIterator`). They now read
+  the engine's slice directly (`getOutgoingEdges` / `getIncomingEdges`, as
+  SONNY-6498 did for the other callers). The library defect remains for any
+  other caller of the type-erased iterators (one geode test). Regression:
+  `zig build test-sonny6540-adjacency-hydrate-oom` (every allocation-failure
+  point, both directions).
 - **A WITH in a later part of a chain that aggregates, is DISTINCT or has a
   SKIP / LIMIT reads every row reaching it (SONNY-6540 item 5, BREAKING:
   results change).** The chain executor (`executeQueryChain`) ran each
