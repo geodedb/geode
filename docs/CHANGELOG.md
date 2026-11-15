@@ -2794,6 +2794,28 @@
 
 ### Fixed
 
+- **A graph's first-read hydration no longer quarantines a healthy graph,
+  or hydrates stale data, when a checkpoint runs at the same time
+  (SONNY-6597).** The hydration scan (`hydration_scan.scanShard`) reads
+  store pages straight from disk and sent through the buffer pool only the
+  pages its snapshot found dirty. A checkpoint flush or a dirty eviction
+  clears a page's dirty flag and then writes the page with the pool unlocked,
+  so a snapshot taken in that window read the older disk image: a node
+  created since the last checkpoint was missing, the shard held fewer live
+  records than its manifest counts, and the graph was quarantined as
+  `58000 DataCorruption` (every read and write refused until a restart);
+  a property SET since then hydrated with its old value and reads answered
+  OK. Seen after a restart in `test-sonny6591-fts-write-paths` under load,
+  where the periodic light checkpoints run during the lazy first-read
+  hydration. The scan now reads every page resident in the pool at its
+  snapshot through the pool (cache hits; bounded by the pool, not the
+  store), which covers the window whatever the flush order. The live-count
+  check is unchanged and still detects lost or zeroed node pages
+  (`test-sonny2409-zeroed-page-header`, `test-canary-recovery-corrupt-latency`).
+  Regression: `zig build test-sonny6597-hydration-flush-race` (holds the
+  window open with the graph's own engine thread pool; before the fix the
+  scan found 8 of 9 nodes with DataCorruption, and the old property value).
+
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no

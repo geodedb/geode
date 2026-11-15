@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T16:55:10.928957103Z",
+  "generated_at": "2026-11-15T17:34:27.265198189Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79032,6 +79032,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6597-HYDRATION-FLUSH-RACE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ResidentPagesThroughPool",
+          "status": "TESTED",
+          "files": [
+            "src/storage/hydration_scan.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6597_hydration_flush_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6597_hydration_flush_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6597_hydration_flush_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6598-AUTH-ERROR-AUDIT",
       "features": [
         {
@@ -84455,7 +84488,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4183
+      "TESTED": 4185
     },
     "by_aspect": {
       "2PC": 3,
@@ -87259,7 +87292,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 368,
+      "Regression": 369,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -87329,6 +87362,7 @@
       "ResetGuardrails": 1,
       "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,
+      "ResidentPagesThroughPool": 1,
       "ResolvConfSearchExpansion": 1,
       "ResolveAfterInserts": 1,
       "ResolveBind": 1,

@@ -5005,6 +5005,8 @@ REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,T
 REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,tests/test_sonny6595_fts_snapshot_restart.zig,,,fts,2026-11-15
 REQ-SONNY-6595-STANDALONE-DELETE,DeleteStatement,UnboundDeleteDeletesNothing,TESTED,tests/test_sonny6595_standalone_delete.zig,tests/test_sonny6595_standalone_delete.zig,,engine,2026-11-15
 REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,tests/test_sonny6595_vector_write_paths.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
+REQ-SONNY-6597-HYDRATION-FLUSH-RACE,StorageIntegrity,ResidentPagesThroughPool,TESTED,src/storage/hydration_scan.zig,tests/test_sonny6597_hydration_flush_race.zig,,storage,2026-11-15
+REQ-SONNY-6597-HYDRATION-FLUSH-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6597_hydration_flush_race.zig,tests/test_sonny6597_hydration_flush_race.zig,,storage,2026-11-15
 REQ-SONNY-6598-AUTH-ERROR-AUDIT,AuthOutcomeClassification,LoginRefusalAudit,TESTED,src/security/audit.zig,tests/test_sonny6598_kdf_error_hello.zig,,security,2026-11-15
 REQ-SONNY-6598-AUTH-VERIFY-ERRORS,AuthOutcomeClassification,AuthenticateVerifyErrors,TESTED,src/security/user_management.zig,tests/test_sonny6598_verify_outcomes.zig,,security,2026-11-15
 REQ-SONNY-6598-CHAIN-VERIFY-ERRORS,AuthOutcomeClassification,ChainTamperVerdict,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6598_verify_outcomes.zig,,security,2026-11-15

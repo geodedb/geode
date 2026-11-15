@@ -10867,6 +10867,16 @@ pub fn build(b: *std.Build) void {
     const sonny6492_hyd_step = b.step("test-sonny6492-hydration-live-count-race", "Run SONNY-6492 item 2 regression (a hydration scan between a node create's count and its record never reports DataCorruption; with nothing in flight it finds every node; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
     sonny6492_hyd_step.dependOn(&run_sonny6492_hyd_tests.step);
 
+    // SONNY-6597: a hydration scan during a checkpoint's page writes reads
+    // each page as the buffer pool holds it, never the older disk image.
+    const sonny6597_flush_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6597_hydration_flush_race.zig"), .target = target, .optimize = optimize });
+    sonny6597_flush_test_mod.addImport("geode", root_mod);
+    const sonny6597_flush_tests = b.addTest(.{ .root_module = sonny6597_flush_test_mod });
+    const run_sonny6597_flush_tests = b.addRunArtifact(sonny6597_flush_tests);
+    shardDep(test_step, &run_sonny6597_flush_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6597_flush_step = b.step("test-sonny6597-hydration-flush-race", "Run SONNY-6597 regression (a hydration scan while a checkpoint writes the shard's dirty pages finds a node created since the last checkpoint, with no false DataCorruption quarantine, and hydrates a property SET since then with its new value)");
+    sonny6597_flush_step.dependOn(&run_sonny6597_flush_tests.step);
+
     // SONNY-6492 (3): a replicated data write never creates a dropped graph
     // again; an unlocked createNode never writes into a graph dropped under it.
     const sonny6492_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_replicated_write_dropped_graph.zig"), .target = target, .optimize = optimize });
