@@ -69,7 +69,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **RBAC/ABAC**: Role and attribute-based access control
 - **Row-level security**: policy evaluation and bytecode-compiled expression policies (`src/security/rls_core.zig`)
-- **MFA Support**: Multi-factor authentication integration
+- **MFA**: TOTP enrollment and on-request verification procedures; not enforced at login yet (SONNY-6604)
 - **Session Management**: Secure session handling
 
 ### **Data Protection**

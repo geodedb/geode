@@ -8,7 +8,7 @@ Comprehensive security documentation for Geode graph database.
 
 ## Authentication & Users
 
-- **[USER_AUTH.md](../USER_AUTH.md)** - User authentication, RBAC/ABAC, MFA support
+- **[USER_AUTH.md](../USER_AUTH.md)** - User authentication, RBAC/ABAC, MFA (not enforced at login yet)
 - **[ARGON2ID_IMPLEMENTATION.md](../ARGON2ID_IMPLEMENTATION.md)** - Password hashing implementation
 
 ## Encryption
@@ -40,7 +40,7 @@ Comprehensive security documentation for Geode graph database.
 | WAL Encryption | Complete | KMS_PROVIDER_SYSTEM.md |
 | Key Rotation | Complete | SECURITY_PROGRESS.md |
 | HashiCorp Vault Integration | Complete | KMS_PROVIDER_SYSTEM.md |
-| MFA (TOTP + Recovery) | Complete | USER_AUTH.md |
+| MFA (TOTP + Recovery) | Library and procedures only; not enforced at login (SONNY-6602, SONNY-6604) | USER_AUTH.md |
 | Argon2id Password Hashing | Complete | ARGON2ID_IMPLEMENTATION.md |
 | Row-Level Security | Complete | RLS_IMPLEMENTATION.md |
 | Field-Level Encryption | Complete | FIELD_LEVEL_ENCRYPTION.md |

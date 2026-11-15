@@ -40,7 +40,7 @@ docs/
 ### Enterprise Features
 
 - **[KMS Provider System](KMS_PROVIDER_SYSTEM.md)** - Key management
-- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC with MFA
+- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC (MFA not enforced at login yet, SONNY-6604)
 - **[Audit Logging](AUDIT_LOGGING.md)** - Audit capabilities
 
 ### Advanced Features

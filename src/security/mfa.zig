@@ -111,17 +111,10 @@ pub fn hashRecoveryCode(code: []const u8) [32]u8 {
     return ext_mfa.hashScratchCode(code);
 }
 
-pub fn verifyRecoveryCode(candidate: []const u8, codes_ptr: anytype) ?usize {
-    if (candidate.len != 8) return null;
-
-    for (codes_ptr.*, 0..) |code, idx| {
-        if (code.len != candidate.len) continue;
-        if (std.crypto.timing_safe.eql([8]u8, code[0..8].*, candidate[0..8].*)) { // fips-exempt: non-security (timing-safe TOTP code comparison; HMAC-SHA1 is already routed through cb.Mac.hmacSha1)
-            return idx;
-        }
-    }
-    return null;
-}
+// SONNY-6602: `verifyRecoveryCode` is gone. It matched 8-character codes
+// only, the issued codes are 32 characters, and nothing but a test called
+// it. Recovery codes are redeemed by `SecurityManager.authenticateWithMFA`
+// alone (digests at rest, constant-time compare, single use; SONNY-6600).
 
 pub fn freeEnrollment(allocator: std.mem.Allocator, enrollment: *Enrollment) void {
     for (enrollment.scratch_codes) |code| allocator.free(code);

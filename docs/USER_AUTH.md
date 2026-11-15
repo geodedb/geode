@@ -11,7 +11,6 @@ Geode implements a comprehensive authentication system with post-quantum ready s
 **Supported today:**
 
 - Password-based authentication (Argon2id, RFC 9106)
-- Multi-factor authentication (TOTP)
 - mTLS client-certificate requirement (a transport gate: the client then
   still authenticates with a user name and password)
 - Role-based access control (RBAC)
@@ -24,6 +23,8 @@ that claimed them, see "Session and API-key commands" below):**
   and no server keeps the session ids it issues, so a session can be
   neither reused, validated, rotated nor invalidated
 - API keys (see "API Key Authentication" below)
+- Multi-factor authentication at login (SONNY-6602; wiring it in is story
+  SONNY-6604): see "MFA is not enforced at login" below
 
 **Not supported (no implementation in `src/security/`):**
 
@@ -713,7 +714,7 @@ This authentication system provides **enterprise-grade security** with **complet
 | Method | Status | Use Case | Security Level | Implementation |
 |--------|--------|----------|----------------|----------------|
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
-| **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
+| **MFA (TOTP)** | ❌ Not enforced at login | Two-factor auth | — | HELLO (QUIC and gRPC) never asks for a TOTP code or a recovery code; `SecurityManager.authenticateWithMFA` has no production caller. The `geode.auth.mfa_*` procedures enroll a secret and check a code on request only (SONNY-6602; login enforcement is SONNY-6604); see "MFA is not enforced at login" |
 | **Session Tokens** | ❌ Not on the server wire | Session continuity | — | The HELLO carries no token and no server keeps the session ids it issues (SONNY-6551, SONNY-6554); `src/security/authn.zig`'s session store is used only by the embedded LSP verifier, which nothing populates |
 | **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` only; `geode apikey` refuses everything but a format check (SONNY-6554); see below |
 | **mTLS (Certificate)** | ⚠️ Transport gate only (see below) | Zero-trust, service mesh | Very High | `GEODE_MTLS_REQUIRED` + `GEODE_MTLS_CLIENT_CA`; `src/security/mtls_provider.zig` |
@@ -1010,5 +1011,36 @@ SONNY-6600 carries the rule to the remaining checks:
   the MFA store's lock and zeroed after use, and the store allocates from
   the process allocator (it kept the allocator of the first `mfa_*`
   request). Note: no procedure redeems the codes `mfa_setup` issues.
+
+### MFA is not enforced at login
+
+**No login is protected by MFA today (SONNY-6602).** The QUIC and gRPC
+HELLO authenticate with a user name and password only (mTLS is a
+transport gate in front of it): neither asks for a TOTP code or a
+recovery code, and
+`SecurityManager.authenticateWithMFA`, the library's MFA login path, has
+no production caller. Wiring MFA into HELLO is story SONNY-6604.
+
+What exists:
+
+- `geode.auth.mfa_setup(user)` generates a TOTP secret and recovery codes
+  and stores them (the codes as SHA-256 digests). Every result carries a
+  `warning` column saying MFA is not enforced at login and that no
+  procedure redeems the recovery codes.
+- `geode.auth.mfa_verify(user, code)` checks a code against the stored
+  secret when it is called (an application may use it for its own step-up
+  check). It is rate limited: five failures lock the user's verifications
+  out for five minutes. The attempt is counted in a record made before the
+  code is checked; if that record cannot be made (out of memory) the
+  verification is refused with `53000` and the code is not checked, so the
+  limit cannot be bypassed under memory pressure (it failed open).
+- `geode.auth.mfa_enable(user, code)` checks the code and answers "MFA
+  enabled for <user>" with the same `warning` column; it changes no login.
+- The offline `geode user mfa-setup` and `geode user mfa enable` print the
+  same warning. They set the stored `mfa_enabled` flag (shown by `geode
+  user show`), which no login reads, and `mfa-setup` does not store the
+  recovery codes it prints.
+- `mfa.verifyRecoveryCode`, which matched 8-character codes only (the
+  issued codes are 32), was removed: it had no caller.
 
 CANARY: REQ=REQ-DOC-SONNY-6598-AUTH-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-15

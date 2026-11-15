@@ -264,8 +264,9 @@ fn setupCodes(ga: std.mem.Allocator, session: []const u8, user: []const u8) ![]c
         .page => |p| p,
         else => return error.UnexpectedPayload,
     };
-    // Columns mfa_secret, recovery_codes: "Recovery codes: A B ...".
-    if (page.rows.items.len != 1 or page.rows.items[0].values.items.len != 2) return error.UnexpectedRow;
+    // Columns mfa_secret, recovery_codes ("Recovery codes: A B ..."),
+    // warning (SONNY-6602).
+    if (page.rows.items.len != 1 or page.rows.items[0].values.items.len != 3) return error.UnexpectedRow;
     const text = switch (page.rows.items[0].values.items[1].kind orelse return error.UnexpectedRow) {
         .string_val => |s| s.value,
         else => return error.UnexpectedRow,

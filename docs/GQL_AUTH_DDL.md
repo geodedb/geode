@@ -159,6 +159,16 @@ fails with 55000 (`mfa_not_enrolled`), a code that does not verify with
 28000 (`invalid token`), and a user locked out after five failed
 verifications with 53400. They answered 00000 with a status row
 (`rate_limited`, `mfa_not_enrolled`, `invalid token`, or an `error` column).
+A `mfa_verify` whose attempt record cannot be made (out of memory) fails
+with 53000 without checking the code (SONNY-6602; it was checked and not
+counted toward the lockout).
+
+MFA is not enforced at login (SONNY-6602; story SONNY-6604): HELLO never
+asks for a TOTP code or a recovery code. `mfa_setup` (every shape:
+`mfa_secret`, `recovery_codes`; or `provisioning_uri`, `secret` with
+`show-uri`) and `mfa_enable` (`status`, `username`) answer an extra last
+column, `warning`, that says so; no procedure redeems the recovery codes
+`mfa_setup` issues.
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist

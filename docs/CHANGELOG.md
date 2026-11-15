@@ -4,6 +4,36 @@
 
 ### Security
 
+- **MFA says it is not enforced at login, the MFA rate limiter fails
+  closed, and the dead 8-character recovery-code matcher is gone
+  (SONNY-6602).** No login is protected by MFA: the QUIC and gRPC HELLO
+  never ask for a TOTP code or a recovery code, and
+  `SecurityManager.authenticateWithMFA` has no production caller (wiring
+  MFA into HELLO is story SONNY-6604). `geode.auth.mfa_setup` nonetheless
+  answered a TOTP secret and recovery codes, and `geode.auth.mfa_enable`
+  "MFA enabled for <user>", with nothing saying so. **User-visible:** both
+  now answer an extra last column, `warning`, that says MFA is not enforced
+  at login and that no procedure redeems the recovery codes; the offline
+  `geode user mfa-setup`, `geode user mfa enable` and their `--help` print
+  the same warning, and `mfa-setup --show-recovery` no longer says each
+  code "can only be used once" (the CLI does not even store them).
+  `geode.auth.mfa_verify` counted a failed attempt after checking the code,
+  and when the attempt record could not be made (out of memory) the attempt
+  was logged and not counted: unlimited guesses. The record is now made
+  before the code is checked; a verification whose record cannot be made
+  is refused with GQLSTATUS 53000 without checking the code, and counting a
+  failure in an existing record allocates nothing (a successful
+  verification resets the record instead of dropping it).
+  `mfa.verifyRecoveryCode` matched 8-character codes only while the issued
+  codes are 32 characters, and only a test called it; it was removed.
+  The gRPC Execute result a session retains (`active_result_values`) was
+  checked for a use-after-free: grpc_zig hands every handler
+  `GrpcServer.allocator`, the allocator geode's `GeodeGrpcServer.init` was
+  given, which is the one the session store and every session use (the
+  server's process allocator), not a per-request one, so there is none.
+  Regressions: `zig build test-sonny6602-mfa`, `zig build
+  test-sonny6602-mfa-cli`.
+
 - **Cluster tokens are compared in full and must be at least 16 bytes;
   MFA recovery codes are held as digests; auth checks that could not run
   are errors, not verdicts; stored password hashes are parsed strictly

@@ -98,9 +98,22 @@ fn printUserUsage() void {
     printOut("      (a live server). Use ALTER USER ... SET PASSWORD over the wire, or pass --force.\n", .{});
 }
 
+// CANARY: REQ=REQ-SONNY-6602-MFA-CLI-HONESTY; FEATURE="MFA authentication"; ASPECT=OfflineCliWarning; STATUS=TESTED; TEST=tests/test_sonny6602_mfa_cli.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6602: MFA is not enforced at login (HELLO never asks for a code;
+/// SONNY-6604), and the offline CLI does not keep the recovery codes it
+/// prints. mfa-setup, mfa enable and their help say so.
+const mfa_not_enforced_note =
+    \\Warning: MFA is not enforced at login yet (SONNY-6604). HELLO does not ask
+    \\for a TOTP code or a recovery code, so enrolling or enabling MFA protects
+    \\no login, and the recovery codes printed here are not stored and cannot be
+    \\redeemed.
+    \\
+;
+
 fn printMfaSetupHelp() void {
     printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
     printOut("Generate MFA secret and recovery codes for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
     printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
     printOut("  --show-recovery   Show recovery codes\n", .{});
@@ -119,6 +132,7 @@ fn printMfaVerifyHelp() void {
 fn printMfaToggleHelp() void {
     printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
     printOut("Enable or disable MFA for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
     printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
     printOut("  --help, -h        Show this help\n", .{});
@@ -901,9 +915,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("  {s}\n", .{code});
         }
 
-        if (show_recovery) {
-            printOut("\nStore these recovery codes securely. Each can only be used once.\n", .{});
-        }
+        // SONNY-6602: --show-recovery added "Each can only be used once";
+        // nothing redeems them (they are not even stored).
+        printOut("\n{s}", .{mfa_not_enforced_note});
 
         return;
     }
@@ -1058,6 +1072,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Users should use 'mfa-setup' command for initial MFA configuration with real secret
         if (enable) {
             printOut("MFA enabled for {s}.\n", .{username});
+            printOut("{s}", .{mfa_not_enforced_note});
         } else {
             printOut("MFA disabled for {s}.\n", .{username});
         }
