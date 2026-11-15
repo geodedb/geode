@@ -29,12 +29,11 @@ const cases = [_]Case{
     .{ .q = "MATCH (z:W6587) WITH z FOR x IN z.l MATCH (o:W6587) WHERE o.k = x SET o.seen = z.k", .err = error.WriteClauseNotApplied },
     .{ .q = "MATCH (o:W6587Out) RETURN count(*) AS c", .want = &.{"0"} },
     .{ .q = "MATCH (o:W6587) WHERE o.seen IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
-    // Control: a writing FOR with no WITH (one empty row per element, as
-    // it answers today).
-    .{ .q = "FOR x IN [1, 2] CREATE (:W6587Tmp {x: x})", .want = &.{ "", "" } },
+    // Control: a writing FOR with no WITH (no rows: SONNY-6613 item 3).
+    .{ .q = "FOR x IN [1, 2] CREATE (:W6587Tmp {x: x})" },
     // The admitted shape: one WITH row, every element.
     // It leaked the list the FOR header computed (the result allocator's).
-    .{ .q = "WITH 7 AS k FOR x IN [10, 20, 30] CREATE (:W6587Out {k: k, x: x})", .want = &.{ "", "", "" } },
+    .{ .q = "WITH 7 AS k FOR x IN [10, 20, 30] CREATE (:W6587Out {k: k, x: x})" },
     .{ .q = "MATCH (o:W6587Out) RETURN o.k AS k, o.x AS x", .want = &.{ "7, 10", "7, 20", "7, 30" } },
 };
 

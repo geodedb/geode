@@ -492,6 +492,15 @@ const ForBodyAccumulator = struct {
             self.owns_value_memory = false;
         }
 
+        // CANARY: REQ=REQ-SONNY-6613-FOR-WRITE-RESULT; FEATURE="ForStatement"; ASPECT=NoRowsWithoutReturn; STATUS=TESTED; TEST=tests/test_sonny6613_for_write_result.zig; OWNER=engine; UPDATED=2026-11-15
+        // SONNY-6613 item 3: a body with no RETURN has no result rows (ISO/IEC
+        // 39075:2024 14.1); its run's row of no columns was kept, one per
+        // element. A row of no columns owns no values.
+        if (result.columns.len == 0) {
+            for (result.rows) |row| allocator.free(row);
+            allocator.free(result.rows);
+            result.rows = &.{};
+        }
         // Reserve first: every transfer below must be infallible so a failure
         // can never leave a row owned by BOTH the accumulator and `result`.
         try self.rows.ensureUnusedCapacity(allocator, result.rows.len);

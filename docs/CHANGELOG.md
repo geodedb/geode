@@ -2616,6 +2616,13 @@
 
 ### Fixed
 
+- **A writing FOR with no RETURN answers no rows (SONNY-6613).** `FOR x IN
+  [1, 2] CREATE ...` answered one empty row (no columns) per element, as did
+  an UNWIND before a write; ISO/IEC 39075:2024 14.1: a statement with no
+  RETURN has no result rows. **BREAKING** for a client that counted those
+  rows. A body with a RETURN still answers its rows. Regression:
+  `zig build test-sonny6613-for-write-result`.
+
 - **CANARY markers in src/canary.zig no longer claim tests that do not
   exist (SONNY-6613).** 31 TESTED markers (34 `TestCANARY_*` names, REQ-GQL-
   001 through REQ-GQL-101) named tests no source defines; they are IMPL until
