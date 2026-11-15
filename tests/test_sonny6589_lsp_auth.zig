@@ -276,12 +276,11 @@ test "SONNY-6589 (3): the embedded LSP authenticates with the HELLO credentials 
         defer allocator.free(labels);
         try expectHas("alice on " ++ graph_a, labels, "Visible6589");
         try expectLacks("alice on " ++ graph_a, labels, "Secret6589");
-        // No positive property check: the primary store `geode serve`'s
-        // LSP reads keeps no label-property keys for user graphs, so property
-        // completion is empty for every user (a separate defect, reported
-        // with SONNY-6589). The leak checks below hold either way.
+        // SONNY-6606 (2): the write fast path now counts the keys it
+        // writes, so property completion lists them.
         const own = try completeAtEnd(allocator, &lsp, 3, visible_prop_doc);
         defer allocator.free(own);
+        try expectHas("alice on " ++ graph_a ++ " properties", own, "visible_prop6589");
         try expectLacks("alice on " ++ graph_a ++ " properties of her graph's label", own, "secret_ssn6589");
         const other = try completeAtEnd(allocator, &lsp, 4, secret_prop_doc);
         defer allocator.free(other);
@@ -314,9 +313,12 @@ test "SONNY-6589 (3): the embedded LSP authenticates with the HELLO credentials 
         defer allocator.free(labels);
         try expectHas("bob on " ++ graph_b, labels, "Secret6589");
         try expectLacks("bob on " ++ graph_b, labels, "Visible6589");
-        const props = try completeAtEnd(allocator, &lsp, 3, visible_prop_doc);
+        const props = try completeAtEnd(allocator, &lsp, 3, secret_prop_doc);
         defer allocator.free(props);
-        try expectLacks("bob on " ++ graph_b ++ " properties of a label of " ++ graph_a, props, "visible_prop6589");
+        try expectHas("bob on " ++ graph_b ++ " properties", props, "secret_ssn6589");
+        const other = try completeAtEnd(allocator, &lsp, 4, visible_prop_doc);
+        defer allocator.free(other);
+        try expectLacks("bob on " ++ graph_b ++ " properties of a label of " ++ graph_a, other, "visible_prop6589");
     }
 
     // Fail closed: a wrong password, no credentials, a token nothing issued.

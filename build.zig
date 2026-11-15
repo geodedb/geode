@@ -11164,6 +11164,51 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6592-start-election-lock", "Run SONNY-6592 item 2 regression (RaftNode.startElection waits for inner_mutex, held by another thread as a tick in progress holds it, before it drains Ready)").dependOn(&run_tests.step);
     }
+    // SONNY-6606: the SONNY-6589 follow-ups. Each a real server or binary
+    // except (2) and (6), which drive the GraphStore and the LSP auth state.
+    inline for (.{
+        .{ "tests/test_sonny6606_meta_schema_scope.zig", "test-sonny6606-meta-schema-scope", "Run SONNY-6606 item 1 regression (db.labels, db.relationshipTypes, db.propertyKeys and SHOW TABLES list the session graph's schema only, never another graph's or __geode_security's, for an admin and a readonly user on a real server)" },
+        .{ "tests/test_sonny6606_broken_graph_logs.zig", "test-sonny6606-broken-graph-logs", "Run SONNY-6606 item 3 regression (a graph whose manifest cannot be read is reported once per boot, not at every registry save and full checkpoint)" },
+        .{ "tests/test_sonny6606_backup_handshake_timeout.zig", "test-sonny6606-backup-handshake-timeout", "Run SONNY-6606 item 4 regression (backup create and restore --server give up on a server that does not answer the QUIC handshake within --timeout, not after geode-client-zig's fixed 30 s)" },
+        .{ "tests/test_sonny6606_repl_connect_credentials.zig", "test-sonny6606-repl-connect-credentials", "Run SONNY-6606 item 5 regression (geode shell \\connect authenticates with the credentials the shell logged in with and reaches a second authenticating server)" },
+    }) |t| {
+        const mod = b.createModule(.{ .root_source_file = b.path(t[0]), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(t[1], t[2]).dependOn(&run_tests.step);
+    }
+    // SONNY-6606 (2): batch property writes keep the PERF-C counters.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6606_batch_property_counters.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6606-batch-property-counters", "Run SONNY-6606 item 2 regression (setNodePropertiesBatch and the write fast path's in-memory twin count a new key in listPropertiesForLabel and drop it with its last carrier)").dependOn(&run_tests.step);
+    }
+    // SONNY-6606 (6): an LSP principal verified with no role is None.
+    {
+        const server_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+        server_mod.addImport("geode", root_mod);
+        server_mod.addImport("schema_introspection", schema_introspection_mod);
+        server_mod.link_libc = true;
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6606_lsp_role_default.zig"), .target = target, .optimize = optimize });
+        mod.addImport("lsp_server", server_mod);
+        mod.addImport("geode", root_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6606-lsp-role-default", "Run SONNY-6606 item 6 regression (an LSP principal whose verifier reports no role, \"none\" or an unknown role is None, not ReadOnly)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6321: the TDE self-test procedures through the executor, and no
     // CANARY cites the TDEKeyManager suite for code it does not exercise.
