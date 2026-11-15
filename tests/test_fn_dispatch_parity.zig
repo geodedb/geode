@@ -571,6 +571,10 @@ const function_probes = [_]FunctionProbe{
     // Null handling
     .{ .name = "coalesce", .query = "RETURN coalesce(NULL, 1)" },
     .{ .name = "nullif", .query = "RETURN nullIf(1, 1)" },
+    // SONNY-6613: catalogued extension functions.
+    .{ .name = "st_point", .query = "RETURN st_x(st_point(1, 2))" },
+    .{ .name = "ipaddr", .query = "RETURN ipaddr('10.0.0.1')" },
+    .{ .name = "url_host", .query = "RETURN url_host(url('https://example.com/a'))" },
 };
 
 fn probeFor(name: []const u8) ?FunctionProbe {

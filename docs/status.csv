@@ -63,8 +63,8 @@ GQL-39075-RQ-0018,GQL Feature Gating,GA08DiagnosticGating,TESTED,,,conformance,2
 GQL-39075-RQ-0019,Conformance/PrivilegeViolationClass42,SQLSTATE,TESTED,,,conformance,2026-11-14,tests/test_gql_conformance_rq.zig,23
 GQL-39075-RQ-0020,Conformance/ConnectionLoss40003_08007,SQLSTATE,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig,24
 GQL-39075-RQ-0021,Conformance/ImplTransactionsExplicit,GT01,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig,25
-GQL-39075-RQ-0022,CaseInsensitivity/FindFunction,Regression,TESTED,,,gql,2026-04-10,src/gql/language_metadata.zig,1721
-GQL-39075-RQ-0022,CaseInsensitivity/FindProcedure,Regression,TESTED,,,gql,2026-04-10,src/gql/language_metadata.zig,1756
+GQL-39075-RQ-0022,CaseInsensitivity/FindFunction,Regression,TESTED,,,gql,2026-04-10,src/gql/language_metadata.zig,1752
+GQL-39075-RQ-0022,CaseInsensitivity/FindProcedure,Regression,TESTED,,,gql,2026-04-10,src/gql/language_metadata.zig,1787
 GQL-39075-RQ-0022,Conformance/KeywordsCaseInsensitive,Parser,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig,26
 GQL-39075-RQ-0023,Conformance/GT01TransactionGating,FeatureFlag,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig,27
 GQL-39075-RQ-0023,ConformanceFlags/GT01,ExplicitTransactionGating,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md,920
