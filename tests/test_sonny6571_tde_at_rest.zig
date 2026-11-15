@@ -21,13 +21,23 @@
 // Two steps run this file:
 // * test-sonny6571-tde-at-rest (the single-node and cluster tests): no value
 //   in any file, and no name outside the storage engine's schema-name files
-//   (`schema_name_files`). RED before the fix: every cluster node's Raft log
+//   (`schema_name_files`) on the single server; nothing at all on the
+//   cluster. RED before the fix: every cluster node's Raft log
 //   (`<data>/raft/entries.wal`, the raft library's FileStorage) held the
 //   replicated CREATE - label, key, string and integer value - in plaintext.
 // * test-sonny6571-schema-names (the schema-names test): no name in those
-//   files either. RED until graph-storage encrypts `labels.dict` and
-//   `props.idx` and geode its `prop_exact.idx` / `prop_rev.idx`
-//   (docs/KNOWN_TEST_ISSUES.md).
+//   files either. Was RED until graph-storage 0.4.17 sealed `labels.dict`
+//   and `props.idx` and geode its `prop_exact.idx` / `prop_rev.idx`
+//   (SONNY-6590).
+//
+// SONNY-6590: the single server also gets a property index (CREATE INDEX and
+// an ORDER BY over the property) and a time-series point (with GEODE_TDE_KEY
+// only: time-series encryption follows it), and is scanned running, after a
+// SIGKILL, after a restart on the crashed directory (everything reads back)
+// and after a clean stop. The cluster is scanned after a SIGKILL of every
+// node too, and restarted on those directories. Time-series writes and
+// CREATE INDEX are refused in cluster mode (no replication slice), so the
+// cluster writes graph data only.
 //
 // Skips (error.SkipZigTest) when not on linux, the geode binary is missing,
 // openssl is unavailable, or GEODE_SKIP_SUBPROC_CLUSTER is set (cluster test).
@@ -87,6 +97,13 @@ fn randomHex(aa: std.mem.Allocator, comptime n: usize) ![]u8 {
     return std.fmt.allocPrint(aa, "{x}", .{&raw});
 }
 
+/// Positive, and wide enough that no other 8 bytes match by chance.
+fn randomWideInt() i64 {
+    var raw: [8]u8 = undefined;
+    std.Io.Threaded.global_single_threaded.io().random(&raw);
+    return @intCast((std.mem.readInt(u64, &raw, .little) >> 2) | (1 << 60));
+}
+
 /// The per-run secrets: a TDE key, and a label, property key, property
 /// value and relationship type the scan looks for.
 const Needles = struct {
@@ -99,15 +116,23 @@ const Needles = struct {
     /// little-endian (how an i64 is laid out on disk).
     number: i64,
     number_le: [8]u8,
+    /// SONNY-6590: a time-series point value (`CALL geode.ts.insert`), and
+    /// the name of a property index (`CREATE INDEX`).
+    ts_value: i64,
+    ts_value_le: [8]u8,
+    index_name: []const u8,
 
     fn make(aa: std.mem.Allocator) !Needles {
-        var raw: [8]u8 = undefined;
-        std.Io.Threaded.global_single_threaded.io().random(&raw);
-        // Positive, and wide enough that no other 8 bytes match by chance.
-        const n: i64 = @intCast((std.mem.readInt(u64, &raw, .little) >> 2) | (1 << 60));
+        const n = randomWideInt();
         var le: [8]u8 = undefined;
         std.mem.writeInt(i64, &le, n, .little);
+        const tv = randomWideInt();
+        var tv_le: [8]u8 = undefined;
+        std.mem.writeInt(i64, &tv_le, tv, .little);
         return .{
+            .ts_value = tv,
+            .ts_value_le = tv_le,
+            .index_name = try std.fmt.allocPrint(aa, "sonny6590idx{s}", .{try randomHex(aa, 6)}),
             .tde_key = try randomHex(aa, 32),
             .label = try std.fmt.allocPrint(aa, "Sonny6571L{s}", .{try randomHex(aa, 6)}),
             .key = try std.fmt.allocPrint(aa, "sonny6571k{s}", .{try randomHex(aa, 6)}),
@@ -284,7 +309,7 @@ const Finding = struct {
 const schema_name_files = [_][]const u8{ "labels.dict", "props.idx", "prop_exact.idx", "prop_rev.idx" };
 
 fn isSchemaName(what: []const u8, basename: []const u8) bool {
-    const is_name = std.mem.eql(u8, what, "label") or std.mem.eql(u8, what, "key") or std.mem.eql(u8, what, "reltype");
+    const is_name = std.mem.eql(u8, what, "label") or std.mem.eql(u8, what, "key") or std.mem.eql(u8, what, "reltype") or std.mem.eql(u8, what, "index");
     if (!is_name) return false;
     for (schema_name_files) |f| {
         if (std.mem.eql(u8, f, basename)) return true;
@@ -321,6 +346,8 @@ fn scanTree(
             .{ .what = "key", .needle = needles.key },
             .{ .what = "reltype", .needle = needles.rel_type },
             .{ .what = "number", .needle = &needles.number_le },
+            .{ .what = "tsvalue", .needle = &needles.ts_value_le },
+            .{ .what = "index", .needle = needles.index_name },
         };
         for (checks) |c| {
             if (std.mem.indexOf(u8, bytes, c.needle) != null) {
@@ -356,8 +383,78 @@ const ScanResult = struct { findings: []const Finding, files_scanned: usize };
 // Single node.
 // ---------------------------------------------------------------------------
 
-/// Start one server with TDE on, write a node pair and a relationship, read
-/// it back, and scan the data directory running and after a clean stop.
+/// SIGKILL every node (no shutdown, no checkpoint: the data directory is
+/// what a crash leaves). Only PIDs this test spawned are signalled.
+fn killNodes(nodes: []Node, gpa: std.mem.Allocator, io: std.Io) void {
+    for (nodes) |*n| {
+        if (n.child.id) |pid| {
+            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            _ = tryReap(pid, 0);
+            n.child.id = null;
+        }
+    }
+    stopNodes(nodes, gpa, io);
+}
+
+/// Spawn the single server on `data_dir` and wait until a query answers.
+fn startSingle(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs: Certs, needles: Needles, data_dir: []const u8, port: u16, node: *Node) !void {
+    const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ SINGLE_IP, port });
+    const env = try aa.create(std.process.Environ.Map);
+    env.* = std.process.Environ.Map.init(aa);
+    // GEODE_TDE_KEY only: SONNY-6590 made time-series encryption follow it.
+    try env.put("GEODE_TDE_KEY", needles.tde_key);
+    try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
+    node.* = .{
+        .child = try spawnServe(io, &.{ BINARY_PATH, "serve", "--listen", listen, "--data-dir", data_dir, "--cert", certs.leaf, "--key", certs.key }, env),
+        .data_dir = data_dir,
+    };
+    const deadline = nowMillis() + STARTUP_DEADLINE_MS;
+    while (true) {
+        node.drain(gpa, io);
+        const out = try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, "RETURN 1 AS ready");
+        defer gpa.free(out);
+        if (std.mem.indexOf(u8, out, "ready") != null) return;
+        if (nowMillis() > deadline) {
+            std.debug.print("server never answered; log tail:\n{s}\n", .{node.tail()});
+            return error.ServerStartupTimeout;
+        }
+        sleepMs(250);
+    }
+}
+
+/// Every written item reads back: the relationship property through the
+/// pattern, the node through its indexed property, the time-series point.
+fn expectSingleReads(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs: Certs, needles: Needles, port: u16, node: *Node) !void {
+    const reads = [_]struct { q: []const u8, want: []const u8 }{
+        .{
+            .q = try std.fmt.allocPrint(aa, "MATCH (n:{s})-[r:{s}]->() RETURN r.{s} AS s", .{ needles.label, needles.rel_type, needles.key }),
+            .want = needles.value,
+        },
+        .{
+            .q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) WHERE n.{s} = '{s}' RETURN n.n6571 AS v", .{ needles.label, needles.key, needles.value }),
+            .want = try std.fmt.allocPrint(aa, "{d}", .{needles.number}),
+        },
+        .{
+            .q = try std.fmt.allocPrint(aa, "CALL geode.ts.range(6590, 'sonny6590', 1000, 1000) YIELD ts, value RETURN value", .{}),
+            .want = try std.fmt.allocPrint(aa, "{d}", .{needles.ts_value}),
+        },
+    };
+    for (reads) |r| {
+        const out = try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, r.q);
+        defer gpa.free(out);
+        if (std.mem.indexOf(u8, out, r.want) == null) {
+            node.drain(gpa, io);
+            std.debug.print("{s} did not return {s}: {s}\nlog tail:\n{s}\n", .{ r.q, r.want, out, node.tail() });
+            return error.WriteNotVisible;
+        }
+    }
+}
+
+/// Start one server with TDE on, write a node pair and a relationship, a
+/// property index over the string property and a time-series point, read
+/// them back, and scan the data directory: running, after a SIGKILL, and
+/// after a restart on that directory (everything reads back) and a clean
+/// stop (SONNY-6590).
 fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !ScanResult {
     const certs = try makeCerts(aa, io);
     defer std.Io.Dir.cwd().deleteTree(io, certs.dir) catch {};
@@ -365,48 +462,39 @@ fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Sc
     const port = try test_ports.freeUdpPort();
     const data_dir = try std.fmt.allocPrint(aa, "{s}/data", .{certs.dir});
     try std.Io.Dir.cwd().createDirPath(io, data_dir);
-    const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ SINGLE_IP, port });
 
-    const env = try aa.create(std.process.Environ.Map);
-    env.* = std.process.Environ.Map.init(aa);
-    try env.put("GEODE_TDE_KEY", needles.tde_key);
-    try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
-    var nodes = [_]Node{.{
-        .child = try spawnServe(io, &.{ BINARY_PATH, "serve", "--listen", listen, "--data-dir", data_dir, "--cert", certs.leaf, "--key", certs.key }, env),
-        .data_dir = data_dir,
-    }};
+    var nodes: [1]Node = undefined;
+    var spawned: usize = 0;
     defer {
-        stopNodes(&nodes, gpa, io);
-        nodes[0].capture.buf.deinit(gpa);
+        stopNodes(nodes[0..spawned], gpa, io);
+        for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
     }
+    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0]);
+    spawned = 1;
 
-    // Ready when a query answers.
-    const deadline = nowMillis() + STARTUP_DEADLINE_MS;
-    while (true) {
-        nodes[0].drain(gpa, io);
-        const out = try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, "RETURN 1 AS ready");
-        defer gpa.free(out);
-        if (std.mem.indexOf(u8, out, "ready") != null) break;
-        if (nowMillis() > deadline) {
-            std.debug.print("server never answered; log tail:\n{s}\n", .{nodes[0].tail()});
-            return error.ServerStartupTimeout;
-        }
-        sleepMs(250);
-    }
-
-    const create_q = try std.fmt.allocPrint(aa, "CREATE (:{s} {{{s}: '{s}', n6571: {d}}})-[:{s} {{{s}: '{s}'}}]->(:{s})", .{ needles.label, needles.key, needles.value, needles.number, needles.rel_type, needles.key, needles.value, needles.label });
-    gpa.free(try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, create_q));
-    const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s})-[r:{s}]->() RETURN r.{s} AS s", .{ needles.label, needles.rel_type, needles.key });
-    const read_out = try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, read_q);
-    defer gpa.free(read_out);
-    if (std.mem.indexOf(u8, read_out, needles.value) == null) {
-        std.debug.print("write not visible: {s}\nlog tail:\n{s}\n", .{ read_out, nodes[0].tail() });
-        return error.WriteNotVisible;
-    }
+    const writes = [_][]const u8{
+        try std.fmt.allocPrint(aa, "CREATE (:{s} {{{s}: '{s}', n6571: {d}}})-[:{s} {{{s}: '{s}'}}]->(:{s})", .{ needles.label, needles.key, needles.value, needles.number, needles.rel_type, needles.key, needles.value, needles.label }),
+        try std.fmt.allocPrint(aa, "CREATE INDEX {s} ON :{s}({s})", .{ needles.index_name, needles.label, needles.key }),
+        try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN n.{s} AS k ORDER BY k", .{ needles.label, needles.key }),
+        try std.fmt.allocPrint(aa, "CALL geode.ts.insert(6590, 'sonny6590', 1000, {d})", .{needles.ts_value}),
+    };
+    for (writes) |q| gpa.free(try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, q));
+    try expectSingleReads(gpa, aa, io, certs, needles, port, &nodes[0]);
 
     var findings: std.ArrayList(Finding) = .empty;
     var scanned: usize = 0;
     try scanTree(gpa, aa, io, data_dir, needles, "running", &findings, &scanned);
+    killNodes(&nodes, gpa, io);
+    try scanTree(gpa, aa, io, data_dir, needles, "killed", &findings, &scanned);
+
+    // Restart on the crashed directory: recovery replays the encrypted WAL
+    // and everything reads back; then a clean stop checkpoints.
+    nodes[0].capture.buf.deinit(gpa);
+    spawned = 0;
+    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0]);
+    spawned = 1;
+    try expectSingleReads(gpa, aa, io, certs, needles, port, &nodes[0]);
+    try scanTree(gpa, aa, io, data_dir, needles, "restart", &findings, &scanned);
     stopNodes(&nodes, gpa, io);
     try scanTree(gpa, aa, io, data_dir, needles, "stopped", &findings, &scanned);
     report("single node, TDE on", findings.items, scanned);
@@ -616,9 +704,22 @@ test "cluster: with TDE on, no replicated plaintext appears anywhere under any n
             }
         }
     }
-    stopNodes(&nodes, gpa, io);
+    // SONNY-6590: SIGKILL every node (what a crash leaves on disk), scan,
+    // restart on those directories, read both writes back on every node,
+    // stop cleanly and scan again.
     for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "restart", &findings, &scanned);
+    killNodes(&nodes, gpa, io);
+    for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "killed", &findings, &scanned);
+    for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
+    spawned = 0;
+    _ = try startCluster(spec, gpa, aa, io, &nodes, &spawned);
+    try expectOnEveryNode(spec, gpa, aa, io, &nodes, read_q, needles.value);
+    try expectOnEveryNode(spec, gpa, aa, io, &nodes, read_q, second);
+    stopNodes(&nodes, gpa, io);
+    for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "stopped", &findings, &scanned);
 
     report("3-node cluster, TDE on", findings.items, scanned);
-    try std.testing.expectEqual(@as(usize, 0), countOtherHits(findings.items));
+    // SONNY-6590: names included (graph-storage 0.4.17 seals labels.dict and
+    // props.idx, geode its prop_exact.idx / prop_rev.idx).
+    try std.testing.expectEqual(@as(usize, 0), findings.items.len);
 }
