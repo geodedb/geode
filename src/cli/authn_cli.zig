@@ -173,7 +173,7 @@ pub fn cmdAuthn(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printAuthnUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcommand, "config")) {
         try cmdAuthnConfig(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "test-access")) {
@@ -230,7 +230,7 @@ fn cmdAuthnConfig(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  geode authn config --allow-anonymous-path /health\n" ++
                 "  geode authn config --require-mfa-path /admin/*\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         } else if (std.mem.eql(u8, argv[i], "--allow-anonymous-path") and i + 1 < argv.len) {
             i += 1;
             anonymous_path = argv[i];
@@ -262,7 +262,7 @@ fn cmdAuthnConfig(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     try saveAuthnConfig(allocator, config);
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -283,7 +283,7 @@ fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
                 "  --mfa-verified      Test with MFA verified\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         } else if (std.mem.eql(u8, argv[i], "--path") and i + 1 < argv.len) {
             i += 1;
             test_path = argv[i];
@@ -309,7 +309,7 @@ fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
                 std.mem.startsWith(u8, test_path.?, anon_path[0 .. anon_path.len - 1])))
         {
             std.debug.print("Access allowed: anonymous path\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -321,17 +321,17 @@ fn cmdAuthnTestAccess(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
         {
             if (session_only and !mfa_verified) {
                 std.debug.print("requires_mfa: true\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.success));
+                return;
             } else if (mfa_verified) {
                 std.debug.print("requires_mfa: false\n", .{});
                 std.debug.print("Access elevated: MFA verified\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.success));
+                return;
             }
         }
     }
 
     std.debug.print("Access allowed: authenticated path\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 fn cmdAuthnStepupCheck(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -349,7 +349,7 @@ fn cmdAuthnStepupCheck(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: 
                 "  --action <action>   Action to check\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         } else if (std.mem.eql(u8, argv[i], "--action") and i + 1 < argv.len) {
             i += 1;
             action = argv[i];
@@ -367,7 +367,7 @@ fn cmdAuthnStepupCheck(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: 
     } else {
         std.debug.print("No step-up required for action: {s}\n", .{action.?});
     }
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 fn cmdAuthnStepupMark(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -382,7 +382,7 @@ fn cmdAuthnStepupMark(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
                 "Options:\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -392,5 +392,5 @@ fn cmdAuthnStepupMark(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
 
     std.debug.print("Session elevated successfully.\n", .{});
     std.debug.print("Elevation expires at: {d}\n", .{expires_at});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }

@@ -170,6 +170,9 @@ const cmdFLE = fle_cli.cmdFLE;
 // Auth chain management CLI module (init, reseal, verify)
 const auth_init_cli = @import("auth_init_cli.zig");
 
+// SONNY-6560: the formats `geode query --format` renders.
+const transport_response = geode.cli_transport_response;
+
 // Import shared types and functions from cli_dispatcher
 const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
@@ -292,9 +295,6 @@ fn printQueryUsage() void {
         "                         sent again\n" ++
         "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
         "                         independent of the authenticated user's role\n" ++
-        "  --begin                Start transaction\n" ++
-        "  --commit               Commit transaction\n" ++
-        "  --rollback             Rollback transaction\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
         "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
@@ -316,7 +316,7 @@ fn printQueryUsage() void {
         "Authentication:\n" ++
         "  For authenticated servers, provide both --user and --password:\n" ++
         "    geode query --user geode --password yourpassword \"RETURN 1\"\n" ++
-        "    geode query -U geode -P \"RETURN 1\"  # (prompts for password)\n" ++
+        "    geode query \"RETURN 1\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  Environment variables are NOT used for authentication.\n" ++
         "  The default admin username is 'geode' (not 'admin').\n" ++
@@ -334,7 +334,7 @@ fn printQueryUsage() void {
         "Examples:\n" ++
         "  # Authenticated query (use 'geode' as default admin user)\n" ++
         "  geode query --user geode --password \"$GEODE_DEFAULT_PASSWORD\" \"RETURN 1 AS x\"\n" ++
-        "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
+        "  geode query \"RETURN 1 AS x\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  # Using DSN connection string\n" ++
         "  geode query --dsn quic://localhost:3141 \"RETURN 1 AS x\"\n" ++
@@ -364,6 +364,12 @@ fn printQueryUsage() void {
         "  cat queries.txt | geode query --batch\n" ++
         "  cat queries.txt | geode query --batch -   # explicit stdin marker\n" ++
         "  echo -e 'RETURN 1\\nRETURN 2' | geode query --batch --server localhost:3141\n" ++
+        "\n" ++
+        "  # An explicit transaction: its statements on one connection (--batch)\n" ++
+        "  printf 'BEGIN\\nCREATE (:T)\\nROLLBACK\\n' | geode query --batch\n" ++
+        "\n" ++
+        "An option geode query does not know, a --format it does not render, or a\n" ++
+        "value option without its value exits 2 (usage error).\n" ++
         "\n", .{});
 }
 
@@ -1156,6 +1162,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             format = argv[i + 1];
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-FORMAT; FEATURE="CliOptions"; ASPECT=UnsupportedFormatRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: any value used to be stored, and a format the
+            // renderer does not draw printed nothing and exited 0.
+            if (!transport_response.isSupportedFormat(format)) {
+                std.debug.print("Error: geode query: unsupported --format '{s}' (supported: " ++ transport_response.supported_formats_text ++ ")\n", .{format});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure-tls-skip-verify")) {
             insecure = true;
@@ -1315,11 +1328,29 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             forward_principal_envelope_hex = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--begin") or std.mem.eql(u8, arg, "--commit") or std.mem.eql(u8, arg, "--rollback")) {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-TXN-FLAGS; FEATURE="CliOptions"; ASPECT=TransactionFlagsRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: --help documented these and nothing read them
+            // (the client that did was deleted in 78c9534e4), so
+            // `--begin --rollback` committed the write. Each geode query
+            // is its own connection; an explicit transaction is BEGIN /
+            // ... / COMMIT or ROLLBACK lines of --batch, on one connection.
+            std.debug.print("Error: geode query: {s} is not supported: run the transaction's statements with --batch, one per line, between BEGIN and COMMIT or ROLLBACK (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
-            // First non-option argument is the query text, or "-" for stdin
-            if (query_text == null) {
-                query_text = arg;
+            // First non-option argument is the query text, or "-" for stdin.
+            // SONNY-6560: a second one used to be dropped without a word.
+            if (query_text != null) {
+                std.debug.print("Error: geode query: unexpected argument '{s}': the query is one argument (quote it), or - for stdin (see geode query --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
+            query_text = arg;
+        } else {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-UNKNOWN-OPTION; FEATURE="CliOptions"; ASPECT=UnknownOptionRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: an option geode query does not know used to be
+            // skipped (exit 0); `geode serve` refuses one since SONNY-6442.
+            std.debug.print("Error: geode query: unknown option '{s}' (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -4547,16 +4578,14 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
             std.debug.print("geode auth logout - Clear saved credentials\n" ++
                 "\n" ++
-                "Usage: geode auth logout [--token <token>]\n" ++
+                "Usage: geode auth logout\n" ++
                 "\n" ++
                 "This command clears saved authentication credentials from ~/.geode/credentials.json\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         }
-        // Accept --token flag (used for specific session invalidation, currently no-op)
-        if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-            i += 1; // skip token value
-        }
+        // SONNY-6560: `--token` was documented and skipped (a no-op); it is
+        // refused as unknown (option_check).
     }
 
     // Clear saved credentials (SONNY-6551: creates nothing; an unusable

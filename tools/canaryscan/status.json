@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T09:04:27.175868505Z",
+  "generated_at": "2026-11-15T12:02:27.818424893Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79132,6 +79132,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6559-COMPLETION-STDOUT",
+      "features": [
+        {
+          "feature": "CliExitPaths",
+          "aspect": "CompletionOnStdout",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_cli_exit_paths.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6559-MCP-BACKEND",
       "features": [
         {
@@ -79151,6 +79170,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6559-MCP-RESOURCE-URIS",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "StrictUrisAndTemplates",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/resources.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_mcp_backend.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6559-MCP-WIRE-DECODE",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "FullResultDecode",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_mcp_backend.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6559-RETURN-THROUGH-MAIN",
+      "features": [
+        {
+          "feature": "CliExitPaths",
+          "aspect": "ReturnThroughMain",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6559_cli_exit_paths.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6560-CLI-UNSUPPORTED-OPTIONS",
       "features": [
         {
@@ -79159,6 +79235,139 @@
           "status": "TESTED",
           "files": [
             "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-GLOBAL-UNREAD-OPTIONS",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "DocumentedUnreadRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-GRAPH-FORMATS",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "DotMermaidEveryShape",
+          "status": "TESTED",
+          "files": [
+            "src/client/query_result_accumulator.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-MCP-OPTIONS",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "McpOptionsRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-QUERY-FORMAT",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "UnsupportedFormatRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-QUERY-TXN-FLAGS",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "TransactionFlagsRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-QUERY-UNKNOWN-OPTION",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "UnknownOptionRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6560_cli_unsupported_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6560-UNKNOWN-OPTION",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "UnknownOptionRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/option_check.zig"
           ],
           "tests": [
             "tests/test_sonny6560_cli_unsupported_options.zig"
@@ -84272,7 +84481,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4175
+      "TESTED": 4186
     },
     "by_aspect": {
       "2PC": 3,
@@ -84795,6 +85004,7 @@
       "CompiledPlan": 1,
       "CompilerLimits": 1,
       "CompleteResultShape": 1,
+      "CompletionOnStdout": 1,
       "CompletionTenantGate": 1,
       "Completions": 2,
       "Complex": 1,
@@ -85147,8 +85357,10 @@
       "DocumentationCoverage": 1,
       "DocumentedCommandsExist": 1,
       "DocumentedNames": 1,
+      "DocumentedUnreadRefused": 1,
       "Domain": 1,
       "DomainTriePersistence": 1,
+      "DotMermaidEveryShape": 1,
       "DotProductIsFloat": 1,
       "DoubleFreeFix": 3,
       "DownReversalSafety": 1,
@@ -85558,6 +85770,7 @@
       "FtsStrictTenancyFailClosed": 1,
       "FullMigration": 1,
       "FullRecordEventHash": 1,
+      "FullResultDecode": 1,
       "FulltextDropInDefault": 1,
       "FulltextOptimization": 1,
       "FulltextSearchRefused": 1,
@@ -86178,6 +86391,7 @@
       "McpCancellation": 1,
       "McpDsn": 1,
       "McpEnvelopeRoundTrip": 1,
+      "McpOptionsRefused": 1,
       "MeanDistance": 1,
       "Measurement": 1,
       "MemberOfValue": 1,
@@ -87176,7 +87390,7 @@
       "ReturnFix": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
-      "ReturnThroughMain": 1,
+      "ReturnThroughMain": 2,
       "ReverseTraversal": 2,
       "RevivedTests": 1,
       "RevokeFailureReported": 1,
@@ -87611,6 +87825,7 @@
       "StressHarnessTeardown": 1,
       "StrictCreatePolicy": 1,
       "StrictIso8601Strings": 1,
+      "StrictUrisAndTemplates": 1,
       "String": 1,
       "StringFunctions": 2,
       "StringHelpers": 1,
@@ -87735,6 +87950,7 @@
       "Transaction": 1,
       "TransactionBodyProjection": 1,
       "TransactionCoordination": 1,
+      "TransactionFlagsRefused": 1,
       "TransactionLifecycle": 1,
       "Transactions": 1,
       "TransferEstimation": 1,
@@ -87834,7 +88050,7 @@
       "UnknownFunctionEscapes": 1,
       "UnknownLabel": 1,
       "UnknownMeansEncrypted": 1,
-      "UnknownOptionRefused": 1,
+      "UnknownOptionRefused": 3,
       "UnknownPropertyDiagnostic": 1,
       "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
@@ -87844,6 +88060,7 @@
       "UnsuppliedParameter": 1,
       "UnsupportedAggregateReject": 1,
       "UnsupportedAlgorithm": 2,
+      "UnsupportedFormatRefused": 1,
       "UnsupportedImageRemoved": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,

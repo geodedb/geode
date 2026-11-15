@@ -35,6 +35,7 @@ const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
 const util = @import("proto_test_util.zig");
+const option_check = @import("cli_option_check");
 
 const linux = std.os.linux;
 const exe = geode_test_bin.geode_exe;
@@ -73,6 +74,10 @@ const Env = struct {
     fn start() !Env {
         var root = try test_scratch.ScratchDir.create("sonny6560-cli");
         errdefer root.remove();
+        // The offline auth commands (user, role, policy, grant, ...) open
+        // this data directory; they do not create it.
+        var dir_buf: [256]u8 = undefined;
+        try std.Io.Dir.cwd().createDirPath(fsIo(), try std.fmt.bufPrint(&dir_buf, "{s}/cli-data", .{root.path()}));
         const server = try util.spawnServerRandom(testing.allocator, util.TestEnv.standard());
         return .{ .root = root, .server = server };
     }
@@ -228,7 +233,6 @@ const command_prefixes = [_][]const []const u8{
     &.{ "authn", "test-access", "--path", "/x" },
     &.{ "authn", "stepup-check", "--action", "read" },
     &.{ "authn", "stepup-mark" },
-    &.{ "mtls", "status" },
     &.{ "tenant", "list" },
     &.{ "tenant", "create", "t6560" },
     &.{ "audit", "verify" },
@@ -451,7 +455,10 @@ test "SONNY-6560 (3) options a help text documents and nothing reads are refused
     var env = try Env.start();
     defer env.stop();
 
+    // geode serve reads the global --config (its parser scans the whole
+    // command line); every other command ignored it.
     try expectRefused(&env, &.{ "--config", "geode.toml", "query", "RETURN 1" }, "--config");
+    try expectRefused(&env, &.{ "--config", "geode.toml", "user", "list" }, "--config");
     try expectRefused(&env, &.{ "--json", "query", "RETURN 1" }, "--json");
     try expectRefused(&env, &.{ "--verbose", "query", "RETURN 1" }, "--verbose");
     try expectRefused(&env, &.{ "-v", "query", "RETURN 1" }, "-v");
@@ -459,7 +466,7 @@ test "SONNY-6560 (3) options a help text documents and nothing reads are refused
     try expectRefused(&env, &.{ "auth", "logout", "--token", "t" }, "--token");
 
     const helps = [_]struct { argv: []const []const u8, unread: []const []const u8 }{
-        .{ .argv = &.{"--help"}, .unread = &.{ "--config", "--json", "--verbose" } },
+        .{ .argv = &.{"--help"}, .unread = &.{ "--json", "--verbose" } },
         .{ .argv = &.{ "role", "--help" }, .unread = &.{"--permissions"} },
         .{ .argv = &.{ "auth", "logout", "--help" }, .unread = &.{"--token"} },
     };
@@ -474,4 +481,70 @@ test "SONNY-6560 (3) options a help text documents and nothing reads are refused
             }
         }
     }
+}
+
+test "SONNY-6560 (3) every option a command's --help documents is one the command reads" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var env = try Env.start();
+    defer env.stop();
+
+    // The commands whose options src/cli/option_check.zig lists, with each
+    // help text that documents them.
+    const helps = [_]struct { command: []const u8, argv: []const []const u8 }{
+        .{ .command = "user", .argv = &.{ "user", "--help" } },
+        .{ .command = "user", .argv = &.{ "user", "mfa-setup", "--help" } },
+        .{ .command = "user", .argv = &.{ "user", "mfa-verify", "--help" } },
+        .{ .command = "user", .argv = &.{ "user", "mfa", "--help" } },
+        .{ .command = "role", .argv = &.{ "role", "--help" } },
+        .{ .command = "policy", .argv = &.{ "policy", "--help" } },
+        .{ .command = "grant", .argv = &.{ "grant", "--help" } },
+        .{ .command = "revoke", .argv = &.{ "revoke", "--help" } },
+        .{ .command = "auth", .argv = &.{ "auth", "--help" } },
+        .{ .command = "auth", .argv = &.{ "auth", "logout", "--help" } },
+        .{ .command = "auth", .argv = &.{ "auth", "validate", "--help" } },
+        .{ .command = "auth", .argv = &.{ "auth", "init", "--help" } },
+        .{ .command = "auth", .argv = &.{ "auth", "reseal", "--help" } },
+        .{ .command = "fle", .argv = &.{ "fle", "--help" } },
+        .{ .command = "apikey", .argv = &.{ "apikey", "--help" } },
+        .{ .command = "session", .argv = &.{ "session", "--help" } },
+        .{ .command = "session", .argv = &.{ "session", "validate", "--help" } },
+        .{ .command = "session", .argv = &.{ "session", "invalidate-all", "--help" } },
+        .{ .command = "authn", .argv = &.{ "authn", "--help" } },
+        .{ .command = "authn", .argv = &.{ "authn", "config", "--help" } },
+        .{ .command = "authn", .argv = &.{ "authn", "test-access", "--help" } },
+        .{ .command = "authn", .argv = &.{ "authn", "stepup-check", "--help" } },
+        .{ .command = "tenant", .argv = &.{ "tenant", "--help" } },
+        .{ .command = "backup", .argv = &.{ "backup", "list", "--help" } },
+        .{ .command = "migrate", .argv = &.{ "migrate", "status", "--help" } },
+        .{ .command = "migrate", .argv = &.{ "migrate", "run", "--help" } },
+        .{ .command = "migrate", .argv = &.{ "migrate", "create", "--help" } },
+        .{ .command = "migrate", .argv = &.{ "migrate", "sign", "--help" } },
+    };
+    var unread: usize = 0;
+    for (helps) |h| {
+        const cmd = option_check.find(h.command) orelse return error.CommandNotListed;
+        const r = try env.run(h.argv, null);
+        defer r.deinit();
+        if (r.code != 0) {
+            r.dump(h.argv);
+            return error.HelpFailed;
+        }
+        for ([_][]const u8{ r.out, r.err }) |text| {
+            var i: usize = 0;
+            while (std.mem.indexOfPos(u8, text, i, "--")) |at| {
+                var end = at + 2;
+                while (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '-')) end += 1;
+                i = end;
+                if (end == at + 2) continue;
+                if (at > 0 and (std.ascii.isAlphanumeric(text[at - 1]) or text[at - 1] == '-')) continue;
+                const flag = text[at..end];
+                if (std.mem.eql(u8, flag, "--help")) continue;
+                if (!option_check.knows(cmd, flag)) {
+                    std.debug.print("SONNY-6560 (3): geode {s} documents {s}, which it does not read\n", .{ h.command, flag });
+                    unread += 1;
+                }
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), unread);
 }

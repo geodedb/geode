@@ -98,7 +98,7 @@ pub const GeodeMcpServer = struct {
         if (options.auth_mode == .bearer and options.bearer_token == null) {
             if (!@import("builtin").is_test) {
                 std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
-                    "Set --mcp-token or pass bearer_token in Options. " ++
+                    "Set geode mcp --token (or GEODE_MCP_TOKEN), or pass bearer_token in Options. " ++
                     "To disable auth (NOT recommended), explicitly set auth_mode to .none.\n", .{});
             }
             return error.MissingBearerToken;

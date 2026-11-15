@@ -124,6 +124,17 @@ test "SONNY-6559 (8) geode completion writes the script to stdout, nothing to st
         try testing.expect(std.mem.indexOf(u8, r.out, "geode") != null);
         try testing.expectEqual(@as(usize, 0), r.err.len);
     }
+    // The shell named as an argument is the one generated (it was ignored,
+    // so `geode completion zsh` printed the bash script).
+    const bash = try runGeode(root.path(), &.{ "completion", "bash" }, &.{});
+    defer bash.deinit();
+    const zsh = try runGeode(root.path(), &.{ "completion", "zsh" }, &.{});
+    defer zsh.deinit();
+    const zsh_opt = try runGeode(root.path(), &.{ "completion", "--shell", "zsh" }, &.{});
+    defer zsh_opt.deinit();
+    try testing.expectEqual(@as(?u8, 0), zsh.code);
+    try testing.expectEqualStrings(zsh_opt.out, zsh.out);
+    try testing.expect(!std.mem.eql(u8, bash.out, zsh.out));
 }
 
 test "SONNY-6559 (7) a Debug command run with every audit setting reports no leak" {

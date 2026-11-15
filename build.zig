@@ -751,7 +751,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-cli-query-options", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): geode query ignores an unknown --format and unknown options; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-quic-cdc-control", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): QUIC CDC_CONTROL reads ServerState.cdc_engine, which nothing assigns; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-raft-persistent-voted-for", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): raft_persistent.RaftNode does not persist voted_for; compiled by test-compile; register it through shardDep in the commit that fixes it" },
@@ -6463,9 +6462,14 @@ pub fn build(b: *std.Build) void {
     // render with exit 2; dot/mermaid render every result shape; the help
     // texts document only options that are read (built binary + a server).
     {
+        const option_check_mod = b.createModule(.{ .root_source_file = b.path("src/cli/option_check.zig"), .target = target, .optimize = optimize });
+        const unit_tests = b.addTest(.{ .root_module = option_check_mod });
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        shardDep(test_step, &run_unit_tests.step, 1, test_shard_loads, test_shard_index);
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6560_cli_unsupported_options.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("geode", root_mod);
+        mod.addImport("cli_option_check", option_check_mod);
         mod.addImport("protobuf", protobuf_mod);
         mod.addImport("schema", schema_mod);
         mod.addImport("transport/quic", transport_quic_mod);
@@ -6473,7 +6477,9 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6560-cli-unsupported-options", "Run SONNY-6560 regression (every geode command refuses an option it does not know and a value option given without its value with exit 2 naming it; geode query refuses a --format it does not render, and dot/mermaid render paths, plans and errors and escape DOT labels; --begin/--commit/--rollback and the other documented-but-unread options are refused and no longer documented; --batch BEGIN/ROLLBACK leaves nothing; built binary + a real server)").dependOn(&run_tests.step);
+        const sonny6560_step = b.step("test-sonny6560-cli-unsupported-options", "Run SONNY-6560 regression (every geode command refuses an option it does not know and a value option given without its value with exit 2 naming it; geode query refuses a --format it does not render, and dot/mermaid render paths, plans and errors and escape DOT labels; --begin/--commit/--rollback and the other documented-but-unread options are refused and no longer documented; --batch BEGIN/ROLLBACK leaves nothing; every option a command's --help documents is one src/cli/option_check.zig reads; plus option_check's unit tests; built binary + a real server)");
+        sonny6560_step.dependOn(&run_tests.step);
+        sonny6560_step.dependOn(&run_unit_tests.step);
     }
 
     // SONNY-6559 (7, 8, 11): a successful geode command returns through main
@@ -19001,7 +19007,6 @@ pub fn build(b: *std.Build) void {
     // it registers it there. They get tests/all_tests.zig's module graph; the
     // e2e ones spawn this build's geode.
     const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{
-        .{ .file = "tests/test_sonny6548_cli_query_options.zig", .step = "test-sonny6548-cli-query-options", .desc = "Run SONNY-6548 reproduction (intentionally red: geode query prints nothing and exits 0 for --format txt, exits 0 for an unknown option, and commits a write under the --begin --rollback its --help documents)" },
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 reproduction (intentionally red: with CDC running, QUIC CDC_CONTROL answers NO_ENGINE to RESET_GUARDRAILS and to an unknown action; it reads ServerState.cdc_engine, which nothing assigns)" },
         .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 reproduction (intentionally red: an exact numeric column is typed FLOAT, a UNION column INTEGER although it holds 1.25; FOR ... ORDER BY reports ordered:false; PROFILE reports spill_reason with no spill)" },
         .{ .file = "tests/test_sonny6548_raft_persistent_voted_for.zig", .step = "test-sonny6548-raft-persistent-voted-for", .desc = "Run SONNY-6548 reproduction (intentionally red: raft_persistent.RaftNode persists current_term and not voted_for, so a reopened node forgets its vote; the cluster's raft_consensus node is not affected)" },
@@ -19019,5 +19024,21 @@ pub fn build(b: *std.Build) void {
         if (target.result.os.tag == .linux) repro_tests.root_module.linkSystemLibrary("dl", .{});
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
+    }
+    // SONNY-6560: the SONNY-6548 geode query reproduction passes and runs in
+    // the aggregate (same module graph as the reproductions above).
+    {
+        const cli_query_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6548_cli_query_options.zig"), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| cli_query_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        cli_query_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            cli_query_tests.root_module.linkSystemLibrary("ssl", .{});
+            cli_query_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) cli_query_tests.root_module.linkSystemLibrary("dl", .{});
+        const run_cli_query_tests = b.addRunArtifact(cli_query_tests);
+        shardDep(test_step, &run_cli_query_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6548-cli-query-options", "Run SONNY-6548 / SONNY-6560 regression (geode query refuses --format txt and an unknown option with exit 2, and refuses --begin --rollback without writing)").dependOn(&run_cli_query_tests.step);
     }
 }
