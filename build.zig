@@ -19106,6 +19106,7 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6596_doc_examples_parse.zig", .step = "test-sonny6596-doc-examples-parse", .desc = "Run SONNY-6596 item 6 regression (every ```gql example in the listed docs - docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md and the others fixed with it - goes through the real parser and parses, so a doc example cannot rot)", .weight = 1 },
         .{ .file = "tests/test_sonny6596_grpc_client_reuse.zig", .step = "test-sonny6596-grpc-client-reuse", .desc = "Run SONNY-6596 item 7 regression (against a real geode serve: the test helper's GrpcProtoClient runs HELLO and four parameterized queries on one HTTP/2 connection, each RPC on its own stream id)", .weight = 1 },
         .{ .file = "tests/test_sonny6587_list_functions.zig", .step = "test-sonny6587-list-functions", .desc = "Run SONNY-6587 items 3 and 4 regression (head() and last() of a value that is no list are 22G03 as tail() is; range() keeps its documented exclusive end, answers NULL for a NULL argument, 22G03 for a non-integer one and 22023 for a zero step)", .weight = 1 },
+        .{ .file = "tests/test_sonny6587_canary_markers.zig", .step = "test-sonny6587-canary-markers", .desc = "Run SONNY-6587 item 6 regression (a TESTED CANARY marker for REQ-GQL-016 in src/canary.zig names a test some source under src/ or tests/ defines)", .weight = 1 },
     };
     for (sonny656x_regressions) |reg| {
         const reg_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize }) });
