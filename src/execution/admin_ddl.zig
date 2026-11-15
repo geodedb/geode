@@ -89,14 +89,16 @@ pub fn executeAlterUser(allocator: std.mem.Allocator, s: ast.AlterUserStatement,
 }
 
 pub fn executeDropUser(allocator: std.mem.Allocator, s: ast.DropUserStatement, ctx: ExecutionContext) !ExecutionResult {
-    // handleUserDelete answers status="deleted <name>" for a user that does
-    // not exist, so IF EXISTS changes nothing: DROP USER IF EXISTS on a
-    // missing user returns status="deleted <name>". The one error it
-    // propagates is a delete that could not be saved (SONNY-3038,
-    // UserNotPersisted, 58030), with or without IF EXISTS.
-    _ = s.if_exists;
+    // SONNY-6609: handleUserDelete answers a user that does not exist with
+    // UserNotFound (42704; it answered "deleted <name>"), and every other
+    // failure with its error (a delete that could not be saved:
+    // UserNotPersisted, 58030). DROP USER IF EXISTS of a missing user is a
+    // no-op that says so.
     try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
-    return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name});
+    return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name}) catch |err| {
+        if (s.if_exists and err == error.UserNotFound) return auth_dispatch.dropUserAbsentResult(allocator, s.name);
+        return err;
+    };
 }
 
 pub fn executeCreateRole(allocator: std.mem.Allocator, s: ast.CreateRoleStatement, ctx: ExecutionContext) !ExecutionResult {

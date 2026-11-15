@@ -5088,6 +5088,26 @@ REQ-SONNY-6608-MFA-RECOVERY-STORE,MFA authentication,DurableRecoveryDigests,TEST
 REQ-SONNY-6608-MFA-RESTART,MFA authentication,Regression,TESTED,tests/test_sonny6608_mfa_restart.zig,tests/test_sonny6608_mfa_restart.zig,,security,2026-11-15
 REQ-SONNY-6608-MFA-RESULT-OWNERSHIP,MFA authentication,ResultOwnsValues,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6608_mfa_persist.zig,,security,2026-11-15
 REQ-SONNY-6608-MFA-WRITE-THROUGH,MFA authentication,EnrollmentWriteThrough,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6608_mfa_persist.zig,,security,2026-11-15
+REQ-SONNY-6609-MFA-AT-REST,MFA authentication,Regression,TESTED,tests/test_sonny6609_mfa_at_rest.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6609-MFA-AT-REST-SCAN,MFA authentication,Regression,TESTED,tests/test_sonny6609_mfa_at_rest_scan.zig,tests/test_sonny6609_mfa_at_rest_scan.zig,,security,2026-11-15
+REQ-SONNY-6609-MFA-SECRET-SEALED,MFA authentication,SecretSealedAtRest,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6609-NO-SECURITY-SNAPSHOTS,MFA authentication,NoPlaintextSidecars,TESTED,src/graph_store.zig,tests/test_sonny6609_mfa_at_rest_scan.zig,,security,2026-11-15
+REQ-SONNY-6609-SM-MFA-HYDRATION,MFA authentication,StartupLoadsSecurityManagerMfa,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6609-SM-MFA-HYDRATION,MFA authentication,StoredMfaStateLoaded,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6609-USER-DELETE-ERRORS,GQL Auth DDL,DropUserReportsErrors,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6609-USER-SHOW-MFA,MFA authentication,UserShowMfaState,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6609_mfa_at_rest_scan.zig,,security,2026-11-15
+REQ-SONNY-6614-GRACEFUL-STOP,Test harness,GracefulServerStop,TESTED,tests/proto_test_util.zig,tests/test_sonny6614_offline_verify.zig,,testing,2026-11-15
+REQ-SONNY-6614-MFA-ATTEMPT-STORE,MFA authentication,DurableAttemptRecord,TESTED,src/storage/user_storage.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
+REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,OfflineAttemptLimit,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig,,security,2026-11-15
+REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6614_offline_verify.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
+REQ-SONNY-6614-SM-LOAD-ERRDEFER,AuthGraphManager Integration,LoadFreesOnFailure,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6614-SM-RESIDUALS,MFA authentication,Regression,TESTED,tests/test_sonny6614_auth_residuals.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6619-MFA-LIMITS,MFA authentication,Regression,TESTED,tests/test_sonny6619_mfa_limits.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
+REQ-SONNY-6619-OFFLINE,MFA authentication,Regression,TESTED,tests/test_sonny6619_offline.zig,tests/test_sonny6619_offline.zig,,security,2026-11-15
+REQ-SONNY-6619-SERVER-LOCKOUT-STORED,MFA authentication,LockoutSurvivesRestart,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
+REQ-SONNY-6619-SM-FOLLOWS-MFA,MFA authentication,SecurityManagerMfaCurrent,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
+REQ-SONNY-6619-SM-REMOVE-USER,AuthGraphManager Integration,DroppedUserRemoved,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6619-TS-WAL-DIR-RELEASE,Timeseries,WalDirHandleClosed,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6619_offline.zig,,storage,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

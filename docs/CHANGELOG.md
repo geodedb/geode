@@ -4,6 +4,75 @@
 
 ### Security
 
+- **Offline `geode user mfa enable --code` counts against the attempt
+  limit; the server's MFA lockout survives a restart; SecurityManager
+  follows the MFA procedures and drops a dropped user; an in-process store
+  no longer holds the data directory (SONNY-6619).** `geode user mfa enable
+  --code` checked the code with no attempt limit; it now counts against the
+  sealed `MfaAttempts` record with `mfa-verify` (5 failures, 5-minute
+  lockout, counted before the check). `geode.auth.mfa_verify` kept its
+  lockout in process memory; the transition into lockout (the fifth
+  failure) and the reset after a stored lockout are now stored in
+  `MfaAttempts` and loaded at startup. Failures below the limit stay in
+  memory: storing each would re-seal the whole chain per wrong guess.
+  SecurityManager now takes mfa_setup's new secret and codes and
+  mfa_enable / mfa_disable's flag, and DROP USER removes the user from it
+  (record, roles, sessions). timeseries-storage opens each graph's
+  `timeseries` directory for its WAL and never closes it, so a process
+  that had opened the store (the offline CLI, test fixtures) kept a
+  descriptor in the data directory and the offline CLI's live-server guard
+  treated it as a holder; geode's timeseries `Store.deinit` now closes it
+  (the library fix is owed upstream). The offline-CLI regression tests no
+  longer pass `--force`. Regressions: `zig build test-sonny6619-mfa-limits`,
+  `zig build test-sonny6619-offline`.
+
+- **The SecurityManager load frees everything when it fails, DROP USER
+  clears the user's MFA state from SecurityManager, and the offline
+  `geode user mfa-verify` has the online attempt limit (SONNY-6614).** The
+  startup load of SecurityManager (now
+  `auth_startup_hydration.hydrateSecurityManager`) had no errdefer: an
+  allocation failure part way leaked the SecurityManager and every record
+  it had copied (shown under every allocation failure: 208 leaked
+  allocations), and `SecurityManager.hydrateUser` leaked the copies it had
+  made; both free them now, and a role-membership entry whose list cannot
+  be made is removed instead of left undefined. DROP USER left the user's
+  TOTP secret, recovery codes and MFA flag in SecurityManager; it clears
+  them. The offline `geode user mfa-verify` had no attempt limit (the
+  server's count lives in its process memory; each run of the command is a
+  new process): it now keeps a sealed `MfaAttempts` record in
+  `__geode_security` with the online rule (five failures, a five-minute
+  lockout, reset on success), counting the attempt before the code is
+  checked. **User-visible:** `geode user mfa-verify` writes the store now,
+  so it is refused while a server holds the data directory unless
+  `--force` is given (it takes `--force` now). Test harness:
+  `proto_test_util.ServerHandle.stopGracefully` (SIGTERM, wait, then
+  SIGKILL past a bound); `deinit` stays SIGKILL. Regressions: `zig build
+  test-sonny6614-auth-residuals`, `zig build test-sonny6614-offline-verify`.
+
+- **The TOTP secret is encrypted at rest; no loop2 snapshot of the
+  security graph; SecurityManager gets the stored recovery codes; DROP
+  USER reports a missing user; `geode user show` prints the MFA state
+  (SONNY-6609).** The user record's `mfa_secret` held the TOTP secret in
+  plaintext (in the security graph's pages and WAL without TDE). It is now
+  sealed with AES-256-GCM (through the `crypto_backend` seam) under a key
+  derived with HKDF-SHA256 from the security graph's HMAC key, with a random
+  nonce and the user id as associated data; a plaintext secret written by
+  an older binary is sealed when the server loads it. Whoever holds both
+  the data directory and the HMAC key (by default `.geode_hmac_key` inside
+  the data directory) can still open it; supply the key from outside the
+  data directory (`GEODE_AUTH_HMAC_KEY` / `GEODE_TDE_KEY`) to separate them.
+  The loop2 hydration snapshots copied the security graph's property values
+  into unencrypted side-car files; they are no longer written for
+  `__geode_security` (an old one is deleted). The `mfa_secret` field grew
+  from 64 to 128 bytes. SecurityManager is loaded with each user's opened
+  secret and stored recovery codes (it got neither code). **BREAKING:**
+  `DROP USER` / `geode.auth.user_delete` of a user that does not exist
+  fails with 42704 (it answered `deleted <name>`), and any other failure is
+  reported; `DROP USER IF EXISTS` stays a no-op. `geode user show` prints
+  `MFA: enabled|disabled (enrolled, N recovery codes; ...)` or `(not
+  enrolled)`. Regressions: `zig build test-sonny6609-mfa-at-rest`, `zig
+  build test-sonny6609-mfa-at-rest-scan`.
+
 - **MFA enrollments and the MFA on/off state are stored in
   `__geode_security`, the offline CLI turns MFA on only with a verified
   code, and the mfa_* results no longer leak (SONNY-6608).**

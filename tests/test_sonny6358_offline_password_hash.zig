@@ -222,13 +222,13 @@ test "SONNY-6358: offline user create / update --password store an Argon2id hash
     defer removeDir(dir);
 
     // `user create` of a new user, then `user update --password` of it.
-    try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_first, "--force", "--data-dir", dir });
-    try runOk(aa, &.{ binary_path, "user", "update", "bob", "--password", bob_second, "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_first, "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "update", "bob", "--password", bob_second, "--data-dir", dir });
     // `user update --password` of a user that does not exist creates it.
-    try runOk(aa, &.{ binary_path, "user", "update", "carol", "--password", carol_pw, "--email", "carol@example.com", "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "update", "carol", "--password", carol_pw, "--email", "carol@example.com", "--data-dir", dir });
     // `user create` of a user that exists sets its password.
-    try runOk(aa, &.{ binary_path, "user", "create", "dave", "dave@example.com", "--password", dave_first, "--force", "--data-dir", dir });
-    try runOk(aa, &.{ binary_path, "user", "create", "dave", "dave@example.com", "--password", dave_second, "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "dave", "dave@example.com", "--password", dave_first, "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "dave", "dave@example.com", "--password", dave_second, "--data-dir", dir });
 
     const users = [_][2][]const u8{
         .{ "bob", bob_second },
@@ -247,7 +247,7 @@ test "SONNY-6358: offline user create on a store with no auth records seals the 
     const dir = try freshDir(aa, "empty");
     defer removeDir(dir);
 
-    try runOk(aa, &.{ binary_path, "user", "create", "erin", "erin@example.com", "--password", erin_pw, "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "erin", "erin@example.com", "--password", erin_pw, "--data-dir", dir });
 
     const users = [_][2][]const u8{.{ "erin", erin_pw }};
     try expectStoredHashesAndChain(dir, &users);

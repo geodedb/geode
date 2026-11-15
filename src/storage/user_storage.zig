@@ -61,6 +61,8 @@ pub const GRAPH_GRANT_LABEL = "GraphGrant";
 pub const FLE_ROLE_GRANT_LABEL = "FleRoleGrant";
 /// SONNY-6608: a user's MFA recovery codes, as SHA-256 digests.
 pub const MFA_RECOVERY_CODES_LABEL = "MfaRecoveryCodes";
+/// SONNY-6614: a user's offline MFA verification attempts.
+pub const MFA_ATTEMPTS_LABEL = "MfaAttempts";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     // error-policy: D — computeRecordHmac's only error is TooManyProperties
@@ -155,6 +157,8 @@ pub const UserStorageBackend = struct {
     fle_role_grant_nodes: std.AutoHashMap(u64, u64),
     /// SONNY-6608: user id -> its MfaRecoveryCodes node id.
     mfa_recovery_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6614: user id -> its MfaAttempts node id.
+    mfa_attempt_nodes: std.AutoHashMap(u64, u64),
 
     // AuthChainRoot singleton node ID (null if not yet created)
     chain_root_node: ?u64,
@@ -162,6 +166,10 @@ pub const UserStorageBackend = struct {
     const Self = @This();
 
     // Persistent record structures
+    /// SONNY-6609: room for a sealed TOTP secret (it was 64, a plaintext
+    /// base32 secret).
+    pub const mfa_secret_field_len = 128;
+
     pub const UserRecord = extern struct {
         id: u64,
         username: [64]u8,
@@ -174,7 +182,10 @@ pub const UserStorageBackend = struct {
         is_active: bool,
         is_superuser: bool,
         mfa_enabled: bool,
-        mfa_secret: [64]u8,
+        /// SONNY-6609: the TOTP secret sealed (`AuthGraphManager.sealMfaSecret`,
+        /// "aesgcm1$" + base64url(nonce || ciphertext || tag)); a store
+        /// written before holds it in plaintext until the server loads it.
+        mfa_secret: [mfa_secret_field_len]u8,
         mfa_secret_len: u16,
         failed_login_attempts: u16,
         lockout_until: i64,
@@ -419,6 +430,7 @@ pub const UserStorageBackend = struct {
             .graph_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .fle_role_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .mfa_recovery_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .mfa_attempt_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .chain_root_node = null,
         };
 
@@ -438,6 +450,7 @@ pub const UserStorageBackend = struct {
         self.graph_grant_nodes.deinit();
         self.fle_role_grant_nodes.deinit();
         self.mfa_recovery_nodes.deinit();
+        self.mfa_attempt_nodes.deinit();
     }
 
     fn ensureSecurityGraph(store: *graph_store.GraphStore) !void {
@@ -455,6 +468,7 @@ pub const UserStorageBackend = struct {
         try self.loadGraphGrantsFromGraph();
         try self.loadFleRoleGrantsFromGraph();
         try self.loadMfaRecoveryCodesFromGraph();
+        try self.loadMfaAttemptsFromGraph();
         // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
         // a subsequent `persistChainRoot` call (e.g. during offline
         // reset-password rewriting the seal) updates the existing node
@@ -1251,6 +1265,59 @@ pub const UserStorageBackend = struct {
         return try out.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6614-MFA-ATTEMPT-STORE; FEATURE="MFA authentication"; ASPECT=DurableAttemptRecord; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6614: a user's MFA verification attempts as the offline
+    /// `geode user mfa-verify` counts them (each run is a new process, so an
+    /// in-memory count, as the server's, carries nothing from one run to the
+    /// next): one (:MfaAttempts {id, user_id, fail_count, lockout_until_ms})
+    /// node per user, sealed by the HMAC chain.
+    pub const MfaAttemptState = struct {
+        fail_count: u32 = 0,
+        lockout_until_ms: i64 = 0,
+    };
+
+    fn loadMfaAttemptsFromGraph(self: *Self) !void {
+        const nodes = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, MFA_ATTEMPTS_LABEL) orelse return;
+        for (nodes) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            try self.mfa_attempt_nodes.put(mfaRecoveryKeyFromNode(self.store, node_id), node_id);
+        }
+    }
+
+    /// `user_id`'s stored attempts, or null when it has no record.
+    pub fn getMfaAttempts(self: *Self, user_id: u64) ?MfaAttemptState {
+        const node_id = self.mfa_attempt_nodes.get(user_id) orelse return null;
+        const count = getIntProp(self.store, node_id, "fail_count", 0);
+        return .{
+            .fail_count = std.math.cast(u32, count) orelse std.math.maxInt(u32),
+            .lockout_until_ms = getIntProp(self.store, node_id, "lockout_until_ms", 0),
+        };
+    }
+
+    /// Store `user_id`'s attempts (the record made if it has none).
+    pub fn setMfaAttempts(self: *Self, user_id: u64, state: MfaAttemptState) !void {
+        if (self.mfa_attempt_nodes.get(user_id)) |node_id| {
+            try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+            try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+            return;
+        }
+        const node_id = try self.createEntityNode(MFA_ATTEMPTS_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+        try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+        try self.mfa_attempt_nodes.put(user_id, node_id);
+    }
+
+    /// Remove `user_id`'s attempt record; false when it had none.
+    pub fn removeMfaAttempts(self: *Self, user_id: u64) bool {
+        const kv = self.mfa_attempt_nodes.fetchRemove(user_id) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
     /// Remove `user_id`'s recovery codes; false when it had none.
     pub fn removeMfaRecoveryDigests(self: *Self, user_id: u64) bool {
         const kv = self.mfa_recovery_nodes.fetchRemove(user_id) orelse return false;
@@ -1313,7 +1380,7 @@ pub const UserStorageBackend = struct {
         }
 
         if (mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
             if (record.getMFASecret()) |existing| {
                 if (!std.mem.eql(u8, existing, secret)) bump_auth_version = true;
             } else {
@@ -1350,7 +1417,7 @@ pub const UserStorageBackend = struct {
             return error.FieldTooLong;
         }
         if (opts.mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
         }
         if (opts.attributes_json) |attrs| {
             if (attrs.len > 2047) return error.FieldTooLong;
@@ -1477,8 +1544,10 @@ pub const UserStorageBackend = struct {
             _ = self.user_nodes.remove(user_id);
         }
         _ = self.removeCachedUser(user_id);
-        // SONNY-6608: the user's MFA recovery codes go with it.
+        // SONNY-6608: the user's MFA recovery codes go with it, SONNY-6614:
+        // and its MFA attempt record.
         _ = self.removeMfaRecoveryDigests(user_id);
+        _ = self.removeMfaAttempts(user_id);
     }
 
     /// A copy of the cached record (SONNY-6329: under `user_cache_lock`).
@@ -1894,7 +1963,7 @@ pub const UserStorageBackend = struct {
             .is_active = true,
             .is_superuser = false,
             .mfa_enabled = false,
-            .mfa_secret = [_]u8{0} ** 64,
+            .mfa_secret = [_]u8{0} ** mfa_secret_field_len,
             .mfa_secret_len = 0,
             .failed_login_attempts = 0,
             .lockout_until = 0,

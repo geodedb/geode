@@ -217,8 +217,11 @@ test "SONNY-6608 (3)(4): mfa_setup is stored (secret, recovery-code digests, MFA
     const issued = try setup(ga, w.admin, "st6608");
 
     var rec = try storedUser(&w.agm, "st6608");
-    if (rec.getMFASecret() == null or !std.mem.eql(u8, rec.getMFASecret().?, issued.secret)) {
-        std.debug.print("SONNY-6608 (4): the stored user record holds MFA secret '{s}', want the one mfa_setup issued\n", .{rec.getMFASecret() orelse ""});
+    // SONNY-6609: the record holds the secret sealed; it opens to the issued one.
+    var secret_buf: [64]u8 = undefined;
+    const opened = (try w.agm.openMfaSecret(rec.id, &secret_buf)) orelse "";
+    if (!std.mem.eql(u8, opened, issued.secret)) {
+        std.debug.print("SONNY-6608 (4): the stored user record holds MFA secret '{s}', want the one mfa_setup issued\n", .{opened});
         return error.EnrollmentNotStored;
     }
     try testing.expect(!rec.mfa_enabled);
@@ -239,7 +242,7 @@ test "SONNY-6608 (3)(4): mfa_setup is stored (secret, recovery-code digests, MFA
     const again = try setup(ga, w.admin, "st6608");
     rec = try storedUser(&w.agm, "st6608");
     try testing.expect(!rec.mfa_enabled);
-    try testing.expectEqualStrings(again.secret, rec.getMFASecret().?);
+    try testing.expectEqualStrings(again.secret, (try w.agm.openMfaSecret(rec.id, &secret_buf)).?);
     try expectStoredDigests(&w.agm, rec.id, again.codes);
 
     try fx.expectRuns(ga, w.admin, try std.fmt.allocPrint(ga, "CALL geode.auth.mfa_enable('st6608', '{s}')", .{try codeFor(ga, again.secret)}));

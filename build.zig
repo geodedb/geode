@@ -6694,6 +6694,7 @@ pub fn build(b: *std.Build) void {
     const auth_startup_hydration_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_startup_hydration.zig"), .target = target, .optimize = optimize });
     auth_startup_hydration_mod.addImport("geode", root_mod);
     auth_startup_hydration_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    auth_startup_hydration_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-6609: zeroes opened MFA secrets
     geode_exe.root_module.addImport("auth_startup_hydration", auth_startup_hydration_mod);
 
     // Auth graph manager unit tests
@@ -18940,6 +18941,89 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6608_mfa_restart.zig", .step = "test-sonny6608-mfa-restart", .desc = "Run the SONNY-6608 regression (offline geode user mfa-setup stores the secret with MFA off and the recovery codes hashed; geode user mfa enable without --code is refused; an enrollment made over QUIC is stored and verifies codes after a server restart; spawns the CLI and a server)", .spawns = true },
     };
     for (sonny6608_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
+    // SONNY-6609: the TOTP secret is sealed at rest (AES-256-GCM, key from
+    // the HMAC key, user id bound), plaintext secrets are sealed on load, no
+    // loop2 snapshot is written for __geode_security, SecurityManager gets
+    // the recovery codes, DROP USER of a missing user is an error, and
+    // geode user show prints the MFA state. The scan regression spawns the
+    // CLI and a server.
+    const sonny6609_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6609_mfa_at_rest.zig", .step = "test-sonny6609-mfa-at-rest", .desc = "Run the SONNY-6609 regression (mfa_setup stores the TOTP secret sealed with AES-256-GCM bound to the user id, opening only for that user and HMAC key; a plaintext secret is sealed at load; SecurityManager is loaded with the stored secret and recovery codes and redeems a code once; DROP USER of a missing user is 42704, IF EXISTS a no-op)", .spawns = false },
+        .{ .file = "tests/test_sonny6609_mfa_at_rest_scan.zig", .step = "test-sonny6609-mfa-at-rest-scan", .desc = "Run the SONNY-6609 regression (after a real server enrolled a user no file of the data directory holds the TOTP secret and no loop2 snapshot of __geode_security is written; geode user show prints the MFA state; offline mfa enable opens the sealed secret; spawns the CLI and a server)", .spawns = true },
+    };
+    for (sonny6609_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
+    // SONNY-6614: the SecurityManager load frees everything on failure; DROP
+    // USER clears the user's MFA state from SecurityManager; the offline
+    // mfa-verify keeps a sealed attempt record with the online limit;
+    // ServerHandle.stopGracefully. The offline regression spawns the CLI and
+    // a server.
+    const sonny6614_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6614_auth_residuals.zig", .step = "test-sonny6614-auth-residuals", .desc = "Run the SONNY-6614 regression (the SecurityManager load at startup frees everything under every allocation failure; DROP USER clears the user's MFA secret, recovery codes and flag from SecurityManager)", .spawns = false },
+        .{ .file = "tests/test_sonny6614_offline_verify.zig", .step = "test-sonny6614-offline-verify", .desc = "Run the SONNY-6614 regression (offline geode user mfa-verify keeps a sealed MfaAttempts record: five failures across runs lock it out for five minutes and the lockout refuses a right code, a right code resets the count; ServerHandle.stopGracefully lets a server shut itself down; spawns the CLI and a server)", .spawns = true },
+    };
+    for (sonny6614_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
+    // SONNY-6619: offline mfa enable counts against the attempt limit; the
+    // server's lockout is stored; SecurityManager follows the MFA
+    // procedures and DROP USER; the in-process store releases the data dir.
+    const sonny6619_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6619_mfa_limits.zig", .step = "test-sonny6619-mfa-limits", .desc = "Run the SONNY-6619 regression (the server's MFA lockout is stored in the sealed MfaAttempts record and survives a restart, a failure below the limit is not stored, a success after a stored lockout resets it; SecurityManager follows mfa_setup / mfa_enable / mfa_disable; DROP USER removes the user from SecurityManager)", .spawns = false },
+        .{ .file = "tests/test_sonny6619_offline.zig", .step = "test-sonny6619-offline", .desc = "Run the SONNY-6619 regression (offline geode user mfa enable --code counts against the MfaAttempts limit with mfa-verify and a right code resets it; opening the store in process releases the data directory, so offline writes need no --force; spawns the CLI)", .spawns = true },
+    };
+    for (sonny6619_regressions) |reg| {
         const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("geode", root_mod);

@@ -12766,6 +12766,18 @@ pub const GraphStore = struct {
             return;
         }
 
+        // CANARY: REQ=REQ-SONNY-6609-NO-SECURITY-SNAPSHOTS; FEATURE="MFA authentication"; ASPECT=NoPlaintextSidecars; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest_scan.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6609: no loop2 snapshot of `__geode_security`. The snapshots
+        // hold property values unencrypted (the merge index), TDE or not:
+        // the security graph's records (users, policies) were copied into a
+        // side-car file outside the engine's pages. The graph is small, so
+        // its hydration is the engine scan. A file an older binary wrote is
+        // deleted.
+        if (isSecurityGraphName(graph_name)) {
+            deleteHydrationSnapshotFiles(dir);
+            return;
+        }
+
         if (disabled) return;
 
         // GAP-0064 FIX B: stamp the loop2 snapshots on the Path-B
@@ -13742,7 +13754,8 @@ pub const GraphStore = struct {
         graph_name: []const u8,
     ) HydrationSnapshotProducts {
         var out = HydrationSnapshotProducts{};
-        if (hydrationSnapshotsDisabled()) return out;
+        // SONNY-6609: never for the security graph (see the writer).
+        if (hydrationSnapshotsDisabled() or isSecurityGraphName(graph_name)) return out;
         const io = std.Io.Threaded.global_single_threaded.io();
         const dir_path = (self.resolveGraphRootDirPath(graph_name) catch return out) orelse return out;
         defer self.allocator.free(dir_path);

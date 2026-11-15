@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T19:41:35.227470607Z",
+  "generated_at": "2026-11-15T20:32:14.629300641Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80354,6 +80354,376 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6609-MFA-AT-REST",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-MFA-AT-REST-SCAN",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6609_mfa_at_rest_scan.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest_scan.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-MFA-SECRET-SEALED",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "SecretSealedAtRest",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-NO-SECURITY-SNAPSHOTS",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "NoPlaintextSidecars",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest_scan.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-SM-MFA-HYDRATION",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "StartupLoadsSecurityManagerMfa",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_startup_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "MFA authentication",
+          "aspect": "StoredMfaStateLoaded",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-USER-DELETE-ERRORS",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "DropUserReportsErrors",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6609-USER-SHOW-MFA",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "UserShowMfaState",
+          "status": "TESTED",
+          "files": [
+            "src/cli/user_mgmt_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6609_mfa_at_rest_scan.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6614-GRACEFUL-STOP",
+      "features": [
+        {
+          "feature": "Test harness",
+          "aspect": "GracefulServerStop",
+          "status": "TESTED",
+          "files": [
+            "tests/proto_test_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_offline_verify.zig"
+          ],
+          "benches": [],
+          "owner": "testing",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6614-MFA-ATTEMPT-STORE",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "DurableAttemptRecord",
+          "status": "TESTED",
+          "files": [
+            "src/storage/user_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_offline_verify.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6614-OFFLINE-MFA-LIMIT",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "OfflineAttemptLimit",
+          "status": "TESTED",
+          "files": [
+            "src/cli/user_mgmt_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6614_offline_verify.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_offline_verify.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6614-SM-LOAD-ERRDEFER",
+      "features": [
+        {
+          "feature": "AuthGraphManager Integration",
+          "aspect": "LoadFreesOnFailure",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_startup_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_auth_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6614-SM-RESIDUALS",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6614_auth_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6614_auth_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-MFA-LIMITS",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6619_mfa_limits.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_mfa_limits.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-OFFLINE",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6619_offline.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_offline.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-SERVER-LOCKOUT-STORED",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "LockoutSurvivesRestart",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_mfa_limits.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-SM-FOLLOWS-MFA",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "SecurityManagerMfaCurrent",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_mfa_limits.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-SM-REMOVE-USER",
+      "features": [
+        {
+          "feature": "AuthGraphManager Integration",
+          "aspect": "DroppedUserRemoved",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6619-TS-WAL-DIR-RELEASE",
+      "features": [
+        {
+          "feature": "Timeseries",
+          "aspect": "WalDirHandleClosed",
+          "status": "TESTED",
+          "files": [
+            "src/timeseries/timeseries.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6619_offline.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -85445,7 +85815,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4236
+      "TESTED": 4256
     },
     "by_aspect": {
       "2PC": 3,
@@ -86375,9 +86745,11 @@
       "DropRoundTrip": 1,
       "DropTakesWriteLock": 1,
       "DropUserFailClosed": 1,
+      "DropUserReportsErrors": 1,
       "DropWaitsForHydration": 1,
       "DropWaitsForReaders": 1,
       "DroppedNameRefused": 1,
+      "DroppedUserRemoved": 1,
       "DroppingTenantRefused": 1,
       "DryRunWrapper": 1,
       "DualListenerLifetime": 1,
@@ -86390,6 +86762,7 @@
       "DuplicateSetUndo": 1,
       "Durability": 1,
       "DurabilityFlushBeforeWatchdog": 1,
+      "DurableAttemptRecord": 1,
       "DurableAuthStateOrRefuse": 1,
       "DurableDdl": 1,
       "DurableDroppedNames": 1,
@@ -86835,6 +87208,7 @@
       "GqlExamplesParse": 1,
       "GqlExecution": 1,
       "GqlFunction": 21,
+      "GracefulServerStop": 1,
       "GrantCallbacks": 1,
       "GrantChangeInvalidatesDecisionCache": 1,
       "GrantCheck": 1,
@@ -87274,6 +87648,7 @@
       "LiveServerDetection": 1,
       "LoadCorrectnessAndVariance": 1,
       "LoadFailureIsAnError": 1,
+      "LoadFreesOnFailure": 1,
       "LoadFromAdapter": 1,
       "LoadFromFile": 1,
       "LoadGraphGrants": 2,
@@ -87288,6 +87663,7 @@
       "LockedPlannerGates": 1,
       "LockedResidentWalk": 1,
       "LockedSnapshots": 1,
+      "LockoutSurvivesRestart": 1,
       "Log10": 1,
       "LogCleanup": 1,
       "LogCreateNode": 1,
@@ -87547,6 +87923,7 @@
       "NoPerTableCacheOfRowVerdict": 1,
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,
+      "NoPlaintextSidecars": 1,
       "NoPlaintextUnderDataDir": 1,
       "NoPrincipalUnauthenticated": 1,
       "NoReboxing": 1,
@@ -87638,6 +88015,7 @@
       "ObservabilityMetrics": 1,
       "OccupancyBandwidth": 1,
       "Offline": 1,
+      "OfflineAttemptLimit": 1,
       "OfflineAuthManagement": 1,
       "OfflineChangeThenCrash": 1,
       "OfflineCliWarning": 1,
@@ -88276,7 +88654,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 384,
+      "Regression": 390,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -88498,6 +88876,7 @@
       "SearchSigintCheck": 1,
       "SecondsPrecisionDeclaration": 1,
       "SecretCopiedUnderLock": 1,
+      "SecretSealedAtRest": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
       "Security": 46,
@@ -88510,6 +88889,7 @@
       "SecurityInit": 1,
       "SecurityManager": 2,
       "SecurityManagerInit": 1,
+      "SecurityManagerMfaCurrent": 1,
       "SecurityRLSAuditTDE": 1,
       "SecurityReview": 1,
       "SecurityTests": 1,
@@ -88745,6 +89125,7 @@
       "StartupHydrationFailsClosed": 1,
       "StartupLoad": 1,
       "StartupLoadsEnrollments": 1,
+      "StartupLoadsSecurityManagerMfa": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
       "StartupRefusal": 1,
@@ -88817,6 +89198,7 @@
       "StoreUpgradedHash": 1,
       "StoreWriteFence": 1,
       "StoredListElementsNfc": 1,
+      "StoredMfaStateLoaded": 1,
       "StreamAliasParity": 1,
       "StreamCloseBeforeTeardown": 1,
       "StreamFairness": 1,
@@ -89104,6 +89486,7 @@
       "UserManagement": 4,
       "UserPermissionsGate": 1,
       "UserRecordUndo": 1,
+      "UserShowMfaState": 1,
       "UserShowSelfOrAdmin": 1,
       "UserSpecificPolicyIncluded": 1,
       "UserWriteThroughs": 1,
@@ -89168,6 +89551,7 @@
       "VoteSurvivesRestart": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
+      "WalDirHandleClosed": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,

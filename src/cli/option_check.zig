@@ -94,7 +94,7 @@ pub const commands = [_]Command{
             .{ .names = &.{"update"}, .options = &.{ force, v("--email"), v("--password"), v("--role") } },
             .{ .names = &.{ "assign-role", "disable", "enable" }, .options = &.{force} },
             .{ .names = &.{"mfa-setup"}, .options = &.{ force, f("--show-uri"), f("--show-recovery"), f("--regenerate") } },
-            .{ .names = &.{"mfa-verify"}, .options = &.{v("--token")} },
+            .{ .names = &.{"mfa-verify"}, .options = &.{ force, v("--token") } },
             .{ .names = &.{"mfa"}, .options = &.{ force, v("--code") } },
             .{ .names = &.{"change-password"}, .options = &.{ force, v("--old-password"), v("--new-password"), f("--generate-password") } },
             .{ .names = &.{"reset-password"}, .options = &.{ force, v("--new-password"), f("--generate-password") } },

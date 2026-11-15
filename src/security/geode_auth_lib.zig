@@ -231,10 +231,16 @@ pub const recovery_code_digest_prefix = "sha256$";
 pub const recovery_code_stored_len = recovery_code_digest_prefix.len + 64;
 
 pub fn recoveryCodeStoredForm(code: []const u8) [recovery_code_stored_len]u8 {
-    var out: [recovery_code_stored_len]u8 = undefined;
-    @memcpy(out[0..recovery_code_digest_prefix.len], recovery_code_digest_prefix);
     var digest = ext_mfa.hashScratchCode(code);
     defer crypto_backend.secureZero(&digest);
+    return recoveryCodeStoredFormFromDigest(digest);
+}
+
+/// SONNY-6609: the stored form of a code given its digest (the security
+/// graph holds the digests, `MfaRecoveryCodes`).
+pub fn recoveryCodeStoredFormFromDigest(digest: [32]u8) [recovery_code_stored_len]u8 {
+    var out: [recovery_code_stored_len]u8 = undefined;
+    @memcpy(out[0..recovery_code_digest_prefix.len], recovery_code_digest_prefix);
     const hex = std.fmt.bytesToHex(digest, .lower);
     @memcpy(out[recovery_code_digest_prefix.len..], &hex);
     return out;
@@ -956,27 +962,39 @@ pub const SecurityManager = struct {
                     var it = p.value.object.iterator();
                     while (it.next()) |entry| {
                         if (entry.value_ptr.* != .string) continue;
-                        try attrs.put(
-                            try self.allocator.dupe(u8, entry.key_ptr.*),
-                            try self.allocator.dupe(u8, entry.value_ptr.string),
-                        );
+                        // SONNY-6614: a copy the map did not take is freed.
+                        const k = try self.allocator.dupe(u8, entry.key_ptr.*);
+                        errdefer self.allocator.free(k);
+                        const v = try self.allocator.dupe(u8, entry.value_ptr.string);
+                        errdefer self.allocator.free(v);
+                        try attrs.put(k, v);
                     }
                 }
             }
         }
 
+        // SONNY-6614: each copy is freed when a later step fails (they were
+        // made inside the struct literal and leaked).
+        const username_copy = try self.allocator.dupe(u8, username);
+        errdefer self.allocator.free(username_copy);
+        const email_copy = try self.allocator.dupe(u8, email);
+        errdefer self.allocator.free(email_copy);
+        const hash_copy = try self.allocator.dupe(u8, password_hash);
+        errdefer self.allocator.free(hash_copy);
+        const secret_copy: ?[]const u8 = if (mfa_secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| self.allocator.free(c);
         const user = User{
             .id = id,
-            .username = try self.allocator.dupe(u8, username),
-            .email = try self.allocator.dupe(u8, email),
-            .password_hash = try self.allocator.dupe(u8, password_hash),
+            .username = username_copy,
+            .email = email_copy,
+            .password_hash = hash_copy,
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = is_active,
             .is_superuser = is_superuser,
             .mfa_enabled = mfa_enabled,
-            .mfa_secret = if (mfa_secret) |s| try self.allocator.dupe(u8, s) else null,
+            .mfa_secret = secret_copy,
             .attributes = attrs,
             .password_reset_required = password_reset_required,
             .auth_version = @max(@as(u64, 1), auth_version),
@@ -2068,6 +2086,122 @@ pub const SecurityManager = struct {
             old.deinit(self.allocator);
         }
         user.recovery_codes = list;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6609-SM-MFA-HYDRATION; FEATURE="MFA authentication"; ASPECT=StoredMfaStateLoaded; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6609: load a user's stored MFA state (startup,
+    /// `auth_startup_hydration.hydrateSecurityManagerMfa`): its TOTP secret
+    /// (plaintext, opened from the security graph; null: none) and its
+    /// recovery codes, from their digests. It was hydrated with the secret
+    /// only, so no stored recovery code could be redeemed.
+    pub fn loadMfaState(self: *Self, user_id: UserId, secret: ?[]const u8, digests: []const [32]u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        const secret_copy: ?[]const u8 = if (secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| {
+            crypto_backend.secureZero(@constCast(c));
+            self.allocator.free(c);
+        };
+        var list = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (list.items) |c| self.allocator.free(c);
+            list.deinit(self.allocator);
+        }
+        try list.ensureTotalCapacity(self.allocator, digests.len);
+        for (digests) |d| {
+            const form = recoveryCodeStoredFormFromDigest(d);
+            list.appendAssumeCapacity(try self.allocator.dupe(u8, &form));
+        }
+        if (user.mfa_secret) |old| {
+            crypto_backend.secureZero(@constCast(old));
+            self.allocator.free(old);
+        }
+        user.mfa_secret = secret_copy;
+        if (user.recovery_codes) |*old| {
+            for (old.items) |c| self.allocator.free(c);
+            old.deinit(self.allocator);
+        }
+        user.recovery_codes = list;
+    }
+
+    fn userIdByNameLocked(self: *Self, username: []const u8) ?UserId {
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) return entry.key_ptr.*;
+        }
+        return null;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-FOLLOWS-MFA; FEATURE="MFA authentication"; ASPECT=SecurityManagerMfaCurrent; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: `username`'s MFA state after geode.auth.mfa_setup: the new
+    /// secret and recovery codes (digests), MFA off. No such user: nothing.
+    pub fn loadMfaStateByName(self: *Self, username: []const u8, secret: ?[]const u8, digests: []const [32]u8, enabled: bool) !void {
+        const id = blk: {
+            self.auth_mu.lock();
+            defer self.auth_mu.unlock();
+            break :blk self.userIdByNameLocked(username) orelse return;
+        };
+        try self.loadMfaState(id, secret, digests);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    /// SONNY-6619: `username`'s MFA flag after mfa_enable / mfa_disable.
+    pub fn setMfaEnabledByName(self: *Self, username: []const u8, enabled: bool) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-REMOVE-USER; FEATURE="AuthGraphManager Integration"; ASPECT=DroppedUserRemoved; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: remove `username` (DROP USER) with everything held for
+    /// it: its record (password hash, MFA secret zeroed, recovery codes,
+    /// attributes), its role memberships, its sessions. SONNY-6614 cleared
+    /// the MFA state only and left the user. No such user: nothing to do.
+    pub fn removeUserByName(self: *Self, username: []const u8) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        var kv = self.users.fetchRemove(id) orelse return;
+        const user = &kv.value;
+        self.allocator.free(user.username);
+        self.allocator.free(user.email);
+        crypto_backend.secureZero(@constCast(user.password_hash));
+        self.allocator.free(user.password_hash);
+        if (user.mfa_secret) |sec| {
+            crypto_backend.secureZero(@constCast(sec));
+            self.allocator.free(sec);
+        }
+        if (user.recovery_codes) |*codes| {
+            for (codes.items) |c| self.allocator.free(c);
+            codes.deinit(self.allocator);
+        }
+        var attr_it = user.attributes.iterator();
+        while (attr_it.next()) |attr| {
+            self.allocator.free(attr.key_ptr.*);
+            self.allocator.free(attr.value_ptr.*);
+        }
+        user.attributes.deinit();
+        if (self.rbac.user_roles.fetchRemove(id)) |r| {
+            var roles = r.value;
+            roles.deinit(self.allocator);
+        }
+        // Its sessions (collected first: removing while iterating rehashes).
+        var doomed: std.ArrayList([]const u8) = .empty;
+        defer doomed.deinit(self.allocator);
+        var sit = self.sessions.iterator();
+        while (sit.next()) |e| {
+            if (e.value_ptr.user_id == id) doomed.append(self.allocator, e.key_ptr.*) catch break;
+        }
+        for (doomed.items) |key| {
+            const skv = self.sessions.fetchRemove(key) orelse continue;
+            if (skv.value.ip_address) |ip| self.allocator.free(ip);
+            if (skv.value.user_agent) |ua| self.allocator.free(ua);
+            self.allocator.free(skv.key);
+        }
     }
 
     /// SONNY-6600: convert codes still held in plaintext (stored before

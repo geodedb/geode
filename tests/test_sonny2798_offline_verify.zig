@@ -173,17 +173,17 @@ fn argvOf(aa: std.mem.Allocator, args: []const []const u8) ![]const []const u8 {
     return aa.dupe([]const u8, args);
 }
 
-/// The offline commands that change the store, as run against `dir`. The
-/// user commands pass --force past the live-server probe: this test process
-/// keeps files of the store it built open, and the probe would refuse for
-/// that reason first.
+/// The offline commands that change the store, as run against `dir`.
+/// (SONNY-6619: they passed --force past the live-server probe because this
+/// test process kept a descriptor of the store it built open; the store now
+/// releases it.)
 fn commands(aa: std.mem.Allocator, dir: []const u8) ![]const []const []const u8 {
     var list: std.ArrayList([]const []const u8) = .empty;
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", strong_password, "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "reset-password", "geode", "--new-password", strong_password, "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "disable", "geode", "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "assign-role", "geode", "reader", "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "delete", "bob", "--force", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", strong_password, "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "reset-password", "geode", "--new-password", strong_password, "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "disable", "geode", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "assign-role", "geode", "reader", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "delete", "bob", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "role", "create", "auditor", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "role", "delete", "auditor", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "policy", "create", "orders-rls", "--table", "orders", "--data-dir", dir }));
@@ -253,7 +253,7 @@ test "SONNY-2798: on an intact store offline changes go through and are sealed, 
     const dir = try makeStore(aa, "intact", null);
     defer std.Io.Dir.cwd().deleteTree(io_fs, dir) catch {};
     const sequence = [_][]const []const u8{
-        try argvOf(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", strong_password, "--force", "--data-dir", dir }),
+        try argvOf(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", strong_password, "--data-dir", dir }),
         try argvOf(aa, &.{ binary_path, "role", "create", "auditor", "--data-dir", dir }),
         try argvOf(aa, &.{ binary_path, "policy", "create", "orders-rls", "--table", "orders", "--data-dir", dir }),
         try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "carol", "--data-dir", dir }),

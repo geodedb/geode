@@ -306,8 +306,8 @@ test "SONNY-6369: giving a superuser a role other than admin is refused over the
     }
 
     for ([_][]const []const u8{
-        &.{ binary_path, "user", "assign-role", admin_user, "readonly", "--force", "--data-dir", dir },
-        &.{ binary_path, "user", "update", admin_user, "--role", "user", "--force", "--data-dir", dir },
+        &.{ binary_path, "user", "assign-role", admin_user, "readonly", "--data-dir", dir },
+        &.{ binary_path, "user", "update", admin_user, "--role", "user", "--data-dir", dir },
     }) |args| {
         const r = try runGeode(aa, args);
         if (r.code == 0) std.debug.print("{s} {s} of the superuser exited 0:\n{s}\n", .{ args[1], args[2], r.output });
@@ -317,7 +317,7 @@ test "SONNY-6369: giving a superuser a role other than admin is refused over the
     try testing.expect(st.superuser);
     try testing.expectEqual(Role.Admin, st.role);
     // Offline admin is still accepted.
-    const ok = try runGeode(aa, &.{ binary_path, "user", "assign-role", admin_user, "admin", "--force", "--data-dir", dir });
+    const ok = try runGeode(aa, &.{ binary_path, "user", "assign-role", admin_user, "admin", "--data-dir", dir });
     if (ok.code != 0) std.debug.print("assign-role admin to the superuser exited {d}:\n{s}\n", .{ ok.code, ok.output });
     try testing.expectEqual(@as(u8, 0), ok.code);
 }
@@ -622,7 +622,7 @@ test "SONNY-6369: a BLAKE2b-imported user's hash is replaced with Argon2id at it
     defer removeDir(dir);
 
     const hex = legacyBlake2bHex(legacy_pw);
-    const imp = try runGeode(aa, &.{ binary_path, "user", "import", "legacy6369", "--hash", &hex, "--algorithm", "blake2b", "--role", "readwrite", "--force", "--data-dir", dir });
+    const imp = try runGeode(aa, &.{ binary_path, "user", "import", "legacy6369", "--hash", &hex, "--algorithm", "blake2b", "--role", "readwrite", "--data-dir", dir });
     if (imp.code != 0) std.debug.print("user import exited {d}:\n{s}\n", .{ imp.code, imp.output });
     try testing.expectEqual(@as(u8, 0), imp.code);
     const before = try storedUser(aa, dir, "legacy6369");

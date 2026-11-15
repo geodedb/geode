@@ -167,9 +167,9 @@ test "SONNY-6602 (1): geode user mfa-setup / mfa enable and their help say MFA i
 
     const dir = try bootstrappedStore(aa, "cli");
     defer removeDir(dir);
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "cli6602", "cli6602@example.com", "--password", user_pw, "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "cli6602", "cli6602@example.com", "--password", user_pw, "--data-dir", dir });
 
-    const setup = try runOk(aa, &.{ binary_path, "user", "mfa-setup", "cli6602", "--show-recovery", "--force", "--data-dir", dir });
+    const setup = try runOk(aa, &.{ binary_path, "user", "mfa-setup", "cli6602", "--show-recovery", "--data-dir", dir });
     try expectNotEnforcedWarning("geode user mfa-setup", setup);
     if (std.mem.indexOf(u8, setup, "Each can only be used once") != null) {
         std.debug.print("SONNY-6602 (1): geode user mfa-setup says its recovery codes can be used once; nothing redeems them:\n{s}\n", .{setup});
@@ -187,7 +187,7 @@ test "SONNY-6602 (1): geode user mfa-setup / mfa enable and their help say MFA i
     const code = try mfa.generateCodeFromBase32(aa, secret, realMillis(), 30, 6);
     const code_str = try std.fmt.allocPrint(aa, "{d:0>6}", .{code});
 
-    const enable = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "cli6602", "--code", code_str, "--force", "--data-dir", dir });
+    const enable = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "cli6602", "--code", code_str, "--data-dir", dir });
     if (std.mem.indexOf(u8, enable, "MFA enabled for cli6602") == null) {
         std.debug.print("geode user mfa enable did not enable:\n{s}\n", .{enable});
         return error.NotEnabled;
