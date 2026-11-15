@@ -183,7 +183,16 @@ pub fn renderCell(aa: std.mem.Allocator, cell: Value, sort_lists: bool) anyerror
             break :blk try std.fmt.allocPrint(aa, "{{{s}}}", .{try std.mem.join(aa, ", ", parts.items)});
         },
         .Node => |n| try std.fmt.allocPrint(aa, "(:{s})", .{try std.mem.join(aa, ":", n.labels)}),
-        .Path => |p| try std.fmt.allocPrint(aa, "<path {d}>", .{p.edges.len}),
+        .Path => |p| blk: {
+            // SONNY-6613: read through the path's arrays (each node's labels,
+            // each relationship's type), so a path whose arrays were freed
+            // under the result is caught.
+            var names: usize = 0;
+            for (p.nodes) |n| names += n.labels.len;
+            for (p.edges) |e| names += e.label.len;
+            std.mem.doNotOptimizeAway(names);
+            break :blk try std.fmt.allocPrint(aa, "<path {d}>", .{p.edges.len});
+        },
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(cell)}),
     };
 }

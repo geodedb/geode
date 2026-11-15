@@ -750,7 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6613-path-ownership", .reason = "intentionally red TDD reproduction (SONNY-6613 item 1, KNOWN_TEST_ISSUES): a path value a result keeps leaks its node and edge arrays until the path ownership model lands; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
@@ -14067,10 +14066,8 @@ pub fn build(b: *std.Build) void {
     sonny6613_po_mod.addImport("rls_types", rls_types_mod);
     const sonny6613_po_tests = b.addTest(.{ .root_module = sonny6613_po_mod });
     const run_sonny6613_po_tests = b.addRunArtifact(sonny6613_po_tests);
-    // Intentionally red until the path ownership fix lands (docs/KNOWN_TEST_ISSUES.md):
-    // compiled by test-compile, out of the aggregate until then.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6613_po_tests.step);
-    b.step("test-sonny6613-path-ownership", "Run SONNY-6613 item 1 reproduction (intentionally red: a path value a result keeps - a named path, a variable-length one, through WITH, ORDER BY, DISTINCT, collect(), shortestPath, nodes()/relationships()/length() - leaks nothing on a leak-checked allocator: every session kind)").dependOn(&run_sonny6613_po_tests.step);
+    shardDep(test_step, &run_sonny6613_po_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-path-ownership", "Run SONNY-6613 item 1 regression (a path value a result keeps - a named path, a variable-length one, through WITH, ORDER BY, DISTINCT, collect(), a list or map, a UNION, shortestPath, nodes()/relationships()/length() - is freed with the result and read whole: every session kind; an allocation failure at every point leaks and double-frees nothing)").dependOn(&run_sonny6613_po_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);

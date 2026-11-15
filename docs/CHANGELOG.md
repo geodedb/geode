@@ -2616,6 +2616,24 @@
 
 ### Fixed
 
+- **A path value a result keeps no longer leaks (SONNY-6613).** Every
+  statement that kept a path in a row (`MATCH p = ... RETURN p`, a
+  variable-length path, `WITH p`, `ORDER BY length(p)`, `DISTINCT`,
+  `collect(p)`, `[p]`, a multi-hop pattern, `shortestPath`) leaked the path's
+  node and relationship arrays on every session kind. The result's entity
+  tracker now owns the arrays its rows keep and frees them with the result;
+  a copied path (`duplicateValue`, so a gRPC stored result and a result
+  copied out of the statement's scratch arena) owns copies of its arrays,
+  which `freeValue` frees. A UNION keeps each arm's tracker, since its rows
+  are the arm's (reading a UNION's path rows otherwise read freed memory once
+  the arrays were freed). Also fixed on the way, each found by an
+  allocation-failure sweep over path statements: a windowed result
+  (`SKIP`/`LIMIT`) whose kept-row list could not be made freed its rows twice;
+  the shortest-path search and the multi-pattern executor leaked what they
+  had built. Regression: `zig build test-sonny6613-path-ownership` (now in the
+  aggregate `test`), and `zig build test-sonny3046-with-bound-variable-join`
+  runs its path statements on the leak-checked allocator.
+
 - **A writing FOR with no RETURN answers no rows (SONNY-6613).** `FOR x IN
   [1, 2] CREATE ...` answered one empty row (no columns) per element, as did
   an UNWIND before a write; ISO/IEC 39075:2024 14.1: a statement with no
