@@ -5435,9 +5435,11 @@ REQ-SONNY-6619-SERVER-LOCKOUT-STORED,MFA authentication,LockoutSurvivesRestart,T
 REQ-SONNY-6619-SM-FOLLOWS-MFA,MFA authentication,SecurityManagerMfaCurrent,TESTED,,,security,2026-11-15,src/security/geode_auth_lib.zig,2136
 REQ-SONNY-6619-SM-REMOVE-USER,AuthGraphManager Integration,DroppedUserRemoved,TESTED,,,security,2026-11-15,src/security/geode_auth_lib.zig,2159
 REQ-SONNY-6619-TS-WAL-DIR-RELEASE,Timeseries,WalDirHandleClosed,TESTED,,,storage,2026-11-15,src/timeseries/timeseries.zig,262
+REQ-SONNY-6622-RAFT-V022,Raft Consensus Persistence,Regression,TESTED,,,distributed,2026-11-15,tests/test_sonny6622_raft_v022_adapt.zig,27
 REQ-SONNY-6623-MFA-ENABLE-LIMIT,MFA authentication,Regression,TESTED,,,security,2026-11-15,tests/test_sonny6623_mfa_enable_limit.zig,13
 REQ-SONNY-6623-OFFLINE-MALFORMED,MFA authentication,Regression,TESTED,,,security,2026-11-15,tests/test_sonny6623_offline.zig,6
 REQ-SONNY-6623-SHARED-MFA-LIMITER,MFA authentication,OneLimiterForEveryCodeCheck,TESTED,,,security,2026-11-15,src/execution/auth_dispatch.zig,1386
+REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,Regression,TESTED,,,distributed,2026-11-15,tests/test_sonny6631_apply_hydration_off_mutex.zig,28
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38
