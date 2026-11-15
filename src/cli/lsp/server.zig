@@ -1430,7 +1430,10 @@ pub const Server = struct {
         // Ownership transfers to publishVerifiedState — it deinits on
         // its own error path. On success the state lives on as
         // Server.auth.
-        return self.publishVerifiedState(state);
+        try self.publishVerifiedState(state);
+        // SONNY-6589 (3): an authenticated principal sees a graph's schema
+        // only when it may bind and read the graph (schema_introspection).
+        self.schema.?.ctx.authenticated = true;
     }
 
     /// Task 13: `--no-auth` stdio path. Synthesize a local-admin

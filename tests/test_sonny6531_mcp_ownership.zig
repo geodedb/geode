@@ -290,9 +290,11 @@ test "SONNY-6531: resources fall back to their offline documents without leaking
     // Nothing listens on the port: the client is built, the request fails,
     // and schema/stats answer their "Server unavailable" documents (config
     // is answered locally by the client).
+    // SONNY-6589 (2): no timeout parameter: geode mcp refuses one (the
+    // client library cannot apply it; it never shortened these waits).
     const port = try util.getRandomPort();
     var ep_buf: [64]u8 = undefined;
-    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true&timeout=2000", .{port});
+    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true", .{port});
     const server = try GeodeMcpServer.init(testing.allocator, .{ .auth_mode = .none, .geode_endpoint = endpoint });
     defer server.deinit();
     try handshake(server);

@@ -51,6 +51,10 @@ const user_management = geode.user_management;
 pub const Verifier = struct {
     ctx: *anyopaque,
     verifyFn: *const fn (ctx: *anyopaque, token: []const u8) Outcome,
+    /// SONNY-6589 (3): checks `initializationOptions.geode.username` /
+    /// `.password`, the credentials a QUIC HELLO carries. Null: a verifier
+    /// that takes no password (every such `initialize` is refused).
+    verifyCredentialsFn: ?*const fn (ctx: *anyopaque, username: []const u8, password: []const u8) Outcome = null,
 
     pub const Outcome = union(enum) {
         ok: struct {
@@ -80,6 +84,11 @@ pub const AuthState = struct {
     graph: ?[]const u8 = null,
     tenant_id: ?[]const u8 = null,
     verified: bool = false,
+    /// SONNY-6589 (3): `initializationOptions.geode.username` / `.password`
+    /// (owned; the password is zeroed when freed). The password is released
+    /// as soon as `verify` has checked it.
+    login_user: ?[]const u8 = null,
+    login_password: ?[]u8 = null,
 
     /// GAP-0818 follow-up: a derived, non-reversible session handle exposed
     /// to `LspContext.session_id`. It is the lowercase hex of a 64-bit
@@ -116,9 +125,16 @@ pub const AuthState = struct {
     /// `initialize` request's `initializationOptions`. Every owned
     /// slice is freshly duped; release them all via `deinit`.
     ///
+    /// SONNY-6589 (3): instead of `authToken`, `username` and `password`
+    /// (both strings, the credentials of a QUIC HELLO); `verify` checks them
+    /// through `Verifier.verifyCredentialsFn`. A token wins when both are
+    /// given.
+    ///
     /// Errors:
-    ///   - `MissingToken` — no `geode` block, or `geode.authToken` absent.
-    ///   - `BadFormat`    — `params` / `geode` / `authToken` wrong JSON kind.
+    ///   - `MissingToken` — no `geode` block, or neither `geode.authToken`
+    ///     nor both `geode.username` and `geode.password`.
+    ///   - `BadFormat`    — `params` / `geode` / `authToken` / `username` /
+    ///     `password` wrong JSON kind.
     pub fn fromInitializeOptions(
         allocator: std.mem.Allocator,
         params: std.json.Value,
@@ -126,11 +142,22 @@ pub const AuthState = struct {
         if (params != .object) return AuthError.BadFormat;
         const geode_obj = params.object.get("geode") orelse return AuthError.MissingToken;
         if (geode_obj != .object) return AuthError.BadFormat;
-        const tok = geode_obj.object.get("authToken") orelse return AuthError.MissingToken;
-        if (tok != .string) return AuthError.BadFormat;
-
-        var s = AuthState{ .token = try allocator.dupe(u8, tok.string) };
+        var s: AuthState = if (geode_obj.object.get("authToken")) |tok| blk: {
+            if (tok != .string) return AuthError.BadFormat;
+            break :blk .{ .token = try allocator.dupe(u8, tok.string) };
+        } else blk: {
+            const user = geode_obj.object.get("username") orelse return AuthError.MissingToken;
+            const password = geode_obj.object.get("password") orelse return AuthError.MissingToken;
+            if (user != .string or password != .string) return AuthError.BadFormat;
+            const token = try allocator.dupe(u8, "");
+            errdefer allocator.free(token);
+            const login_user = try allocator.dupe(u8, user.string);
+            errdefer allocator.free(login_user);
+            break :blk .{ .token = token, .login_user = login_user, .login_password = try allocator.dupe(u8, password.string) };
+        };
         errdefer allocator.free(s.token);
+        errdefer if (s.login_user) |u| allocator.free(u);
+        errdefer s.releasePassword(allocator);
 
         if (geode_obj.object.get("graph")) |g| {
             if (g == .string) s.graph = try allocator.dupe(u8, g.string);
@@ -150,6 +177,19 @@ pub const AuthState = struct {
         if (self.graph) |g| allocator.free(g);
         if (self.tenant_id) |t| allocator.free(t);
         if (self.user.len > 0) allocator.free(self.user);
+        if (self.login_user) |u| allocator.free(u);
+        if (self.login_password) |p| {
+            std.crypto.secureZero(u8, p);
+            allocator.free(p);
+        }
+    }
+
+    /// Zero and free the login password (SONNY-6589).
+    fn releasePassword(self: *AuthState, allocator: std.mem.Allocator) void {
+        const p = self.login_password orelse return;
+        std.crypto.secureZero(u8, p);
+        allocator.free(p);
+        self.login_password = null;
     }
 
     /// Validate the bearer token bound at construction time. On
@@ -188,10 +228,21 @@ pub const AuthState = struct {
         allocator: std.mem.Allocator,
         verifier: ?Verifier,
     ) AuthError!void {
-        if (self.token.len == 0) return AuthError.MissingToken;
-        const v = verifier orelse return AuthError.InvalidToken;
+        // SONNY-6589 (3): a user name and password, checked as a HELLO's.
+        const outcome: Verifier.Outcome = if (self.login_user) |login_user| blk: {
+            defer self.releasePassword(allocator);
+            const password = self.login_password orelse return AuthError.MissingToken;
+            if (login_user.len == 0 or password.len == 0) return AuthError.MissingToken;
+            const v = verifier orelse return AuthError.InvalidToken;
+            const check = v.verifyCredentialsFn orelse return AuthError.InvalidToken;
+            break :blk check(v.ctx, login_user, password);
+        } else blk: {
+            if (self.token.len == 0) return AuthError.MissingToken;
+            const v = verifier orelse return AuthError.InvalidToken;
+            break :blk v.verifyFn(v.ctx, self.token);
+        };
 
-        switch (v.verifyFn(v.ctx, self.token)) {
+        switch (outcome) {
             .invalid => return AuthError.InvalidToken,
             .ok => |ok| {
                 // Release owned outcome strings once copied (api-key path);
@@ -202,9 +253,11 @@ pub const AuthState = struct {
                 };
                 self.user = try allocator.dupe(u8, ok.username);
                 if (ok.role) |role_name| {
-                    if (user_management.Role.fromString(role_name)) |r| {
-                        self.role = r;
-                    }
+                    // SONNY-6589 (3): a role this build does not assign
+                    // ("none": a user with no stored role, which
+                    // `fromString` refuses on purpose) is no role, not the
+                    // `.ReadOnly` default.
+                    self.role = user_management.Role.fromString(role_name) orelse .None;
                 }
                 self.verified = true;
             },

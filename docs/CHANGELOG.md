@@ -4,6 +4,26 @@
 
 ### Security
 
+- **The embedded LSP authenticates with the HELLO's user name and password
+  and completes only what the user may read (SONNY-6589).** `geode serve`'s
+  LSP listener checked every `initialize` token against an `AuthProvider`
+  that nothing populated (the server issues no API keys or session tokens,
+  SONNY-6554), so no client could ever authenticate and schema-aware
+  completion over TCP did not work. An `initialize` now carries
+  `initializationOptions.geode.username` and `.password` (and optionally
+  `graph`, `tenant`), checked as a QUIC HELLO's
+  (`user_management.authenticate`, behind the same per-(peer IP, user) rate
+  limiter); a wrong or missing credential, or a user who must change their
+  password first, gets JSON-RPC -32002 and no schema. **BREAKING:** the
+  session's labels, edge types and properties are those of the session's
+  graph only (they were the union over every graph, `__geode_security`
+  included), and none at all for a graph the user may not bind and read
+  (`session_graph.mayBind`, `gps.graphReadPermitted`, as for HELLO and
+  MATCH). A verified principal whose role this build does not assign (no
+  stored role) is no role, not ReadOnly. Stdio `geode lsp` and
+  `geode lsp --listen` have no user store: they authenticate nobody (stdio
+  `--no-auth` is the local developer mode). docs/LSP_FEATURES.md.
+
 - **CDC procedures answer the engine's state or refuse, Admin only, audited
   (SONNY-6570).** Change capture is not implemented (SONNY-6572): no write
   path feeds the CDC engine, so no change is ever captured. The `CALL cdc.*`
@@ -2580,6 +2600,25 @@
 
 ### Fixed
 
+- **CLI, MCP and storage residuals (SONNY-6589).** **BREAKING:** a
+  `geode mcp` endpoint DSN carrying `connect_timeout` (`timeout`) or
+  `timeout_ms` is refused ("Invalid Geode endpoint DSN: geode mcp cannot
+  apply connect_timeout (timeout) or timeout_ms ..."), by the tools at once
+  and by `geode mcp --endpoint` at startup: geode-client-zig copies no
+  timeout into its client, whose QUIC handshake and HELLO each wait a fixed
+  30 s, so `timeout=2000` waited 30 s on a server that did not answer. A
+  refused `\connect` in `geode shell` prints the endpoint message (never the
+  address) instead of a bare error name (`UnencodedCredentialDelimiter`,
+  `InvalidPort`), and the shell keeps its working session (it had torn it
+  down first, so the next statement failed too). `geode backup create` and
+  `geode restore --server` name the address they dial (`--server :3141`
+  is `127.0.0.1:3141`), not `--server` as typed. A graph whose engine cannot
+  be opened is opened, and the failure logged, once per boot (it was opened
+  again on every access: four times in one boot, re-reading its store); it
+  still answers 58000, and a restart tries again (SONNY-6554 item 7).
+  Regressions: `zig build test-sonny6589-mcp-timeout`,
+  `test-sonny6589-cli-messages`, `test-sonny6589-broken-graph-open`,
+  `test-sonny6589-lsp-auth`.
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no

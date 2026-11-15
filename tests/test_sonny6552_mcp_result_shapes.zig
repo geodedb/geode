@@ -619,9 +619,11 @@ test "SONNY-6552: every MCP result has its 2025-11-25 shape through processMessa
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Nothing listens on the endpoint: the backend tools and resources take
     // their failure / offline paths.
+    // SONNY-6589 (2): no timeout parameter: geode mcp refuses one (the
+    // client library cannot apply it; it never shortened these waits).
     const port = try util.getRandomPort();
     var ep_buf: [96]u8 = undefined;
-    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true&timeout=2000", .{port});
+    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true", .{port});
     const server = try GeodeMcpServer.init(testing.allocator, .{ .auth_mode = .none, .geode_endpoint = endpoint });
     defer server.deinit();
     try handshake(server);

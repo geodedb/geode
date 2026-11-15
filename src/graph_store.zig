@@ -4853,9 +4853,28 @@ pub const GraphStore = struct {
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
+        return self.listEdgeTypesScoped(allocator, null, filter_tenant);
+    }
+
+    /// SONNY-6589 (3): `listEdgeTypes` of graph `graph_name` only.
+    pub fn listEdgeTypesInGraph(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
+        return self.listEdgeTypesScoped(allocator, graph_name, filter_tenant);
+    }
+
+    fn listEdgeTypesScoped(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_filter: ?[]const u8,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
         // SONNY-6528 (4): and fail closed while any graph is quarantined.
-        try self.requireAllGraphsHydrated();
+        if (graph_filter) |g| try self.requireGraphHydrated(g) else try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_types_for_tenant) read from
         // `edge_types_by_tenant`. The previous implementation walked every
         // edge in the store, deduping on each tick — that was O(E) per LSP
@@ -4888,6 +4907,7 @@ pub const GraphStore = struct {
             // union across graphs. The outer map is tiny (graphs x tenants).
             var outer_it = self.edge_types_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
                 var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
@@ -4901,6 +4921,7 @@ pub const GraphStore = struct {
             // Admin / no-filter path: union across every tenant.
             var outer_it = self.edge_types_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 var inner_it = outer_entry.value_ptr.keyIterator();
                 while (inner_it.next()) |kp| {
                     if (type_set.contains(kp.*)) continue;
@@ -4936,9 +4957,30 @@ pub const GraphStore = struct {
         filter_tenant: ?[]const u8,
         label: []const u8,
     ) ![][]const u8 {
+        return self.listPropertiesForLabelScoped(allocator, null, filter_tenant, label);
+    }
+
+    /// SONNY-6589 (3): `listPropertiesForLabel` of graph `graph_name` only.
+    pub fn listPropertiesForLabelInGraph(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        filter_tenant: ?[]const u8,
+        label: []const u8,
+    ) ![][]const u8 {
+        return self.listPropertiesForLabelScoped(allocator, graph_name, filter_tenant, label);
+    }
+
+    fn listPropertiesForLabelScoped(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_filter: ?[]const u8,
+        filter_tenant: ?[]const u8,
+        label: []const u8,
+    ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
         // SONNY-6528 (4): and fail closed while any graph is quarantined.
-        try self.requireAllGraphsHydrated();
+        if (graph_filter) |g| try self.requireGraphHydrated(g) else try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_property_keys_for_label_in_tenant)
         // via `label_properties_by_tenant`. The composite index key is
         // "label\x00prop_key" — we walk the inner map and strip the prefix.
@@ -4994,12 +5036,14 @@ pub const GraphStore = struct {
             // the tenant component, union across graphs (see listEdgeTypes).
             var outer_it = self.label_properties_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
                 try collect(&prop_set, allocator, outer_entry.value_ptr, label);
             }
         } else {
             var outer_it = self.label_properties_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 try collect(&prop_set, allocator, outer_entry.value_ptr, label);
             }
         }
@@ -5099,9 +5143,32 @@ pub const GraphStore = struct {
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
+        return self.listNodeLabelsScoped(allocator, null, filter_tenant);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6589-LSP-PASSWORD-AUTH; FEATURE="Embedded LSP"; ASPECT=GraphScopedSchemaListing; STATUS=TESTED; TEST=tests/test_sonny6589_lsp_auth.zig; OWNER=lsp; UPDATED=2026-11-15
+    /// SONNY-6589 (3): `listNodeLabels` of graph `graph_name` only (and its
+    /// hydration only). The LSP's schema of a session's graph was the union
+    /// over every graph, so a completion named labels of graphs the user
+    /// could not read.
+    pub fn listNodeLabelsInGraph(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
+        return self.listNodeLabelsScoped(allocator, graph_name, filter_tenant);
+    }
+
+    fn listNodeLabelsScoped(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_filter: ?[]const u8,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
         // PHASE 1b chokepoint: tenant-scoped, no single graph_name -> hydrate all.
         // SONNY-6528 (4): and fail closed while any graph is quarantined.
-        try self.requireAllGraphsHydrated();
+        if (graph_filter) |g| try self.requireGraphHydrated(g) else try self.requireAllGraphsHydrated();
         // PERF-C (issue #814): O(distinct_labels_for_tenant) read from
         // `node_labels_by_tenant`. The previous implementation walked every
         // node in the store on every LSP completion call. Reference counts
@@ -5134,6 +5201,7 @@ pub const GraphStore = struct {
             // the tenant component, union across graphs (see listEdgeTypes).
             var outer_it = self.node_labels_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 if (!std.mem.eql(u8, graphTenantKeyTenant(outer_entry.key_ptr.*), tid)) continue;
                 var it = outer_entry.value_ptr.keyIterator();
                 while (it.next()) |kp| {
@@ -5146,6 +5214,7 @@ pub const GraphStore = struct {
         } else {
             var outer_it = self.node_labels_by_tenant.iterator();
             while (outer_it.next()) |outer_entry| {
+                if (!graphTenantKeyInGraphScope(outer_entry.key_ptr.*, graph_filter)) continue;
                 var inner_it = outer_entry.value_ptr.keyIterator();
                 while (inner_it.next()) |kp| {
                     if (label_set.contains(kp.*)) continue;
@@ -6679,6 +6748,16 @@ pub const GraphStore = struct {
     fn graphTenantKeyTenant(outer_key: []const u8) []const u8 {
         const idx = std.mem.indexOfScalar(u8, outer_key, 0) orelse return "";
         return outer_key[idx + 1 ..];
+    }
+
+    /// SONNY-6589 (3): is a "graph\x00tenant" outer key's graph `graph_filter`
+    /// (any graph when null)? A node written with no graph name is in the
+    /// default graph.
+    fn graphTenantKeyInGraphScope(outer_key: []const u8, graph_filter: ?[]const u8) bool {
+        const want = graph_filter orelse return true;
+        const graph = graphTenantKeyGraph(outer_key);
+        if (std.mem.eql(u8, graph, want)) return true;
+        return graph.len == 0 and std.mem.eql(u8, want, DEFAULT_GRAPH_NAME);
     }
 
     fn bumpLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) !void {

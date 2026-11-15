@@ -334,7 +334,12 @@ refuses a value outside it with `TimeoutOutOfRange`, including
 geode parses the `geode mcp --endpoint` DSN and the CLI's `--dsn` strictly
 (SONNY-6569; the MCP endpoint was parsed leniently, so an out-of-range
 value silently became the default). Neither applies a timeout parameter
-yet: the CLI says so (`Warning: ... has no effect`; use `--timeout`).
+yet: geode-client-zig's `initFromConfig` copies no timeout into its client,
+whose QUIC handshake and HELLO each wait a fixed 30 s. The CLI says so
+(`Warning: ... has no effect`; use `--timeout`); `geode mcp` refuses the
+endpoint ("Invalid Geode endpoint DSN: geode mcp cannot apply
+connect_timeout (timeout) or timeout_ms", SONNY-6589): it used to keep it
+and wait 30 s on a server that did not answer.
 
 ### Boolean Parameter Values
 
