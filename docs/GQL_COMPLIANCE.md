@@ -122,12 +122,18 @@ identifiers, so `MATCH (type:T) SET type.x = 1` was a syntax error.
 **Documented non-conformances** (Geode extensions to 21.3 SR 18):
 
 1. **Five reserved words stay binding names: `PATH`, `VALUE`, `COUNT`, `AVG`,
-   `TIMESTAMP`.** Geode's own procedures yield columns with these names, so a
-   `YIELD` binds them: `algo.bfs.stream`, `algo.dfs.stream`,
-   `algo.shortestPath.dijkstra` and the recursive path procedures yield
-   `path`; `geode.ts.range` / `last` / `sample_by` yield `value` and
-   `geode.ts.bucket_avg` yields `avg`; RLS and storage procedures yield
-   `count` and `timestamp`. They are also the reserved words most used as
+   `TIMESTAMP`.** Geode's own procedures yield columns with four of these
+   names, so a `YIELD` binds them (verified 2026-11-15, SONNY-6596):
+   `algo.bfs.stream` / `bfs`, `algo.dfs.stream` / `dfs` and
+   `algo.dijkstra.stream` / `algo.shortestPath.dijkstra` / `dijkstra` yield
+   `path` (src/execution/algo_dispatch.zig); `geode.ts.range`, `last` and
+   `sample_by` yield `value` and `geode.ts.bucket_avg` yields `avg`
+   (src/execution/ts_dispatch.zig); `geode.rls.policy_count` yields `count`
+   (src/execution/rls_dispatch.zig). No procedure yields `timestamp` any
+   more: the CDC procedures that did are refused (0A000, SONNY-6570), so
+   `TIMESTAMP` stays a binding name for existing queries only. Renaming the
+   columns (and then dropping this deviation) is a breaking change for every
+   client and is a pending decision. They are also the reserved words most used as
    names: of 14,410 queries in Geode's tests, docs and examples and the
    integration-harness specs, a strict rule refused 260, and 123 of those
    used one of these five (`PATH` 56, `VALUE` 41, `COUNT` 20, `AVG` 4,
