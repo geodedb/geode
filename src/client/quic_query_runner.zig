@@ -273,10 +273,15 @@ pub fn consumeQueryWithTransport(
         while (!done) {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
+            // SONNY-6567 (1): a pushed result whose stream ends before its
+            // final page was cut short (the gRPC server refuses a page the
+            // peer's window cannot take and ends the stream). That was taken
+            // for the end of the result: a truncated answer, reported as a
+            // success.
             const event = transport.nextEvent(arena.allocator(), opts.timeout_secs) catch |err| {
                 if (err == error.EndOfStream or err == error.Timeout or err == error.WouldBlock) break;
                 return err;
-            } orelse break;
+            } orelse return error.IncompleteResponse;
 
             const summary = try consumer.handleEvent(allocator, event, 0);
             if (summary.page_final) {

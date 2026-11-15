@@ -132,9 +132,8 @@ fn fromResult(r: *const util.ExecResult) Answer {
     return a;
 }
 
-/// The gRPC test client sends every Execute on HTTP/2 stream 3
-/// (`grpc_query_transport.execute_stream_id`), so it runs one Execute per
-/// connection; the session (and its graph) outlives the connection.
+/// One Execute per connection (each answer on a fresh connection, as the
+/// CLI runs it); the session (and its graph) outlives the connection.
 const GrpcSession = struct {
     allocator: std.mem.Allocator,
     addr: []const u8,

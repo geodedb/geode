@@ -52,6 +52,40 @@ const Attr = logging.Attr;
 
 var g_store: ?*GraphStore = null;
 
+// CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=RefusedReplicatedDropHaltsApply; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6567 (6a): set when a committed entry could not be applied on this
+/// node in a way that leaves it different from the others (a replicated
+/// DROP GRAPH refused because a session transaction changed the graph). The
+/// Raft node logs an entry it could not apply and goes on with the next one:
+/// the node kept the graph every other node dropped, and applied (or
+/// failed) the later entries on it differently. Instead it stops applying:
+/// every later entry fails (`ReplicatedApplyHalted`), so its store stays the
+/// cluster's state as of the entry before the drop (behind, never
+/// different), and the operator error says to restart it. A restarted node
+/// replays the committed log (cluster.zig: rebuilt by committed-log replay)
+/// with no transaction open, and the drop applies. Hard stop, not a
+/// decision about open transactions: that is for the replicated DDL feature
+/// (nothing proposes a `schema_change` today, SONNY-6547 (6)).
+var g_apply_halted: std.atomic.Value(bool) = .init(false);
+
+fn haltApply(reason: []const u8, graph: []const u8) void {
+    if (g_apply_halted.swap(true, .acq_rel)) return;
+    log.err("raft apply: HALTED: a committed entry could not be applied on this node; it stops applying so it cannot diverge from the cluster. Restart the node: it replays the committed log", &.{
+        Attr.string("reason", reason),
+        Attr.string("graph", graph),
+    });
+}
+
+/// Has this node stopped applying (SONNY-6567 (6a))?
+pub fn applyHalted() bool {
+    return g_apply_halted.load(.acquire);
+}
+
+/// Tests: clear the halt (a restart does, the flag is per process).
+pub fn resetApplyHaltForTesting() void {
+    g_apply_halted.store(false, .release);
+}
+
 /// Register the graph store used by the apply callback.
 /// Must be called before the Raft node begins processing committed entries.
 pub fn setGlobalStore(store: *GraphStore) void {
@@ -270,6 +304,18 @@ pub fn prehydrateForApply(cmd: Command) void {
 /// Returns a result payload (caller-owned).  For most MVP paths this is an
 /// empty slice allocated from `allocator`; the caller must free it.
 pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command, raft_index: u64) ![]u8 {
+    // SONNY-6567 (6a): a node that could not apply a committed entry stops
+    // applying (see `haltApply`).
+    if (g_apply_halted.load(.acquire)) {
+        log.err("raft apply: HALTED; this node does not apply committed entries until it is restarted", &.{
+            Attr.uint("raft_index", raft_index),
+        });
+        return error.ReplicatedApplyHalted;
+    }
+    // SONNY-6567 (6c): no hydration this apply triggers persists (waits for
+    // a graph lock) under the Raft node's `inner_mutex`.
+    GraphStore.enterReplicatedApply();
+    defer GraphStore.leaveReplicatedApply();
     switch (command) {
         // ---- no-op: nothing to apply ----
         .noop => {
@@ -757,10 +803,13 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 // lock. What a replicated drop does to an open transaction is
                 // for the replicated DDL feature to decide: nothing proposes
                 // a `schema_change` today (SONNY-6547 (6)).
+                // SONNY-6567 (6a): and the node then stops applying
+                // (`haltApply`) rather than go on without the drop.
                 error.ObjectInUse => {
                     log.err("raft apply: drop_graph refused, the graph is in use on this node; the entry is not applied here", &.{
                         Attr.string("graph", sc.graph),
                     });
+                    haltApply("replicated drop_graph refused: the graph is in use on this node", sc.graph);
                     return err;
                 },
                 // SONNY-6433: no room to record the graph lock; nothing was

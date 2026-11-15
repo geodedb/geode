@@ -460,12 +460,17 @@ fn filterAuthorizedHits(
         }
 
         // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrate; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+        // CANARY: REQ=REQ-SONNY-6567-FTS-UNREADABLE-HIT; FEATURE="FullText"; ASPECT=UnreadableHitFailsSearch; STATUS=TESTED; TEST=tests/test_sonny6567_fts_unreadable_hit.zig; OWNER=fts; UPDATED=2026-11-15
+        // Never call the hydrating accessor while the shard lock is held —
+        // it is self-locking (getOrHydrate re-takes the same map_lock) and
+        // re-entrant cache calls are forbidden. We are outside that lock here
+        // (the block above already released it). SONNY-6567 (3): null is a
+        // node that is gone (deleted, the posting stale): its hit is skipped.
+        // An error is a node that exists and could not be read: the search
+        // fails. It was taken for "gone" (`catch null`), and the hit was left
+        // out of a result reported as complete.
         const node = resident_node orelse
-            // Never call the hydrating accessor while the shard lock is held
-            // — it is self-locking (getOrHydrate re-takes the same map_lock)
-            // and re-entrant cache calls are forbidden. We are outside that
-            // lock here (the block above already released it).
-            (store.nodes.getOrHydrate(hit.doc_id) catch null) orelse continue; // genuinely gone — no fallback possible
+            (try store.nodes.getOrHydrate(hit.doc_id)) orelse continue;
 
         // SONNY-6421: a node that no longer carries the index's label is not
         // in the index, whatever postings it left: the engine cannot take a

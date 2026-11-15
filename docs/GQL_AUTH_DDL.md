@@ -366,8 +366,15 @@ half-written node behind, which these undos do not repair.
 On startup, `server_init` hydrates the security state from `__geode_security`:
 users are loaded via the existing `PersistentUserResolver`; custom roles are
 loaded via `auth_dispatch.hydrateCustomRolesFromGraph`; per-graph grants are
-loaded via `GraphRBACPolicy.loadGraphGrants(agm.listGraphGrants(...))`. All
-hydration is best-effort — a failure logs a warning and does not crash startup.
+loaded via `auth_startup_hydration.hydrateGraphGrants`; FLE role grants via
+`auth_startup_hydration.hydrateFleRoleGrants`; GPS policies via
+`policy_persistence.hydrateCatalog`; the tenant hierarchy and quotas from the
+tenant registry. **Each loads every stored record or the server refuses to
+start** (SONNY-6567): they were best-effort, logging a warning, and a server
+could run with part of its roles, grants or policies (a deny policy that was
+not loaded hides nothing). A stored FLE role grant whose user was deleted is
+not loaded (it names no one). Hydration still tolerates the records it always
+tolerated by design: a duplicate or uncompilable stored policy (GAP-0923).
 
 ### Per-graph grant semantics
 
