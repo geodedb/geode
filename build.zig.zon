@@ -494,9 +494,17 @@
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
+        // 2026-11-15: v0.1.24 (acd8f68, SONNY-6622) — recovery and compaction
+        // fail closed (WalEncryptionMismatch / WalAuthFailed / WalCorrupted)
+        // on data they cannot read; only a genuine torn tail is truncated on
+        // open. Lockstep with raft v0.2.2, which pins the same wal. v0.1.25
+        // (truncateAfter fails closed too) was not tagged yet. Known diamond:
+        // graph-storage v0.4.16 and timeseries-storage v0.2.20 still pin
+        // wal v0.1.23 (their re-pin is the storage lane's); no wal type
+        // crosses between geode and those libraries.
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.23#e90dc1e949597cd17ec6d440820f59721c46cfe0",
-            .hash = "wal-0.1.23-EqPqpgZQBwAoa0xblHlawItWiYJwUHuPsLJskTkCehVi",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.24#acd8f6810decf5e3a9e6c9c3056c59003b7bca36",
+            .hash = "wal-0.1.24-EqPqpuQPCABjGgoaO2lYjoNwcfM8d6Cvg04FdJTh3qkM",
         },
 
         // Page-based graph storage engine
@@ -686,9 +694,19 @@
         // (freeEntries); committed_entries data lives until advanceApply(). A
         // node outside its voter set no longer campaigns. Same wal and
         // thread_pool pins as geode (its thread_pool 0.2.9 diamond is gone).
+        // 2026-11-15: v0.2.2 (25614ee, SONNY-6622, SONNY-6611) — wal v0.1.24;
+        // FileStorage refuses a damaged log (StorageError.LogCorrupted /
+        // LogAuthFailed / LogEncryptionMismatch) instead of truncating it; the
+        // leader counts only persisted entries toward commit (a commit shows
+        // one Ready cycle later); a second ready() before advanceApply() is
+        // ReadyNotAdvanced; a snapshot installed between ready() and advance()
+        // is delivered in Ready.snapshot (owned by the Ready until
+        // advanceApply()); fast backtracking (AppendEntriesResponse
+        // conflict_index / conflict_term, match_index = the rejected
+        // prev_log_index); saving a snapshot trims the log.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.0#d736de414ee48eb963d9bfbff4ad953db87f296d",
-            .hash = "raft-0.2.0-PqJyvnYYCQChAu91ghKdKgWxuhDaHstVBEOsSCYT_JDw",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.2#25614ee74e6b06169922fc6c713508b3c0d31318",
+            .hash = "raft-0.2.2-PqJyvvLZCQA6yz61iyXPkRk3bc8sxUPK5G3J-VRwIoLC",
         },
 
         // =======================================================================

@@ -1275,6 +1275,13 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
+    // SONNY-6622: geode and raft v0.2.2 pin wal v0.1.24 (fail-closed
+    // recovery); graph-storage v0.4.16 and timeseries-storage v0.2.20 still
+    // pin v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
+    // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
+    // both libraries compile against geode's wal module, as timeseries-storage
+    // does for thread_pool below. Remove once both pin geode's wal version.
+    graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
     const raft_dep = b.dependency("raft", .{
@@ -1325,6 +1332,8 @@ pub fn build(b: *std.Build) void {
     // instead of a lockstep timeseries-storage re-release. Remove once
     // timeseries-storage pins geode's thread-pool version.
     timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
+    // SONNY-6622: and geode's wal (see graph_storage_mod above).
+    timeseries_storage_ext_mod.addImport("wal", wal_ext_mod);
     const fts_storage_dep = b.dependency("fts_storage", .{ .target = target, .optimize = optimize });
     const fts_storage_ext_mod = fts_storage_dep.module("fts_storage");
     const fts_smoke_tests = b.addTest(.{ .root_module = b.createModule(.{
