@@ -1007,12 +1007,16 @@ fn hydrateSecurityManagerFromGraph(
             record.is_default_user,
             record.password_reset_required,
             record.mfa_enabled,
-            record.getMFASecret(),
+            null, // SONNY-6609: the secret is stored sealed; loaded below
             record.auth_version,
             record.getAttributesJson(),
         );
         user_count += 1;
     }
+    // SONNY-6609: each user's TOTP secret (opened) and recovery codes (from
+    // their digests); the recovery codes were never loaded.
+    if (hmac_key_result) |kr| agm.hmac_key = kr.key;
+    _ = try auth_startup_hydration.hydrateSecurityManagerMfa(allocator, agm, &sm);
 
     var assignment_count: usize = 0;
     var membership_it = agm.storage.userIterator();

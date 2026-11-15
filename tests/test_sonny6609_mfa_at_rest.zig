@@ -307,13 +307,12 @@ test "SONNY-6609 (3): SecurityManager is loaded with the stored secret and recov
     } else {
         try testing.expectEqual(@as(usize, 1), try hydration.hydrateSecurityManagerMfa(testing.allocator, &w.agm, &sm));
     }
-    const token = try sm.authenticateWithMFA("sm6609", user_pw, 0, issued.codes[2]);
-    testing.allocator.free(token);
+    // The session token belongs to the SecurityManager.
+    _ = try sm.authenticateWithMFA("sm6609", user_pw, 0, issued.codes[2]);
     try testing.expectError(error.MFAInvalidCode, sm.authenticateWithMFA("sm6609", user_pw, 0, issued.codes[2]));
     // And the TOTP secret is the issued one, opened.
     const code = try mfa.generateCodeFromBase32(ga, issued.secret, realMillis(), 30, 6);
-    const t2 = try sm.authenticateWithMFA("sm6609", user_pw, code, null);
-    testing.allocator.free(t2);
+    _ = try sm.authenticateWithMFA("sm6609", user_pw, code, null);
 }
 
 test "SONNY-6609 (2): DROP USER of a user that does not exist is an error; IF EXISTS stays a no-op" {

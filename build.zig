@@ -6694,6 +6694,7 @@ pub fn build(b: *std.Build) void {
     const auth_startup_hydration_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_startup_hydration.zig"), .target = target, .optimize = optimize });
     auth_startup_hydration_mod.addImport("geode", root_mod);
     auth_startup_hydration_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    auth_startup_hydration_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-6609: zeroes opened MFA secrets
     geode_exe.root_module.addImport("auth_startup_hydration", auth_startup_hydration_mod);
 
     // Auth graph manager unit tests

@@ -145,6 +145,32 @@ const Server = struct {
         self.proc.deinit();
         allocator.free(self.addr);
     }
+
+    /// SIGTERM and wait (60 s at most) for the server to exit, so it runs
+    /// its shutdown checkpoint (which writes the loop2 hydration snapshots);
+    /// then `stop` (SIGKILL, reap). `ServerHandle.deinit` alone SIGKILLs.
+    fn stopGracefully(self: *Server, allocator: std.mem.Allocator) void {
+        if (self.proc.child.id) |pid| {
+            std.posix.kill(pid, .TERM) catch {};
+            const t0 = monoMillis();
+            while (monoMillis() - t0 < 60_000) {
+                if (exited(pid)) break;
+                var req = linux.timespec{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+                _ = linux.nanosleep(&req, null);
+            }
+        }
+        self.stop(allocator);
+    }
+
+    /// The process has exited (a zombie, not yet reaped) or is gone.
+    fn exited(pid: std.posix.pid_t) bool {
+        var path_buf: [64]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/stat", .{pid}) catch return true;
+        var buf: [512]u8 = undefined;
+        const stat = std.Io.Dir.cwd().readFile(std.Io.Threaded.global_single_threaded.io(), path, &buf) catch return true;
+        const close = std.mem.lastIndexOfScalar(u8, stat, ')') orelse return true;
+        return close + 2 < stat.len and stat[close + 2] == 'Z';
+    }
 };
 
 /// Run `query` as the admin: the first row's string cells, or the refusal.
@@ -168,47 +194,24 @@ fn adminRow(aa: std.mem.Allocator, addr: []const u8, query: []const u8) ![]const
     return out.items;
 }
 
-fn isHex32(c: []const u8) bool {
-    if (c.len != 32) return false;
-    for (c) |ch| if (!std.ascii.isHex(ch)) return false;
-    return true;
-}
-
 /// Every file under `dir` (recursively) whose bytes contain `needle`, and
-/// every loop2 hydration snapshot (`hydration_*.snap`) of the security graph.
-/// Graph directories are named by graph UUID: the security graph's are the
-/// ones holding its `AuthChainRoot` record.
+/// every loop2 hydration snapshot (`hydration_*.snap`, in the graph's
+/// UUID-named directory) of the security graph: one that names
+/// `__geode_security` or its `AuthChainRoot` label.
 fn scan(aa: std.mem.Allocator, dir_path: []const u8, needle: []const u8, hits: *std.ArrayList([]const u8), snaps: *std.ArrayList([]const u8)) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
-    var sec_uuids: std.ArrayList([]const u8) = .empty;
-    var snap_files: std.ArrayList([]const u8) = .empty;
     var walker = try dir.walk(aa);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        const rel = try aa.dupe(u8, entry.path);
-        const path = try std.fmt.allocPrint(aa, "{s}/{s}", .{ dir_path, rel });
-        if (std.mem.startsWith(u8, entry.basename, "hydration_")) try snap_files.append(aa, rel);
+        const path = try std.fmt.allocPrint(aa, "{s}/{s}", .{ dir_path, entry.path });
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, aa, .limited(1 << 30)) catch continue;
         if (std.mem.indexOf(u8, bytes, needle) != null) try hits.append(aa, path);
-        if (std.mem.indexOf(u8, bytes, "AuthChainRoot") != null) {
-            // The graph's UUID: the hex component after `graphs/`.
-            var it = std.mem.splitScalar(u8, rel, '/');
-            var prev: []const u8 = "";
-            while (it.next()) |c| : (prev = c) {
-                if (std.mem.eql(u8, prev, "graphs") and isHex32(c)) try sec_uuids.append(aa, c);
-            }
-        }
-    }
-    for (snap_files.items) |rel| {
-        for (sec_uuids.items) |u| {
-            if (std.mem.indexOf(u8, rel, u) != null) {
-                try snaps.append(aa, rel);
-                break;
-            }
-        }
+        if (std.mem.startsWith(u8, entry.basename, "hydration_") and
+            (std.mem.indexOf(u8, bytes, "__geode_security") != null or std.mem.indexOf(u8, bytes, "AuthChainRoot") != null))
+            try snaps.append(aa, path);
     }
 }
 
@@ -232,12 +235,13 @@ test "SONNY-6609 (1)(4): no file of the data directory holds the TOTP secret; ge
     var secret: []const u8 = "";
     {
         var s = try Server.start(testing.allocator, dir);
-        defer s.stop(testing.allocator);
+        errdefer s.stop(testing.allocator);
         _ = try adminRow(aa, s.addr, "CREATE USER sc6609 SET PASSWORD '" ++ user_pw ++ "'");
         const row = try adminRow(aa, s.addr, "CALL geode.auth.mfa_setup('sc6609')");
         secret = row[0]["MFA secret: ".len..];
         // Some data in another graph, so a checkpoint has work.
         _ = try adminRow(aa, s.addr, "CREATE (:Doc6609 {v: 1})");
+        s.stopGracefully(testing.allocator);
     }
     try testing.expect(secret.len >= 16);
 

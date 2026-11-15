@@ -20,6 +20,7 @@ const auth_graph_manager = @import("auth_graph_manager");
 const multi_graph_security = geode.multi_graph_security;
 const fle_role_grants = geode.security.fle_role_grants;
 const auth_dispatch = geode.auth_dispatch;
+const geode_cb = @import("crypto_backend");
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 /// Load every stored per-graph grant into `policy`. Returns how many.
@@ -71,11 +72,39 @@ pub fn hydrateMfaEnrollments(allocator: std.mem.Allocator, agm: *AuthGraphManage
     defer allocator.free(ids);
     var loaded: usize = 0;
     for (ids) |id| {
+        // SONNY-6609: a secret stored in plaintext (before SONNY-6609) is
+        // sealed first.
+        _ = try agm.sealPlaintextMfaSecretWriteThrough(&agm.hmac_key, id);
         const rec = agm.storage.getUser(id) orelse continue;
-        const secret = rec.getMFASecret() orelse continue;
+        var buf: [AuthGraphManager.mfa_secret_max_plain]u8 = undefined;
+        defer geode_cb.secureZero(&buf);
+        const secret = (try agm.openMfaSecret(id, &buf)) orelse continue;
         const digests = try agm.mfaRecoveryDigests(allocator, id);
         defer if (digests) |d| allocator.free(d);
         try auth_dispatch.loadMfaEnrollment(rec.getUsername(), secret, digests orelse &.{});
+        loaded += 1;
+    }
+    return loaded;
+}
+
+// CANARY: REQ=REQ-SONNY-6609-SM-MFA-HYDRATION; FEATURE="MFA authentication"; ASPECT=StartupLoadsSecurityManagerMfa; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6609: load every hydrated SecurityManager user's stored MFA state:
+/// its TOTP secret (opened) and its recovery codes (from their digests).
+/// Returns how many users have either. A secret that does not open fails
+/// the load.
+pub fn hydrateSecurityManagerMfa(allocator: std.mem.Allocator, agm: *AuthGraphManager, sm: *geode.auth.SecurityManager) !usize {
+    const ids = try agm.storage.cachedUserIds(allocator);
+    defer allocator.free(ids);
+    var loaded: usize = 0;
+    for (ids) |id| {
+        if (!sm.users.contains(id)) continue;
+        var buf: [AuthGraphManager.mfa_secret_max_plain]u8 = undefined;
+        defer geode_cb.secureZero(&buf);
+        const secret = try agm.openMfaSecret(id, &buf);
+        const digests = try agm.mfaRecoveryDigests(allocator, id);
+        defer if (digests) |d| allocator.free(d);
+        if (secret == null and digests == null) continue;
+        try sm.loadMfaState(id, secret, digests orelse &.{});
         loaded += 1;
     }
     return loaded;

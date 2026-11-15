@@ -1953,14 +1953,133 @@ pub const AuthGraphManager = struct {
         const old = self.storage.getUser(uid) orelse return error.UserNotFound;
         const old_digests = try self.storage.mfaRecoveryDigests(self.allocator, uid);
         defer if (old_digests) |d| self.allocator.free(d);
+        // SONNY-6609: the secret is stored sealed, never in plaintext.
+        var sealed_buf: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        const sealed = try sealMfaSecret(hmac_key, uid, secret_base32, &sealed_buf);
         // Undone in reverse: the digests first, then the record (which seals).
         errdefer self.restoreUserRecord(hmac_key, old);
         errdefer self.storage.setMfaRecoveryDigests(uid, old_digests orelse @as([]const [32]u8, &.{})) catch |err| logRestoreFailure("MFA recovery codes", err);
-        try self.storage.updateUser(uid, null, null, null, false, secret_base32);
+        try self.storage.updateUser(uid, null, null, null, false, sealed);
         try self.recomputeAndStoreUserHmac(uid, hmac_key);
         try self.storage.setMfaRecoveryDigests(uid, digests);
         try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "MFA_ENROLL", uid, username, null);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6609-MFA-SECRET-SEALED; FEATURE="MFA authentication"; ASPECT=SecretSealedAtRest; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6609: how a TOTP secret is stored. AES-256-GCM (through the
+    /// crypto_backend seam: std.crypto's Aes256Gcm, OpenSSL under -Dfips)
+    /// with a random 96-bit nonce, under a key derived with HKDF-SHA256 from
+    /// the security graph's HMAC key (the key the chain is sealed with:
+    /// GEODE_AUTH_HMAC_KEY, else derived from GEODE_TDE_KEY, else
+    /// `.geode_hmac_key`), the user id bound as associated data (a sealed
+    /// value copied to another user's record does not open). Stored as
+    /// `mfa_secret_sealed_prefix` + base64url(nonce || ciphertext || tag).
+    /// A value without the prefix is a secret stored in plaintext before
+    /// SONNY-6609 (base32 has no '$'); the server seals it at load
+    /// (`sealPlaintextMfaSecretWriteThrough`).
+    pub const mfa_secret_sealed_prefix = "aesgcm1$";
+    /// The longest secret that fits the record sealed (base32 secrets are 32).
+    pub const mfa_secret_max_plain = 48;
+    const mfa_secret_nonce_len = 12;
+    const mfa_secret_tag_len = 16;
+    const mfa_secret_b64 = std.base64.url_safe_no_pad;
+
+    pub fn isSealedMfaSecret(stored: []const u8) bool {
+        return std.mem.startsWith(u8, stored, mfa_secret_sealed_prefix);
+    }
+
+    fn mfaSecretKey(hmac_key: *const [32]u8) ![32]u8 {
+        var key: [32]u8 = undefined;
+        try cb.Kdf.hkdf(.sha256, hmac_key, "geode-mfa-secret-salt-v1", "geode-mfa-secret-v1", &key);
+        return key;
+    }
+
+    fn mfaSecretAd(user_id: u64, buf: *[64]u8) []const u8 {
+        return std.fmt.bufPrint(buf, "geode-mfa-secret-v1:user_id={d}", .{user_id}) catch unreachable;
+    }
+
+    /// Seal `plain` for `user_id` into `out`; the stored form (a slice of
+    /// `out`).
+    pub fn sealMfaSecret(hmac_key: *const [32]u8, user_id: u64, plain: []const u8, out: *[UserStorageBackend.mfa_secret_field_len]u8) ![]const u8 {
+        if (plain.len == 0 or plain.len > mfa_secret_max_plain) return error.FieldTooLong;
+        var key = try mfaSecretKey(hmac_key);
+        defer cb.secureZero(&key);
+        var raw: [mfa_secret_nonce_len + mfa_secret_max_plain + mfa_secret_tag_len]u8 = undefined;
+        defer cb.secureZero(&raw);
+        const nonce = raw[0..mfa_secret_nonce_len];
+        try cb.Csprng.bytes(nonce);
+        const ct = raw[mfa_secret_nonce_len..][0..plain.len];
+        var tag: [mfa_secret_tag_len]u8 = undefined;
+        var ad_buf: [64]u8 = undefined;
+        try cb.Aead.seal(.aes_256_gcm, &key, nonce, mfaSecretAd(user_id, &ad_buf), plain, ct, &tag);
+        @memcpy(raw[mfa_secret_nonce_len + plain.len ..][0..mfa_secret_tag_len], &tag);
+        const raw_len = mfa_secret_nonce_len + plain.len + mfa_secret_tag_len;
+        const enc_len = mfa_secret_b64.Encoder.calcSize(raw_len);
+        if (mfa_secret_sealed_prefix.len + enc_len > out.len - 1) return error.FieldTooLong;
+        @memcpy(out[0..mfa_secret_sealed_prefix.len], mfa_secret_sealed_prefix);
+        _ = mfa_secret_b64.Encoder.encode(out[mfa_secret_sealed_prefix.len..][0..enc_len], raw[0..raw_len]);
+        return out[0 .. mfa_secret_sealed_prefix.len + enc_len];
+    }
+
+    /// The plaintext of a stored secret, into `out`: a sealed value opened
+    /// (`error.MfaSecretUndecryptable` when it does not open for this key and
+    /// user: another key, another user's record, or changed bytes), or a
+    /// value stored in plaintext before SONNY-6609, copied.
+    pub fn openMfaSecretWithKey(hmac_key: *const [32]u8, user_id: u64, stored: []const u8, out: []u8) ![]const u8 {
+        if (!isSealedMfaSecret(stored)) {
+            if (stored.len > out.len) return error.FieldTooLong;
+            @memcpy(out[0..stored.len], stored);
+            return out[0..stored.len];
+        }
+        const enc = stored[mfa_secret_sealed_prefix.len..];
+        var raw: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        defer cb.secureZero(&raw);
+        const raw_len = mfa_secret_b64.Decoder.calcSizeForSlice(enc) catch return error.MfaSecretUndecryptable;
+        if (raw_len > raw.len or raw_len <= mfa_secret_nonce_len + mfa_secret_tag_len) return error.MfaSecretUndecryptable;
+        mfa_secret_b64.Decoder.decode(raw[0..raw_len], enc) catch return error.MfaSecretUndecryptable;
+        const ct_len = raw_len - mfa_secret_nonce_len - mfa_secret_tag_len;
+        if (ct_len > out.len) return error.FieldTooLong;
+        var key = try mfaSecretKey(hmac_key);
+        defer cb.secureZero(&key);
+        var ad_buf: [64]u8 = undefined;
+        const tag = raw[mfa_secret_nonce_len + ct_len ..][0..mfa_secret_tag_len];
+        cb.Aead.open(.aes_256_gcm, &key, raw[0..mfa_secret_nonce_len], mfaSecretAd(user_id, &ad_buf), raw[mfa_secret_nonce_len..][0..ct_len], tag, out[0..ct_len]) catch {
+            cb.secureZero(out[0..ct_len]);
+            return error.MfaSecretUndecryptable;
+        };
+        return out[0..ct_len];
+    }
+
+    /// `user_id`'s TOTP secret in plaintext, into `out`, or null when it has
+    /// none (this manager's HMAC key).
+    pub fn openMfaSecret(self: *Self, user_id: u64, out: []u8) !?[]const u8 {
+        const rec = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        const stored = rec.getMFASecret() orelse return null;
+        return try openMfaSecretWithKey(&self.hmac_key, user_id, stored, out);
+    }
+
+    /// SONNY-6609: seal `user_id`'s secret if it is stored in plaintext (a
+    /// store written before SONNY-6609). Nothing else changes (no auth
+    /// version bump: the secret is the same). All of it or none of it.
+    /// True when it sealed one.
+    pub fn sealPlaintextMfaSecretWriteThrough(self: *Self, hmac_key: *const [32]u8, user_id: u64) !bool {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        const stored = old.getMFASecret() orelse return false;
+        if (isSealedMfaSecret(stored)) return false;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var sealed_buf: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        const sealed = try sealMfaSecret(hmac_key, user_id, stored, &sealed_buf);
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
+        record.mfa_secret_len = UserStorageBackend.copyIntoField(&record.mfa_secret, sealed);
+        try self.storage.putCachedUser(user_id, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "MFA_SECRET_SEALED", user_id, record.getUsername(), null);
+        return true;
     }
 
     /// SONNY-6608: `geode.auth.mfa_enable` / `mfa_disable`'s write-through:

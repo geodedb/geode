@@ -820,18 +820,23 @@ fn handleUserList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
-fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+// CANARY: REQ=REQ-SONNY-6609-USER-DELETE-ERRORS; FEATURE="GQL Auth DDL"; ASPECT=DropUserReportsErrors; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+fn handleUserDelete(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_delete(username) -> status
     var username: []const u8 = "";
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
     }
+    // SONNY-6609: every failure is an error status. Only UserNotPersisted
+    // was (SONNY-3038); a user that does not exist (deleteUser's
+    // Unauthenticated) and any other error answered "deleted <name>".
+    // No such user: 42704 for an Admin (42501 otherwise), as the other
+    // geode.auth.* procedures; DROP USER IF EXISTS answers it as a no-op.
     user_mgmt.deleteUser(username) catch |err| {
-        log.warn("geode.auth.user_delete failed", &.{Attr.string("error", @errorName(err))});
-        // SONNY-3038: the delete could not be saved; the user is locked out
-        // (user_management.UnsavedRestriction). It was reported deleted.
-        if (err == error.UserNotPersisted) return err;
+        log.warn("geode.auth.user_delete failed", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+        if (err == error.Unauthenticated) return missingUser(allocator, proc_name, context);
+        return err;
     };
     // SONNY-6608: the user's MFA enrollment goes with it (the stored one
     // with the user record); a user made again under the name is not
@@ -1234,6 +1239,14 @@ fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt
     const codes_text = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str});
     defer allocator.free(codes_text);
     return ownedRow(allocator, &.{ "mfa_secret", "recovery_codes", "warning" }, &.{ secret_text, codes_text, mfa_setup_not_enforced_warning });
+}
+
+/// SONNY-6609: DROP USER IF EXISTS of a user that does not exist: nothing
+/// dropped, said so.
+pub fn dropUserAbsentResult(allocator: std.mem.Allocator, username: []const u8) !ExecutionResult {
+    const status = try std.fmt.allocPrint(allocator, "no user {s}; nothing dropped", .{username});
+    defer allocator.free(status);
+    return ownedRow(allocator, &.{ "status", "username" }, &.{ status, username });
 }
 
 // CANARY: REQ=REQ-SONNY-6608-MFA-RESULT-OWNERSHIP; FEATURE="MFA authentication"; ASPECT=ResultOwnsValues; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15

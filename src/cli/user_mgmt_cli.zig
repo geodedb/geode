@@ -110,6 +110,20 @@ const mfa_not_enforced_note =
     \\
 ;
 
+/// SONNY-6609: a user's TOTP secret in plaintext (the store holds it
+/// sealed), into `buf`; exits with an error when it has none or it does not
+/// open.
+fn openStoredMfaSecret(mgr: anytype, key: *const [32]u8, record: anytype, buf: []u8) []const u8 {
+    const stored = record.getMFASecret() orelse {
+        std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{record.getUsername()});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    return @TypeOf(mgr.*).openMfaSecretWithKey(key, record.id, stored, buf) catch |err| {
+        std.debug.print("Error: the stored MFA secret of '{s}' could not be opened ({s}); was the store sealed with another HMAC key?\n", .{ record.getUsername(), @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 fn printMfaSetupHelp() void {
     printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
     printOut("Generate MFA secret and recovery codes for a user.\n", .{});
@@ -668,6 +682,17 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 storedRoleName(&mgr, u),
                 if (u.is_active) "active" else "disabled",
             });
+            // CANARY: REQ=REQ-SONNY-6609-USER-SHOW-MFA; FEATURE="MFA authentication"; ASPECT=UserShowMfaState; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest_scan.zig; OWNER=security; UPDATED=2026-11-15
+            // SONNY-6609: the MFA state (it printed none). No login reads it
+            // yet (SONNY-6604).
+            const on = if (u.mfa_enabled) "enabled" else "disabled";
+            if (u.getMFASecret() != null) {
+                const digests = mgr.mfaRecoveryDigests(allocator, u.id) catch null;
+                defer if (digests) |d| allocator.free(d);
+                printOut("MFA: {s} (enrolled, {d} recovery codes; not enforced at login yet, SONNY-6604)\n", .{ on, if (digests) |d| d.len else 0 });
+            } else {
+                printOut("MFA: {s} (not enrolled)\n", .{on});
+            }
         } else {
             // SONNY-6367: it printed made-up details and exited 0.
             std.debug.print("Error: user '{s}' not found\n", .{username});
@@ -903,7 +928,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             for (enrollment.scratch_codes, 0..) |code, ci| digests[ci] = ext_mfa.hashScratchCode(code);
-            try mgr.storage.updateUser(existing.id, null, null, null, false, enrollment.secret_base32);
+            // SONNY-6609: stored sealed under the store's HMAC key.
+            const key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to seal the MFA secret with ({s}); nothing was changed\n", .{@errorName(err)});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            var sealed_buf: [@TypeOf(mgr.storage).mfa_secret_field_len]u8 = undefined;
+            const sealed = try @TypeOf(mgr).sealMfaSecret(&key, existing.id, enrollment.secret_base32, &sealed_buf);
+            try mgr.storage.updateUser(existing.id, null, null, null, false, sealed);
             try mgr.storage.setMfaRecoveryDigests(existing.id, digests[0..enrollment.scratch_codes.len]);
         }
 
@@ -967,10 +999,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        const secret = existing.getMFASecret() orelse {
-            std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+        const read_key = cli_auth.readKey(allocator) catch |err| {
+            std.debug.print("Error: no HMAC key to open the MFA secret with ({s})\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        var secret_buf: [64]u8 = undefined;
+        defer std.crypto.secureZero(u8, &secret_buf);
+        const secret = openStoredMfaSecret(&mgr, &read_key, existing, &secret_buf);
 
         const code_str = token.?;
         if (code_str.len != 6) {
@@ -1068,10 +1103,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
 
-            const secret = existing.getMFASecret() orelse {
-                std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+            // SONNY-6609: the stored secret is sealed.
+            const enable_key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to open the MFA secret with ({s}); MFA was not enabled\n", .{@errorName(err)});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };
+            var secret_buf: [64]u8 = undefined;
+            defer std.crypto.secureZero(u8, &secret_buf);
+            const secret = openStoredMfaSecret(&mgr, &enable_key, existing, &secret_buf);
 
             const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
                 std.debug.print("Error: invalid code format\n", .{});

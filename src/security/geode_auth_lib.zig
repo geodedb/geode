@@ -231,10 +231,16 @@ pub const recovery_code_digest_prefix = "sha256$";
 pub const recovery_code_stored_len = recovery_code_digest_prefix.len + 64;
 
 pub fn recoveryCodeStoredForm(code: []const u8) [recovery_code_stored_len]u8 {
-    var out: [recovery_code_stored_len]u8 = undefined;
-    @memcpy(out[0..recovery_code_digest_prefix.len], recovery_code_digest_prefix);
     var digest = ext_mfa.hashScratchCode(code);
     defer crypto_backend.secureZero(&digest);
+    return recoveryCodeStoredFormFromDigest(digest);
+}
+
+/// SONNY-6609: the stored form of a code given its digest (the security
+/// graph holds the digests, `MfaRecoveryCodes`).
+pub fn recoveryCodeStoredFormFromDigest(digest: [32]u8) [recovery_code_stored_len]u8 {
+    var out: [recovery_code_stored_len]u8 = undefined;
+    @memcpy(out[0..recovery_code_digest_prefix.len], recovery_code_digest_prefix);
     const hex = std.fmt.bytesToHex(digest, .lower);
     @memcpy(out[recovery_code_digest_prefix.len..], &hex);
     return out;
@@ -2063,6 +2069,43 @@ pub const SecurityManager = struct {
             const form = recoveryCodeStoredForm(c);
             list.appendAssumeCapacity(try self.allocator.dupe(u8, &form));
         }
+        if (user.recovery_codes) |*old| {
+            for (old.items) |c| self.allocator.free(c);
+            old.deinit(self.allocator);
+        }
+        user.recovery_codes = list;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6609-SM-MFA-HYDRATION; FEATURE="MFA authentication"; ASPECT=StoredMfaStateLoaded; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6609: load a user's stored MFA state (startup,
+    /// `auth_startup_hydration.hydrateSecurityManagerMfa`): its TOTP secret
+    /// (plaintext, opened from the security graph; null: none) and its
+    /// recovery codes, from their digests. It was hydrated with the secret
+    /// only, so no stored recovery code could be redeemed.
+    pub fn loadMfaState(self: *Self, user_id: UserId, secret: ?[]const u8, digests: []const [32]u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        const secret_copy: ?[]const u8 = if (secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| {
+            crypto_backend.secureZero(@constCast(c));
+            self.allocator.free(c);
+        };
+        var list = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (list.items) |c| self.allocator.free(c);
+            list.deinit(self.allocator);
+        }
+        try list.ensureTotalCapacity(self.allocator, digests.len);
+        for (digests) |d| {
+            const form = recoveryCodeStoredFormFromDigest(d);
+            list.appendAssumeCapacity(try self.allocator.dupe(u8, &form));
+        }
+        if (user.mfa_secret) |old| {
+            crypto_backend.secureZero(@constCast(old));
+            self.allocator.free(old);
+        }
+        user.mfa_secret = secret_copy;
         if (user.recovery_codes) |*old| {
             for (old.items) |c| self.allocator.free(c);
             old.deinit(self.allocator);

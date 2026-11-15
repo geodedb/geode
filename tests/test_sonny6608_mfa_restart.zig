@@ -178,7 +178,11 @@ fn storedMfa(aa: std.mem.Allocator, dir: []const u8, user: []const u8) !StoredMf
         null;
     return .{
         .enabled = rec.mfa_enabled,
-        .secret = try aa.dupe(u8, rec.getMFASecret() orelse ""),
+        // SONNY-6609: stored sealed; opened with the store's key.
+        .secret = if (rec.getMFASecret()) |stored| blk: {
+            var buf: [64]u8 = undefined;
+            break :blk try aa.dupe(u8, try AuthGraphManager.openMfaSecretWithKey(&kr.key, rec.id, stored, &buf));
+        } else "",
         .digests = digests,
     };
 }

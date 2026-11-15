@@ -294,6 +294,16 @@ pub fn changeKey(allocator: std.mem.Allocator) ![32]u8 {
     return kr.key;
 }
 
+/// SONNY-6609: the key the store's sealed MFA secrets open with, for a
+/// command that reads one without changing the store (`geode user
+/// mfa-verify`): the verified key, else the store's existing key (never
+/// generated).
+pub fn readKey(allocator: std.mem.Allocator) ![32]u8 {
+    if (g_verified_key) |key| return key;
+    const kr = try AuthGraphManager.resolveExistingHmacKey(allocator, g_resolved_data_dir);
+    return kr.key;
+}
+
 /// `verifyChainBeforeChange` for a CLI command (`command` and `subcommand`
 /// name it in the message): on a refusal it says why and what to do, and
 /// exits without changing anything.

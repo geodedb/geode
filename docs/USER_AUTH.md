@@ -1040,6 +1040,12 @@ What exists:
 - The offline `geode user mfa-setup` and `geode user mfa enable` print the
   same warning. `geode user mfa enable` needs `--code` with a code that
   verifies (SONNY-6608: without it, it turned MFA on).
+- `geode user show` prints the stored MFA state, e.g. `MFA: disabled
+  (enrolled, 8 recovery codes; not enforced at login yet, SONNY-6604)` or
+  `MFA: disabled (not enrolled)` (SONNY-6609).
+- At startup `SecurityManager` is loaded with each user's opened secret and
+  stored recovery codes, so `authenticateWithMFA` (library-only until
+  SONNY-6604) can redeem a stored code once (SONNY-6609).
 
 **Where an enrollment is stored (SONNY-6608).** `mfa_setup` (and the
 offline `geode user mfa-setup`) writes the enrollment through to the
@@ -1054,13 +1060,33 @@ name is not enrolled. Before, the procedures' enrollments lived in process
 memory only and a restart lost them, and the offline `mfa-setup` turned
 MFA on before any code was verified and kept no recovery code.
 
-**How the secret is protected at rest:** as every user record field is, and
-no more. The HMAC chain detects a changed record. Confidentiality comes only
-from page-level TDE: with `GEODE_TDE_KEY` set the security graph's pages are
-encrypted at rest; **without it the secret is stored in plaintext** in the
-data directory (as the rest of the user record is), and anyone who can read
-the data directory can generate the user's codes. There is no field-level
-encryption of the secret. The recovery codes are never stored in plaintext.
+**How the secret is protected at rest (SONNY-6609).** The user record's
+`mfa_secret` holds the secret sealed: AES-256-GCM (through the
+`crypto_backend` seam: std.crypto, or OpenSSL under `-Dfips`) with a random
+96-bit nonce, under a key derived with HKDF-SHA256 from the security graph's
+HMAC key (`GEODE_AUTH_HMAC_KEY`, else derived from `GEODE_TDE_KEY`, else
+`<data dir>/.geode_hmac_key`), with the user id as associated data. Stored
+as `aesgcm1$` + base64url(nonce, ciphertext, tag). A secret stored in
+plaintext by an older binary is sealed the first time the server loads it
+(no auth-version bump; the secret is the same). The loop2 hydration
+snapshots (`hydration_*.snap`), which copy property values out of the
+engine's pages unencrypted, are no longer written for `__geode_security`
+(a file an older binary wrote is deleted at the next checkpoint).
+
+Why the HMAC key: it is the one key every server has (it already seals the
+chain), backups do not carry it (SONNY-6299), and it may live outside the
+data directory (environment, KMS-backed `GEODE_TDE_KEY`). What that buys:
+someone who reads the data directory, a backup, a snapshot side-car or a
+WAL **without** the key cannot recover the secret; a sealed value copied to
+another user's record does not open; a changed one does not open.
+**What it does not buy:** whoever holds both the data directory and the
+key, which by default is `.geode_hmac_key` **inside the data directory**,
+can derive the key and open every secret, exactly as the server does. To
+separate them, supply the key through `GEODE_AUTH_HMAC_KEY` or
+`GEODE_TDE_KEY` from outside the data directory. TDE (`GEODE_TDE_KEY`) still
+encrypts the pages themselves. The secret is in process memory while the
+server runs. Recovery codes are stored only as SHA-256 digests.
+
 - `mfa.verifyRecoveryCode`, which matched 8-character codes only (the
   issued codes are 32), was removed: it had no caller.
 

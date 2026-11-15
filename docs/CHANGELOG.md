@@ -4,6 +4,30 @@
 
 ### Security
 
+- **The TOTP secret is encrypted at rest; no loop2 snapshot of the
+  security graph; SecurityManager gets the stored recovery codes; DROP
+  USER reports a missing user; `geode user show` prints the MFA state
+  (SONNY-6609).** The user record's `mfa_secret` held the TOTP secret in
+  plaintext (in the security graph's pages and WAL without TDE). It is now
+  sealed with AES-256-GCM (through the `crypto_backend` seam) under a key
+  derived with HKDF-SHA256 from the security graph's HMAC key, with a random
+  nonce and the user id as associated data; a plaintext secret written by
+  an older binary is sealed when the server loads it. Whoever holds both
+  the data directory and the HMAC key (by default `.geode_hmac_key` inside
+  the data directory) can still open it; supply the key from outside the
+  data directory (`GEODE_AUTH_HMAC_KEY` / `GEODE_TDE_KEY`) to separate them.
+  The loop2 hydration snapshots copied the security graph's property values
+  into unencrypted side-car files; they are no longer written for
+  `__geode_security` (an old one is deleted). The `mfa_secret` field grew
+  from 64 to 128 bytes. SecurityManager is loaded with each user's opened
+  secret and stored recovery codes (it got neither code). **BREAKING:**
+  `DROP USER` / `geode.auth.user_delete` of a user that does not exist
+  fails with 42704 (it answered `deleted <name>`), and any other failure is
+  reported; `DROP USER IF EXISTS` stays a no-op. `geode user show` prints
+  `MFA: enabled|disabled (enrolled, N recovery codes; ...)` or `(not
+  enrolled)`. Regressions: `zig build test-sonny6609-mfa-at-rest`, `zig
+  build test-sonny6609-mfa-at-rest-scan`.
+
 - **MFA enrollments and the MFA on/off state are stored in
   `__geode_security`, the offline CLI turns MFA on only with a verified
   code, and the mfa_* results no longer leak (SONNY-6608).**

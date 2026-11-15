@@ -162,6 +162,10 @@ pub const UserStorageBackend = struct {
     const Self = @This();
 
     // Persistent record structures
+    /// SONNY-6609: room for a sealed TOTP secret (it was 64, a plaintext
+    /// base32 secret).
+    pub const mfa_secret_field_len = 128;
+
     pub const UserRecord = extern struct {
         id: u64,
         username: [64]u8,
@@ -174,7 +178,10 @@ pub const UserStorageBackend = struct {
         is_active: bool,
         is_superuser: bool,
         mfa_enabled: bool,
-        mfa_secret: [64]u8,
+        /// SONNY-6609: the TOTP secret sealed (`AuthGraphManager.sealMfaSecret`,
+        /// "aesgcm1$" + base64url(nonce || ciphertext || tag)); a store
+        /// written before holds it in plaintext until the server loads it.
+        mfa_secret: [mfa_secret_field_len]u8,
         mfa_secret_len: u16,
         failed_login_attempts: u16,
         lockout_until: i64,
@@ -1302,7 +1309,7 @@ pub const UserStorageBackend = struct {
         }
 
         if (mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
             if (record.getMFASecret()) |existing| {
                 if (!std.mem.eql(u8, existing, secret)) bump_auth_version = true;
             } else {
@@ -1339,7 +1346,7 @@ pub const UserStorageBackend = struct {
             return error.FieldTooLong;
         }
         if (opts.mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
         }
         if (opts.attributes_json) |attrs| {
             if (attrs.len > 2047) return error.FieldTooLong;
@@ -1881,7 +1888,7 @@ pub const UserStorageBackend = struct {
             .is_active = true,
             .is_superuser = false,
             .mfa_enabled = false,
-            .mfa_secret = [_]u8{0} ** 64,
+            .mfa_secret = [_]u8{0} ** mfa_secret_field_len,
             .mfa_secret_len = 0,
             .failed_login_attempts = 0,
             .lockout_until = 0,
