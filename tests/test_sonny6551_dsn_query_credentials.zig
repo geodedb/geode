@@ -33,6 +33,11 @@ const pieces = [_][]const u8{ "Golf6551", "Hotel6551", "India6551", "Juliet6551"
 const wrong_encoded = "Kilo6551%20Lima6551%20Mike6551%20November6551";
 const wrong_pieces = [_][]const u8{ "Kilo6551", "Lima6551", "Mike6551", "November6551" };
 
+/// The answer to the test query (6551 * 7). A product, not 42: "42" appears in
+/// a version banner such as `v0.8.25-942-...` and in random ports, which
+/// made a refused run look answered.
+const answer = "45857";
+
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -125,7 +130,7 @@ fn query(dsn: []const u8) !Run {
     return runGeode(&.{
         geode_test_bin.geode_exe,     "query",              "--dsn",     dsn,
         "--insecure-tls-skip-verify", "--no-saved-session", "--timeout", "10",
-        "RETURN 41 + 1 AS x",
+        "RETURN 6551 * 7 AS x",
     }, "", 60);
 }
 
@@ -134,7 +139,7 @@ fn shell(dsn: []const u8) !Run {
         geode_test_bin.geode_exe, "shell",                      "--plain",
         "--no-history",           "--insecure-tls-skip-verify", "--dsn",
         dsn,
-    }, "RETURN 41 + 1 AS x;\n", 60);
+    }, "RETURN 6551 * 7 AS x;\n", 60);
 }
 
 /// SONNY-6550: `geode mcp --stdio` with `dsn` as its endpoint, answering a
@@ -166,14 +171,14 @@ fn expectMcpRefused(r: Run, label: []const u8) !void {
 }
 
 fn expectAnswered(r: Run, label: []const u8) !void {
-    if (r.code == null or r.code.? != 0 or !r.has("42")) {
+    if (r.code == null or r.code.? != 0 or !r.has(answer)) {
         r.dump(label);
         return error.TestUnexpectedResult;
     }
 }
 
 fn expectRefused(r: Run, label: []const u8) !void {
-    if (r.code == null or r.code.? == 0 or r.has("42")) {
+    if (r.code == null or r.code.? == 0 or r.has(answer)) {
         r.dump(label);
         return error.TestUnexpectedResult;
     }

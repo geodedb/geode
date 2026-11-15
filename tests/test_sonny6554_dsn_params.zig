@@ -43,6 +43,11 @@ const creds = "user=geode&pass=" ++ password_encoded;
 
 const dsn_error = "Invalid Geode endpoint DSN";
 
+/// The answer to the test query (6554 * 7). A product, not 42: "42" appears in
+/// a version banner such as `v0.8.25-942-...` and in random ports, which
+/// made a refused run look answered.
+const answer = "45878";
+
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -117,8 +122,8 @@ fn runGeode(argv: []const []const u8, extra: []const Env) !Run {
 /// `geode query --dsn <dsn>` with no TLS flag of its own.
 fn query(dsn: []const u8, extra: []const Env) !Run {
     return runGeode(&.{
-        geode_test_bin.geode_exe, "query", "--dsn",              dsn, "--no-saved-session",
-        "--timeout",              "10",    "RETURN 41 + 1 AS x",
+        geode_test_bin.geode_exe, "query", "--dsn",                dsn, "--no-saved-session",
+        "--timeout",              "10",    "RETURN 6554 * 7 AS x",
     }, extra);
 }
 
@@ -163,7 +168,7 @@ test "SONNY-6554 (5): geode query honours DSN insecure=true like --insecure-tls-
         defer a.free(dsn);
         const r = try query(dsn, &.{});
         defer r.deinit();
-        if (r.code == null or r.code.? != 0 or !r.has("42") or !r.has("TLS certificate verification DISABLED")) {
+        if (r.code == null or r.code.? != 0 or !r.has(answer) or !r.has("TLS certificate verification DISABLED")) {
             r.dump("query --dsn " ++ flag);
             return error.TestUnexpectedResult;
         }
@@ -174,7 +179,7 @@ test "SONNY-6554 (5): geode query honours DSN insecure=true like --insecure-tls-
         defer a.free(dsn);
         const r = try query(dsn, &.{.{ .name = "GEODE_ENV", .value = "production" }});
         defer r.deinit();
-        if (r.code == null or r.code.? != 1 or r.has("42") or !r.has("SECURITY: refusing --insecure-tls-skip-verify")) {
+        if (r.code == null or r.code.? != 1 or r.has(answer) or !r.has("SECURITY: refusing --insecure-tls-skip-verify")) {
             r.dump("query --dsn insecure=true, GEODE_ENV=production");
             return error.TestUnexpectedResult;
         }
@@ -185,7 +190,7 @@ test "SONNY-6554 (5): geode query honours DSN insecure=true like --insecure-tls-
         defer a.free(dsn);
         const r = try query(dsn, &.{ .{ .name = "GEODE_ENV", .value = "production" }, .{ .name = "GEODE_ALLOW_INSECURE_TLS", .value = "1" } });
         defer r.deinit();
-        if (r.code == null or r.code.? != 0 or !r.has("42")) {
+        if (r.code == null or r.code.? != 0 or !r.has(answer)) {
             r.dump("query --dsn insecure=true, production + override");
             return error.TestUnexpectedResult;
         }
@@ -203,7 +208,7 @@ test "SONNY-6554 (5): geode query honours a DSN ca= bundle" {
     defer a.free(dsn);
     const r = try query(dsn, &.{});
     defer r.deinit();
-    if (r.code == null or r.code.? == 0 or r.has("42")) {
+    if (r.code == null or r.code.? == 0 or r.has(answer)) {
         r.dump("query --dsn ca=/nonexistent");
         return error.TestUnexpectedResult;
     }
@@ -236,7 +241,7 @@ test "SONNY-6569 (6): geode query refuses an unknown or malformed DSN parameter 
         defer a.free(dsn);
         const r = try query(dsn, &.{});
         defer r.deinit();
-        if (r.code == null or r.code.? != 2 or r.has("42") or !r.has(dsn_error) or !r.has(c.expect) or r.has("Sierra6554")) {
+        if (r.code == null or r.code.? != 2 or r.has(answer) or !r.has(dsn_error) or !r.has(c.expect) or r.has("Sierra6554")) {
             r.dump(c.query);
             failures += 1;
         }
@@ -255,7 +260,7 @@ test "SONNY-6554 (5): geode query refuses a DSN parameter it cannot honour and n
         defer a.free(dsn);
         const r = try query(dsn, &.{});
         defer r.deinit();
-        if (r.code == null or r.code.? != 2 or r.has("42") or !r.has("is not supported by geode query")) {
+        if (r.code == null or r.code.? != 2 or r.has(answer) or !r.has("is not supported by geode query")) {
             r.dump(p);
             return error.TestUnexpectedResult;
         }
@@ -266,7 +271,7 @@ test "SONNY-6554 (5): geode query refuses a DSN parameter it cannot honour and n
         defer a.free(dsn);
         const r = try query(dsn, &.{});
         defer r.deinit();
-        if (r.code == null or r.code.? != 0 or !r.has("42") or !r.has("'hello_name' has no effect")) {
+        if (r.code == null or r.code.? != 0 or !r.has(answer) or !r.has("'hello_name' has no effect")) {
             r.dump("hello_name");
             return error.TestUnexpectedResult;
         }
