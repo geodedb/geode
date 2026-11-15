@@ -2561,6 +2561,18 @@
   adjacency or role node, and `canUserAccessGraph` reads grant properties
   with `getNodePropertyOrError`. Regression: `zig build
   test-sonny6607-adjacency-property-read-failure`.
+- **A void store write that fails reports its real error (SONNY-6607 item
+  2).** `GraphStore.removeNodeProperty` / `removeEdgeProperty` return
+  nothing; a failure inside them reached the statement as `OutOfMemory`
+  (53200) whatever had happened (`undoRecordFailed`), and an engine error
+  that was not out of memory reached it not at all (`voidWriteFailed`): the
+  statement succeeded without the write. A body that cannot be read now
+  fails the statement with `StorageReadFailed` (58000, the cause logged),
+  and a non-OOM engine write failure inside a statement with
+  `StorageWriteFailed` (58000). `removeNodeProperty` on a node whose body
+  cannot be read was a silent no-op; it now fails. Outside a statement (the
+  undo replay, a Raft apply) a non-OOM write failure is only logged, as
+  before. Regression: `zig build test-sonny6607-void-write-errors`.
 - **ROLLBACK that cannot read a body it must undo fails instead of
   reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
   undo asked whether the node or edge a change was on still exists, and a

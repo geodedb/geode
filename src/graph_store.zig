@@ -21,6 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const fle_integration = @import("fle_integration.zig");
 // SONNY-3348 (round 18): the statement undo record the write methods fill.
 const statement_undo = @import("statement_undo.zig");
+const value_types = @import("value_types.zig");
 
 /// SONNY-6567 (6c): depth of `GraphStore.enterReplicatedApply` on this thread.
 threadlocal var t_replicated_apply_depth: u32 = 0;
@@ -8852,10 +8853,12 @@ pub const GraphStore = struct {
         // resident-only gates below turn a REMOVE on a cold (post-warm-reopen)
         // node into a SILENT durable no-op. See setNodeProperty for the full
         // rationale and the write-lock safety argument.
-        _ = self.nodes.getOrHydratePtr(node_id) catch null;
+        // SONNY-6607 (2): a node that cannot be read fails the statement with
+        // the read's error (`undoRecordFailed`); it was the no-op above.
+        _ = self.nodes.getOrHydratePtr(node_id) catch |err| return undoRecordFailed(err);
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
-        self.undoRecordNodeProperty(node_id, key, true) catch return undoRecordFailed();
+        self.undoRecordNodeProperty(node_id, key, true) catch |err| return undoRecordFailed(err);
         // SONNY-6268: the map's shrunken slice is allocated before the
         // adapter write, so the in-memory removal after it cannot fail (it
         // could, and then compacted in place into a slice shorter than its
@@ -8863,7 +8866,7 @@ pub const GraphStore = struct {
         // A failure to allocate it, or of the adapter write, changes nothing
         // and fails the statement (out of memory) or is logged (the adapter).
         const node_meta = self.nodes.get(node_id) orelse return;
-        const reservation = node_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        const reservation = node_meta.properties.reserveRemove(key) catch |err| return undoRecordFailed(err);
         var reserved = reservation != null;
         defer if (reserved) node_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
@@ -11185,7 +11188,7 @@ pub const GraphStore = struct {
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
-        self.undoRecordEdgeProperty(edge_id, key, true) catch return undoRecordFailed();
+        self.undoRecordEdgeProperty(edge_id, key, true) catch |err| return undoRecordFailed(err);
         // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertyRemove; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
         // SONNY-6302: the map's shrunken slice is allocated before the engine
         // write, as in removeNodeProperty, so the in-memory removal after it
@@ -11200,9 +11203,9 @@ pub const GraphStore = struct {
                 Attr.string("error", @errorName(err)),
                 Attr.int("edge_id", @intCast(edge_id)),
             });
-            return voidWriteFailed(err);
+            return undoRecordFailed(err);
         }) orelse return;
-        const reservation = edge_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        const reservation = edge_meta.properties.reserveRemove(key) catch |err| return undoRecordFailed(err);
         var reserved = reservation != null;
         defer if (reserved) edge_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
@@ -16088,19 +16091,25 @@ pub const GraphStore = struct {
         try statement_undo.append(self, try undoNodeImage(node));
     }
 
-    /// A void write method's record failed (out of memory): the write is not
-    /// made, and the statement fails with out of memory at its relay, which
-    /// undoes what was recorded.
-    fn undoRecordFailed() void {
-        @import("eval.zig").recordLimitError(error.OutOfMemory);
+    /// A void write method's record failed, or the body it writes could not
+    /// be read: the write is not made, and the statement fails at its relay,
+    /// which undoes what was recorded. SONNY-6607 (2): with the real error
+    /// (out of memory, or `StorageReadFailed` for a read error, its name
+    /// logged); it recorded out of memory whatever had happened.
+    fn undoRecordFailed(err: anyerror) void {
+        @import("eval.zig").recordLimitError(value_types.storageReadFailed(err));
     }
 
     /// SONNY-6268: a void write method failed part way (nothing changed): an
     /// out-of-memory fails the statement at its relay, as `undoRecordFailed`
-    /// does; any other error was logged by the caller. Either way the write
-    /// did not happen, and nothing is left half done.
+    /// does. SONNY-6607 (2): so does any other error inside a statement
+    /// (`StorageWriteFailed`; the caller logged it): the statement succeeded
+    /// without the write. Outside a statement (the undo replay, a Raft
+    /// apply) it is only logged, as before. Either way the write did not
+    /// happen, and nothing is left half done.
     fn voidWriteFailed(err: anyerror) void {
-        if (err == error.OutOfMemory) undoRecordFailed();
+        if (err == error.OutOfMemory or statement_undo.capturing())
+            @import("eval.zig").recordLimitError(value_types.storageWriteFailed(err));
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
