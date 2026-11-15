@@ -1008,7 +1008,7 @@ pub const UserStorageBackend = struct {
     /// removal (policy, role, user, permission) goes through it.
     fn deleteNodeChecked(self: *Self, node_id: u64) !void {
         if (!takeDeleteFault()) self.store.deleteNode(node_id);
-        if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+        if (try self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
     }
 
     /// SONNY-6293: a test-only fault hook. While non-zero, each checked
@@ -1328,7 +1328,7 @@ pub const UserStorageBackend = struct {
                 if (edge.to_id == role_node_id) {
                     // SONNY-6293: checked, as a record's node delete.
                     if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
-                    if (self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
+                    if (try self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }

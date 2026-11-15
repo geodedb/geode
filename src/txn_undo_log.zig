@@ -995,6 +995,11 @@ pub fn cloneEntry(allocator: std.mem.Allocator, entry: UndoEntry) !UndoEntry {
 /// never happened). The caller suspends the statement record and the write
 /// fence (`statement_undo.suspendCapture`).
 ///
+/// SONNY-6594 (1): an entity whose body cannot be READ is neither: the undo
+/// fails with the read's error (the caller reports the rollback incomplete,
+/// 40003). It was taken for an absent entity, the change was skipped and
+/// ROLLBACK reported success with the transaction's write still in place.
+///
 /// SONNY-3381: `repair` (when given) is told which indexed (graph, label,
 /// property) each undone node change touches, so the indexes the executor
 /// keeps beside the store can be rebuilt once the undo is done
@@ -1003,13 +1008,13 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair:
     if (repair) |r| r.noteBefore(store, entry);
     switch (entry) {
         .CreateNode => |e| {
-            if (store.nodeExistsForUndo(e.node_id)) try store.deleteNodeChecked(e.node_id);
+            if (try store.nodeExistsForUndo(e.node_id)) try store.deleteNodeChecked(e.node_id);
         },
         .CreateEdge => |e| {
-            if (store.edgeExistsForUndo(e.edge_id)) try store.deleteEdgeChecked(e.edge_id);
+            if (try store.edgeExistsForUndo(e.edge_id)) try store.deleteEdgeChecked(e.edge_id);
         },
         .SetNodeProperty => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             if (e.had_old_value) {
                 const pv = try e.old_value.toPropertyValue(store.allocator);
                 defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
@@ -1019,13 +1024,13 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair:
             }
         },
         .RemoveNodeProperty => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             const pv = try e.old_value.toPropertyValue(store.allocator);
             defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
             try store.setNodeProperty(e.node_id, e.old_value.key, pv);
         },
         .SetEdgeProperty => |e| {
-            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            if (!(try store.edgeExistsForUndo(e.edge_id))) return;
             if (e.had_old_value) {
                 const pv = try e.old_value.toPropertyValue(store.allocator);
                 defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
@@ -1035,13 +1040,13 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair:
             }
         },
         .RemoveEdgeProperty => |e| {
-            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            if (!(try store.edgeExistsForUndo(e.edge_id))) return;
             const pv = try e.old_value.toPropertyValue(store.allocator);
             defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
             try store.setEdgeProperty(e.edge_id, e.old_value.key, pv);
         },
         .DeleteNode => |e| {
-            if (store.nodeExistsForUndo(e.node_id)) return;
+            if (try store.nodeExistsForUndo(e.node_id)) return;
             const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
             try store.createNodeWithReservedIdGraphAndTenant(e.node_id, e.labels, e.graph_name, tenant);
             for (e.properties) |prop| {
@@ -1051,7 +1056,7 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair:
             }
         },
         .DeleteEdge => |e| {
-            if (store.edgeExistsForUndo(e.edge_id)) return;
+            if (try store.edgeExistsForUndo(e.edge_id)) return;
             const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
             try store.restoreDeletedEdge(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name, tenant);
             for (e.properties) |prop| {
@@ -1061,11 +1066,11 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair:
             }
         },
         .AddNodeLabel => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             try store.removeNodeLabel(e.node_id, e.label);
         },
         .RemoveNodeLabel => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             try store.addNodeLabel(e.node_id, e.label);
         },
     }
@@ -1130,19 +1135,28 @@ pub const IndexRepair = struct {
     }
 
     /// Edge `edge_id`'s graph and type, with `property`.
+    /// SONNY-6594 (1): an edge whose body cannot be read is not skipped (its
+    /// index would stay stale): every index is repaired, as when a target
+    /// cannot be collected.
     fn noteEdge(self: *IndexRepair, store: *graph_store.GraphStore, edge_id: u64, property: []const u8) void {
-        if (!store.edgeExistsForUndo(edge_id)) return;
-        const edge = store.getEdgeHydrated(edge_id) orelse return;
+        if (!(store.edgeExistsForUndo(edge_id) catch return self.noteUnreadable())) return;
+        const edge = (store.getEdgeHydratedChecked(edge_id) catch return self.noteUnreadable()) orelse return;
         self.note(edge.graph_name, edge.label, property);
     }
 
     /// Node `node_id`'s graph and labels (or only `label`, for a label
     /// change), with `property`.
     fn noteNode(self: *IndexRepair, store: *graph_store.GraphStore, node_id: u64, property: ?[]const u8, label: ?[]const u8) void {
-        if (!store.nodeExistsForUndo(node_id)) return;
-        const node = store.getNodePtrHydrated(node_id) orelse return;
+        if (!(store.nodeExistsForUndo(node_id) catch return self.noteUnreadable())) return;
+        const node = (store.getNodePtrHydratedChecked(node_id) catch return self.noteUnreadable()) orelse return;
         if (label) |l| return self.note(node.graph_name, l, property);
         for (node.labels) |l| self.note(node.graph_name, l, property);
+    }
+
+    /// SONNY-6594 (1): the entity's body could not be read, so its indexes
+    /// are unknown: repair every index.
+    fn noteUnreadable(self: *IndexRepair) void {
+        self.everything = true;
     }
 
     fn note(self: *IndexRepair, graph: []const u8, label: []const u8, property: ?[]const u8) void {

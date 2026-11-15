@@ -2542,6 +2542,20 @@
 
 ### Fixed
 
+- **ROLLBACK that cannot read a body it must undo fails instead of
+  reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
+  undo asked whether the node or edge a change was on still exists, and a
+  body that could not be READ (an engine read error, out of memory while
+  rebuilding an evicted body) answered "gone": the change was skipped and
+  ROLLBACK (and a failed statement's or transaction body's undo) reported
+  success with the transaction's write still in place. The existence check
+  now fails with the read's error, so the rollback continues past it and
+  ends with `RollbackIncomplete` / `StatementUndoIncomplete` (40003, "may
+  be partly applied"), as for any change it cannot undo. A write whose
+  "before" image cannot be read (the statement undo record) now fails
+  instead of recording nothing; the undo's index repair repairs every
+  index when it cannot read which ones a change touched. Regression: `zig
+  build test-sonny6594-undo-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,

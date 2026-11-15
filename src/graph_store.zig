@@ -15852,15 +15852,19 @@ pub const GraphStore = struct {
     // through these same methods (capture and fence suspended).
 
     /// Does node `node_id` exist (hydrating it)? For the undo.
-    pub fn nodeExistsForUndo(self: *GraphStore, node_id: u64) bool {
+    /// SONNY-6594 (1): a body that cannot be read is the read's error, not
+    /// "absent": the undo skipped the change and ROLLBACK reported success
+    /// with the transaction's write still in place.
+    pub fn nodeExistsForUndo(self: *GraphStore, node_id: u64) !bool {
         self.ensureNodeGraphHydrated(node_id);
-        return self.getNodePtrHydrated(node_id) != null;
+        return (try self.getNodePtrHydratedChecked(node_id)) != null;
     }
 
-    /// Does edge `edge_id` exist (hydrating it)? For the undo.
-    pub fn edgeExistsForUndo(self: *GraphStore, edge_id: u64) bool {
+    /// Does edge `edge_id` exist (hydrating it)? For the undo (SONNY-6594:
+    /// as `nodeExistsForUndo`).
+    pub fn edgeExistsForUndo(self: *GraphStore, edge_id: u64) !bool {
         self.ensureEdgeGraphHydrated(edge_id);
-        return self.getEdgeHydrated(edge_id) != null;
+        return (try self.getEdgeHydratedChecked(edge_id)) != null;
     }
 
     /// SONNY-3348 (round 18): re-create a deleted edge under its own id,
@@ -15875,7 +15879,9 @@ pub const GraphStore = struct {
     fn undoRecordNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, removing: bool) !void {
         if (!statement_undo.capturing()) return;
         if (isInternalPersistedPropertyKey(key)) return;
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        // SONNY-6594 (1): an unreadable node fails the write; it recorded
+        // nothing, and ROLLBACK then had nothing to undo.
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return;
         const old = node.properties.get(key);
         try statement_undo.append(self, try undoPropertyEntry(node_id, key, old, removing, false) orelse return);
     }
@@ -15884,7 +15890,7 @@ pub const GraphStore = struct {
     fn undoRecordEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, removing: bool) !void {
         if (!statement_undo.capturing()) return;
         if (isInternalPersistedPropertyKey(key)) return;
-        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return;
         const old = edge.properties.get(key);
         try statement_undo.append(self, try undoPropertyEntry(edge_id, key, old, removing, true) orelse return);
     }
@@ -15918,7 +15924,7 @@ pub const GraphStore = struct {
     /// Adding a label the node has, or removing one it lacks, changes nothing.
     fn undoRecordNodeLabel(self: *GraphStore, node_id: u64, label: []const u8, adding: bool) !void {
         if (!statement_undo.capturing()) return;
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return;
         var has = false;
         for (node.labels) |l| {
             if (std.mem.eql(u8, l, label)) {
@@ -16007,7 +16013,7 @@ pub const GraphStore = struct {
     /// Edge `edge_id` before it is deleted.
     fn undoRecordDeleteEdge(self: *GraphStore, edge_id: u64) !void {
         if (!statement_undo.capturing()) return;
-        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return;
         try statement_undo.append(self, try undoEdgeImage(edge));
     }
 
