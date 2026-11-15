@@ -2428,7 +2428,14 @@ pub fn dropGraphMapScans() u64 {
 /// its pages) or `CommitFailed` (a commit failed and the engine undid the
 /// transaction, whose writes the store's in-memory copy still holds); a
 /// restart reopens the graph at its committed state and clears both.
-pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed };
+/// SONNY-6590: a graph graph-storage refused to open under at-rest
+/// encryption because a sealed side file has no key (`SideFileEncrypted`),
+/// fails authentication (`SideFileAuthFailed`) or is plaintext in a sealed
+/// store (`SideFileNotSealed`), or whose time-series data was written in
+/// plaintext before TDE covered it (`TimeseriesNotEncrypted`) or is encrypted
+/// while the server runs without its key (`TimeseriesNeedsTdeKey`), is
+/// reported as itself (a restart does not clear it).
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed, SideFileEncrypted, SideFileAuthFailed, SideFileNotSealed, TimeseriesNotEncrypted, TimeseriesNeedsTdeKey };
 
 const QuarantineCause = enum(u8) {
     unknown,
@@ -2438,6 +2445,11 @@ const QuarantineCause = enum(u8) {
     label_dictionary_diverged,
     abort_not_undone,
     commit_failed,
+    side_file_encrypted,
+    side_file_auth_failed,
+    side_file_not_sealed,
+    timeseries_not_encrypted,
+    timeseries_needs_tde_key,
 
     fn of(err: anyerror) QuarantineCause {
         return switch (err) {
@@ -2447,6 +2459,11 @@ const QuarantineCause = enum(u8) {
             error.LabelDictionaryDiverged => .label_dictionary_diverged,
             error.AbortNotUndone => .abort_not_undone,
             error.CommitFailed => .commit_failed,
+            error.SideFileEncrypted => .side_file_encrypted,
+            error.SideFileAuthFailed => .side_file_auth_failed,
+            error.SideFileNotSealed => .side_file_not_sealed,
+            error.TimeseriesNotEncrypted => .timeseries_not_encrypted,
+            error.TimeseriesNeedsTdeKey => .timeseries_needs_tde_key,
             else => .unknown,
         };
     }
@@ -2460,6 +2477,11 @@ const QuarantineCause = enum(u8) {
             .label_dictionary_diverged => error.LabelDictionaryDiverged,
             .abort_not_undone => error.AbortNotUndone,
             .commit_failed => error.CommitFailed,
+            .side_file_encrypted => error.SideFileEncrypted,
+            .side_file_auth_failed => error.SideFileAuthFailed,
+            .side_file_not_sealed => error.SideFileNotSealed,
+            .timeseries_not_encrypted => error.TimeseriesNotEncrypted,
+            .timeseries_needs_tde_key => error.TimeseriesNeedsTdeKey,
         };
     }
 };

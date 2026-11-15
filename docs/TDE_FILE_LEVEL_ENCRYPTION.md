@@ -7,28 +7,115 @@
 ## Overview
 
 Geode implements Transparent Data Encryption (TDE) with AES-256-GCM. When
-enabled, the storage engine's pages and WAL, the schema catalogs and, in
-cluster mode, the Raft log and snapshots are encrypted. Not everything is:
-see [What TDE does not cover yet](#what-tde-does-not-cover-yet).
+enabled, the storage engine's pages and WAL, its side files that hold
+label, relationship-type and property-key names or indexed values, geode's
+exact property index, the schema catalogs, time-series data and, in cluster
+mode, the Raft log and snapshots are encrypted. What is not: see
+[What TDE does not cover](#what-tde-does-not-cover).
 
 This document covers the file-level encryption of index files, schema
 catalogs, the cluster's Raft storage and other persistent data structures.
 
-### What TDE does not cover yet
+### What TDE does not cover
 
-Found by `zig build test-sonny6571-schema-names` (SONNY-6571), which writes
-through a real server with `GEODE_TDE_KEY` set and reads every file under
-the data directory:
+`zig build test-sonny6571-schema-names`, `test-sonny6571-tde-at-rest` and
+`test-sonny6590-tde-side-files` write labels, relationship types, property
+keys, an index, string and integer values and a time-series point through
+real servers with `GEODE_TDE_KEY` set (one server, and a 3-node cluster),
+and read every file under the data directories while running, after a
+SIGKILL, after a restart and after a clean stop: none of them is found.
+What stays in clear:
 
-- Label and relationship type **names** are written in plaintext to every
-  shard's `labels.dict` (graph-storage), and property key names to
-  `props.idx` (graph-storage) and to geode's exact property index
-  `prop_exact.idx` / `prop_rev.idx`. No property value was found in any of
-  them, nor anywhere else under the data directory.
+- File names, sizes and modification times.
+- graph-storage files that hold ids, counts and checksums only: `labels.idx`,
+  `edges.idx`, `edges_exist.idx`, `free.store`, `wal/graph.uuid`, and the
+  manifests (authenticated with an HMAC under the key, not encrypted).
+  `edges.idx` / `edges_exist.idx` show which nodes are connected and by
+  which relationship-type id (the graph's shape, not its names or values).
 - The Raft hard state (`<data_dir>/raft/hard_state`: the current term and
-  vote, two integers) is not encrypted; it holds no graph data.
-- Time-series data is encrypted only with `GEODE_TS_TDE=1` as well
-  (docs/TIMESERIES.md).
+  vote, two integers) and `snapshot.meta` (index, term, voter ids).
+- Plaintext copies written before an upgrade: replaced files are not
+  scrubbed, so freed disk blocks, file-system snapshots and backups taken
+  before the upgrade still hold what they held (see
+  [Upgrading stores written before graph_storage 0.4.17](#upgrading-stores-written-before-graph_storage-0417)).
+- With the `GEODE_TS_TDE=0` opt-out, time-series data (see
+  [Time-series](#time-series)).
+
+### Sealed side files (SONNY-6590)
+
+graph-storage 0.4.17 seals the side files that held names or indexed values
+in plaintext beside the encrypted pages: `labels.dict` (label and
+relationship-type names, every shard), `props.idx` (property-key names and
+value hashes), `ordered_propidx.snap` (property-key names and indexed
+values), `props.catalog` (key names of declared indexes) and every
+`propidx_*.btree`. geode seals its own exact property index the same way:
+`<graph dir>/prop_exact.idx` and `prop_rev.idx` hold property-key names and
+a 64-bit unkeyed hash of every indexed value (a guessable value, such as a
+small integer or a name from a list, is recoverable from its hash).
+
+Envelope (graph-storage `side_file_crypto`, `docs/format-spec.md` §1.6 of
+graph-storage): magic `00 00 00 00 G S E F`, version, kind, a random 96-bit
+nonce, the AES-256-GCM ciphertext of the file's former layout and the tag.
+Key: HKDF-SHA256 of `GEODE_TDE_KEY` (a key used for side files only).
+Associated data: the header, the uuid of the graph (each shard has its own)
+and the file name, so a file copied from another graph, shard or file name
+fails authentication. geode's two files use the envelope kind
+`prop_chain_index` (graph-storage's set of kinds is closed); the file name
+keeps them apart.
+
+When a graph is opened:
+
+| What is found | Result |
+| --- | --- |
+| a graph-storage side file sealed under another key, modified, or copied from another graph | the graph is refused: `58000 SideFileAuthFailed` |
+| a sealed graph-storage side file and no `GEODE_TDE_KEY` | refused: `58000 SideFileEncrypted` |
+| a plaintext graph-storage side file in a store already sealed (manifest format_version 5) | refused: `58000 SideFileNotSealed` |
+| a geode `prop_exact.idx` / `prop_rev.idx` that is plaintext, fails authentication or is stale | not used: the index is rebuilt from the pages and saved sealed (it is derived data) |
+
+A refused graph refuses every read and write with the message above (the
+server log names the graph); the server and its other graphs keep running.
+None of the messages contains key material. To recover: restart with the
+`GEODE_TDE_KEY` the graph was written with, or restore the graph's
+directory from a backup.
+
+### Time-series
+
+Time-series data (`<data_dir>/timeseries`, and each graph's
+`<graph dir>/timeseries`) is encrypted whenever `GEODE_TDE_KEY` is set
+(WAL, segments and manifest; see docs/TIMESERIES.md). Before SONNY-6590 it
+needed `GEODE_TS_TDE=1` as well, and a server with `GEODE_TDE_KEY` alone
+wrote time-series values in plaintext to `<data_dir>/timeseries/ts.wal`.
+
+| `GEODE_TDE_KEY` | `GEODE_TS_TDE` | Time-series |
+| --- | --- | --- |
+| set | unset, `1` or `true` | encrypted |
+| set | `0` or `false` | plaintext, logged at ERROR on every start: only to read and export a store written before SONNY-6590 |
+| unset | `1` or `true` | refused (no key) |
+| any | anything else | refused (`InvalidTsTdeSetting`) |
+| unset | unset, `0` or `false` | plaintext (no TDE) |
+
+geode reads the layout of a store's `ts.wal` before it opens the store and
+never opens a WAL of the other layout: timeseries-storage 0.2.20 reads the
+frames it cannot decode as a torn tail and truncates the file, so points
+not yet flushed to a segment would be lost. An encrypted store opened
+without the key (or with `GEODE_TS_TDE=0`) is refused
+(`TimeseriesNeedsTdeKey`; a graph's store refuses the graph with 58000, the
+server-wide one stops startup).
+
+A time-series store written in plaintext and opened under the key:
+
+- empty (every graph's own store, and the server-wide one if nothing was
+  ever inserted): replaced by an encrypted store (moved aside with one
+  rename, then deleted; a crash leaves the old store or none);
+- holding data: not opened and not deleted (`TimeseriesNotEncrypted`). For
+  the server-wide store, startup stops with the log line
+  `timeseries.open_failed_fail_closed` naming the directory; for a graph's
+  store, the graph is refused with `58000 TimeseriesNotEncrypted`.
+  `GEODE_TS_DURABILITY=best_effort` does not turn it into an in-memory
+  store. To keep the data: start once with `GEODE_TS_TDE=0`, export it
+  (`CALL geode.ts.range`), stop, remove the `timeseries` directory, start
+  without `GEODE_TS_TDE` and insert it again. The engine cannot list a
+  store's series, so geode cannot migrate it in place.
 
 ## Enabling TDE
 
@@ -362,6 +449,41 @@ zig build test
 2. **Unset the key**: `unset GEODE_TDE_KEY`
 3. **Delete encrypted files** (they cannot be read without key)
 4. **Restart and rebuild** indexes from source data
+
+### Upgrading stores written before graph_storage 0.4.17
+
+**Who is affected:** every data directory written with `GEODE_TDE_KEY` set by
+a geode build that pins graph_storage 0.4.16 or older (SONNY-6590). Start the
+new build with the same `GEODE_TDE_KEY`; no other step is needed for the
+graph data:
+
+1. Each graph's shards are upgraded when the graph is first opened
+   (graph-storage, crash-safe at every step): a stale `labels.dict.tmp` is
+   removed, `labels.dict`, `ordered_propidx.snap`, `props.catalog` and each
+   `propidx_*.btree` are rewritten sealed, `props.idx` is emptied (rebuilt
+   from the pages), and the next checkpoint or clean stop records manifest
+   format_version 5.
+2. geode deletes the graph's plaintext `prop_exact.idx` / `prop_rev.idx` when
+   it opens the graph; the exact index is rebuilt from the pages on first use
+   and saved sealed at the next checkpoint.
+3. Empty time-series stores (every graph has one) are replaced by encrypted
+   ones. A time-series store that holds data stops startup (server-wide
+   store) or refuses its graph; see [Time-series](#time-series).
+
+`test-sonny6590-tde-side-files` upgrades such a directory (written by a real
+server, then put into the layout the old builds left: side files and exact
+index in plaintext, manifests at format_version 4, time-series in plaintext)
+and checks that every name, value and index reads back and that no file
+holds any of them afterwards.
+
+Plaintext copies are not scrubbed: freed disk blocks, file-system snapshots
+and backups taken before the upgrade still hold the names. Treat them as
+plaintext.
+
+**Downgrade.** None. Once a graph has been checkpointed under the new build,
+graph_storage 0.4.16 and older refuse it (`IncompatibleVersion` on the
+manifest, `InvalidData` on a sealed `labels.dict`), so an older geode cannot
+open it. Keep a backup taken before the upgrade if you may need to go back.
 
 ### Upgrading stores written before graph_storage 0.4.12
 

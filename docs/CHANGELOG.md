@@ -422,6 +422,43 @@
   sealed file. Once a graph has been checkpointed by this build,
   graph-storage <= 0.4.16 (any earlier geode) refuses it. Same transitive
   dependencies as 0.4.16. The geode-side changes follow in the next entry.
+- **TDE covers geode's exact property index and time-series data, and a
+  graph whose sealed files cannot be read is refused alone (SONNY-6590).**
+  With `GEODE_TDE_KEY` set, geode wrote its exact property index
+  (`<graph dir>/prop_exact.idx`, `prop_rev.idx`: property-key names and an
+  unkeyed 64-bit hash of every indexed value, from which a guessable value
+  is recoverable) in plaintext, and time-series values in plaintext to
+  `<data_dir>/timeseries/ts.wal` unless `GEODE_TS_TDE=1` was set as well.
+  The exact-index files are now sealed with graph-storage's side-file
+  envelope, bound to the graph's uuid and the file name; one that is
+  plaintext, fails authentication or is stale is rebuilt from the pages,
+  never served, and a plaintext pair left by an earlier build is deleted
+  when the graph opens. **BREAKING:** time-series encryption follows
+  `GEODE_TDE_KEY` (`GEODE_TS_TDE=0` opts out, logged at ERROR on every
+  start; any `GEODE_TS_TDE` value other than `1`/`true`/`0`/`false` is
+  refused). An empty plaintext time-series store is replaced by an
+  encrypted one at open; one holding data is refused
+  (`TimeseriesNotEncrypted`, also under `GEODE_TS_DURABILITY=best_effort`)
+  and kept: the server-wide store stops startup, a graph's store refuses the
+  graph (docs/TDE_FILE_LEVEL_ENCRYPTION.md gives the export steps). geode
+  reads the layout of a time-series `ts.wal` before opening the store and
+  never opens a WAL of the other layout: timeseries-storage 0.2.20 treats
+  frames it cannot decode as a torn tail and truncated the file, losing
+  every point not yet flushed (a plaintext WAL under the key, or an
+  encrypted one without it); an encrypted store opened without the key is
+  refused (`TimeseriesNeedsTdeKey`). A graph
+  graph-storage refuses at open with `SideFileEncrypted`,
+  `SideFileAuthFailed` or `SideFileNotSealed`, or whose time-series store is
+  refused (`TimeseriesNotEncrypted`, `TimeseriesNeedsTdeKey`), answers every read and write with 58000 and a message saying
+  what happened and what to do (supply the key, restore the file); the
+  server and its other graphs keep running, and no key material is echoed.
+  `label_dict_divergence` reads the shard dictionaries through the cipher.
+  Cost under a key: each exact-index save builds the file in memory and
+  seals it (about twice the file size transiently). Regression:
+  `zig build test-sonny6590-tde-side-files`; `test-sonny6571-schema-names`
+  (now in the aggregate) and `test-sonny6571-tde-at-rest` also write a
+  property index and a time-series point and scan every file after a SIGKILL
+  and a restart, on a single server and a 3-node cluster.
 - **graph-storage v0.4.16 (SONNY-6529, SONNY-6527): an aborted transaction
   is undone.** `abortTxn` used to drop only the transaction's WAL records:
   the pages it had written stayed modified, its slots and counts stayed

@@ -2710,8 +2710,8 @@ pub fn main() !void {
         // fresh dir because the engine refuses to mkdir). Opt back into the
         // legacy soft behaviour with GEODE_TS_DURABILITY=best_effort (the
         // wrapper then degrades internally with a warning). Retention is
-        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TS_TDE=1 +
-        // GEODE_TDE_KEY.
+        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TDE_KEY
+        // (SONNY-6590: on whenever it is set; GEODE_TS_TDE=0 opts out).
         // CANARY: REQ=REQ-TIMESERIES-WIRE-003; FEATURE="TimeseriesServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/eval.zig; OWNER=server; UPDATED=2026-04-01
         // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=server; UPDATED=2026-06-10
         const ts_mod = geode.timeseries;
@@ -2726,7 +2726,16 @@ pub fn main() !void {
         }) catch |err| {
             log.err("timeseries.open_failed_fail_closed", &.{
                 Attr.string("error", @errorName(err)),
-                Attr.string("hint", "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
+                Attr.string("dir", data_dir),
+                // SONNY-6590: the server-wide time-series store holds data
+                // written in plaintext before time-series encryption
+                // followed GEODE_TDE_KEY; it is neither opened nor dropped.
+                Attr.string("hint", if (err == error.TimeseriesNotEncrypted)
+                    "the time-series store <data-dir>/timeseries holds data written in plaintext before TDE covered time-series; geode will not keep plaintext data under GEODE_TDE_KEY. To keep it: start once with GEODE_TS_TDE=0, export it with CALL geode.ts.range, stop, remove <data-dir>/timeseries, restart without GEODE_TS_TDE and re-insert it (docs/TDE_FILE_LEVEL_ENCRYPTION.md)"
+                else if (err == error.TimeseriesNeedsTdeKey)
+                    "the time-series store <data-dir>/timeseries is encrypted; start with the GEODE_TDE_KEY it was written with and without GEODE_TS_TDE=0"
+                else
+                    "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
             });
             return err;
         };

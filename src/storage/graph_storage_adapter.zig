@@ -318,6 +318,112 @@ const prop_rev_index_file_name = "prop_rev.idx";
 // GENRVIX3 (SONNY-3055): strings hash by their NFC form; a GENRVIX2 file is
 // stale.
 const prop_rev_index_magic = "GENRVIX3";
+const prop_exact_index_file_name = "prop_exact.idx";
+
+// CANARY: REQ=REQ-SONNY-6590-EXACT-INDEX-SEALED; FEATURE="TDEFileLevelEncryption"; ASPECT=SealedExactIndexFiles; STATUS=TESTED; TEST=tests/test_sonny6590_tde_side_files.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6590: under at-rest encryption (`GraphConfig.encryption_key`) geode's
+/// own exact-index files, `prop_exact.idx` and `prop_rev.idx`, hold property
+/// key names and unkeyed value hashes (a guessable value is recoverable from
+/// its hash). They are sealed whole with graph-storage's side-file envelope
+/// (`side_file_crypto.Cipher`: AES-256-GCM under the HKDF side-file key of the
+/// configured key, random nonce, associated data = header + the graph's uuid
+/// + the file name), the format graph-storage 0.4.17 seals its own side
+/// files with (docs/format-spec.md §1.6). `Kind` is graph-storage's closed
+/// enum, so geode's two files use `.prop_chain_index` (the property-key index
+/// kind); the file name in the associated data keeps them apart from
+/// graph-storage's `props.idx` and from each other. They are derived indexes:
+/// a file that is absent, plaintext, fails authentication (wrong key,
+/// modified, copied from another graph) or is stale is rebuilt from the
+/// pages, never served. A plaintext pair left by an earlier geode (a store
+/// written before 0.4.17) is deleted when the graph opens under a key
+/// (`dropPlaintextExactIndexFiles`), and the rebuilt index is saved sealed.
+const exact_index_seal_kind: gs.side_file_crypto.Kind = .prop_chain_index;
+
+/// SONNY-6590 test-only: write the exact-index files in the plaintext
+/// layout even under a key, as geode did before SONNY-6590, so a test can
+/// show such files are dropped and rebuilt sealed. Always false outside tests.
+var plaintext_exact_index_for_test: bool = false;
+
+pub fn setPlaintextExactIndexForTest(on: bool) void {
+    if (!builtin.is_test) @compileError("test-only helper");
+    plaintext_exact_index_for_test = on;
+}
+
+const SealedRead = union(enum) {
+    /// No file.
+    absent,
+    /// A file that cannot be used (unreadable, plaintext under a key, or it
+    /// failed authentication): the caller rebuilds the index.
+    unusable,
+    /// The file's plaintext layout (owned; zero it before freeing).
+    bytes: []u8,
+};
+
+/// SONNY-6590: read geode's exact-index side file `name` in `dir` under
+/// `cipher` and return its plaintext layout.
+fn readSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, cipher: *const gs.side_file_crypto.Cipher) SealedRead {
+    const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return .unusable;
+    defer allocator.free(path);
+    const raw = gs.side_file_crypto.readWholeFile(allocator, path) catch |err| switch (err) {
+        error.FileNotFound => return .absent,
+        else => return .unusable,
+    };
+    defer allocator.free(raw);
+    if (!gs.side_file_crypto.isSealed(raw)) return .unusable;
+    const plain = cipher.open(allocator, exact_index_seal_kind, name, raw) catch |err| {
+        // Derived: rebuilt from the pages. Logged, because a sealed file that
+        // fails authentication was modified, copied from another graph, or
+        // written under another key.
+        slog.warn("exact property index file failed authentication; it is rebuilt from the graph's pages (SONNY-6590)", &.{
+            SAttr.string("file", path),
+            SAttr.err("error", err),
+        });
+        return .unusable;
+    };
+    return .{ .bytes = plain };
+}
+
+/// SONNY-6590: seal `plaintext` and write it to `dir/name` atomically (temp
+/// file, fsync, rename).
+fn writeSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, cipher: *const gs.side_file_crypto.Cipher, plaintext: []const u8) !void {
+    const sealed = try cipher.seal(allocator, exact_index_seal_kind, name, plaintext);
+    defer allocator.free(sealed);
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
+    defer allocator.free(path);
+    try gs.side_file_crypto.writeAtomic(allocator, path, sealed);
+}
+
+/// SONNY-6590: under a key, delete an exact-index file in the plaintext
+/// layout (left by geode before SONNY-6590). Both files go when either is
+/// plaintext: the pair is rebuilt and saved sealed. Run when a graph opens.
+fn dropPlaintextExactIndexFiles(allocator: Allocator, dir: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var plaintext = false;
+    for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+        const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return;
+        defer allocator.free(path);
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
+        defer file.close(io);
+        var head: [gs.side_file_crypto.MAGIC.len]u8 = undefined;
+        const n = file.readPositionalAll(io, &head, 0) catch 0;
+        if (!gs.side_file_crypto.isSealed(head[0..n])) plaintext = true;
+    }
+    if (!plaintext) return;
+    for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+        const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return;
+        defer allocator.free(path);
+        std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => slog.err("could not delete a plaintext exact property index file under TDE; it holds property key names in plaintext (SONNY-6590)", &.{
+                SAttr.string("file", path),
+                SAttr.err("error", err),
+            }),
+        };
+    }
+    slog.info("deleted the plaintext exact property index files written before TDE covered them; the index is rebuilt and saved sealed (SONNY-6590)", &.{
+        SAttr.string("dir", dir),
+    });
+}
 
 pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
@@ -711,6 +817,9 @@ const NodePropertyExactIndex = struct {
     /// StringHashMap mutex. Checkpoint/load still take every shard in stable
     /// order to preserve a coherent on-disk snapshot.
     shards: [exact_node_property_index_shard_count]NodePropertyExactIndexShard,
+    /// SONNY-6590: seals `prop_exact.idx` / `prop_rev.idx` under at-rest
+    /// encryption (null: plaintext layout, no key configured).
+    cipher: ?gs.side_file_crypto.Cipher = null,
 
     fn init(allocator: Allocator) NodePropertyExactIndex {
         var self: NodePropertyExactIndex = .{
@@ -723,10 +832,24 @@ const NodePropertyExactIndex = struct {
         return self;
     }
 
+    /// SONNY-6590: the index of graph `graph_uuid` under the store's at-rest
+    /// key (`GraphConfig.encryption_key`; null = no encryption).
+    fn initForGraph(allocator: Allocator, encryption_key: ?[32]u8, graph_uuid: [16]u8) NodePropertyExactIndex {
+        var self = init(allocator);
+        self.cipher = gs.side_file_crypto.Cipher.forKey(encryption_key, graph_uuid);
+        return self;
+    }
+
+    fn cipherPtr(self: *const NodePropertyExactIndex) ?*const gs.side_file_crypto.Cipher {
+        if (self.cipher) |*c| return c;
+        return null;
+    }
+
     fn deinit(self: *NodePropertyExactIndex) void {
         for (&self.shards) |*shard| {
             shard.deinit(self.allocator);
         }
+        if (self.cipher) |*c| c.deinit();
     }
 
     fn clear(self: *NodePropertyExactIndex) void {
@@ -943,6 +1066,24 @@ const NodePropertyExactIndex = struct {
         self.lockAllShards();
         defer self.unlockAllShards();
 
+        // SONNY-6590: under a key both files are built in memory and sealed
+        // whole (the envelope authenticates the complete file).
+        const seal_with = if (builtin.is_test and plaintext_exact_index_for_test) null else self.cipherPtr();
+        if (seal_with) |cipher| {
+            var aw: std.Io.Writer.Allocating = .init(self.allocator);
+            defer {
+                std.crypto.secureZero(u8, aw.writer.buffer);
+                aw.deinit();
+            }
+            try self.writeForwardLocked(&aw.writer, checkpoint_epoch, covered_lsn, config_hash);
+            try writeSealedExactFile(self.allocator, graph_dir_path, prop_exact_index_file_name, cipher, aw.written());
+            std.crypto.secureZero(u8, aw.writer.buffer);
+            aw.clearRetainingCapacity();
+            try self.writeReverseLocked(&aw.writer, checkpoint_epoch, covered_lsn);
+            try writeSealedExactFile(self.allocator, graph_dir_path, prop_rev_index_file_name, cipher, aw.written());
+            return;
+        }
+
         const idx_path = try self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len);
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
@@ -954,8 +1095,23 @@ const NodePropertyExactIndex = struct {
 
         var idx_wbuf: [8192]u8 = undefined;
         var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
-        const writer = &idx_fw.interface;
+        try self.writeForwardLocked(&idx_fw.interface, checkpoint_epoch, covered_lsn, config_hash);
+        try idx_fw.flush();
 
+        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
+        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
+        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
+        // tail-changed node's OLD postings in O(node's postings) WITHOUT
+        // re-reading its (tail-overwritten) old value — the exact prerequisite
+        // the Phase 5 report flagged as missing. Written in the SAME locked pass
+        // (all shard mutexes held) so it is an exact inversion of the postings
+        // just written. Independent stamp/magic → an inconsistent or torn
+        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
+        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
+    }
+
+    /// The `prop_exact.idx` layout. Caller holds every shard mutex.
+    fn writeForwardLocked(self: *NodePropertyExactIndex, writer: *std.Io.Writer, checkpoint_epoch: u64, covered_lsn: u64, config_hash: u64) !void {
         // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
         // WAL-aware Path B contract; v4 = SONNY-2806, a number's value hash is
         // its exact value; v5 = SONNY-6354, stamped with the indexed-key
@@ -992,18 +1148,6 @@ const NodePropertyExactIndex = struct {
                 }
             }
         }
-        try idx_fw.flush();
-
-        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
-        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
-        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
-        // tail-changed node's OLD postings in O(node's postings) WITHOUT
-        // re-reading its (tail-overwritten) old value — the exact prerequisite
-        // the Phase 5 report flagged as missing. Written in the SAME locked pass
-        // (all shard mutexes held) so it is an exact inversion of the postings
-        // just written. Independent stamp/magic → an inconsistent or torn
-        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
-        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
     }
 
     /// Phase E1: write `prop_rev.idx` — the node→[(label,key,value_hash)] reverse
@@ -1027,8 +1171,12 @@ const NodePropertyExactIndex = struct {
 
         var rev_wbuf: [8192]u8 = undefined;
         var rev_fw = file.writerStreaming(rev_io, &rev_wbuf);
-        const writer = &rev_fw.interface;
+        try self.writeReverseLocked(&rev_fw.interface, checkpoint_epoch, covered_lsn);
+        try rev_fw.flush();
+    }
 
+    /// The `prop_rev.idx` layout. Caller holds every shard mutex.
+    fn writeReverseLocked(self: *NodePropertyExactIndex, writer: *std.Io.Writer, checkpoint_epoch: u64, covered_lsn: u64) !void {
         try writer.writeAll(revIndexMagicForWrite());
         try writer.writeInt(u64, checkpoint_epoch, .little);
         try writer.writeInt(u64, covered_lsn, .little);
@@ -1053,7 +1201,6 @@ const NodePropertyExactIndex = struct {
                 }
             }
         }
-        try rev_fw.flush();
     }
 
     /// Phase E2: remove `node_id` from the posting for `encoded_key` (the exact
@@ -1122,6 +1269,23 @@ const NodePropertyExactIndex = struct {
         self.lockAllShards();
         defer self.unlockAllShards();
 
+        // SONNY-6590: under a key only a sealed file that authenticates loads;
+        // a plaintext one or one that fails is a present-but-unusable snapshot.
+        if (self.cipherPtr()) |cipher| {
+            switch (readSealedExactFile(self.allocator, graph_dir_path, prop_exact_index_file_name, cipher)) {
+                .absent => return .absent,
+                .unusable => return .stale,
+                .bytes => |plain| {
+                    defer {
+                        std.crypto.secureZero(u8, plain);
+                        self.allocator.free(plain);
+                    }
+                    var fixed: std.Io.Reader = .fixed(plain);
+                    return self.loadLocked(&fixed, expected_epoch, expected_covered_lsn, expected_config);
+                },
+            }
+        }
+
         const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return .absent;
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
@@ -1136,8 +1300,12 @@ const NodePropertyExactIndex = struct {
 
         var reader_buffer: [4096]u8 = undefined;
         var file_reader = file.reader(gsa_io, &reader_buffer);
-        const reader = &file_reader.interface;
+        return self.loadLocked(&file_reader.interface, expected_epoch, expected_covered_lsn, expected_config);
+    }
 
+    /// Parse the `prop_exact.idx` layout from `reader`. Caller holds every
+    /// shard mutex.
+    fn loadLocked(self: *NodePropertyExactIndex, reader: *std.Io.Reader, expected_epoch: u64, expected_covered_lsn: u64, expected_config: u64) ExactIndexLoadOutcome {
         // Validate magic header — only the v5 (epoch + covered-lsn + key
         // configuration stamped, numbers hashed by value) format loads; a
         // GENPIDX4 (no key configuration), GENPIDX3 (numbers hashed by their
@@ -1245,7 +1413,21 @@ fn revIndexMagicForWrite() []const u8 {
 /// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
 const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
 
-fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactIndexStamp {
+fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8, cipher: ?*const gs.side_file_crypto.Cipher) ?ExactIndexStamp {
+    // SONNY-6590: a sealed file is authenticated whole before its stamp is
+    // believed (O(file), on the crash-reopen path only).
+    if (cipher) |c| switch (readSealedExactFile(allocator, graph_dir_path, prop_exact_index_file_name, c)) {
+        .absent, .unusable => return null,
+        .bytes => |plain| {
+            defer {
+                std.crypto.secureZero(u8, plain);
+                allocator.free(plain);
+            }
+            var fixed: std.Io.Reader = .fixed(plain);
+            return parseExactIndexStamp(&fixed);
+        },
+    };
+
     const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return null;
     defer allocator.free(idx_path);
 
@@ -1255,8 +1437,10 @@ fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactI
 
     var rbuf: [64]u8 = undefined;
     var fr = file.reader(io, &rbuf);
-    const reader = &fr.interface;
+    return parseExactIndexStamp(&fr.interface);
+}
 
+fn parseExactIndexStamp(reader: *std.Io.Reader) ?ExactIndexStamp {
     var magic: [8]u8 = undefined;
     reader.readSliceAll(&magic) catch return null;
     if (!std.mem.eql(u8, &magic, exact_index_magic)) return null;
@@ -1311,7 +1495,21 @@ const NodePropertyReverseMap = struct {
     /// the forward base-load, so a torn / inconsistent / foreign reverse file is
     /// rejected → the caller falls back to a full rebuild, never an unsound
     /// reconcile). Mirrors `NodePropertyExactIndex.loadFromFile`'s outcomes.
-    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64, cipher: ?*const gs.side_file_crypto.Cipher) ExactIndexLoadOutcome {
+        // SONNY-6590: under a key only a sealed file that authenticates loads.
+        if (cipher) |c| switch (readSealedExactFile(self.allocator, graph_dir_path, prop_rev_index_file_name, c)) {
+            .absent => return .absent,
+            .unusable => return .stale,
+            .bytes => |plain| {
+                defer {
+                    std.crypto.secureZero(u8, plain);
+                    self.allocator.free(plain);
+                }
+                var fixed: std.Io.Reader = .fixed(plain);
+                return self.parse(&fixed, expected_epoch, expected_covered_lsn);
+            },
+        };
+
         const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name }) catch return .absent;
         defer self.allocator.free(rev_path);
 
@@ -1321,8 +1519,10 @@ const NodePropertyReverseMap = struct {
 
         var rbuf: [4096]u8 = undefined;
         var fr = file.reader(io, &rbuf);
-        const reader = &fr.interface;
+        return self.parse(&fr.interface, expected_epoch, expected_covered_lsn);
+    }
 
+    fn parse(self: *NodePropertyReverseMap, reader: *std.Io.Reader, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
         if (!std.mem.eql(u8, &magic, prop_rev_index_magic)) return .stale;
@@ -9133,7 +9333,7 @@ pub const StorageAdapter = struct {
 
         var rev = NodePropertyReverseMap.init(allocator);
         defer rev.deinit();
-        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered) != .loaded) return null;
+        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered, mg.exact_node_property_index.cipherPtr()) != .loaded) return null;
 
         var out = std.ArrayList(ReverseMapPairDump).empty;
         errdefer {
@@ -9170,7 +9370,7 @@ pub const StorageAdapter = struct {
         };
         const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
         defer self.allocator.free(dir_path);
-        const stamp = readExactIndexStamp(self.allocator, dir_path) orelse
+        const stamp = readExactIndexStamp(self.allocator, dir_path, mg.exact_node_property_index.cipherPtr()) orelse
             return .{ .epoch = mgCheckpointEpoch(mg), .covered_lsn = 0, .frontier = mgDurableFrontierLsn(mg), .pre_recovery = mgPreRecoveryFrontierLsn(mg) };
         return .{
             .epoch = stamp.epoch,
@@ -11056,7 +11256,7 @@ pub const StorageAdapter = struct {
     /// `false` (full rebuild).
     fn tryReconcileExactIndexOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_dir_path: []const u8) bool {
         // 1) Read the snapshot's (epoch, covered_lsn) stamp from its header.
-        const stamp = readExactIndexStamp(self.allocator, graph_dir_path) orelse return false;
+        const stamp = readExactIndexStamp(self.allocator, graph_dir_path, mg.exact_node_property_index.cipherPtr()) orelse return false;
 
         // 2) Gate on the WAL-aware single-recovery contract.
         const cur_epoch = mgCheckpointEpoch(mg);
@@ -11100,7 +11300,7 @@ pub const StorageAdapter = struct {
         //    IDENTICALLY to the base. Missing/torn/mismatched → clear + rebuild.
         var rev = NodePropertyReverseMap.init(self.allocator);
         defer rev.deinit();
-        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn) != .loaded) {
+        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn, mg.exact_node_property_index.cipherPtr()) != .loaded) {
             mg.exact_node_property_index.clear();
             return false;
         }
@@ -11467,12 +11667,15 @@ pub const StorageAdapter = struct {
     /// wrapper) and adapter-level errors degrade to `null`.
     ///
     /// Also wires retention (`GEODE_TS_RETENTION_DAYS`) and TDE
-    /// (`GEODE_TS_TDE=1` + `GEODE_TDE_KEY`) into the engine (GAP-0865 c/e).
+    /// (`GEODE_TDE_KEY`; SONNY-6590: on whenever it is set) into the engine
+    /// (GAP-0865 c/e).
     fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*ts_mod.Store {
         const durability = ts_mod.durabilityFromEnv();
         return initTimeseriesForGraphInner(allocator, data_dir, graph_uuid, durability) catch |err| switch (durability) {
             .fail_closed => err,
-            .best_effort => blk: {
+            // SONNY-6590: plaintext time-series data under the TDE key
+            // refuses the graph (58000 TimeseriesNotEncrypted) either way.
+            .best_effort => if (err == error.TimeseriesNotEncrypted) err else blk: {
                 log.warn("per-graph timeseries init failed ({}); GEODE_TS_DURABILITY=best_effort — graph continues without persistent timeseries", .{err});
                 break :blk null;
             },
@@ -11626,7 +11829,7 @@ pub const StorageAdapter = struct {
             // mapping is consistent whether the caller reads via the adapter
             // or directly via the per-shard label_store.
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
-            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .exact_node_property_index = NodePropertyExactIndex.initForGraph(self.allocator, cfg.encryption_key, graph_uuid),
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
@@ -11744,7 +11947,7 @@ pub const StorageAdapter = struct {
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
-            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .exact_node_property_index = NodePropertyExactIndex.initForGraph(self.allocator, cfg.encryption_key, graph_uuid),
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
@@ -11778,6 +11981,8 @@ pub const StorageAdapter = struct {
         const load_outcome: ExactIndexLoadOutcome = blk: {
             const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk .absent;
             defer self.allocator.free(dir_path);
+            // SONNY-6590: a plaintext pair from before TDE sealed it goes now.
+            if (mg.exact_node_property_index.cipher != null) dropPlaintextExactIndexFiles(self.allocator, dir_path);
             break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), graph_store.exactIndexConfigHash());
         };
         const loaded_from_disk = load_outcome == .loaded;
