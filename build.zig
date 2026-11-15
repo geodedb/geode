@@ -11248,6 +11248,29 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6611-raft-persist-before-apply", "Run SONNY-6611 item 7 / SONNY-6592 item 3 regression (a cluster follower applies a committed Raft entry only after the entry is in its FileStorage, TDE-sealed or not, and sends the AppendEntries reply acknowledging it only then)").dependOn(&run_tests.step);
     }
+    // SONNY-6617 (1): a failed Raft persist is retried; the node takes no
+    // input until it succeeds.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6617_raft_persist_failure.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6617-raft-persist-failure", "Run SONNY-6617 item 1 regression (a cluster node whose Raft hard-state write fails - its FileStorage directory read-only - sends no vote and takes no Raft input; once the directory is writable again a tick retries the write, the vote leaves with the hard state on disk, and the node takes input again)").dependOn(&run_tests.step);
+    }
+    // SONNY-6617 (2, 3): geode query / shell apply the DSN timeout; a geode
+    // mcp gRPC endpoint with TLS on says the gRPC client has no TLS.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6617_cli_dsn_timeout.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6617-cli-dsn-timeout", "Run SONNY-6617 items 2-3 regression (geode query --dsn and geode shell --dsn with timeout_ms, connect_timeout or timeout give up on a server that does not answer after that time, not after 30 s, and no longer call it 'no effect'; a geode mcp grpc:// endpoint with TLS on answers tools and resources with what to do, not ConnectionFailed)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6321: the TDE self-test procedures through the executor, and no
     // CANARY cites the TDEKeyManager suite for code it does not exercise.
