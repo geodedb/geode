@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T09:36:44.570134936Z",
+  "generated_at": "2026-11-15T12:12:00.130257386Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78551,6 +78551,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6529-ABORT-UNDO",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6531-MCP-OWNERSHIP",
       "features": [
         {
@@ -84408,7 +84427,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4184
+      "TESTED": 4185
     },
     "by_aspect": {
       "2PC": 3,
@@ -87207,7 +87226,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 360,
+      "Regression": 361,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
