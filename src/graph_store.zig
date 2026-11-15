@@ -2404,6 +2404,12 @@ const HydrationEntry = struct {
     /// and left `done` false, so the next access builds again; that build
     /// first clears the counters the failed one bumped. Under `mutex`.
     needs_reset: bool = false,
+    /// SONNY-6632: a build of this graph is running (set and cleared under
+    /// `hydration_build_mutex`). Only a running build's family threads hold
+    /// shallow copies of cache bodies, so only it holds off the checkpoint's
+    /// retired-cache reclaims (`hasUnfinishedHydration`); a graph waiting for
+    /// its first touch or for the retry of a failed build does not.
+    building: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 /// SONNY-6523 (7): keys DROP GRAPH collects per scan of a shared map.
@@ -3870,7 +3876,7 @@ pub const GraphStore = struct {
                 // PERF-C (issue #814): tenant-keyed edge-type counter.
                 try dst.bumpEdgeTypeCount(src_edge.graph_name, src_edge.tenant_id, src_edge.label);
                 // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-                dst.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
+                try dst.bumpGraphEdgeTypeCount(src_edge.graph_name, src_edge.label);
             }
         };
         var edge_copier: EdgeCopy = .{ .dst = self, .scope = scope };
@@ -6286,9 +6292,15 @@ pub const GraphStore = struct {
         try self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(0));
     }
 
-    fn bumpGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
+    // CANARY: REQ=REQ-SONNY-6632-EDGE-TYPE-COUNT-OOM; FEATURE="StorageIntegrity"; ASPECT=CountFailureNotSilent; STATUS=TESTED; TEST=tests/test_sonny6632_hydration_followups.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6632: fails when the count's entry cannot be made (it returned
+    /// silently, and the type was counted one short for the life of the
+    /// process). A hydration fails with the error and is retried; a create
+    /// makes the entry first (`ensureGraphEdgeTypeCount`), so its bump does
+    /// not allocate.
+    fn bumpGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) !void {
         var key_buf: [512]u8 = undefined;
-        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
+        var formatted = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type);
         defer if (formatted.owned) |owned| self.allocator.free(owned);
 
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -6310,11 +6322,9 @@ pub const GraphStore = struct {
         const owned_key = if (formatted.owned) |owned| blk: {
             formatted.owned = null;
             break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type }) catch return;
-        self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
-            self.allocator.free(owned_key);
-            return;
-        };
+        } else try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, edge_type });
+        errdefer self.allocator.free(owned_key);
+        try self.edge_type_counts_by_graph.put(owned_key, LabelCountValue.init(1));
     }
 
     fn decGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
@@ -8420,7 +8430,7 @@ pub const GraphStore = struct {
             // PERF-C (issue #814): rebuild tenant-keyed edge-type counter.
             try self.bumpEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
             // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-            self.bumpGraphEdgeTypeCount(edge.graph_name, edge.label);
+            try self.bumpGraphEdgeTypeCount(edge.graph_name, edge.label);
         }
     }
 
@@ -10493,7 +10503,7 @@ pub const GraphStore = struct {
         // Per-(graph,type) exact counter (typed count(r:TYPE) fast path). Its
         // entry is made first, so the bump itself does not allocate.
         try self.ensureGraphEdgeTypeCount(graph_name, edge_type);
-        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
+        try self.bumpGraphEdgeTypeCount(graph_name, edge_type);
     }
 
     /// SONNY-6268: undo an edge create's engine edge after a later step
@@ -12476,8 +12486,30 @@ pub const GraphStore = struct {
     /// always safe — the retire backlog just survives to the next grace
     /// window (typically the persist-on-complete graph checkpoint fired
     /// right after `done` flips).
+    ///
+    /// SONNY-6632: the checkpoint's reclaim gate now uses
+    /// `hasRunningHydrationBuild`; this stays the "graph not built yet"
+    /// predicate.
     pub fn hasUnfinishedHydration(self: *GraphStore, graph_name: []const u8) bool {
         return self.isGraphDeferred(graph_name);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6632-RECLAIM-NOT-BUILT; FEATURE="StorageIntegrity"; ASPECT=ReclaimGateRunningBuild; STATUS=TESTED; TEST=tests/test_sonny6632_hydration_followups.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6632: true iff a build of `graph_name` is running: the
+    /// checkpoint's retired-cache reclaim gate (it used
+    /// `hasUnfinishedHydration`, `done == false`). A graph whose build failed
+    /// transiently stays not built until a retry succeeds, and each failed
+    /// build retired the cache bodies the previous one cached; holding the
+    /// reclaims off until then grew memory with every retry. Between builds
+    /// no thread holds a copy (every build joins its threads before it
+    /// returns, under `hydration_build_mutex`), and the reclaim itself holds
+    /// that mutex (`tryBeginCacheReclaimGrace`), so no build starts under it.
+    pub fn hasRunningHydrationBuild(self: *GraphStore, graph_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return false;
+        return entry.building.load(.acquire);
     }
 
     // ── GAP-ENT-0023 P3: per-graph loop2-product snapshots ─────────────────
@@ -13406,6 +13438,10 @@ pub const GraphStore = struct {
         // build on the store-wide maps it mutates (see `hydration_build_mutex`).
         self.hydration_build_mutex.lockUncancelable(io);
         defer self.hydration_build_mutex.unlock(io);
+        // SONNY-6632: every scan and family thread is joined before the
+        // build returns, so `building` clears after them.
+        entry.building.store(true, .release);
+        defer entry.building.store(false, .release);
         // SONNY-6605: the previous build failed transiently. Every product
         // it left behind is rebuilt idempotently (IdMap, node bodies, label
         // postings and their counts, per-graph node set, merge index, edge
@@ -13455,6 +13491,17 @@ pub const GraphStore = struct {
             if (!std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME)) adapter.markGraphQuarantined(graph_name, err);
             break :blk null;
         };
+        // CANARY: REQ=REQ-SONNY-6632-OPEN-FAILED-REBUILT; FEATURE="StorageIntegrity"; ASPECT=FailedClearedOnRebuild; STATUS=TESTED; TEST=tests/test_sonny6632_hydration_followups.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6632: a graph whose registration failed at open is marked
+        // failed with `done` false (`loadFromAdapter`, the catalog
+        // registration), so the checkpoint writers skip its snapshots until
+        // this first touch rebuilds it. A rebuild that succeeded left the
+        // mark: every read was refused until a restart. Cleared before
+        // `done`, so a saver never sees the graph built and failed.
+        if (outcome != null and entry.failed.load(.acquire)) {
+            entry.failure.store(@intFromEnum(QuarantineCause.unknown), .release);
+            entry.failed.store(false, .release);
+        }
         entry.done.store(true, .release);
         // GAP-ENT-0048f: build + persist the adapter's exact node-property VALUE
         // index (prop_exact.idx) in THIS hydration window — the race-free path.
@@ -14240,9 +14287,10 @@ pub const GraphStore = struct {
     /// hydrating graph's free rwlock. What keeps these sub-heaps alive is
     /// the reclaim gate in `checkpointOneGraph`: the retired-cache reclaims
     /// are SKIPPED while this graph has an unfinished hydration
-    /// (`hasUnfinishedHydration`, i.e. the entry's `done` latch still
-    /// false). `done` flips only after the merge joins every family thread,
-    /// so no family can be reading a retired body once reclaims run again.
+    /// (`hasRunningHydrationBuild`, i.e. the entry's `building` flag, SONNY-6632;
+    /// and the reclaim holds `hydration_build_mutex`). `building` clears only
+    /// after the merge joins every family thread, so no family can be reading
+    /// a retired body once reclaims run again.
     fn hydrateStreamNodeRowCore(
         self: *GraphStore,
         adapter: *graph_storage_adapter.StorageAdapter,
@@ -14942,7 +14990,7 @@ pub const GraphStore = struct {
                         // counted, cached or not: a build retried after a
                         // transient failure finds the edges the failed one
                         // cached, and its counts were cleared.
-                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
+                        if (!snap.counters) try self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
 
                         if (self.edges.contains(edge_uuid)) continue;
 
@@ -15500,7 +15548,7 @@ pub const GraphStore = struct {
                         // present — re-bumping would double-count. SONNY-6605: every
                         // edge the scan finds is counted, cached or not (see the
                         // stream scan).
-                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
+                        if (!snap.counters) try self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
 
                         if (self.edges.contains(edge_uuid)) continue;
 

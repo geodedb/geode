@@ -10466,8 +10466,9 @@ pub const StorageAdapter = struct {
         // mg.rwlock, yet its merge family threads read shallow Node copies
         // whose sub-heaps live on exactly these retire lists — reclaiming
         // mid-merge is the 14.27M SEGV bomb #2 / C-1 review UAF):
-        //  1. hasUnfinishedHydration: graph-scoped `done`-latch predicate —
-        //     catches THIS graph's build even between mutex-held phases.
+        //  1. hasRunningHydrationBuild: a build of THIS graph is running
+        //     (SONNY-6632: not `done == false`, which held off the reclaims of
+        //     a graph whose build failed transiently until a retry succeeded).
         //  2. tryBeginCacheReclaimGrace: NON-BLOCKING tryLock of the store's
         //     hydration_build_mutex — catches any concurrent build touching
         //     the shared retire machinery (parking here under the graph-
@@ -10476,7 +10477,7 @@ pub const StorageAdapter = struct {
         // window (typically the persist-on-complete graph checkpoint fired
         // right after hydration finishes, which reclaims with done == true).
         if (graph_store.getCurrentGlobalStore()) |store| {
-            if (store.hasUnfinishedHydration(mg.name)) {
+            if (store.hasRunningHydrationBuild(mg.name)) {
                 _ = g_hydration_reclaim_skips.fetchAdd(1, .monotonic);
                 slog.info("checkpoint grace window: retired-cache reclaim skipped (hydration in flight)", &.{
                     SAttr.string("graph", mg.name),

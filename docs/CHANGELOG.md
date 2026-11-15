@@ -2794,6 +2794,25 @@
 
 ### Fixed
 
+- **Hydration follow-ups to SONNY-6605 (SONNY-6632).** A graph whose
+  registration failed at server start is marked failed and rebuilt by its
+  first touch; a rebuild that succeeded left the mark, so every read of the
+  graph was refused (`GraphQuarantined`) until a restart. The mark is now
+  cleared when the rebuild succeeds. The per-relationship-type count
+  (`count(r:TYPE)`) returned silently when it could not allocate a type's
+  entry, so the hydration (or a store clone or rebuild) succeeded with the
+  type counted one short for the life of the process; the failure now fails
+  the hydration with `OutOfMemory`, which is retried on the next access. A
+  checkpoint skipped freeing the retired node, edge and adjacency cache
+  entries of every graph not built yet, to protect a running build; a graph
+  whose build failed transiently stays not built until a retry succeeds, so
+  each retry under memory pressure grew memory further. Only a running build
+  holds the reclaims off now (`hasRunningHydrationBuild`). Regression:
+  `zig build test-sonny6632-hydration-followups` (real allocation failures:
+  a reload whose registration of the graph failed, then a first touch that
+  answers exact counts and no quarantine; the count entry of a relationship
+  type failing, then exact per-type counts; two failed builds, then a
+  checkpoint that frees all 240 retired node bodies).
 - **A graph whose first-read hydration runs out of memory (or of
   descriptors, threads or disk space) is retried on its next access instead
   of being quarantined until a restart (SONNY-6605).** Any hydration error
