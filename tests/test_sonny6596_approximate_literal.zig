@@ -37,6 +37,16 @@ fn checkApproximate(s: *Session, f: *Failures) !void {
     // The literal is an ordinary numeric argument and operand.
     try expectValue(s, f, "RETURN abs(-1.5E0) AS x", &.{}, "1.5d");
     try expectValue(s, f, "RETURN 1E0 + 1 AS x", &.{}, "2d");
+    // 20.21 SR 2: one approximate operand makes the result approximate.
+    try expectValue(s, f, "RETURN 2.5 - 1E0 AS x", &.{}, "1.5d");
+    try expectValue(s, f, "RETURN 1.5E0 * 2 AS x", &.{}, "3d");
+    try expectValue(s, f, "RETURN 3 / 2E0 AS x", &.{}, "1.5d");
+    try expectValue(s, f, "RETURN 2E0 ^ 3 AS x", &.{}, "8d");
+    try expectValue(s, f, "RETURN -$d AS x", &.{.{ .name = "d", .value = .{ .Double = 0.5 } }}, "-0.5d");
+    // 20.21 GR 3 / GR 4: 22012 and 22003, never inf or NaN.
+    try expectFail(s, f, "RETURN 1E0 / 0 AS x", &.{}, error.DivisionByZero);
+    try expectFail(s, f, "RETURN 1E308 * 10 AS x", &.{}, error.NumericOutOfRange);
+    try expectValue(s, f, "RETURN 1E0 < 2 AS x", &.{}, "true");
     // A stored approximate literal reads back as a DOUBLE.
     try s.exec("CREATE (:Sci6596 {v: 1.5E0})", &.{});
     try expectValue(s, f, "MATCH (n:Sci6596) RETURN n.v AS x", &.{}, "1.5d");

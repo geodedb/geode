@@ -587,6 +587,17 @@ pub fn evalMathFunction(
                     return Value{ .Int = std.math.cast(i64, result) orelse return EvalError.IntegerOverflow };
                 }
             },
+            // SONNY-6596: an approximate number rounds to an approximate
+            // number (as floor and ceil, 20.22 GR 12/13 b ii), half away from
+            // zero at 10^-precision.
+            .Double => |x| {
+                if (precision == 0) return Value{ .Double = @round(x) };
+                const p = std.math.cast(i32, precision) orelse return Value{ .Double = if (precision > 0) x else 0 };
+                const factor = std.math.pow(f64, 10.0, @floatFromInt(p));
+                if (!std.math.isFinite(factor) or factor == 0) return Value{ .Double = if (precision > 0) x else 0 };
+                const rounded = @round(x * factor) / factor;
+                return Value{ .Double = if (std.math.isFinite(rounded)) rounded else x };
+            },
             .Null => return Value{ .Null = {} },
             else => return EvalError.TypeMismatch,
         }

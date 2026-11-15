@@ -159,6 +159,10 @@ and 97 in 39 integration-harness specs.
 RETURN true, false, null
 RETURN 42, -123, 3.14, 'hello world'
 
+-- Numeric literals (21.2): exact without an exponent, approximate with one
+RETURN 3.14      -- DECIMAL (exact numeric literal)
+RETURN 1.5E0     -- DOUBLE  (approximate numeric literal, SONNY-6596)
+
 -- Temporal types
 RETURN date('2024-01-15')
 RETURN datetime('2024-01-15T14:30:00')

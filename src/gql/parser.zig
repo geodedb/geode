@@ -4978,27 +4978,17 @@ pub const Parser = struct {
                 }
 
                 if (has_exp) {
-                    // Parse scientific notation: parse as f64 and convert to decimal
+                    // CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-LITERAL; FEATURE="GQLParser"; ASPECT=ApproximateNumericLiteral; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: an <unsigned decimal in scientific notation>
+                    // is an <approximate numeric literal> (ISO/IEC 39075:2024
+                    // 21.2); its declared type is implementation-defined
+                    // (SR 19 c, ID079): Geode's is DOUBLE. It was evaluated
+                    // as an exact scale-15 DECIMAL. SR 20: a value beyond the
+                    // DOUBLE range is refused (GAP-0905: a clean parse error,
+                    // never a panic).
                     const value = try std.fmt.parseFloat(f64, lex);
-                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7).
-                    // GAP-0905: guard the i128 conversion — an unchecked @intFromFloat
-                    // panicked (and killed the server) for literals like 1.0e308.
-                    // 0x1p127 is 2^127 as f64; i128 holds (-2^127, 2^127). NaN fails
-                    // both comparisons and falls through to the error.
-                    const i128_limit: f64 = 0x1p127;
-                    const scaled = value * 1_000_000_000_000_000;
-                    if (scaled >= -i128_limit and scaled < i128_limit) {
-                        const coeff = @as(i128, @intFromFloat(scaled));
-                        break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
-                    }
-                    if (value >= -i128_limit and value < i128_limit) {
-                        // Too large for the scale-15 fixed-point form; fall back to an
-                        // integer-valued decimal so huge-but-representable literals work.
-                        break :blk_f .{ .Decimal = .{ .coeff = @as(i128, @intFromFloat(value)), .scale = 0 } };
-                    }
-                    // Unrepresentable in a 38-digit decimal: clean parse error, matching
-                    // the pre-existing oversized-integer-literal policy (error.Overflow).
-                    return error.Overflow;
+                    if (!std.math.isFinite(value)) return error.Overflow;
+                    break :blk_f .{ .DoubleLit = value };
                 } else {
                     // Standard decimal notation
                     var dot_idx: usize = 0;
@@ -5277,10 +5267,11 @@ pub const Parser = struct {
 
     // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=SignedNumericLiteralNotALink; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
     /// SONNY-6540: an <unsigned numeric literal> (ISO/IEC 39075:2024 21.2)
-    /// as the parser builds it: an integer or a decimal literal.
+    /// as the parser builds it: an integer, a decimal or (SONNY-6596) an
+    /// approximate numeric literal.
     fn isUnsignedNumericLiteral(e: ast.Expr) bool {
         return switch (e) {
-            .Int, .Decimal => true,
+            .Int, .Decimal, .DoubleLit => true,
             else => false,
         };
     }
@@ -5371,6 +5362,7 @@ pub const Parser = struct {
         return switch (e) {
             .Int => true,
             .Decimal => true,
+            .DoubleLit => true, // SONNY-6596: 1.5E0
             .Binary => true, // allow arithmetic expressions
             .Unary => true,
             .Ident => true,

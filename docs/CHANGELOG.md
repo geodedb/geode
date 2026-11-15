@@ -2616,6 +2616,29 @@
 
 ### Fixed
 
+- **A numeric literal with an exponent is an approximate number, a DOUBLE
+  (SONNY-6596).** ISO/IEC 39075:2024 21.2 makes `1.5E0`, `1E3` and `2.5e-1`
+  <approximate numeric literal>s, whose declared type is an approximate
+  numeric type (SR 19 c; Geode's is DOUBLE). The parser evaluated them as
+  exact DECIMALs at scale 15 (`RETURN 1.5E0` answered `1.500000000000000`,
+  declared DECIMAL on the wire), fell back to a scale-0 DECIMAL past 10^23
+  and refused `1.0e308`, a DOUBLE value. **BREAKING:** such a literal is now
+  a DOUBLE (`1.5E0` answers 1.5, declared `DOUBLE`; a stored one reads back
+  as a DOUBLE); `1.0e308` evaluates; a literal past the DOUBLE range
+  (`1e309`) is still a parse error. A literal without an exponent (`1.25`)
+  stays an exact DECIMAL. Arithmetic now takes an approximate operand
+  (20.21 SR 2: one approximate operand makes the result a DOUBLE): `+`,
+  `-`, `*`, `/`, `^` and monadic minus answered 22G03 for any DOUBLE or REAL
+  (a `$d` parameter, a `CAST(... AS DOUBLE)`, a stored double); a zero
+  divisor is 22012 and a non-finite result 22003. `round()` and
+  `st_point()` take a DOUBLE (they answered 22G03), and `vectorf32()`
+  refuses a component past the REAL range (it stored an infinity).
+  Regression: `zig build test-sonny6596-approximate-literal`; expectations
+  that relied on the exact reading (`1.5e38 + 1.5e38` overflowing a
+  DECIMAL, `floor(1e30)` past i64) now use exact operands
+  (`test-gap0905`, `test-sonny2739-float-narrowing`,
+  `test-sonny2769-integer-overflow`).
+
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no
