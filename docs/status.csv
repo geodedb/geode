@@ -8,7 +8,7 @@ GAP-0436,JsonbDepthGuard,SECURITY,TESTED,,,security,2026-02-18,src/types/jsonb.z
 GAP-0514-PHASE1A,GraphStoreRegressionCoverage,Scaffold,TESTED,,,engine,2026-04-11,tests/test_gap0514_graph_store_regression.zig,1
 GAP-0514-PHASE6-AGM,AuthGraphManagerUnitCoverage,Scaffold,TESTED,,,security,2026-06-11,tests/test_auth_graph_manager_unit.zig,13
 GAP-0531,DB/DBMS Introspection Procedures,Dispatch,TESTED,,,execution,2026-04-10,src/execution/meta_dispatch.zig,19
-GAP-0868,PROFILE runtime telemetry,WallClockTiming,TESTED,,,execution,2026-06-10,src/execution/statement_handlers.zig,1398
+GAP-0868,PROFILE runtime telemetry,WallClockTiming,TESTED,,,execution,2026-06-10,src/execution/statement_handlers.zig,1420
 GAP-0875,ResidualStubsBatch,McpCancellation,TESTED,,,mcp,2026-06-11,tests/test_gap0875_stubs_mcp.zig,10
 GAP-0875,ResidualStubsBatch,Regression,TESTED,,,core,2026-06-11,tests/test_gap0875_stubs.zig,16
 GAP-ENT-0002,EdgeCountFastPath,FastPath,TESTED,,,execution,2026-06-26,src/execution/match_operations.zig,1241
@@ -1450,7 +1450,7 @@ REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,s
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18882
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2408
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1463
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1485
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,MatchClassifiedAsMatch,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,162
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,NoPrincipalUnauthenticated,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,260
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserCreateQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,132
@@ -2202,14 +2202,14 @@ REQ-GQL-EXISTS-PROPS-001,GQLExistsSubquery,Properties,TESTED,,,engine,2026-01-15
 REQ-GQL-EXISTS-WHERE-002,ExistsWithWhere,WherePassthrough,TESTED,,,eval,2025-12-27,src/eval.zig,2212
 REQ-GQL-FLAGS-001,Shared Feature Flag Wrapper,INFRA,IMPL,,,core,2026-11-14,src/util/feature_flags.zig,6
 REQ-GQL-FOR-RETURN-AGGREGATION,ForStatement,ChainedFor,TESTED,,,engine,2026-10-11,src/execution/query_execution.zig,107
-REQ-GQL-FOR-RETURN-AGGREGATION,ForStatement,ReturnAggregation,TESTED,,,engine,2026-10-11,src/execution/statement_handlers.zig,884
+REQ-GQL-FOR-RETURN-AGGREGATION,ForStatement,ReturnAggregation,TESTED,,,engine,2026-10-11,src/execution/statement_handlers.zig,906
 REQ-GQL-FOR-RETURN-AGGREGATION,ForStatement,ReturnAggregation,TESTED,,,engine,2026-10-11,tests/test_for_aggregation.zig,1
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,AST,TESTED,,,parser,2026-08-29,src/gql/ast.zig,988
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyExecution,TESTED,,,engine,2026-08-29,src/execution/statement_handlers.zig,597
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyParse,TESTED,,,parser,2026-08-29,src/gql/parser.zig,7189
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyResultAggregation,TESTED,,,engine,2026-08-29,src/execution/statement_handlers.zig,467
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,WriteBodyComposition,TESTED,,,parser,2026-08-29,tests/test_for_write_body.zig,1
-REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,GpsActionClassification,TESTED,,,query_traits,2026-08-29,src/execution/statement_handlers.zig,1735
+REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,GpsActionClassification,TESTED,,,query_traits,2026-08-29,src/execution/statement_handlers.zig,1757
 REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,MutationClassification,TESTED,,,query_traits,2026-08-29,tests/test_for_write_body.zig,2
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,20
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,91
@@ -3036,7 +3036,7 @@ REQ-MULTI-GRAPH-011,MultiGraphIsolation,MatchQueryWithParams,TESTED,,,engine,202
 REQ-MULTI-GRAPH-012,MultiGraphIsolation,QueryExecution,TESTED,,,engine,2025-12-22,src/execution/query_execution.zig,1204
 REQ-MULTI-GRAPH-012,MultiGraphIsolation,QueryExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,39
 REQ-MULTI-GRAPH-013,MultiGraphIsolation,MatchCreate,TESTED,,,engine,2025-12-22,src/execution/match_operations.zig,4002
-REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,TESTED,,,engine,2025-12-22,src/execution/statement_handlers.zig,1124
+REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,TESTED,,,engine,2025-12-22,src/execution/statement_handlers.zig,1146
 REQ-MULTI-GRAPH-014,MultiGraphIsolation,ValuesMatch,IMPL,,,engine,2026-11-14,tests/test_gap_0193_priority_categories.zig,71
 REQ-MULTI-GRAPH-015,MultiGraphIsolation,CreateQuery,TESTED,,,engine,2025-12-22,src/execution/crud_operations.zig,1469
 REQ-MULTI-GRAPH-015,MultiGraphIsolation,CreateQuery,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,47
@@ -3296,10 +3296,10 @@ REQ-PERF-PHASE3-001,ConcurrencyOptimization,CATALOG_LOCK,EXEMPT,,,performance,20
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,,,performance,2025-10-16,build.zig,4803
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyOptimization,TESTING,EXEMPT,,,performance,2026-04-16,benchmarks/phase3_benchmarks.zig,8
 REQ-PERF-PHASE5-001,ColumnOptimization,BATCH_ALLOC,EXEMPT,,,performance,2025-10-16,src/execution.zig,937
-REQ-PERF-PHASE5-001,ColumnOptimization,HELPER_FN,EXEMPT,,,performance,2025-10-16,src/execution/statement_handlers.zig,964
+REQ-PERF-PHASE5-001,ColumnOptimization,HELPER_FN,EXEMPT,,,performance,2025-10-16,src/execution/statement_handlers.zig,986
 REQ-PERF-PHASE5-001,ColumnOptimization,TESTING,EXEMPT,,,performance,2025-10-16,benchmarks/phase5_1_column_allocation.zig,8
 REQ-PERF-PHASE5-002,ExecutionOptimization,ENV_REUSE,BENCHED,,,performance,2026-01-25,src/execution/match_operations.zig,9976
-REQ-PERF-PHASE5-002,ExecutionOptimization,PARAM_REUSE,BENCHED,,,performance,2026-01-25,src/execution/statement_handlers.zig,1106
+REQ-PERF-PHASE5-002,ExecutionOptimization,PARAM_REUSE,BENCHED,,,performance,2026-01-25,src/execution/statement_handlers.zig,1128
 REQ-PERF-PHASE5-002,ExecutionOptimization,TESTING,EXEMPT,,,performance,2025-11-16,benchmarks/phase5_4_environment_arrays.zig,8
 REQ-PERF-PHASE5-002,GraphOptimization,TESTING,EXEMPT,,,performance,2025-11-16,benchmarks/phase5_2_neighbors_lazy_sort.zig,8
 REQ-PERF-PHASE5-003,EvalOptimization,STRING_CONCAT,BENCHED,,,performance,2026-01-17,src/eval.zig,729
@@ -4747,7 +4747,7 @@ REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,CallerOwnedUserCopies,TESTED,,,s
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6312_user_list_ownership.zig,19
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,UserListOwnsRows,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,675
 REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6313_explain_policy_gates.zig,24
-REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,SameQuestionsAsTheGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1464
+REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,SameQuestionsAsTheGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1486
 REQ-SONNY-6313-TENANT-LIST-READ-ONLY,PerTenantIsolation,ReadOnlyClassification,TESTED,,,security,2026-11-12,src/execution/procedure_access.zig,79
 REQ-SONNY-6320-PASSWORD-HASHING,Argon2id Password Hashing,DeterministicHashAndConstantTimeVerify,TESTED,,,security,2026-11-12,tests/test_sonny6320_password_hashing.zig,18
 REQ-SONNY-6321-FLE-SCHEMA-BI,FieldLevelEncryption,AnnotationsBlindIndexEvidence,TESTED,,,security,2026-11-12,tests/test_sonny6321_fle_schema_blind_index.zig,14
@@ -4860,7 +4860,7 @@ REQ-SONNY-6351-LABELS-PARSE-DEFAULT,ReadSemanticsBatch,Regression,TESTED,,,engin
 REQ-SONNY-6351-LEGACY-RETURN-ERROR,LegacyReturnProjection,ErrorFreesRows,TESTED,,,engine,2026-11-12,src/execution/match_operations.zig,10182
 REQ-SONNY-6351-MATCH-CALL,ProcedureYield,MatchCallPerRow,TESTED,,,engine,2026-11-12,src/execution/match_operations.zig,4293
 REQ-SONNY-6351-PARSE-GQL-DEFAULT,Pagination Legality (US001),EmbeddedOrderKeyDefault,TESTED,,,planner,2026-11-12,src/lib.zig,646
-REQ-SONNY-6351-VALUES-MATCH-STRINGS,ValuesStatement,RowValueOwnership,TESTED,,,engine,2026-11-12,src/execution/statement_handlers.zig,1072
+REQ-SONNY-6351-VALUES-MATCH-STRINGS,ValuesStatement,RowValueOwnership,TESTED,,,engine,2026-11-12,src/execution/statement_handlers.zig,1094
 REQ-SONNY-6351-WITH-ORDER-KEY-ERROR,WithOrderBy,KeyErrorFailsStatement,TESTED,,,engine,2026-11-12,src/execution.zig,4819
 REQ-SONNY-6352-AUTH-READERS-LOCKED,GQL Auth DDL Persistence,CanUserAccessGraphLocked,TESTED,,,security,2026-11-12,src/security/auth_graph_manager.zig,2221
 REQ-SONNY-6352-AUTH-READERS-LOCKED,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6352_auth_verify_locking.zig,19
@@ -4906,7 +4906,7 @@ REQ-SONNY-6368-REMOVE-MAINTENANCE,FullText,RemoveProperty,TESTED,,,engine,2026-1
 REQ-SONNY-6368-REMOVE-MAINTENANCE,FullText,RemovedTextRebuildQueue,TESTED,,,fts,2026-11-12,src/execution/fts_index_ops.zig,375
 REQ-SONNY-6368-REMOVE-MAINTENANCE,FullText,StatementEndRebuild,TESTED,,,execution,2026-11-12,src/execution.zig,1971
 REQ-SONNY-6368-SET-LABEL-MAINTENANCE,Execution,SetLabel,TESTED,,,engine,2026-11-12,src/execution/property_mutation.zig,653
-REQ-SONNY-6369-EXPLAIN-POLICY-EXECUTOR-CHECKS,GPS EXPLAIN POLICY,ExecutorGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1565
+REQ-SONNY-6369-EXPLAIN-POLICY-EXECUTOR-CHECKS,GPS EXPLAIN POLICY,ExecutorGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1587
 REQ-SONNY-6369-LEGACY-HASH-TIMING,SecurePasswordVerify,LegacyCheckTimingEqualised,TESTED,,,security,2026-11-12,src/security/user_management.zig,664
 REQ-SONNY-6369-LEGACY-HASH-UPGRADE,SecurePasswordVerify,StoreUpgradedHash,TESTED,,,security,2026-11-12,src/security/auth_graph_manager.zig,2126
 REQ-SONNY-6369-LEGACY-HASH-UPGRADE,SecurePasswordVerify,UpgradeAtLogin,TESTED,,,security,2026-11-12,src/security/user_management.zig,1197
@@ -5238,7 +5238,7 @@ REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,,,cli,2026-11-15
 REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,,,cli,2026-11-15,tests/test_sonny6554_dsn_params.zig,28
 REQ-SONNY-6555-FOR-CHAIN-STAGE,ChainedWithAggregation,ForAndSubqueryStages,TESTED,,,engine,2026-11-14,tests/test_sonny6555_for_chain_stage.zig,29
 REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,,,engine,2026-11-14,src/execution/query_execution.zig,143
-REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,,,engine,2026-11-14,src/execution/statement_handlers.zig,814
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,,,engine,2026-11-14,src/execution/statement_handlers.zig,836
 REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,,,eval,2026-11-14,src/eval.zig,1883
 REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,,,eval,2026-11-14,tests/test_sonny6555_function_arity.zig,27
 REQ-SONNY-6555-NULL-ARGUMENTS,BuiltinFunctions,NullInNullOut,TESTED,,,eval,2026-11-14,tests/test_sonny6555_null_arguments.zig,25
@@ -5301,6 +5301,7 @@ REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,T
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,,,distributed,2026-11-15,src/distributed/raft_tde_storage.zig,55
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,,,distributed,2026-11-15,tests/test_sonny6571_raft_tde_storage.zig,19
 REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,,,governance,2026-11-15,tests/test_sonny6587_canary_markers.zig,11
+REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,,,engine,2026-11-15,src/execution/statement_handlers.zig,719
 REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,,,engine,2026-11-15,tests/test_sonny6587_for_write_after_with.zig,19
 REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,RangeArguments,TESTED,,,eval,2026-11-15,src/eval/call_handlers.zig,1710
 REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,WrongTypeRefused,TESTED,,,eval,2026-11-15,tests/test_sonny6587_list_functions.zig,16

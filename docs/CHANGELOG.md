@@ -2616,6 +2616,16 @@
 
 ### Fixed
 
+- **A writing FOR after a WITH leaks nothing and runs for every WITH row
+  (SONNY-6587).** `WITH 7 AS k FOR x IN [10, 20] CREATE ...` leaked the list
+  the FOR header computed on every run (SONNY-6449 fixed the same leak for a
+  FOR that reads). executeForWithBindings ran a writing body for the WITH's
+  first row only; the write allowlist admits only a one-row WITH there
+  (`MATCH (z) WITH z FOR x IN z.l CREATE ...` is refused whole, 0A000,
+  before any write), so no wrong write was reachable, and it now runs every
+  row. Regression: `zig build test-sonny6587-for-write-after-with` (every
+  session kind).
+
 - **range() refuses a non-integer argument and a zero step (SONNY-6587).**
   `range(start, end[, step])` (a Geode extension; its end stays exclusive,
   as documented since SONNY-6466) answered NULL for `range(1.5, 3)`,
