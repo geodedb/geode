@@ -14059,6 +14059,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6613_fwr_tests = b.addRunArtifact(sonny6613_fwr_tests);
     shardDep(test_step, &run_sonny6613_fwr_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6613-for-write-result", "Run SONNY-6613 item 3 regression (ISO/IEC 39075 14.1: a FOR whose body writes and has no RETURN answers no rows, not one empty row per element; with a RETURN it answers its rows: every session kind)").dependOn(&run_sonny6613_fwr_tests.step);
+    // SONNY-6613 item 1: a path a result keeps is the result's to free. See tests/test_sonny6613_path_ownership.zig.
+    const sonny6613_po_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6613_path_ownership.zig"), .target = target, .optimize = optimize });
+    sonny6613_po_mod.addImport("geode", root_mod);
+    sonny6613_po_mod.addImport("logging", logging_mod);
+    sonny6613_po_mod.addImport("rls_types", rls_types_mod);
+    const sonny6613_po_tests = b.addTest(.{ .root_module = sonny6613_po_mod });
+    const run_sonny6613_po_tests = b.addRunArtifact(sonny6613_po_tests);
+    shardDep(test_step, &run_sonny6613_po_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-path-ownership", "Run SONNY-6613 item 1 regression (a path value a result keeps - a named path, a variable-length one, through WITH, ORDER BY, DISTINCT, collect(), shortestPath, nodes()/relationships()/length() - leaks nothing on a leak-checked allocator: every session kind)").dependOn(&run_sonny6613_po_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
