@@ -18674,6 +18674,35 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6609: the TOTP secret is sealed at rest (AES-256-GCM, key from
+    // the HMAC key, user id bound), plaintext secrets are sealed on load, no
+    // loop2 snapshot is written for __geode_security, SecurityManager gets
+    // the recovery codes, DROP USER of a missing user is an error, and
+    // geode user show prints the MFA state. The scan regression spawns the
+    // CLI and a server.
+    const sonny6609_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6609_mfa_at_rest.zig", .step = "test-sonny6609-mfa-at-rest", .desc = "Run the SONNY-6609 regression (mfa_setup stores the TOTP secret sealed with AES-256-GCM bound to the user id, opening only for that user and HMAC key; a plaintext secret is sealed at load; SecurityManager is loaded with the stored secret and recovery codes and redeems a code once; DROP USER of a missing user is 42704, IF EXISTS a no-op)", .spawns = false },
+        .{ .file = "tests/test_sonny6609_mfa_at_rest_scan.zig", .step = "test-sonny6609-mfa-at-rest-scan", .desc = "Run the SONNY-6609 regression (after a real server enrolled a user no file of the data directory holds the TOTP secret and no loop2 snapshot of __geode_security is written; geode user show prints the MFA state; offline mfa enable opens the sealed secret; spawns the CLI and a server)", .spawns = true },
+    };
+    for (sonny6609_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.
