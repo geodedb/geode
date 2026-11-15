@@ -18,11 +18,12 @@
 // CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-APPLIED; FEATURE="MCPBackendTools"; ASPECT=EndpointTimeoutApplied; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
 const std = @import("std");
 const builtin = @import("builtin");
-const mcp_server = @import("mcp_server");
+const geode = @import("geode");
+const geode_mcp = @import("geode_mcp");
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
 
-const GeodeMcpServer = mcp_server.GeodeMcpServer;
+const GeodeMcpServer = geode_mcp.GeodeMcpServer;
 const linux = std.os.linux;
 
 const query_call =
@@ -185,4 +186,47 @@ test "SONNY-6589 (2): geode mcp --endpoint with a timeout starts and its tools g
         std.debug.print("SONNY-6589: geode mcp --endpoint {s}: exit {?d} after {d} ms (want 0, 1500..15000 ms, a Timeout answer to id 7)\nstdout:\n{s}\nstderr:\n{s}\n", .{ dsn, code, elapsed, stdout, stderr });
         return error.TestUnexpectedResult;
     }
+}
+
+test "SONNY-6589: geode's clients carry their timeout and name themselves in the HELLO" {
+    const a = std.testing.allocator;
+    const bridge = geode.zig_quic_bridge;
+
+    // geode mcp: the endpoint's timeout and, without a hello_name, geode-mcp.
+    {
+        const c = try geode_mcp.client.GeodeClient.init(a, "quic://127.0.0.1:3141?timeout_ms=2500");
+        defer c.deinit();
+        try std.testing.expectEqual(@as(u32, 2500), c.client.timeout_ms);
+        try std.testing.expectEqualStrings(geode_mcp.client.hello_name, c.client.hello_name.?);
+    }
+    {
+        const c = try geode_mcp.client.GeodeClient.init(a, "quic://127.0.0.1:3141?hello_name=my-app&hello_ver=9.9");
+        defer c.deinit();
+        try std.testing.expectEqual(@as(u32, 30_000), c.client.timeout_ms);
+        try std.testing.expectEqualStrings("my-app", c.client.hello_name.?);
+        try std.testing.expectEqualStrings("9.9", c.client.hello_ver.?);
+    }
+
+    // The CLI: geode-cli, the library's default wait.
+    {
+        var c = try bridge.initClient(a, "127.0.0.1", 3141, .{ .insecure = true }, null, null);
+        defer c.deinit();
+        try std.testing.expectEqual(@as(u32, 30_000), c.timeout_ms);
+        try std.testing.expectEqualStrings(bridge.cli_hello_name, c.hello_name.?);
+    }
+
+    // backup create / restore: --timeout, at most an hour.
+    {
+        var c = try bridge.initClientStrictTls(a, "127.0.0.1", 3141, .{ .insecure = true }, null, null, .{
+            .timeout_ms = bridge.timeoutMsFromSeconds(2),
+            .hello_name = "geode-backup",
+        });
+        defer c.deinit();
+        try std.testing.expectEqual(@as(u32, 2000), c.timeout_ms);
+        try std.testing.expectEqualStrings("geode-backup", c.hello_name.?);
+    }
+    try std.testing.expectEqual(@as(u32, 1000), bridge.timeoutMsFromSeconds(0));
+    try std.testing.expectEqual(@as(u32, 3_600_000), bridge.timeoutMsFromSeconds(3600));
+    try std.testing.expectEqual(@as(u32, 3_600_000), bridge.timeoutMsFromSeconds(86_400));
+    try std.testing.expectEqual(@as(u32, 3_600_000), bridge.timeoutMsFromSeconds(std.math.maxInt(u32)));
 }

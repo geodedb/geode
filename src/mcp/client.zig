@@ -55,19 +55,23 @@ pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
 /// precedence over a `user=` / `pass=` parameter (docs/DSN.md, SONNY-6550).
 /// The returned config's host slices `endpoint`.
 ///
-/// CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-REFUSED; FEATURE="MCPBackendTools"; ASPECT=UnappliedTimeoutRefused; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
-/// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is
-/// refused (`error.DsnTimeoutUnsupported`): geode-client-zig's
-/// `initFromConfig` copies no timeout into the client, whose QUIC handshake
-/// and HELLO each wait a fixed 30 s, so the parameter had no effect.
+/// CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-APPLIED; FEATURE="MCPBackendTools"; ASPECT=EndpointTimeoutApplied; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
+/// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is the
+/// config's `timeout_ms`, which geode-client-zig v0.3.18 `initFromConfig`
+/// applies to the QUIC handshake and the HELLO wait (geode refused the
+/// parameter while the library ignored it). The library's query, begin,
+/// commit, rollback and ping still wait a fixed 30 s for their answers.
+/// Without a `hello_name` / `hello_ver` the HELLO names geode's MCP client.
 fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
-    var parsed = try geode.dsn_params.parse(allocator, endpoint);
-    if (parsed.present.contains(.connect_timeout) or parsed.present.contains(.timeout_ms)) {
-        parsed.deinit(allocator);
-        return error.DsnTimeoutUnsupported;
-    }
-    return parsed.config;
+    const parsed = try geode.dsn_params.parse(allocator, endpoint);
+    var cfg = parsed.config;
+    if (!parsed.present.contains(.hello_name)) cfg.hello_name = hello_name;
+    if (!parsed.present.contains(.hello_ver)) cfg.hello_ver = build_options.version;
+    return cfg;
 }
+
+/// The HELLO `client_name` of geode's MCP backend client.
+pub const hello_name = "geode-mcp";
 
 /// SONNY-6494: check an endpoint DSN without building a client (`geode mcp`
 /// startup). The error maps through `endpointErrorMessage`.

@@ -113,12 +113,8 @@ fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
 }
 
 fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
-    switch (msg) {
-        .append_entries => |ae| {
-            if (ae.entries.len > 0) allocator.free(ae.entries);
-        },
-        else => {},
-    }
+    // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
+    raft_lib.InProcessTransport.freeMessage(allocator, msg);
 }
 
 /// Seed `<raft_dir>` with a FileStorage-backed node at `id` carrying persisted

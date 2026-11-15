@@ -190,7 +190,7 @@ test "SONNY-6453: initClientStrictTls refuses no trust material under production
     defer resetPostureEnv();
     resetPostureEnv();
     _ = setenv("GEODE_ENV", "production", 1);
-    if (bridge.initClientStrictTls(a, SERVER_IP, 1, .{}, null, null)) |client| {
+    if (bridge.initClientStrictTls(a, SERVER_IP, 1, .{}, null, null, .{})) |client| {
         var c = client;
         c.deinit();
         return error.ImplicitUnverifiedConnectionAllowed;

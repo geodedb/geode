@@ -2874,6 +2874,54 @@
 
 ### Fixed
 
+- **Cluster Raft: a committed entry is durable before it is applied, and
+  votes and replies leave a node only after the state they announce is
+  durable (SONNY-6611 item 7, SONNY-6592; raft v0.2.0).** `RaftNode.drainReady`
+  applied a Ready's committed entries to the graph before the raft
+  library's `advance()` wrote the Ready's entries to storage. A follower
+  that gets an entry and its commit in one AppendEntries held the entry only
+  in memory when it applied it, so a crash at that moment left the mutation
+  in the graph with no log entry for it. `drainReady` now persists
+  (`advancePersist()`), then sends the Ready's messages, then applies, then
+  calls `advanceApply()`. raft v0.2.0 queues votes, a candidate's
+  RequestVote and every vote / append / snapshot reply in `Ready.messages`
+  instead of sending them from `step()` / `tick()`, so geode's SONNY-6563
+  workaround (holding everything the library sent until `advance()`) is
+  gone; leader AppendEntries, heartbeats and InstallSnapshot still go out
+  at once, as before. The library's log slices now own their entry data
+  (it leaked every stable entry's data on each read). geode's InstallSnapshot
+  conversion kept a pointer to the snapshot chunk the library frees as soon
+  as its send returns, and the outbox encoded it later; the queued message
+  now owns a copy. A node outside its own voter set no longer starts
+  elections. In-process tests wired with `setInnerTransport` get their
+  votes and replies through `drainReady`. Regression: `zig build
+  test-sonny6611-raft-persist-before-apply` (FileStorage and TDE storage;
+  before the fix "entry 1 was applied while storage held last index 0").
+
+- **`geode mcp` applies an endpoint DSN's timeout; backup and restore no
+  longer run the QUIC handshake on a thread of their own (SONNY-6589 item 2,
+  SONNY-6606 item 4; geode-client-zig v0.3.18).** The client library now
+  applies `Config.timeout_ms` to the QUIC handshake and the HELLO wait, and
+  `page_size`, `tls` and `hello_name` / `hello_ver` / `conformance` through
+  `initFromConfig`. **User-visible:** `geode mcp --endpoint` takes
+  `connect_timeout` / `timeout` / `timeout_ms` again (it refused them with
+  "cannot apply connect_timeout" while the library ignored them): a tool or
+  resource on a server that does not answer reports `Timeout` after that
+  time instead of after 30 s. `timeout` is read as milliseconds, like
+  `timeout_ms` (the library's rule). The library's query, transaction and
+  ping requests still wait a fixed 30 s for their answers. `geode backup
+  create --server` and `geode restore --server` pass `--timeout` (at most an
+  hour) to the client, which gives up on the handshake itself; the message
+  ("no QUIC handshake within N s") is unchanged. geode's clients name
+  themselves in the library's HELLO: `geode-mcp` (unless the DSN sets
+  `hello_name`), `geode-cli`, `geode-backup`, `geode-restore`,
+  `geode-migrate`, with geode's version. **BREAKING:** a `geode mcp`
+  `grpc://` endpoint with `insecure=true` but without `tls=0` now fails with
+  `TlsNotImplemented` (the library's gRPC client has no TLS) instead of
+  connecting in plaintext. Regressions: `zig build test-sonny6589-mcp-timeout`
+  (timeouts of 2 s and 4 s honoured, in process and through `geode mcp
+  --stdio`), `test-sonny6606-backup-handshake-timeout`.
+
 - **A graph's first-read hydration no longer quarantines a healthy graph,
   or hydrates stale data, when a checkpoint runs at the same time
   (SONNY-6597).** The hydration scan (`hydration_scan.scanShard`) reads

@@ -138,8 +138,15 @@ SONNY-6279.
 
 - **Consensus:** Raft leader election and log replication are functional.
   With a data directory the term, vote and log survive a restart
-  (`zig build test-raft-hardstate-durability`), and a vote is durable before
-  the grant leaves the node (`test-sonny6563-vote-persist-before-send`).
+  (`zig build test-raft-hardstate-durability`). `RaftNode.drainReady`
+  persists each Ready (raft v0.2.0 `advancePersist()`) before it sends the
+  votes and replies the Ready holds and before it applies committed entries:
+  a vote is durable before the grant leaves the node
+  (`test-sonny6563-vote-persist-before-send`), and an entry is durable
+  before it is applied or acknowledged
+  (`test-sonny6611-raft-persist-before-apply`). Leader AppendEntries,
+  heartbeats and InstallSnapshot go out at once, each with its own copy of
+  the entry and snapshot data.
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and

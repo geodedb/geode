@@ -5900,6 +5900,7 @@ pub fn build(b: *std.Build) void {
     {
         const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
         bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        bridge_mod.addImport("build_options", build_options_mod);
         const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_tls_fail_closed.zig"), .target = target, .optimize = optimize }) });
         tests.root_module.addImport("transport/quic", transport_quic_mod);
         tests.root_module.addImport("zig_quic_bridge", bridge_mod);
@@ -6106,6 +6107,7 @@ pub fn build(b: *std.Build) void {
     {
         const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
         bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        bridge_mod.addImport("build_options", build_options_mod);
         const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_ipv6_host_port.zig"), .target = target, .optimize = optimize }) });
         tests.root_module.addImport("zig_quic_bridge", bridge_mod);
         tests.root_module.link_libc = true;
@@ -6170,6 +6172,7 @@ pub fn build(b: *std.Build) void {
     {
         const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
         bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        bridge_mod.addImport("build_options", build_options_mod);
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_cli_no_ca_default.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("transport/quic", transport_quic_mod);
@@ -11162,16 +11165,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6589-cli-messages", "Run SONNY-6589 items 4-5 regression (a refused geode shell \\connect prints the endpoint message, not a bare error name or the address, and the shell keeps its session; geode backup create names the parsed host:port of --server when it fails)").dependOn(&run_tests.step);
     }
-    // SONNY-6589 (2): an MCP endpoint timeout geode cannot apply is refused.
+    // SONNY-6589 (2): an MCP endpoint timeout bounds the connect.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6589_mcp_timeout.zig"), .target = target, .optimize = optimize });
-        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
         mod.link_libc = true;
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6589-mcp-timeout", "Run SONNY-6589 item 2 regression (an MCP endpoint DSN carrying connect_timeout, timeout or timeout_ms, which geode-client-zig cannot apply, is refused with a message by the MCP tools at once and by geode mcp --endpoint at startup, instead of waiting 30 s on a server that does not answer)").dependOn(&run_tests.step);
+        b.step("test-sonny6589-mcp-timeout", "Run SONNY-6589 item 2 regression (an MCP endpoint DSN's connect_timeout, timeout or timeout_ms bounds the wait: a tool on a server that does not answer reports Timeout after the configured time, in process and through geode mcp --endpoint over stdio, not at once and not after 30 s; the MCP, CLI and backup clients carry their timeout and HELLO name)").dependOn(&run_tests.step);
     }
     // SONNY-6589 (6) / SONNY-6554 (7): a graph that cannot be opened is
     // opened and logged once per boot.

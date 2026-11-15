@@ -3738,6 +3738,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
         .{ .insecure = insecure, .ca_cert_path = ca_cert_path },
         null,
         null,
+        .{},
     );
 
     client.connect() catch |err| {
