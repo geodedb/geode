@@ -497,14 +497,15 @@
         // 2026-11-15: v0.1.24 (acd8f68, SONNY-6622) — recovery and compaction
         // fail closed (WalEncryptionMismatch / WalAuthFailed / WalCorrupted)
         // on data they cannot read; only a genuine torn tail is truncated on
-        // open. Lockstep with raft v0.2.2, which pins the same wal. v0.1.25
-        // (truncateAfter fails closed too) was not tagged yet. Known diamond:
-        // graph-storage v0.4.16 and timeseries-storage v0.2.20 still pin
-        // wal v0.1.23 (their re-pin is the storage lane's); no wal type
-        // crosses between geode and those libraries.
+        // open. 2026-11-15: v0.1.25 (eca478c, SONNY-6628) — truncateAfter
+        // fails closed too instead of cutting kept records after a damaged
+        // one. Known diamond: raft v0.2.2 pins wal v0.1.24, graph-storage
+        // v0.4.16 and timeseries-storage v0.2.20 pin v0.1.23; build.zig
+        // points all three libraries' "wal" import at this module (two wal
+        // packages cannot share one compilation) until they re-pin.
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.24#acd8f6810decf5e3a9e6c9c3056c59003b7bca36",
-            .hash = "wal-0.1.24-EqPqpuQPCABjGgoaO2lYjoNwcfM8d6Cvg04FdJTh3qkM",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.25#eca478cae4784f4dc311acab31659beaea065508",
+            .hash = "wal-0.1.25-EqPqpqU_CACws_QxxCu906MZjIvJFGLkRmXHvLAY_i4U",
         },
 
         // Page-based graph storage engine

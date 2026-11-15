@@ -1275,9 +1275,9 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622: geode and raft v0.2.2 pin wal v0.1.24 (fail-closed
-    // recovery); graph-storage v0.4.16 and timeseries-storage v0.2.20 still
-    // pin v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
+    // SONNY-6622, SONNY-6628: geode pins wal v0.1.25 (fail-closed recovery,
+    // compaction and truncateAfter); raft v0.2.2 pins v0.1.24,
+    // graph-storage v0.4.16 and timeseries-storage v0.2.20 v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
     // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
     // both libraries compile against geode's wal module, as timeseries-storage
     // does for thread_pool below. Remove once both pin geode's wal version.
@@ -1289,6 +1289,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const raft_ext_mod = raft_dep.module("raft");
+    // SONNY-6628: raft v0.2.2 pins wal v0.1.24, geode v0.1.25 (truncateAfter
+    // fails closed); one wal per compilation (see graph_storage_mod above).
+    raft_ext_mod.addImport("wal", wal_ext_mod);
 
     // ==========================================================================
     // Phase 7 External Library Dependencies (Extracted Domain Libraries)
