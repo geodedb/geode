@@ -2616,6 +2616,33 @@
 
 ### Fixed
 
+- **`MATCH ... WITH ... FOR x IN <list>` may write (SONNY-6613).** ISO/IEC
+  39075:2024 14.8: a FOR extends the working table before it, and a
+  data-modifying statement may follow it. `MATCH (z:L) WITH z FOR x IN z.l
+  CREATE (:M {k: z.k, x: x})` (and `MATCH ... FOR ...`, and a `MATCH ... SET`
+  body) was refused with 0A000; it now runs the body for every row of the
+  WITH and every element of that row's list. The WITH's rows are read as a
+  write step reads them: the WHERE before and after it, DISTINCT, grouping
+  (`WITH n.g AS g, collect(n.i) AS l FOR x IN l ...`), ORDER BY and
+  SKIP/LIMIT, in the session's tenant scope and under its row policies. The
+  whole statement is undone if an element fails. A body that uses a WITH
+  node as a pattern endpoint (`CREATE (z)-[:T]->(...)`: the body sees it as
+  a value) is still refused, as is a variable the WITH dropped (42000).
+  Regression: `zig build test-sonny6613-match-with-for-write`;
+  `test-sonny6587-for-write-after-with` and `test-sonny3040-chained-writes`
+  now assert the writes they used to assert refused.
+
+- **A statement-leading UNWIND that writes is its FOR (SONNY-6613).**
+  `UNWIND [0] AS i CREATE (...)` was a syntax error (42000) only because a
+  statement could not begin with UNWIND; it is now read as `FOR i IN [0]
+  CREATE (...)` and writes exactly what that FOR writes: one CREATE, MERGE or
+  `MATCH ... SET` per element, no rows without a RETURN, nothing for an
+  empty list, nothing at all when an element fails or the write budget trips
+  (53200), and inside a transaction ROLLBACK undoes it, over QUIC and gRPC
+  alike. Regression: `zig build test-sonny6613-leading-unwind-write`;
+  `test-sonny3139-write-shapes` and `test-sonny-write-allowlist-r4-transport`
+  now assert the writes and the transaction behaviour instead of the 42000.
+
 - **A path value a result keeps no longer leaks (SONNY-6613).** Every
   statement that kept a path in a row (`MATCH p = ... RETURN p`, a
   variable-length path, `WITH p`, `ORDER BY length(p)`, `DISTINCT`,

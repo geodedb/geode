@@ -723,7 +723,8 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     // CANARY: REQ=REQ-SONNY-6587-FOR-WRITE-EVERY-ROW; FEATURE="ForStatement"; ASPECT=WriteBodyAfterWith; STATUS=TESTED; TEST=tests/test_sonny6587_for_write_after_with.zig; OWNER=engine; UPDATED=2026-11-15
     // SONNY-6587 item 5: every row of the WITH, each with its own list (ISO/IEC
     // 39075:2024 14.8); the first row only was used. The write allowlist
-    // admits a one-row WITH here today (write_shape.allowWithFor). The list
+    // admits a WITH of values (write_shape.allowWithFor) and, SONNY-6613,
+    // MATCH ... WITH (write_shape.allowMatchWithFor) here. The list
     // is the statement's (`lentAllocator`), as a header's in
     // `expandForTable` (SONNY-6449): it leaked on every run.
     var acc = ForBodyAccumulator{};
