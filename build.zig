@@ -14050,6 +14050,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6587_fww_tests = b.addRunArtifact(sonny6587_fww_tests);
     shardDep(test_step, &run_sonny6587_fww_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6587-for-write-after-with", "Run SONNY-6587 item 5 regression (ISO/IEC 39075 14.8: a FOR whose body writes - CREATE, MATCH ... SET - after a WITH runs for every row of the WITH, not the first only: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6587_fww_tests.step);
+    // SONNY-6613 item 3: a writing FOR with no RETURN answers no rows. See tests/test_sonny6613_for_write_result.zig.
+    const sonny6613_fwr_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6613_for_write_result.zig"), .target = target, .optimize = optimize });
+    sonny6613_fwr_mod.addImport("geode", root_mod);
+    sonny6613_fwr_mod.addImport("logging", logging_mod);
+    sonny6613_fwr_mod.addImport("rls_types", rls_types_mod);
+    const sonny6613_fwr_tests = b.addTest(.{ .root_module = sonny6613_fwr_mod });
+    const run_sonny6613_fwr_tests = b.addRunArtifact(sonny6613_fwr_tests);
+    shardDep(test_step, &run_sonny6613_fwr_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-for-write-result", "Run SONNY-6613 item 3 regression (ISO/IEC 39075 14.1: a FOR whose body writes and has no RETURN answers no rows, not one empty row per element; with a RETURN it answers its rows: every session kind)").dependOn(&run_sonny6613_fwr_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
