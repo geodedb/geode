@@ -368,7 +368,9 @@ pub fn resolvedDataDir() ?[]const u8 {
 /// SONNY-6345: whether `data_dir` holds auth state (a registered
 /// `__geode_security` graph), read without creating or locking anything.
 pub fn hasAuthState(allocator: std.mem.Allocator, data_dir: []const u8) !bool {
-    return geode.graph_storage_adapter.graphRegisteredOnDisk(allocator, data_dir, graph_store.SECURITY_GRAPH_NAME);
+    // SONNY-6616: the registry is sealed under GEODE_TDE_KEY.
+    const key = try geode.tde_file_encryption.loadKey(allocator);
+    return geode.graph_storage_adapter.graphRegisteredOnDisk(allocator, data_dir, graph_store.SECURITY_GRAPH_NAME, key);
 }
 
 // -- Offline Auth Manager Initialization --

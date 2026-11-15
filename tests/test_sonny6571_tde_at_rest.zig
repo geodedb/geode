@@ -121,6 +121,10 @@ const Needles = struct {
     ts_value: i64,
     ts_value_le: [8]u8,
     index_name: []const u8,
+    /// SONNY-6616: a graph's name (graph_registry.dat), and the name of a
+    /// graph that is created and dropped (dropped_graphs.dat).
+    graph_name: []const u8,
+    dropped_graph_name: []const u8,
 
     fn make(aa: std.mem.Allocator) !Needles {
         const n = randomWideInt();
@@ -133,6 +137,8 @@ const Needles = struct {
             .ts_value = tv,
             .ts_value_le = tv_le,
             .index_name = try std.fmt.allocPrint(aa, "sonny6590idx{s}", .{try randomHex(aa, 6)}),
+            .graph_name = try std.fmt.allocPrint(aa, "sonny6616g{s}", .{try randomHex(aa, 6)}),
+            .dropped_graph_name = try std.fmt.allocPrint(aa, "sonny6616dropped{s}", .{try randomHex(aa, 6)}),
             .tde_key = try randomHex(aa, 32),
             .label = try std.fmt.allocPrint(aa, "Sonny6571L{s}", .{try randomHex(aa, 6)}),
             .key = try std.fmt.allocPrint(aa, "sonny6571k{s}", .{try randomHex(aa, 6)}),
@@ -306,10 +312,11 @@ const Finding = struct {
 /// prop_rev_index_file_name). The schema-names test below requires them to
 /// hold no names either; it stays red until they are encrypted. The other
 /// tests fail on any other hit, and on any value anywhere.
-const schema_name_files = [_][]const u8{ "labels.dict", "props.idx", "prop_exact.idx", "prop_rev.idx" };
+const schema_name_files = [_][]const u8{ "labels.dict", "props.idx", "prop_exact.idx", "prop_rev.idx", "graph_registry.dat", "dropped_graphs.dat" };
 
 fn isSchemaName(what: []const u8, basename: []const u8) bool {
-    const is_name = std.mem.eql(u8, what, "label") or std.mem.eql(u8, what, "key") or std.mem.eql(u8, what, "reltype") or std.mem.eql(u8, what, "index");
+    const is_name = std.mem.eql(u8, what, "label") or std.mem.eql(u8, what, "key") or std.mem.eql(u8, what, "reltype") or std.mem.eql(u8, what, "index") or
+        std.mem.eql(u8, what, "graph") or std.mem.eql(u8, what, "dropped");
     if (!is_name) return false;
     for (schema_name_files) |f| {
         if (std.mem.eql(u8, f, basename)) return true;
@@ -348,6 +355,8 @@ fn scanTree(
             .{ .what = "number", .needle = &needles.number_le },
             .{ .what = "tsvalue", .needle = &needles.ts_value_le },
             .{ .what = "index", .needle = needles.index_name },
+            .{ .what = "graph", .needle = needles.graph_name },
+            .{ .what = "dropped", .needle = needles.dropped_graph_name },
         };
         for (checks) |c| {
             if (std.mem.indexOf(u8, bytes, c.needle) != null) {
@@ -477,6 +486,11 @@ fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Sc
         try std.fmt.allocPrint(aa, "CREATE INDEX {s} ON :{s}({s})", .{ needles.index_name, needles.label, needles.key }),
         try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN n.{s} AS k ORDER BY k", .{ needles.label, needles.key }),
         try std.fmt.allocPrint(aa, "CALL geode.ts.insert(6590, 'sonny6590', 1000, {d})", .{needles.ts_value}),
+        // SONNY-6616: graph names reach graph_registry.dat and, once a graph
+        // is dropped, dropped_graphs.dat.
+        try std.fmt.allocPrint(aa, "CREATE GRAPH {s}", .{needles.graph_name}),
+        try std.fmt.allocPrint(aa, "CREATE GRAPH {s}", .{needles.dropped_graph_name}),
+        try std.fmt.allocPrint(aa, "DROP GRAPH {s}", .{needles.dropped_graph_name}),
     };
     for (writes) |q| gpa.free(try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, q));
     try expectSingleReads(gpa, aa, io, certs, needles, port, &nodes[0]);

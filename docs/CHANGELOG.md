@@ -611,6 +611,26 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **Graph names sealed under TDE; a wrong key is reported as such
+  (SONNY-6616). Requires graph-storage 0.4.20.** `graph_registry.dat` and
+  `dropped_graphs.dat` held every graph's name in plaintext beside the
+  encrypted stores. They are sealed under `GEODE_TDE_KEY`
+  (`GraphRegistry.saveToFileWith`; the dropped list with geode's own
+  consumer kind); a plaintext pair from an earlier build is rewritten sealed
+  when the data directory opens. **BREAKING:** without the key (or under
+  another one) the whole data directory is refused (`SideFileEncrypted` /
+  `SideFileAuthFailed`); it used to open and refuse graph by graph, and an
+  older geode cannot read a sealed registry (no downgrade). geode's
+  `prop_exact.idx` / `prop_rev.idx` are sealed with consumer kinds (they
+  borrowed graph-storage's `prop_chain_index`; files sealed that way are
+  rebuilt). A graph whose manifests or WAL do not authenticate under the key
+  answers 58000 `EncryptionKeyMismatch` with an operator message (it was
+  `NoManifest`). The offline auth CLI's registry probe
+  (`graphRegisteredOnDisk`) and `geode storage verify --check
+  tde-page-tail` read the sealed registry with the key; the page-tail scan
+  without the key reports that it needs it. Regression:
+  `test-sonny6616-tde-residuals` (5 tests) and the 6571 scans, which now
+  look for a graph's name and a dropped graph's name.
 - **timeseries-storage v0.2.21 (SONNY-6615): a time-series WAL that cannot
   be decoded is refused, not truncated.** 0.2.20 read the frames of a
   `ts.wal` it could not decode (another key mode, another key, mid-log

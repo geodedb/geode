@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T23:14:55.123422476Z",
+  "generated_at": "2026-11-15T23:17:00.998806879Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80700,6 +80700,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6616-DATA-DIR-NAMES-SEALED",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "SealedGraphNames",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6616_tde_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6616-EXACT-INDEX-INVALIDATE-PAIR",
       "features": [
         {
@@ -86148,7 +86167,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4275
+      "TESTED": 4276
     },
     "by_aspect": {
       "2PC": 3,
@@ -89211,6 +89230,7 @@
       "SealRefusesUnsignedLegacy": 1,
       "SealedExactIndexFiles": 1,
       "SealedFleRoleGrants": 1,
+      "SealedGraphNames": 1,
       "SearchHitHydrate": 1,
       "SearchHitHydrateNegativeControl": 1,
       "SearchHitHydrateTenantScoped": 1,

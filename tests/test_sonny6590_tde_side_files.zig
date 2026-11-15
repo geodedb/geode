@@ -553,13 +553,11 @@ test "SONNY-6590: a graph whose sealed labels.dict fails authentication, is plai
         try expectIndexed(adapter, "okg", nok);
     }
 
-    // No key at all: the sealed side files cannot be read.
+    // No key at all: the sealed files cannot be read. Since SONNY-6616 the
+    // data directory's graph registry is sealed too, so the open of the
+    // whole directory is refused before any graph is.
     {
-        const adapter = try StorageAdapter.init(testing.allocator, path, tdeConfig(null));
-        defer adapter.deinit();
-        const got = adapter.getOrCreateGraph("okg");
-        std.debug.print("[SONNY-6590] no key: {any}\n", .{got});
-        try testing.expectError(error.SideFileEncrypted, got);
+        try testing.expectError(error.SideFileEncrypted, StorageAdapter.init(testing.allocator, path, tdeConfig(null)));
         try expectOperatorMessage(error.SideFileEncrypted, key);
     }
 
