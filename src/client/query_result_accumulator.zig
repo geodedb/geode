@@ -738,6 +738,7 @@ fn writeMermaidId(out: anytype, id: []const u8) !void {
     }
 }
 
+/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-15
 /// Render `rows` as a DOT digraph or a Mermaid flowchart; returns how many
 /// cells held no graph element (not drawn).
 fn renderGraph(kind: GraphKind, allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: anytype) !usize {
