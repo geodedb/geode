@@ -62,8 +62,8 @@ pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
 /// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is the
 /// config's `timeout_ms`, which geode-client-zig v0.3.18 `initFromConfig`
 /// applies to the QUIC handshake and the HELLO wait (geode refused the
-/// parameter while the library ignored it). The library's query, begin,
-/// commit, rollback and ping still wait a fixed 30 s for their answers.
+/// parameter while the library ignored it). Since v0.3.19 (SONNY-6617) the
+/// query, begin, commit, rollback and ping answers wait it too.
 /// Without a `hello_name` / `hello_ver` the HELLO names geode's MCP client.
 fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
     const parsed = try geode.dsn_params.parse(allocator, endpoint);

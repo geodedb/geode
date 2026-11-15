@@ -320,7 +320,7 @@ parameter's value.
 
 | Parameter | Aliases | Type | Default | Description |
 |-----------|---------|------|---------|-------------|
-| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds (geode-client-zig, v0.3.18 included, reads `timeout` as milliseconds, SONNY-6569; geode validates it with the library's rule until the library is fixed) |
+| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds (geode-client-zig, v0.3.19 included, reads `timeout` as milliseconds, SONNY-6569; geode validates it with the library's rule until the library is fixed) |
 | `timeout_ms` | - | integer | 30000 | Connection timeout in milliseconds |
 
 **Note**: When both `connect_timeout` (seconds) and `timeout_ms` (milliseconds) are specified, `timeout_ms` takes precedence.
@@ -336,14 +336,17 @@ geode parses the `geode mcp --endpoint` DSN and the CLI's `--dsn` strictly
 value silently became the default).
 
 **What the timeout bounds.** `geode mcp` applies the endpoint's timeout
-(SONNY-6589, geode-client-zig v0.3.18): it is how long the client waits
-for the QUIC handshake and for the HELLO answer, so a tool or resource on
-a server that does not answer reports `Timeout` after that time. Before
-v0.3.18 the library ignored it and waited 30 s, and `geode mcp` refused the
-parameter. `timeout` is read as milliseconds, like `timeout_ms`
-(geode-client-zig's rule). The library's query, transaction (begin,
-commit, rollback) and ping requests still wait a fixed 30 s for their
-answers whatever the timeout. `geode query --dsn` takes the DSN timeout in
+(SONNY-6589, SONNY-6617, geode-client-zig v0.3.19): it is how long the
+client waits for the server — the QUIC handshake or gRPC connect, the
+HELLO answer, the first answer to a query, begin, commit, rollback or ping,
+and a write held up by flow control (a query's later pages wait at most
+5 s each, or the timeout if shorter) — so a tool or resource on a server
+that does not answer reports `Timeout` after that time. Before v0.3.18 the
+library ignored it and waited 30 s, and `geode mcp` refused the parameter;
+v0.3.18 applied it to the handshake and HELLO only. `timeout` is read as
+milliseconds, like `timeout_ms` (geode-client-zig's rule). The library's
+lenient parser (not used by geode) falls back to the default for an
+out-of-range value; geode parses strictly and refuses it. `geode query --dsn` takes the DSN timeout in
 place of `--timeout` (rounded up to whole seconds), which bounds the QUIC
 handshake and the whole query; `geode shell --dsn`, which has no
 `--timeout`, waits that long for the handshake (also on `\connect`) and

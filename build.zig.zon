@@ -472,8 +472,15 @@
             // Config.tls. Moves dns to v0.1.28 and thread_pool to v0.2.11,
             // geode's own pins (its dns and thread_pool diamonds are gone).
             // Same quic v0.1.51.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.18#33623cc3d9eeafb32bccd4d436bd44080561524c",
-            .hash = "geode_client_zig-0.3.18-8ysbV6x1DQAvP0WVDiXvCjNK3Nf33K1rQKEpXw1QKXcO",
+            // 2026-11-15: v0.3.19 (3fe8dfc, SONNY-6617) — query, begin,
+            // commit, rollback, ping and blocked writes wait timeout_ms (a
+            // fixed 30 s before); the gRPC connect, reads and writes honour it
+            // (portable non-blocking socket); the lenient parser falls back to
+            // the default for an out-of-range timeout or page_size; the HELLO
+            // defaults send the library version and conformance "min". Same
+            // dependencies as v0.3.18.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.19#3fe8dfc4284f85309ca6b8d7ceb932b78ca5c58b",
+            .hash = "geode_client_zig-0.3.19-8ysbVx_uDQBhIxfqzQWDAgBSrOa_6ltpacyOTD0scavF",
         },
 
         // =======================================================================

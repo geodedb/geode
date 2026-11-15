@@ -2902,6 +2902,11 @@
   the schema/stats offline documents. Regressions: `zig build
   test-sonny6617-raft-persist-failure` (the node's FileStorage directory
   made read-only, then writable), `zig build test-sonny6617-cli-dsn-timeout`.
+  geode-client-zig v0.3.19 (SONNY-6617) applies the timeout to every wait:
+  query, transaction and ping answers and a write held up by flow control
+  (they waited a fixed 30 s), and the gRPC connect, reads and writes (they
+  waited for the kernel or the server); its HELLO defaults send its version
+  and conformance `min`.
 
 - **Cluster Raft: a committed entry is durable before it is applied, and
   votes and replies leave a node only after the state they announce is

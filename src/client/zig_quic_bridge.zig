@@ -19,10 +19,10 @@ pub const HostPort = struct {
 /// What a CLI client is and how long it waits (geode-client-zig v0.3.18
 /// applies both through `initFromConfig`).
 pub const ClientOptions = struct {
-    /// How long `connect` waits for the QUIC handshake and `sendHello` for
-    /// the HELLO answer, 1..3600000 ms (`connect` refuses anything else with
-    /// `error.InvalidTimeout`). The library's query, begin, commit, rollback
-    /// and ping wait a fixed 30 s whatever this is.
+    /// How long the client waits for the server, 1..3600000 ms (`connect`
+    /// refuses anything else with `error.InvalidTimeout`): the QUIC
+    /// handshake, the HELLO answer and, since geode-client-zig v0.3.19
+    /// (SONNY-6617), each request's answer and a blocked write.
     timeout_ms: u32 = zig_client.config.DEFAULT_TIMEOUT_MS,
     /// The HELLO `client_name` (`client_version` is geode's version).
     hello_name: []const u8 = cli_hello_name,
