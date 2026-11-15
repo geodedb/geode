@@ -5339,6 +5339,7 @@ REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,2609
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,tests/test_sonny6613_leading_let_unwind.zig,12
 REQ-SONNY-6613-LEADING-UNWIND,Unwind,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,7208
+REQ-SONNY-6613-PROFILE-CPU-TIME,PROFILE,NoCopiedCpuTime,TESTED,,,engine,2026-11-15,tests/test_sonny6613_profile_cpu_time.zig,11
 REQ-SONNY-6613-SINGLE-QUOTED-ALIAS,GQLParser,AliasIsIdentifier,TESTED,,,parser,2026-11-15,tests/test_sonny6613_quoted_alias.zig,10
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
