@@ -18850,11 +18850,12 @@ pub fn build(b: *std.Build) void {
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
     }
-    // SONNY-6561 / SONNY-6563 regressions, with tests/all_tests.zig's module
-    // graph (the e2e ones spawn this build's geode).
+    // SONNY-6561 / SONNY-6562 / SONNY-6563 regressions, with
+    // tests/all_tests.zig's module graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
+        .{ .file = "tests/test_sonny6562_wire_metadata.zig", .step = "test-sonny6562-wire-metadata", .desc = "Run SONNY-6562 regression (over QUIC and gRPC against a real geode serve: every declared column type is the ISO/IEC 39075 22.18/22.19 combination of the column's values - an exact numeric DECIMAL, not FLOAT; a UNION, ORDER BY, CASE, collect() or OPTIONAL MATCH column from all its rows; ANY across base types; a streamed node scan never declares a type its later rows contradict; ordered/order_keys exactly when the result's statement ends in an ORDER BY, FOR, chains, UNION and CALL included; PROFILE reports no spill under GEODE_SPILL_THRESHOLD_BYTES)", .weight = 2 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
     };
     for (sonny656x_regressions) |reg| {
