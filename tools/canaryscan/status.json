@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T14:25:19.484688889Z",
+  "generated_at": "2026-11-15T14:26:03.986001991Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78442,6 +78442,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6594-AUTH-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_auth_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_auth_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6594-INDEX-BUILD-READ-FAILURE",
       "features": [
         {
@@ -83608,7 +83627,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4152
+      "TESTED": 4153
     },
     "by_aspect": {
       "2PC": 3,
@@ -86382,7 +86401,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 370,
+      "Regression": 371,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
