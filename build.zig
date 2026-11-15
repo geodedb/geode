@@ -753,6 +753,8 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-cli-query-options", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): geode query ignores an unknown --format and unknown options; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6571-tde-at-rest", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, the cluster's Raft log holds replicated graph writes in plaintext; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -18840,5 +18842,26 @@ pub fn build(b: *std.Build) void {
         const run_reg_tests = b.addRunArtifact(reg_tests);
         shardDep(test_step, &run_reg_tests.step, reg.weight, test_shard_loads, test_shard_index);
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+    // SONNY-6571: with TDE on, no written graph data in plaintext under a
+    // single server's data directory or under any node's of a 3-node
+    // cluster (real `geode serve` processes; the cluster on 127.0.0.171-173).
+    // test-sonny6571-tde-at-rest is intentionally red until the Raft storage
+    // is encrypted: compiled by test-compile, registered through shardDep by
+    // the commit that fixes it. test-sonny6571-schema-names is red until the
+    // storage engine's schema-name files are encrypted (KNOWN_TEST_ISSUES).
+    {
+        const steps = [_]struct { name: []const u8, filters: []const []const u8, desc: []const u8 }{
+            .{ .name = "test-sonny6571-tde-at-rest", .filters = &.{ "single node: with TDE on", "cluster: with TDE on" }, .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY set, a written label, relationship type, property key, string value and integer value appear in no file under a single server's data directory nor under any node's of a 3-node cluster - Raft log, hard state and snapshots included - with the servers running and after a clean stop; names in the storage engine's schema-name files are test-sonny6571-schema-names)" },
+            .{ .name = "test-sonny6571-schema-names", .filters = &.{"single node schema names"}, .desc = "Run SONNY-6571 reproduction (intentionally red: with GEODE_TDE_KEY set, label and relationship type names are written in plaintext to every shard's labels.dict and property key names to props.idx (graph-storage) and prop_exact.idx / prop_rev.idx (geode's exact property index))" },
+        };
+        for (steps) |st| {
+            const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6571_tde_at_rest.zig"), .target = target, .optimize = optimize });
+            mod.link_libc = true;
+            const tests = b.addTest(.{ .root_module = mod, .filters = st.filters });
+            spawnsBuiltGeode(tests);
+            if (g_test_compile_step) |c| c.dependOn(&tests.step);
+            b.step(st.name, st.desc).dependOn(&b.addRunArtifact(tests).step);
+        }
     }
 }
