@@ -620,6 +620,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidMfaCode => .{ .code = "28000", .message = "invalid token: the MFA code does not verify against the user's TOTP secret" },
         error.MfaNotEnrolled => .{ .code = "55000", .message = "mfa_not_enrolled: the user has no TOTP secret; run geode.auth.mfa_setup first" },
         error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
+        // SONNY-6608: an MFA enrollment or on/off change that could not be
+        // stored in the security graph was not applied.
+        error.MfaChangeNotPersisted => .{ .code = "58030", .message = "The MFA change could not be saved to the security graph; it was not applied. Retry it" },
         error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
         error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
         // SONNY-3135 (N7d): geode.auth.grant(..., '*') (it stored a grant on a

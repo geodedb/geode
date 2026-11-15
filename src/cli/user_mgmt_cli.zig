@@ -100,13 +100,13 @@ fn printUserUsage() void {
 
 // CANARY: REQ=REQ-SONNY-6602-MFA-CLI-HONESTY; FEATURE="MFA authentication"; ASPECT=OfflineCliWarning; STATUS=TESTED; TEST=tests/test_sonny6602_mfa_cli.zig; OWNER=security; UPDATED=2026-11-15
 /// SONNY-6602: MFA is not enforced at login (HELLO never asks for a code;
-/// SONNY-6604), and the offline CLI does not keep the recovery codes it
-/// prints. mfa-setup, mfa enable and their help say so.
+/// SONNY-6604), and nothing redeems the recovery codes mfa-setup prints.
+/// mfa-setup, mfa enable and their help say so.
 const mfa_not_enforced_note =
     \\Warning: MFA is not enforced at login yet (SONNY-6604). HELLO does not ask
     \\for a TOTP code or a recovery code, so enrolling or enabling MFA protects
-    \\no login, and the recovery codes printed here are not stored and cannot be
-    \\redeemed.
+    \\no login, and nothing redeems the recovery codes (they are stored only as
+    \\SHA-256 digests).
     \\
 ;
 
@@ -134,7 +134,7 @@ fn printMfaToggleHelp() void {
     printOut("Enable or disable MFA for a user.\n", .{});
     printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
-    printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
+    printOut("  --code <code>     TOTP code for verification (required to enable)\n", .{});
     printOut("  --help, -h        Show this help\n", .{});
     printOut("\nExamples:\n", .{});
     printOut("  geode user mfa enable alice --code 123456\n", .{});
@@ -891,9 +891,20 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         };
         defer enrollment.deinit(allocator);
 
-        // Update user's MFA state in graph store
+        // CANARY: REQ=REQ-SONNY-6608-MFA-CLI-ENROLL; FEATURE="MFA authentication"; ASPECT=OfflineEnrollStored; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_restart.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6608: the secret is stored with MFA off (`geode user mfa
+        // enable --code` turns it on once a code verifies), and the recovery
+        // codes as SHA-256 digests (`hashScratchCode`, as SONNY-6600). It
+        // turned MFA on before any code was verified and stored no code.
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, null, true, enrollment.secret_base32);
+            var digests: [@TypeOf(mgr.storage).max_mfa_recovery_codes][32]u8 = undefined;
+            if (enrollment.scratch_codes.len > digests.len) {
+                std.debug.print("Error: MFA enrollment issued too many recovery codes\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            for (enrollment.scratch_codes, 0..) |code, ci| digests[ci] = ext_mfa.hashScratchCode(code);
+            try mgr.storage.updateUser(existing.id, null, null, null, false, enrollment.secret_base32);
+            try mgr.storage.setMfaRecoveryDigests(existing.id, digests[0..enrollment.scratch_codes.len]);
         }
 
         // Output secret
@@ -916,7 +927,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         // SONNY-6602: --show-recovery added "Each can only be used once";
-        // nothing redeems them (they are not even stored).
+        // nothing redeems them.
         printOut("\n{s}", .{mfa_not_enforced_note});
 
         return;
@@ -1013,6 +1024,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 code = argv[i + 1];
                 i += 1;
             }
+        }
+
+        // SONNY-6608: an action other than enable / disable is refused (it
+        // disabled MFA), and enable needs --code: it turned MFA on with no
+        // proof the user holds the authenticator.
+        if (!enable and !std.mem.eql(u8, action, "disable")) {
+            std.debug.print("Error: user mfa requires <enable|disable> <username>, not '{s}'\n", .{action});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        if (enable and code == null) {
+            std.debug.print("Error: user mfa enable requires --code <6-digit TOTP code> from the user's authenticator; MFA was not enabled\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
 
         // Verify user exists

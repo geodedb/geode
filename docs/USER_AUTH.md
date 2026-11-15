@@ -1023,10 +1023,9 @@ no production caller. Wiring MFA into HELLO is story SONNY-6604.
 
 What exists:
 
-- `geode.auth.mfa_setup(user)` generates a TOTP secret and recovery codes
-  and stores them (the codes as SHA-256 digests). Every result carries a
-  `warning` column saying MFA is not enforced at login and that no
-  procedure redeems the recovery codes.
+- `geode.auth.mfa_setup(user)` generates a TOTP secret and recovery codes.
+  Every result carries a `warning` column saying MFA is not enforced at
+  login and that no procedure redeems the recovery codes.
 - `geode.auth.mfa_verify(user, code)` checks a code against the stored
   secret when it is called (an application may use it for its own step-up
   check). It is rate limited: five failures lock the user's verifications
@@ -1034,12 +1033,34 @@ What exists:
   code is checked; if that record cannot be made (out of memory) the
   verification is refused with `53000` and the code is not checked, so the
   limit cannot be bypassed under memory pressure (it failed open).
-- `geode.auth.mfa_enable(user, code)` checks the code and answers "MFA
-  enabled for <user>" with the same `warning` column; it changes no login.
+- `geode.auth.mfa_enable(user, code)` checks the code and turns the user's
+  stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
+  `warning` column; `mfa_disable(user)` turns it off. No login reads the
+  flag yet.
 - The offline `geode user mfa-setup` and `geode user mfa enable` print the
-  same warning. They set the stored `mfa_enabled` flag (shown by `geode
-  user show`), which no login reads, and `mfa-setup` does not store the
-  recovery codes it prints.
+  same warning. `geode user mfa enable` needs `--code` with a code that
+  verifies (SONNY-6608: without it, it turned MFA on).
+
+**Where an enrollment is stored (SONNY-6608).** `mfa_setup` (and the
+offline `geode user mfa-setup`) writes the enrollment through to the
+HMAC-chained `__geode_security` graph, all of it or none of it (a store
+that fails refuses the procedure with `58030`): the TOTP secret in the
+user record's `mfa_secret`, the recovery codes as SHA-256 digests in a
+sealed `MfaRecoveryCodes` record, and the user's `mfa_enabled` turned off
+until `mfa_enable` verifies a code against the new secret. The server
+loads every enrollment back at startup (a record that cannot be loaded
+fails startup), and `DROP USER` removes it, so a user made again under the
+name is not enrolled. Before, the procedures' enrollments lived in process
+memory only and a restart lost them, and the offline `mfa-setup` turned
+MFA on before any code was verified and kept no recovery code.
+
+**How the secret is protected at rest:** as every user record field is, and
+no more. The HMAC chain detects a changed record. Confidentiality comes only
+from page-level TDE: with `GEODE_TDE_KEY` set the security graph's pages are
+encrypted at rest; **without it the secret is stored in plaintext** in the
+data directory (as the rest of the user record is), and anyone who can read
+the data directory can generate the user's codes. There is no field-level
+encryption of the secret. The recovery codes are never stored in plaintext.
 - `mfa.verifyRecoveryCode`, which matched 8-character codes only (the
   issued codes are 32), was removed: it had no caller.
 

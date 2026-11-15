@@ -19,6 +19,7 @@ const auth_graph_manager = @import("auth_graph_manager");
 
 const multi_graph_security = geode.multi_graph_security;
 const fle_role_grants = geode.security.fle_role_grants;
+const auth_dispatch = geode.auth_dispatch;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 /// Load every stored per-graph grant into `policy`. Returns how many.
@@ -57,4 +58,45 @@ pub fn hydrateFleRoleGrants(allocator: std.mem.Allocator, agm: *AuthGraphManager
         loaded += 1;
     }
     return loaded;
+}
+
+// CANARY: REQ=REQ-SONNY-6608-MFA-HYDRATION; FEATURE="MFA authentication"; ASPECT=StartupLoadsEnrollments; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6608: load every stored MFA enrollment (a user record's
+/// `mfa_secret`, its `MfaRecoveryCodes` digests) into the mfa_* procedures'
+/// store. Returns how many. A recovery-code record that does not parse fails
+/// the load (the chain verified, so it is a bug, not tampering). They were
+/// process memory only: a restart lost every enrollment.
+pub fn hydrateMfaEnrollments(allocator: std.mem.Allocator, agm: *AuthGraphManager) !usize {
+    const ids = try agm.storage.cachedUserIds(allocator);
+    defer allocator.free(ids);
+    var loaded: usize = 0;
+    for (ids) |id| {
+        const rec = agm.storage.getUser(id) orelse continue;
+        const secret = rec.getMFASecret() orelse continue;
+        const digests = try agm.mfaRecoveryDigests(allocator, id);
+        defer if (digests) |d| allocator.free(d);
+        try auth_dispatch.loadMfaEnrollment(rec.getUsername(), secret, digests orelse &.{});
+        loaded += 1;
+    }
+    return loaded;
+}
+
+/// SONNY-6608: the mfa_* procedures' write-through to `agm`
+/// (`auth_dispatch.setMfaPersistCallbacks`).
+pub fn mfaPersistCallbacks(agm: *AuthGraphManager) auth_dispatch.MfaPersistCallbacks {
+    return .{
+        .ctx = @ptrCast(agm),
+        .enroll_fn = &mfaEnroll,
+        .set_enabled_fn = &mfaSetEnabled,
+    };
+}
+
+fn mfaEnroll(ctx: ?*anyopaque, username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) anyerror!void {
+    const agm: *AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.enrollMfaWriteThrough(&agm.hmac_key, username, secret_base32, recovery_digests);
+}
+
+fn mfaSetEnabled(ctx: ?*anyopaque, username: []const u8, enabled: bool) anyerror!void {
+    const agm: *AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.setMfaEnabledWriteThrough(&agm.hmac_key, username, enabled);
 }

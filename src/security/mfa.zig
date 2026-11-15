@@ -47,15 +47,7 @@ pub fn globallyEnabled() bool {
     return flags_mod.global().mfa.enabled();
 }
 
-pub const MfaChallenge = struct {
-    method: []const u8 = "totp",
-    issued_at_ms: i64 = 0,
-};
-
-pub const MfaResponse = struct {
-    code: ?u32 = null,
-    recovery_code: ?[]const u8 = null,
-};
+// SONNY-6608: `MfaChallenge` / `MfaResponse` (no user) were removed.
 
 pub const Enrollment = struct {
     secret_raw: []u8,

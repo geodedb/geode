@@ -4,6 +4,36 @@
 
 ### Security
 
+- **MFA enrollments and the MFA on/off state are stored in
+  `__geode_security`, the offline CLI turns MFA on only with a verified
+  code, and the mfa_* results no longer leak (SONNY-6608).**
+  `geode.auth.mfa_setup` kept the enrollment in process memory only (a
+  restart lost it, and a user re-created under the name inherited it), and
+  `mfa_enable` / `mfa_disable` changed no stored state. The enrollment is
+  now written through to the HMAC-chained security graph, all of it or none
+  of it: the TOTP secret in the user record's `mfa_secret`, the recovery
+  codes as SHA-256 digests in a new sealed `MfaRecoveryCodes` record, and
+  `mfa_enabled` turned off until `mfa_enable` verifies a code against the
+  new secret; `mfa_enable` / `mfa_disable` set the stored flag. The server
+  loads every enrollment at startup (one that cannot be loaded fails
+  startup) and `DROP USER` removes it. A change that cannot be stored is
+  refused with GQLSTATUS 58030. **User-visible:** these changes bump the
+  user's `auth_version`, so the user's live sessions end. The secret gets
+  the protection every user record field gets: the HMAC chain for
+  integrity and page-level TDE when `GEODE_TDE_KEY` is set; **without TDE it
+  is plaintext on disk** (no field-level encryption). The offline
+  `geode user mfa-setup` turned `mfa_enabled` on before any code was
+  verified and stored none of the recovery codes it printed; it now stores
+  the secret with MFA off and the codes as digests. **BREAKING:**
+  `geode user mfa enable <user>` without `--code` is refused (exit 2; it
+  turned MFA on with no proof of the authenticator), as is an action other
+  than `enable` / `disable` (it disabled MFA). The `mfa_setup` /
+  `mfa_enable` / `mfa_disable` results did not own their strings, so every
+  call over gRPC leaked them (shown under a leak-checking allocator); they
+  now own them. `mfa.MfaChallenge` / `MfaResponse` (no user) were removed.
+  Login still does not ask for MFA (SONNY-6604). Regressions: `zig build
+  test-sonny6608-mfa-persist`, `zig build test-sonny6608-mfa-restart`.
+
 - **MFA says it is not enforced at login, the MFA rate limiter fails
   closed, and the dead 8-character recovery-code matcher is gone
   (SONNY-6602).** No login is protected by MFA: the QUIC and gRPC HELLO

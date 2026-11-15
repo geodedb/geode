@@ -315,17 +315,17 @@ pub fn deinitMfaStore() void {
     }
 }
 
-/// Store MFA credentials for a user, replacing any existing ones.
-fn storeMfaCredential(username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
+/// Store MFA credentials for a user, replacing any existing ones. The
+/// recovery codes arrive as their digests (`mfa.hashRecoveryCode`).
+fn storeMfaCredential(username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) !void {
     const a = g_mfa_store_alloc;
     const secret_copy = try a.dupe(u8, secret_base32);
     errdefer {
         crypto_backend.secureZero(secret_copy);
         a.free(secret_copy);
     }
-    const digests = try a.alloc([32]u8, scratch_codes.len);
+    const digests = try a.dupe([32]u8, recovery_digests);
     errdefer a.free(digests);
-    for (scratch_codes, digests) |code, *d| d.* = mfa_mod.hashRecoveryCode(code);
     const key_copy = try a.dupe(u8, username);
     errdefer a.free(key_copy);
 
@@ -339,6 +339,47 @@ fn storeMfaCredential(username: []const u8, secret_base32: []const u8, scratch_c
         .secret_base32 = secret_copy,
         .recovery_codes = digests,
     });
+}
+
+// CANARY: REQ=REQ-SONNY-6608-MFA-PERSIST-CALLBACKS; FEATURE="MFA authentication"; ASPECT=EnrollmentWriteThrough; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6608: how the mfa_* procedures store what they change in
+/// `__geode_security` (`auth_startup_hydration.mfaPersistCallbacks`,
+/// installed by `server_init.wireAuthDDLCallbacks`). Each is all or nothing;
+/// an error means nothing was changed, and the procedure is refused. Unset
+/// (no auth graph, as in unit tests) the procedures change process memory
+/// only, as grants do.
+pub const MfaPersistCallbacks = struct {
+    ctx: ?*anyopaque = null,
+    /// Store `username`'s enrollment (secret, recovery-code digests) with
+    /// MFA turned off until a code verifies against it.
+    enroll_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) anyerror!void = null,
+    /// Set `username`'s stored `mfa_enabled`.
+    set_enabled_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, enabled: bool) anyerror!void = null,
+};
+
+var g_mfa_persist: MfaPersistCallbacks = .{};
+
+pub fn setMfaPersistCallbacks(cb: MfaPersistCallbacks) void {
+    g_mfa_persist = cb;
+}
+
+/// SONNY-6608: load a stored enrollment into the MFA store (startup,
+/// `auth_startup_hydration.hydrateMfaEnrollments`).
+pub fn loadMfaEnrollment(username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) !void {
+    try storeMfaCredential(username, secret_base32, recovery_digests);
+}
+
+/// SONNY-6608: forget `username`'s enrollment and attempt record (DROP
+/// USER): a user made again under the name is not enrolled.
+pub fn forgetMfaEnrollment(username: []const u8) void {
+    g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (g_mfa_store_init) {
+        if (g_mfa_store.fetchRemove(username)) |kv| freeMfaCredential(kv.key, kv.value);
+    }
+    if (g_mfa_attempts_init) {
+        if (g_mfa_attempts.fetchRemove(username)) |kv| g_mfa_store_alloc.free(kv.key);
+    }
 }
 
 // CANARY: REQ=REQ-SONNY-6600-MFA-SECRET-COPY; FEATURE="MFA authentication"; ASPECT=SecretCopiedUnderLock; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
@@ -792,6 +833,10 @@ fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         // (user_management.UnsavedRestriction). It was reported deleted.
         if (err == error.UserNotPersisted) return err;
     };
+    // SONNY-6608: the user's MFA enrollment goes with it (the stored one
+    // with the user record); a user made again under the name is not
+    // enrolled.
+    forgetMfaEnrollment(username);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");
@@ -1157,54 +1202,76 @@ fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt
     };
     defer mfa_mod.freeEnrollment(allocator, &enrollment);
 
+    const digests = try allocator.alloc([32]u8, enrollment.scratch_codes.len);
+    defer allocator.free(digests);
+    for (enrollment.scratch_codes, digests) |code, *d| d.* = mfa_mod.hashRecoveryCode(code);
+
+    // SONNY-6608: stored first (secret, recovery-code digests, MFA off until
+    // a code verifies), then the in-memory store; a store that fails refuses
+    // the enrollment and changes nothing.
+    if (g_mfa_persist.enroll_fn) |f| {
+        f(g_mfa_persist.ctx, username, enrollment.secret_base32, digests) catch |err| {
+            log.err("geode.auth.mfa_setup could not store the enrollment in the security graph; refused", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            return error.MfaChangeNotPersisted;
+        };
+    }
     // Store per-user secret and recovery codes for later TOTP verification
-    storeMfaCredential(username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
+    storeMfaCredential(username, enrollment.secret_base32, digests) catch |err| {
         log.warn("geode.auth.mfa_setup could not store the credential", &.{Attr.string("error", @errorName(err))});
         return err;
     };
 
     const secret = enrollment.secret_base32;
     const recovery_str = try buildRecoveryStr(allocator, enrollment.scratch_codes);
+    defer allocator.free(recovery_str);
     const show_uri = std.mem.indexOf(u8, opts, "show-uri") != null;
-    const show_recovery = std.mem.indexOf(u8, opts, "show-recovery") != null or std.mem.indexOf(u8, opts, "regenerate") != null;
     if (show_uri) {
-        const columns = try allocator.alloc([]const u8, 3);
-        columns[0] = try allocator.dupe(u8, "provisioning_uri");
-        columns[1] = try allocator.dupe(u8, "secret");
-        columns[2] = try allocator.dupe(u8, "warning");
-        const row = try allocator.alloc(Value, 3);
-        row[0] = Value{ .Str = try allocator.dupe(u8, enrollment.provisioning_uri) };
-        row[1] = Value{ .Str = try allocator.dupe(u8, secret) };
-        row[2] = Value{ .Str = mfa_setup_not_enforced_warning };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return ownedRow(allocator, &.{ "provisioning_uri", "secret", "warning" }, &.{ enrollment.provisioning_uri, secret, mfa_setup_not_enforced_warning });
     }
-    if (show_recovery) {
-        const columns = try allocator.alloc([]const u8, 3);
-        columns[0] = try allocator.dupe(u8, "mfa_secret");
-        columns[1] = try allocator.dupe(u8, "recovery_codes");
-        columns[2] = try allocator.dupe(u8, "warning");
-        const row = try allocator.alloc(Value, 3);
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-        row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
-        row[2] = Value{ .Str = mfa_setup_not_enforced_warning };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // Default and show-recovery / regenerate: the secret and recovery codes.
+    const secret_text = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret});
+    defer allocator.free(secret_text);
+    const codes_text = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str});
+    defer allocator.free(codes_text);
+    return ownedRow(allocator, &.{ "mfa_secret", "recovery_codes", "warning" }, &.{ secret_text, codes_text, mfa_setup_not_enforced_warning });
+}
+
+// CANARY: REQ=REQ-SONNY-6608-MFA-RESULT-OWNERSHIP; FEATURE="MFA authentication"; ASPECT=ResultOwnsValues; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6608: a one-row result that owns everything in it (columns and
+/// values copied, `owns_value_memory` set), so the result's deinit frees it.
+/// The mfa_* results did not own their strings: over gRPC each call leaked
+/// them, and mfa_setup its recovery-code buffer.
+fn ownedRow(allocator: std.mem.Allocator, names: []const []const u8, values: []const []const u8) !ExecutionResult {
+    std.debug.assert(names.len == values.len);
+    var result: ExecutionResult = .{
+        .columns = try allocator.alloc([]const u8, names.len),
+        .rows = &.{},
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+    var made_cols: usize = 0;
+    errdefer {
+        for (result.columns[0..made_cols]) |c| allocator.free(c);
+        allocator.free(result.columns);
     }
-    // Default: show secret and recovery codes
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "mfa_secret");
-    columns[1] = try allocator.dupe(u8, "recovery_codes");
-    columns[2] = try allocator.dupe(u8, "warning");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-    row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
-    row[2] = Value{ .Str = mfa_setup_not_enforced_warning };
+    for (names, 0..) |n, i| {
+        result.columns[i] = try allocator.dupe(u8, n);
+        made_cols = i + 1;
+    }
+    const row = try allocator.alloc(Value, values.len);
+    var made_vals: usize = 0;
+    errdefer {
+        for (row[0..made_vals]) |v| allocator.free(v.Str);
+        allocator.free(row);
+    }
+    for (values, 0..) |v, i| {
+        row[i] = .{ .Str = try allocator.dupe(u8, v) };
+        made_vals = i + 1;
+    }
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    result.rows = rows;
+    return result;
 }
 
 fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
@@ -1878,22 +1945,21 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
         // need to disable MFA for recovery without a valid TOTP).
         if (!isSixDigitCode(code)) return error.InvalidArgs;
     }
+    // SONNY-6608: the change is stored (the user's `mfa_enabled`); a store
+    // that fails refuses it. It answered "MFA enabled / disabled" and
+    // changed nothing.
+    if (g_mfa_persist.set_enabled_fn) |f| {
+        f(g_mfa_persist.ctx, username, is_enable) catch |err| {
+            log.err("geode.auth.mfa_enable/mfa_disable could not store the change in the security graph; refused", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            if (err == error.MfaNotEnrolled) return err;
+            return error.MfaChangeNotPersisted;
+        };
+    }
+    const status = try std.fmt.allocPrint(allocator, "MFA {s} for {s}", .{ if (is_enable) "enabled" else "disabled", username });
+    defer allocator.free(status);
     // SONNY-6602: enable answers the not-enforced warning as well.
-    const ncols: usize = if (is_enable) 3 else 2;
-    const columns = try allocator.alloc([]const u8, ncols);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "username");
-    if (is_enable) columns[2] = try allocator.dupe(u8, "warning");
-    const row = try allocator.alloc(Value, ncols);
-    row[0] = Value{ .Str = if (is_enable)
-        try std.fmt.allocPrint(allocator, "MFA enabled for {s}", .{username})
-    else
-        try std.fmt.allocPrint(allocator, "MFA disabled for {s}", .{username}) };
-    row[1] = Value{ .Str = username };
-    if (is_enable) row[2] = Value{ .Str = mfa_enable_not_enforced_warning };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    if (is_enable) return ownedRow(allocator, &.{ "status", "username", "warning" }, &.{ status, username, mfa_enable_not_enforced_warning });
+    return ownedRow(allocator, &.{ "status", "username" }, &.{ status, username });
 }
 
 // ---------------------------------------------------------------------------
