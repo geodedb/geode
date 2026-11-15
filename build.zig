@@ -11098,6 +11098,73 @@ pub fn build(b: *std.Build) void {
     const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
     sonny6374_step.dependOn(&run_sonny6374_tests.step);
 
+    // SONNY-6589 (3): the embedded LSP authenticates an initialize with the
+    // HELLO's user name and password and filters completions per user.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6589_lsp_auth.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6589-lsp-auth", "Run SONNY-6589 item 3 regression (geode serve's embedded LSP authenticates initialize with the HELLO user name and password, refuses a wrong or missing credential with -32002, and completes only the session graph's labels and properties the user may read: two users of different roles on a real server)").dependOn(&run_tests.step);
+    }
+    // SONNY-6589 (4, 5): a refused REPL \connect prints the endpoint message
+    // and keeps the session; a failed remote backup names the parsed address.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6589_cli_messages.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6589-cli-messages", "Run SONNY-6589 items 4-5 regression (a refused geode shell \\connect prints the endpoint message, not a bare error name or the address, and the shell keeps its session; geode backup create names the parsed host:port of --server when it fails)").dependOn(&run_tests.step);
+    }
+    // SONNY-6589 (2): an MCP endpoint timeout geode cannot apply is refused.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6589_mcp_timeout.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6589-mcp-timeout", "Run SONNY-6589 item 2 regression (an MCP endpoint DSN carrying connect_timeout, timeout or timeout_ms, which geode-client-zig cannot apply, is refused with a message by the MCP tools at once and by geode mcp --endpoint at startup, instead of waiting 30 s on a server that does not answer)").dependOn(&run_tests.step);
+    }
+    // SONNY-6589 (6) / SONNY-6554 (7): a graph that cannot be opened is
+    // opened and logged once per boot.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6589_broken_graph_open.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6589-broken-graph-open", "Run SONNY-6589 item 6 regression (a real server opens a graph whose engine cannot be opened once per boot: one open failure logged across startup, three reads and the shutdown checkpoint, every read answered 58000, other graphs served)").dependOn(&run_tests.step);
+    }
+    // SONNY-6592 (2): RaftNode.startElection drains Ready under inner_mutex.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6592_start_election_lock.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6592-start-election-lock", "Run SONNY-6592 item 2 regression (RaftNode.startElection waits for inner_mutex, held by another thread as a tick in progress holds it, before it drains Ready)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6321: the TDE self-test procedures through the executor, and no
     // CANARY cites the TDEKeyManager suite for code it does not exercise.
     {
