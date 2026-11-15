@@ -10869,6 +10869,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6612_unw_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6612_unw_step = b.step("test-sonny6612-unreadable-node-write", "Run SONNY-6612 item 4 regression (a durable store, gRPC in process, every body rebuild failing with an engine read error: REMOVE, SET and SET label on the node fail with neither NodeNotFound nor EdgeNotFound and change nothing)");
     sonny6612_unw_step.dependOn(&run_sonny6612_unw_tests.step);
+    // SONNY-6612 (2): an unregistered tenant's statements are refused.
+    const sonny6612_tr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_tenant_refusal.zig"), .target = target, .optimize = optimize });
+    sonny6612_tr_test_mod.link_libc = true;
+    sonny6612_tr_test_mod.addImport("geode", root_mod);
+    sonny6612_tr_test_mod.addImport("logging", logging_mod);
+    sonny6612_tr_test_mod.addImport("rls", rls_mod);
+    sonny6612_tr_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6612_tr_tests = b.addTest(.{ .root_module = sonny6612_tr_test_mod });
+    const run_sonny6612_tr_tests = b.addRunArtifact(sonny6612_tr_tests);
+    shardDep(test_step, &run_sonny6612_tr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_tr_step = b.step("test-sonny6612-tenant-refusal", "Run SONNY-6612 item 2 regression (a durable tenant registry holding a tenant: a statement scoped to an unregistered tenant is refused with TenantNotRegistered and writes nothing; a registered tenant and an unscoped session run)");
+    sonny6612_tr_step.dependOn(&run_sonny6612_tr_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.

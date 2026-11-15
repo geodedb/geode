@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:14:56.499148858Z",
+  "generated_at": "2026-11-15T18:15:42.645528685Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78731,6 +78731,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6612-TENANT-REFUSAL",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_tenant_refusal.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_tenant_refusal.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6612-UNREADABLE-NODE-WRITE",
       "features": [
         {
@@ -83840,7 +83859,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4165
+      "TESTED": 4166
     },
     "by_aspect": {
       "2PC": 3,
@@ -86617,7 +86636,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 380,
+      "Regression": 381,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
