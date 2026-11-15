@@ -118,8 +118,6 @@ pub fn callTool(
         return getSchema(allocator, geode_endpoint);
     } else if (std.mem.eql(u8, name, "explain")) {
         return explainQuery(allocator, geode_endpoint, args_json);
-    } else if (std.mem.eql(u8, name, "catalogs")) {
-        return listCatalogs(allocator, geode_endpoint);
     } else if (std.mem.eql(u8, name, "graphs")) {
         return listGraphs(allocator, geode_endpoint, args_json);
     } else if (std.mem.eql(u8, name, "validate")) {
@@ -280,22 +278,6 @@ fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
     defer client.deinit();
 
     const result = client.explain(parsed.value.query) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
-    };
-
-    return try formatBackendResult(allocator, result);
-}
-
-/// List available catalogs
-fn listCatalogs(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
-    const endpoint_str = endpoint orelse "localhost:3141";
-
-    const client = GeodeClient.init(allocator, endpoint_str) catch |err| {
-        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, "Failed to initialize client"));
-    };
-    defer client.deinit();
-
-    const result = client.listCatalogs() catch |err| {
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
@@ -494,9 +476,8 @@ const QueryArgs = struct {
 /// avoided so newline-delimited stdio MCP transports work.
 const tools_json = "{\"tools\":[" ++
     "{\"name\":\"query\",\"description\":\"Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to execute (ISO/IEC 39075:2024 compliant)\"},\"parameters\":{\"type\":\"object\",\"description\":\"Optional query parameters as key-value pairs\"}},\"required\":[\"query\"]}}," ++
-    "{\"name\":\"schema\",\"description\":\"Get the database schema including node labels, relationship types, and property definitions.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
+    "{\"name\":\"schema\",\"description\":\"Get the node label sets of the session's graph (up to 100 distinct sets); the geode://default/{graph}/schema resource adds the relationship types.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"explain\",\"description\":\"Get the execution plan for a GQL query without running it. Useful for query optimization.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to explain\"}},\"required\":[\"query\"]}}," ++
-    "{\"name\":\"catalogs\",\"description\":\"List all available catalogs in the database.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"graphs\",\"description\":\"List the graphs the caller can see.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"validate\",\"description\":\"Validate GQL syntax and return diagnostics including Geode extensions (FLE, BACKUP/RESTORE, SESSION, double-dash comments). Does not require a running Geode server.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to validate\"}},\"required\":[\"query\"]}}," ++
     "{\"name\":\"complete\",\"description\":\"Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures including Geode extensions (BACKUP, RESTORE, SESSION, FLE annotations).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query text\"},\"line\":{\"type\":\"integer\",\"description\":\"Cursor line number (1-indexed)\"},\"column\":{\"type\":\"integer\",\"description\":\"Cursor column number (1-indexed)\"}},\"required\":[\"query\",\"line\",\"column\"]}}," ++
@@ -540,11 +521,13 @@ test "formatErrorResponse formats correctly" {
 test "listTools contains all required tools" {
     const result = try listTools(null);
 
-    // Verify all 9 tools are present (5 database + 4 LSP)
+    // Verify all 8 tools are present (4 database + 4 LSP). SONNY-6559 (5):
+    // no catalogs tool: geode has no catalog to list (SHOW CATALOGS does
+    // not parse), so the tool could not succeed.
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"query\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"schema\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"explain\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"catalogs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"catalogs\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"graphs\"") != null);
     // LSP tools
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"validate\"") != null);

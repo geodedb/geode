@@ -751,7 +751,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-cli-query-options", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): geode query ignores an unknown --format and unknown options; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
@@ -6273,6 +6272,68 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6442-serve-unknown-options", "Run SONNY-6442 item 4 regression (geode serve refuses an unknown option, a positional argument or a value option without its value with exit 2, and parses every option its --help documents)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6560: every geode command refuses an option it does not know, a
+    // value option without its value and (query) a format it does not
+    // render with exit 2; dot/mermaid render every result shape; the help
+    // texts document only options that are read (built binary + a server).
+    {
+        const option_check_mod = b.createModule(.{ .root_source_file = b.path("src/cli/option_check.zig"), .target = target, .optimize = optimize });
+        const unit_tests = b.addTest(.{ .root_module = option_check_mod });
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        shardDep(test_step, &run_unit_tests.step, 1, test_shard_loads, test_shard_index);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6560_cli_unsupported_options.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("cli_option_check", option_check_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        const sonny6560_step = b.step("test-sonny6560-cli-unsupported-options", "Run SONNY-6560 regression (every geode command refuses an option it does not know and a value option given without its value with exit 2 naming it; geode query refuses a --format it does not render, and dot/mermaid render paths, plans and errors and escape DOT labels; --begin/--commit/--rollback and the other documented-but-unread options are refused and no longer documented; --batch BEGIN/ROLLBACK leaves nothing; every option a command's --help documents is one src/cli/option_check.zig reads; plus option_check's unit tests; built binary + a real server)");
+        sonny6560_step.dependOn(&run_tests.step);
+        sonny6560_step.dependOn(&run_unit_tests.step);
+    }
+
+    // SONNY-6559 (7, 8, 11): a successful geode command returns through main
+    // (its Debug leak check runs; the CLI audit log records the success),
+    // the audit configuration's strings are freed, and geode completion
+    // writes its script to stdout (built binary + a server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_cli_exit_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-cli-exit-paths", "Run SONNY-6559 items 7, 8 and 11 regression (geode completion writes its script to stdout with stderr empty for every shell; a Debug command run with every GEODE_AUDIT_* setting and --audit-file/--audit-syslog/--audit-eventlog reports no leak; audit, login, logout, session, authn, mtls and tenant return through main on success: the CLI audit log records the command's success and no leak report is printed; built binary + a real server)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6559 (5, 6, 10): every MCP backend tool and advertised resource
+    // template works against a real server (catalogs is gone, schema and
+    // query return lists and nodes, explain the plan geode query prints,
+    // {graph} is honoured, node/relationship templates read) and resource
+    // URIs are parsed strictly (a real geode mcp --stdio session).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_mcp_backend.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-mcp-backend", "Run SONNY-6559 items 5, 6 and 10 regression (through a real geode mcp --stdio session against a real geode serve: no catalogs tool, the schema/graphs/query tools return lists and nodes, explain returns the plan geode query --format json prints, the schema/stats templates honour {graph}, node/{label} and relationship/{type} read, an unknown graph and every malformed geode:// URI are -32002, no leak report)").dependOn(&run_tests.step);
     }
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
@@ -18803,7 +18864,6 @@ pub fn build(b: *std.Build) void {
     // it registers it there. They get tests/all_tests.zig's module graph; the
     // e2e ones spawn this build's geode.
     const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{
-        .{ .file = "tests/test_sonny6548_cli_query_options.zig", .step = "test-sonny6548-cli-query-options", .desc = "Run SONNY-6548 reproduction (intentionally red: geode query prints nothing and exits 0 for --format txt, exits 0 for an unknown option, and commits a write under the --begin --rollback its --help documents)" },
         .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 reproduction (intentionally red: an exact numeric column is typed FLOAT, a UNION column INTEGER although it holds 1.25; FOR ... ORDER BY reports ordered:false; PROFILE reports spill_reason with no spill)" },
         .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 reproduction (intentionally red: SET and REMOVE refuse a variable named with an ISO/IEC 39075 non-reserved word such as type or property, which MATCH binds and RETURN reads; a reserved word such as MATCH is accepted as a variable)" },
     };
@@ -18840,5 +18900,21 @@ pub fn build(b: *std.Build) void {
         const run_reg_tests = b.addRunArtifact(reg_tests);
         shardDep(test_step, &run_reg_tests.step, reg.weight, test_shard_loads, test_shard_index);
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+    // SONNY-6560: the SONNY-6548 geode query reproduction passes and runs in
+    // the aggregate (same module graph as the reproductions above).
+    {
+        const cli_query_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6548_cli_query_options.zig"), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| cli_query_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        cli_query_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            cli_query_tests.root_module.linkSystemLibrary("ssl", .{});
+            cli_query_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) cli_query_tests.root_module.linkSystemLibrary("dl", .{});
+        const run_cli_query_tests = b.addRunArtifact(cli_query_tests);
+        shardDep(test_step, &run_cli_query_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6548-cli-query-options", "Run SONNY-6548 / SONNY-6560 regression (geode query refuses --format txt and an unknown option with exit 2, and refuses --begin --rollback without writing)").dependOn(&run_cli_query_tests.step);
     }
 }

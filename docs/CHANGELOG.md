@@ -2509,6 +2509,71 @@
   (`CDCEngine.deinit`). Regression: `zig build
   test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
   40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
+- **The geode CLI refuses what it does not support (SONNY-6560).**
+  **BREAKING: exit 2 (usage error) where these used to exit 0.** An option
+  a command does not read, a value option given last without its value,
+  and a stray argument are refused with exit 2 and a message naming them,
+  before anything runs, by every command (`geode query`, `user`, `role`,
+  `policy`, `grant`, `revoke`, `auth`, `login`, `logout`, `fle`, `apikey`,
+  `session`, `authn`, `tenant`, `audit`, `completion`, `mcp`, `migrate`,
+  `backup list|info`, and the global `--audit-file` / `--audit-syslog`;
+  `serve`, `shell`, `lsp`, `storage`, `backup create|cleanup` and `restore`
+  already did, and `mtls` refuses every subcommand as unsupported). They were skipped, so a misspelt option ran
+  the command on its defaults. `geode query --format` takes json, table,
+  csv, dot or mermaid and refuses anything else (`--format txt` printed
+  nothing and exited 0; the renderer's fall-through is now an error).
+  `--format dot` and `mermaid` draw paths and lists of nodes and
+  relationships, print an error result's message on stderr (exit 1) and an
+  EXPLAIN/PROFILE plan, note on stderr how many values were not graph
+  elements, and escape `"` and `\` in DOT strings; they printed an empty
+  graph for all of those and wrote a name holding `"` into DOT unescaped.
+  Documented options nothing read are gone from the help and refused:
+  `geode query --begin`, `--commit` and `--rollback` (`--begin --rollback`
+  committed the write; an explicit transaction is `BEGIN` / ... / `COMMIT`
+  or `ROLLBACK` lines of `geode query --batch`, on one connection), the
+  global `--config`, `--json` and `-v`/`--verbose`, `geode role create
+  --permissions` and `geode auth logout --token`. `geode audit verify
+  --algo` refuses an algorithm other than sha256 and blake3 (it verified
+  with sha256); `geode mcp --port` refuses a value that is not a port (it
+  used to listen on 8080), and `geode mcp --help` documents `--token` and
+  `--no-auth` and says HTTP is the default transport. The shell completion
+  scripts no longer offer `-s`/`-f` for `geode query` (`-f` is `--file`).
+  Regressions: `zig build test-sonny6560-cli-unsupported-options`,
+  `zig build test-sonny6548-cli-query-options` (now in the aggregate).
+
+- **MCP backend tools and resources work against a real server
+  (SONNY-6559 items 5, 6, 10).** **BREAKING for MCP clients:** the
+  `catalogs` tool is gone (it sent `SHOW CATALOGS`, which geode does not
+  parse; geode has no catalog object, so `{catalog}` in a resource URI is
+  always `default`). The backend tools and resources decode results with
+  geode's own wire schema, as `geode query` does: the `schema` tool's label
+  lists and the `query` tool's nodes, relationships, paths and lists were
+  `null`, and `explain` answered `{"columns":[],"rows":[]}`; it now returns
+  the plan `geode query "EXPLAIN ..." --format json` prints. The advertised
+  `geode://{catalog}/{graph}/node/{label}` and `/relationship/{type}`
+  templates read (a count and up to 25 elements) and `{graph}` is honoured
+  by the schema and stats templates (it was ignored); every read goes
+  through the normal client path, so the endpoint user's permissions and
+  row-level security apply. A resource URI is parsed exactly
+  (docs/MCP_SERVER.md, "Resources and the backend tools"); any other URI,
+  and a graph that does not exist, is `-32002` (any path holding `config`
+  or `/schema` used to match). Regression: `zig build
+  test-sonny6559-mcp-backend`.
+
+- **CLI commands return through `main`; the audit configuration is freed;
+  `geode completion` writes to stdout (SONNY-6559 items 7, 8, 11).**
+  `geode completion` wrote the script to stderr, so `geode completion
+  --shell bash > file` wrote nothing; a shell named as an argument
+  (`geode completion zsh`) was ignored and the bash script printed. `audit`, `login`, `logout`,
+  `session`, `authn`, `mtls` and `tenant` ended with `std.process.exit(0)`
+  before `main`'s Debug leak check and before the audit logger was closed;
+  they return (exit 0, as before) and the CLI audit log now records each
+  command's success (`"outcome":"success"`) when it returns. The audit
+  configuration's strings (`GEODE_AUDIT_*`, `--audit-file`,
+  `--audit-syslog`, `--audit-eventlog`) were duplicated and never freed (a
+  flag after its environment variable leaked both); `--audit-eventlog`
+  followed by a subcommand no longer takes the subcommand as the event
+  source. Regression: `zig build test-sonny6559-cli-exit-paths`.
 
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine

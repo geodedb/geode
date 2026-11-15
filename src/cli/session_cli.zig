@@ -210,7 +210,7 @@ pub fn cmdSession(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printSessionUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     } else if (std.mem.eql(u8, subcommand, "validate")) {
         try cmdSessionValidate(allocator, argv, start_idx + 1);
     } else if (std.mem.eql(u8, subcommand, "info")) {
@@ -265,7 +265,7 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
                 "  --token <token>     Token to validate (default: current session)\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         } else if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
             i += 1;
             token_override = argv[i];
@@ -303,7 +303,7 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         std.debug.print("Session is valid for user: {s}\n", .{session.username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     // Fallback: if token looks valid (64 hex chars), assume it's valid
@@ -348,7 +348,7 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
         }
 
         std.debug.print("Session is valid for user: {s}\n", .{username});
-        std.process.exit(@intFromEnum(ExitCode.success));
+        return;
     }
 
     std.debug.print("Session is invalid or expired.\n", .{});
@@ -366,7 +366,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "Options:\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -393,7 +393,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     std.debug.print("  created: {d} (timestamp)\n", .{created_at});
     std.debug.print("  expires: {d} (timestamp)\n", .{expires_at});
     std.debug.print("  token: {s}...\n", .{token[0..@min(16, token.len)]});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 // CANARY: REQ=REQ-CLI-SESSION-001; FEATURE="CLISession"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sec_sess_log.zig; OWNER=cli; UPDATED=2026-06-10
@@ -420,7 +420,7 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 "Options:\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -465,7 +465,7 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var rotate_writer = std.Io.Writer.fixed(&rotate_out_buf);
     writeRotateResult(&rotate_writer, &new_token) catch {};
     std.debug.print("{s}", .{rotate_writer.buffered()});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 fn cmdSessionInvalidateAll(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -483,7 +483,7 @@ fn cmdSessionInvalidateAll(allocator: std.mem.Allocator, argv: [][:0]u8, start_i
                 "  --user <username>   User whose sessions to invalidate (required)\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         } else if (std.mem.eql(u8, argv[i], "--user") and i + 1 < argv.len) {
             i += 1;
             target_user = argv[i];
@@ -496,7 +496,7 @@ fn cmdSessionInvalidateAll(allocator: std.mem.Allocator, argv: [][:0]u8, start_i
     }
 
     std.debug.print("All sessions for user '{s}' have been invalidated.\n", .{target_user.?});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
 
 fn cmdSessionCheckIdle(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -510,7 +510,7 @@ fn cmdSessionCheckIdle(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: 
                 "Options:\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -522,5 +522,5 @@ fn cmdSessionCheckIdle(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: 
 
     // If we have a token, the session is considered active
     std.debug.print("Session is active.\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    return;
 }
