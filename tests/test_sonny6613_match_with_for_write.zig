@@ -73,6 +73,10 @@ const cases = [_]Case{
     .{ .write = "MATCH (n:G) WHERE n.i = 3 WITH n AS z FOR x IN [1, 2] CREATE (u:U {v: x}) RETURN z.i AS i, x AS x, z AS node", .want = &.{ "3|1|<Node>", "3|2|<Node>" }, .checks = &.{
         .{ .query = "MATCH (u:U) RETURN u.v", .want = &.{ "1", "2" } },
     } },
+    // Under PROFILE it writes once, as without.
+    .{ .write = "PROFILE MATCH (n:G) WHERE n.i < 2 WITH n.i AS k FOR x IN [k] CREATE (:U {v: x})", .checks = &.{
+        .{ .query = "MATCH (u:U) RETURN u.v", .want = &.{ "0", "1" } },
+    } },
     // No row: nothing written, no rows.
     .{ .write = "MATCH (n:G) WHERE n.i > 100 WITH n AS z FOR x IN [1] CREATE (:U)", .want = &.{}, .checks = &unchanged },
     // An element that fails fails the statement whole.
