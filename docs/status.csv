@@ -1913,12 +1913,12 @@ REQ-GQL-051,GPU Acceleration,SmartKernelLoader,TESTED,,,engine,2025-10-26,src/gp
 REQ-GQL-051,GPU Acceleration,TruthfulDeviceReporting,TESTED,,,engine,2026-06-11,tests/test_gap0878_gpu_truth.zig,15
 REQ-GQL-051,GPU Acceleration,UnifiedModule,EXEMPT,,,engine,2025-10-26,src/gpu.zig,2
 REQ-GQL-051,GPU Acceleration,Validation,EXEMPT,,,engine,2025-10-26,scripts/test/validate_gpu_implementation.sh,4
-REQ-GQL-052,FederationOrderedMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,269
+REQ-GQL-052,FederationOrderedMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,270
 REQ-GQL-052,FederationOrderedMultiKeyDirMerge,BenchmarkScaling,BENCHED,,,federation,2025-09-23,benchmarks/benchmark_federation_merge_scaling.zig,5
-REQ-GQL-052,FederationOrderedMultiKeyDirMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,271
-REQ-GQL-052,FederationOrderedMultiKeyMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,270
-REQ-GQL-052,FederationResultLine,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,220
-REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,268
+REQ-GQL-052,FederationOrderedMultiKeyDirMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,272
+REQ-GQL-052,FederationOrderedMultiKeyMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,271
+REQ-GQL-052,FederationResultLine,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,221
+REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md,269
 REQ-GQL-060,Core Graph Builders,GraphBuilderThroughputVarianceEnvelope,IMPL,,,graph,2026-11-14,tests/benchmark_graph_builder_throughput_variance.zig,4
 REQ-GQL-068,Containers,LFUCache,BENCHED,,,graph,2025-09-21,src/graph/containers/lfu.zig,3
 REQ-GQL-068,ExposedAlgorithms,CallProcedureE2E,TESTED,,,graph,2026-06-11,tests/test_gap0883_algo_procedures.zig,22
@@ -1960,9 +1960,9 @@ REQ-GQL-074,Network Transport,QUICTLSConfig,TESTED,,,wire,2025-09-22,tests/e2e_q
 REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,IMPL,,,wire,2026-11-14,tests/benchmark_quic_frame_latency_variance.zig,5
 REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,,,wire,2026-06-07,tests/test_quic_slow_poll_warning.zig,4
 REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,,,transport,2026-05-25,tests/test_quic_condition_timedwait_cadence.zig,1
-REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,170
-REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,215
-REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,216
+REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,171
+REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,216
+REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md,217
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,IMPL,,,planner,2026-11-14,src/planner/cost_seed.zig,48
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasClampVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/debug/benchmark_bias_clamp_variance.zig,6
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasVarianceEnvelope,BENCHED,,,planner,2025-09-22,benchmarks/benchmark_adaptive_estimator_variance.zig,8
@@ -5339,6 +5339,7 @@ REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,2609
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,tests/test_sonny6613_leading_let_unwind.zig,12
 REQ-SONNY-6613-LEADING-UNWIND,Unwind,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,7208
+REQ-SONNY-6613-PROFILE-CPU-TIME,PROFILE,NoCopiedCpuTime,TESTED,,,engine,2026-11-15,src/server/profile_payload.zig,208
 REQ-SONNY-6613-PROFILE-CPU-TIME,PROFILE,NoCopiedCpuTime,TESTED,,,engine,2026-11-15,tests/test_sonny6613_profile_cpu_time.zig,11
 REQ-SONNY-6613-SINGLE-QUOTED-ALIAS,GQLParser,AliasIsIdentifier,TESTED,,,parser,2026-11-15,tests/test_sonny6613_quoted_alias.zig,10
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521

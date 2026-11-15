@@ -2616,6 +2616,11 @@
 
 ### Fixed
 
+- **A version-2 PROFILE reports no unmeasured CPU time (SONNY-6613).** Each
+  operator's `cpu_time_ns` was a copy of its wall-clock `time_ns`; CPU time
+  is not measured per operator, so it is 0. Regression:
+  `zig build test-sonny6613-profile-cpu-time`.
+
 - **A statement may begin with LET or UNWIND (SONNY-6613).** ISO/IEC
   39075:2024 14.4 / 14.7: a `<let statement>` is a `<primitive query
   statement>`, so `LET x = 4 RETURN x` and `LET v = 4 MATCH (n) WHERE n.k = v

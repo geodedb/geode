@@ -118,8 +118,9 @@ Top-level keys, in the order sent:
   - `input_rows`, `rows`: rows consumed and produced (version 1:
     `input_rows` 0, not counted; `rows` the statement's result rows, or the
     nodes the index seek returned).
-  - `time_ns`, `cpu_time_ns`, `cumulative_time_ns`: version 2 measured
-    (`cpu_time_ns` equals `time_ns`); version 1: `LegacyExecute`'s
+  - `time_ns`, `cpu_time_ns`, `cumulative_time_ns`: version 2 measured by
+    the wall clock, `cpu_time_ns` 0 (not measured; it copied `time_ns` until
+    SONNY-6613); version 1: `LegacyExecute`'s
     `time_ns` is the wall-clock time measured around the statement,
     `NodeIndexScan`'s 0 (part of the statement's), `cpu_time_ns` 0 (not
     measured).
