@@ -290,14 +290,16 @@ test "SONNY-6531: resources fall back to their offline documents without leaking
     // Nothing listens on the port: the client is built, the request fails,
     // and schema/stats answer their "Server unavailable" documents (config
     // is answered locally by the client).
-    // SONNY-6589 (2): no timeout parameter: geode mcp refuses one (the
-    // client library cannot apply it; it never shortened these waits).
+    // SONNY-6589 (2): the endpoint's timeout_ms bounds each failed connect
+    // (geode-client-zig v0.3.18 applies it; before, each waited 30 s).
     const port = try util.getRandomPort();
-    var ep_buf: [64]u8 = undefined;
-    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true", .{port});
+    var ep_buf: [80]u8 = undefined;
+    const endpoint = try std.fmt.bufPrint(&ep_buf, "quic://127.0.0.1:{d}?insecure=true&timeout_ms=1500", .{port});
     const server = try GeodeMcpServer.init(testing.allocator, .{ .auth_mode = .none, .geode_endpoint = endpoint });
     defer server.deinit();
     try handshake(server);
+    const clock_io = std.Io.Threaded.global_single_threaded.io();
+    const t0 = std.Io.Clock.awake.now(clock_io).toMilliseconds();
     try expectResponse(server, 500,
         \\{"jsonrpc":"2.0","id":500,"method":"resources/read","params":{"uri":"geode://default/default/schema"}}
     , .{ .result = "Server unavailable" });
@@ -307,6 +309,11 @@ test "SONNY-6531: resources fall back to their offline documents without leaking
     try expectResponse(server, 502,
         \\{"jsonrpc":"2.0","id":502,"method":"resources/read","params":{"uri":"geode://config"}}
     , .{ .result = "gql_compliance" });
+    const elapsed = std.Io.Clock.awake.now(clock_io).toMilliseconds() - t0;
+    if (elapsed >= 15_000) {
+        std.debug.print("SONNY-6589: two failed connects with timeout_ms=1500 took {d} ms (want < 15000)\n", .{elapsed});
+        return error.TestUnexpectedResult;
+    }
 }
 
 const Server = struct {

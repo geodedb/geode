@@ -11233,6 +11233,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6606-lsp-role-default", "Run SONNY-6606 item 6 regression (an LSP principal whose verifier reports no role, \"none\" or an unknown role is None, not ReadOnly)").dependOn(&run_tests.step);
     }
+    // SONNY-6611 (7) / SONNY-6592 (3): drainReady persists before it applies
+    // committed entries and before it sends the replies that announce them.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6611_raft_persist_before_apply.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6611-raft-persist-before-apply", "Run SONNY-6611 item 7 / SONNY-6592 item 3 regression (a cluster follower applies a committed Raft entry only after the entry is in its FileStorage, TDE-sealed or not, and sends the AppendEntries reply acknowledging it only then)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6321: the TDE self-test procedures through the executor, and no
     // CANARY cites the TDEKeyManager suite for code it does not exercise.

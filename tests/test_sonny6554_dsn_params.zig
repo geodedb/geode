@@ -307,9 +307,11 @@ test "SONNY-6569 (5): the MCP endpoint still takes every documented DSN form" {
         "grpc://localhost:50051?tls=0&insecure_tls_skip_verify=true",
         "grpc://localhost:50051/my-graph?ca=/path/to/ca.crt&cert=/path/to/client.crt&key=/path/to/client.key",
         "quic://admin:secret@[2001:db8::1]:3141?insecure_tls_skip_verify=true",
-        // SONNY-6589 (2): connect_timeout / timeout_ms are refused
-        // (DsnTimeoutUnsupported, test-sonny6589-mcp-timeout): the client
-        // library cannot apply them.
+        // SONNY-6589 (2): geode-client-zig v0.3.18 applies the timeout
+        // (test-sonny6589-mcp-timeout).
+        "quic://localhost:3141?connect_timeout=30",
+        "quic://localhost:3141?timeout=5000",
+        "quic://localhost:3141?timeout_ms=10000&connect_timeout=5",
         "quic://localhost:3141?server_name=db.example.com",
         "quic://localhost:3141?graph=social&tenant=acme&role=analyst",
         "quic://localhost:3141?username=admin&password=secret",
