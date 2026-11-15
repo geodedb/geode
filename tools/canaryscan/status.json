@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T17:43:06.466580524Z",
+  "generated_at": "2026-11-15T17:43:51.82615908Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78589,6 +78589,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6607-INDEX-BACKFILL-WARNING",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_index_backfill_warning.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_index_backfill_warning.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6607-VOID-WRITE-ERRORS",
       "features": [
         {
@@ -83698,7 +83717,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4157
+      "TESTED": 4158
     },
     "by_aspect": {
       "2PC": 3,
@@ -86473,7 +86492,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 374,
+      "Regression": 375,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
