@@ -10780,6 +10780,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6607_adj_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6607_adj_step = b.step("test-sonny6607-adjacency-property-read-failure", "Run SONNY-6607 item 1 regression (a durable store, gRPC in process, every adjacency list evicted and its rebuild failing: one-hop, var-length, shortestPath, COUNT { }, BFS, DFS and centrality fail or answer exactly the healthy answer)");
     sonny6607_adj_step.dependOn(&run_sonny6607_adj_tests.step);
+    // SONNY-6607 (2): a REMOVE whose target cannot be read fails with the
+    // read's error, never out of memory or a silent success. gRPC in process.
+    const sonny6607_vw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_void_write_errors.zig"), .target = target, .optimize = optimize });
+    sonny6607_vw_test_mod.link_libc = true;
+    sonny6607_vw_test_mod.addImport("geode", root_mod);
+    sonny6607_vw_test_mod.addImport("schema", schema_mod);
+    sonny6607_vw_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_vw_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6607_vw_test_mod.addImport("logging", logging_mod);
+    sonny6607_vw_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_vw_tests = b.addTest(.{ .root_module = sonny6607_vw_test_mod });
+    const run_sonny6607_vw_tests = b.addRunArtifact(sonny6607_vw_tests);
+    shardDep(test_step, &run_sonny6607_vw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_vw_step = b.step("test-sonny6607-void-write-errors", "Run SONNY-6607 item 2 regression (a durable store, gRPC in process, every body rebuild failing with an engine read error: REMOVE of a node or edge property fails, not with 53200, and leaves the property)");
+    sonny6607_vw_step.dependOn(&run_sonny6607_vw_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.

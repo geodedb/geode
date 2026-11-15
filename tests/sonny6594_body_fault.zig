@@ -22,6 +22,16 @@ pub const BodyFault = struct {
     /// failed only by `adjacencyOn`.
     adj_out: std.testing.FailingAllocator,
     adj_in: std.testing.FailingAllocator,
+    /// SONNY-6607: `ioErrorOn` replaced the caches' hydrate hooks.
+    io_error: bool = false,
+    /// SONNY-6607: rebuilds still served by the real hook before the I/O
+    /// error starts (`ioErrorFrom`), and the real hooks.
+    io_left: usize = 0,
+    io_induced: bool = false,
+    real_node_hydrate: ?graph_store.NodeCache.HydrateFn = null,
+    real_node_ctx: ?*anyopaque = null,
+    real_edge_hydrate: ?graph_store.EdgeCache.HydrateFn = null,
+    real_edge_ctx: ?*anyopaque = null,
 
     /// `self` must not move afterwards (the caches point into it while on).
     pub fn init(self: *BodyFault, st: *graph_store.GraphStore) void {
@@ -88,6 +98,48 @@ pub const BodyFault = struct {
         self.st.incoming_edges.allocator = self.adj_in.allocator();
     }
 
+    /// SONNY-6607 (2): every node and edge body rebuild fails with an engine
+    /// read error (`error.InputOutput`, not out of memory) until `off`: the
+    /// caches' hydrate hooks (`setHydrate`, the seam the store installs its
+    /// engine read on) answer the error instead of reading the engine.
+    pub fn ioErrorOn(self: *BodyFault) void {
+        self.ioErrorFrom(0);
+    }
+
+    /// `ioErrorOn` after the first `k` rebuilds (nodes and edges together),
+    /// which the real hook serves.
+    pub fn ioErrorFrom(self: *BodyFault, k: usize) void {
+        self.real_node_hydrate = self.st.nodes.hydrate_fn;
+        self.real_node_ctx = self.st.nodes.hydrate_ctx;
+        self.real_edge_hydrate = self.st.edges.hydrate_fn;
+        self.real_edge_ctx = self.st.edges.hydrate_ctx;
+        self.io_left = k;
+        self.io_induced = false;
+        self.st.nodes.setHydrate(failNodeHydrate, @ptrCast(self));
+        self.st.edges.setHydrate(failEdgeHydrate, @ptrCast(self));
+        self.io_error = true;
+    }
+
+    fn failNodeHydrate(ctx: *anyopaque, a: std.mem.Allocator, id: u64) anyerror!?graph_store.Node {
+        const self: *BodyFault = @ptrCast(@alignCast(ctx));
+        if (self.io_left > 0) {
+            self.io_left -= 1;
+            return self.real_node_hydrate.?(self.real_node_ctx.?, a, id);
+        }
+        self.io_induced = true;
+        return error.InputOutput;
+    }
+
+    fn failEdgeHydrate(ctx: *anyopaque, a: std.mem.Allocator, id: u64) anyerror!?graph_store.Edge {
+        const self: *BodyFault = @ptrCast(@alignCast(ctx));
+        if (self.io_left > 0) {
+            self.io_left -= 1;
+            return self.real_edge_hydrate.?(self.real_edge_ctx.?, a, id);
+        }
+        self.io_induced = true;
+        return error.InputOutput;
+    }
+
     /// Every body rebuild fails from now on (until `off`).
     pub fn on(self: *BodyFault) void {
         self.onFrom(0);
@@ -105,12 +157,17 @@ pub const BodyFault = struct {
 
     /// Back to the real allocators. True when a rebuild failed while on.
     pub fn off(self: *BodyFault) bool {
+        if (self.io_error) {
+            self.st.nodes.setHydrate(self.real_node_hydrate.?, self.real_node_ctx.?);
+            self.st.edges.setHydrate(self.real_edge_hydrate.?, self.real_edge_ctx.?);
+            self.io_error = false;
+        }
         self.st.nodes.allocator = self.nodes.internal_allocator;
         self.st.edges.allocator = self.edges.internal_allocator;
         self.st.outgoing_edges.allocator = self.adj_out.internal_allocator;
         self.st.incoming_edges.allocator = self.adj_in.internal_allocator;
         inline for (.{ &self.nodes, &self.edges, &self.adj_out, &self.adj_in }) |f| f.fail_index = std.math.maxInt(usize);
         return self.nodes.has_induced_failure or self.edges.has_induced_failure or
-            self.adj_out.has_induced_failure or self.adj_in.has_induced_failure;
+            self.adj_out.has_induced_failure or self.adj_in.has_induced_failure or self.io_induced;
     }
 };
