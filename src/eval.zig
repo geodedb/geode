@@ -3585,7 +3585,9 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     for (edge_ids) |edge_id| {
         // By value: a copy taken under the edge shard's lock
         // (`getEdgeHydrated`), safe against a concurrent edge writer.
-        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+        // SONNY-6594 (4): an unreadable edge fails the call; it was skipped
+        // (a degree short by the edges that could not be read).
+        const edge = (store.getEdgeHydratedChecked(edge_id) catch |err| return value_types.storageReadFailed(err)) orelse continue;
         const neighbour = switch (direction) {
             .incoming => edge.from_id,
             .outgoing => edge.to_id,

@@ -118,8 +118,8 @@ pub const AlgoScope = struct {
     /// `edgeTraversable` for an edge id, read by value (`getEdgeHydrated`
     /// copies it under the shard lock). An edge that resolves nowhere is not
     /// traversable.
-    pub fn edgeIdTraversable(self: *AlgoScope, store: *graph_store.GraphStore, edge_id: u64) bool {
-        const edge = store.getEdgeHydrated(edge_id) orelse return false;
+    pub fn edgeIdTraversable(self: *AlgoScope, store: *graph_store.GraphStore, edge_id: u64) !bool {
+        const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return false;
         return self.edgeTraversable(store, edge);
     }
 };

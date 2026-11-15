@@ -3958,7 +3958,7 @@ pub const PathIterator = struct {
             // Process outgoing edges (forward direction)
             if (outgoing_edge_ids) |ids| {
                 for (ids) |edge_id| {
-                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    const edge_ptr = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (self.rel_type) |rt| {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }
@@ -3971,7 +3971,7 @@ pub const PathIterator = struct {
             // Process incoming edges (reverse direction)
             if (incoming_edge_ids) |ids| {
                 for (ids) |edge_id| {
-                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    const edge_ptr = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (self.rel_type) |rt| {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }

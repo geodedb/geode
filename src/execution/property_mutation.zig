@@ -530,7 +530,7 @@ pub fn setEdgePropertyFromValue(
     }
     // GAP-0854 follow-up: resolve the edge's graph so the FLE hook can exclude
     // the internal __geode_security graph (HAS_ROLE etc. feed the auth chain).
-    const edge_graph: ?[]const u8 = if (store.getEdgePtr(edge_id)) |e| e.graph_name else null;
+    const edge_graph: ?[]const u8 = if ((try store.getEdgePtrHydratedChecked(edge_id))) |e| e.graph_name else null;
     const prop_value = switch (value) {
         .Str => |s| blk: {
             // SONNY-6347: the record's stored tenant is the encryption identity's.

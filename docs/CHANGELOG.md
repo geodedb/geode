@@ -2572,6 +2572,29 @@
   `knn()` rebuilds the index from the catalog row (or scans). Exact and
   ordered property indexes do not read bodies through these getters.
   Regression: `zig build test-sonny6594-index-build-read-failure`.
+- **A write that cannot read its target edge fails with the read's own
+  error (SONNY-6594 item 3).** **BREAKING (behaviour):** the write paths
+  took an edge body that could not be READ (an engine read error, out of
+  memory while rebuilding an evicted body) for an absent edge. `SET` on a
+  relationship then succeeded without changing it; MERGE's edge probe
+  skipped it (and could create a second edge beside it); `DELETE r` and
+  `DETACH DELETE` failed with `EdgeBodyUnresolvable` /
+  `IncidentEdgeUnresolvable` (58000, the error's bare name) for what was out
+  of memory or an engine read error. Each now fails with the read's error
+  (out of memory: 53200) and changes nothing. Regression: `zig build
+  test-sonny6594-write-read-failure`.
+- **A read that cannot read an edge body fails instead of answering short
+  (SONNY-6594 item 4).** **BREAKING (behaviour):** a statement that used to
+  return rows (fewer of them) now fails. The MATCH executor, the
+  variable-length expansion, `COUNT { }` / `EXISTS { }` / pattern
+  comprehensions, `shortestPath`, `indegree()` / `outdegree()` under a
+  restricting scope, `algo.bfs` / `dfs` / `dijkstra` and the centrality
+  procedures skipped an edge whose body could not be read, so a count, a
+  path, a distance or a score silently left it out. Each now fails with the
+  read's error (out of memory: 53200; an engine read error inside an
+  expression: `StorageReadFailed`, 58000, the cause logged). An edge that is
+  absent (deleted), in another graph or tenant, or hidden by RLS is still
+  skipped. Regression: `zig build test-sonny6594-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,

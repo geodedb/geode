@@ -89,18 +89,18 @@ fn rawDegree(store: *graph_store.GraphStore, node_id: u64) Degree {
 /// Replaces the raw `getOutgoingEdgeIds(..).len` degree reads, which counted
 /// edges into other tenants' subgraphs and edges RLS hides. Calling thread
 /// only.
-fn visibleDegree(store: *graph_store.GraphStore, node_id: u64, scope: *AlgoScope) Degree {
+fn visibleDegree(store: *graph_store.GraphStore, node_id: u64, scope: *AlgoScope) !Degree {
     if (!scope.restricts()) return rawDegree(store, node_id);
     var out_deg: u64 = 0;
     var in_deg: u64 = 0;
     if (store.getOutgoingEdgeIds(node_id)) |ids| {
         for (ids) |eid| {
-            if (scope.edgeIdTraversable(store, eid)) out_deg += 1;
+            if (try scope.edgeIdTraversable(store, eid)) out_deg += 1;
         }
     }
     if (store.getIncomingEdgeIds(node_id)) |ids| {
         for (ids) |eid| {
-            if (scope.edgeIdTraversable(store, eid)) in_deg += 1;
+            if (try scope.edgeIdTraversable(store, eid)) in_deg += 1;
         }
     }
     return .{ .out = out_deg, .in = in_deg };
@@ -115,7 +115,7 @@ fn visibleEdgeCount(store: *graph_store.GraphStore, allocator: std.mem.Allocator
     defer allocator.free(ids);
     var n: usize = 0;
     for (ids) |eid| {
-        if (scope.edgeIdTraversable(store, eid)) n += 1;
+        if (try scope.edgeIdTraversable(store, eid)) n += 1;
     }
     return n;
 }
@@ -187,7 +187,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     // node, even across an edge that happens to carry the reader's own tag.
     if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            if (store.getEdgeHydrated(edge_id)) |edge| {
+            if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                 if (!scope.edgeTraversable(store, edge)) continue;
                 try neighbors.append(allocator, edge.to_id);
             }
@@ -195,7 +195,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     }
     if (store.getIncomingEdgeIds(node_id)) |in_edge_ids| {
         for (in_edge_ids) |edge_id| {
-            if (store.getEdgeHydrated(edge_id)) |edge| {
+            if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                 if (!scope.edgeTraversable(store, edge)) continue;
                 try neighbors.append(allocator, edge.from_id);
             }
@@ -244,7 +244,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
         var set = NeighborSet.init(allocator);
         if (store.getOutgoingEdgeIds(node)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
-                if (store.getEdgeHydrated(edge_id)) |edge| {
+                if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
                     if (!scope.edgeTraversable(store, edge)) continue;
                     try set.put(edge.to_id, {});
@@ -253,7 +253,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
         }
         if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
             for (in_edge_ids) |edge_id| {
-                if (store.getEdgeHydrated(edge_id)) |edge| {
+                if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                     if (!scope.edgeTraversable(store, edge)) continue;
                     try set.put(edge.from_id, {});
                 }
@@ -313,7 +313,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         const degs = try allocator.alloc(u64, n);
         errdefer allocator.free(degs);
         for (node_list.items, 0..) |node_id, i| {
-            const deg = visibleDegree(store, node_id, scope);
+            const deg = try visibleDegree(store, node_id, scope);
             degs[i] = deg.out + deg.in;
         }
         break :blk degs;
@@ -682,7 +682,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     for (node_list.items, 0..) |node, idx| {
         // SONNY-1318: out-degree over VISIBLE edges only, or a node's rank
         // would be diluted by links into tenants the session cannot see.
-        const out_degree_count = visibleDegree(store, node, scope).out;
+        const out_degree_count = (try visibleDegree(store, node, scope)).out;
         out_degrees[idx] = @as(f64, @floatFromInt(out_degree_count));
     }
 
@@ -708,7 +708,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             // Use incoming_edges adjacency index to find predecessors in O(in_degree)
             if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
-                    if (store.getEdgeHydrated(edge_id)) |edge| {
+                    if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                         // SONNY-1318: never accumulate rank across an edge (or
                         // from a predecessor) the session's scope cannot see.
                         if (!scope.edgeTraversable(store, edge)) continue;
@@ -809,7 +809,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
     var node_degree = std.AutoHashMap(u64, f64).init(allocator);
     defer node_degree.deinit();
     for (node_list.items) |node| {
-        const deg = visibleDegree(store, node, scope);
+        const deg = try visibleDegree(store, node, scope);
         try node_degree.put(node, @floatFromInt(deg.out + deg.in));
     }
 
@@ -1062,7 +1062,7 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
         // SHARED — the same accessor `getNeighbors`/`buildNeighborSets` already
         // use, and the one `graph_store.zig` (~:3169) names as safe for an
         // analytical read that overlaps ingest.
-        const edge = store.getEdgeHydrated(__eid) orelse continue;
+        const edge = (try store.getEdgeHydratedChecked(__eid)) orelse continue;
 
         // SONNY-1318: an invisible edge must not union two components, or a
         // cross-tenant bridge would merge another tenant's nodes into this
@@ -2334,7 +2334,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         out_tmp.clearRetainingCapacity();
         if (store.getOutgoingEdgeIds(node)) |edge_ids| {
             for (edge_ids) |eid| {
-                if (store.getEdgeHydrated(eid)) |edge| {
+                if ((try store.getEdgeHydratedChecked(eid))) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
                     if (!scope.edgeTraversable(store, edge)) continue;
                     try out_tmp.append(allocator, edge.to_id);
@@ -2346,7 +2346,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         in_tmp.clearRetainingCapacity();
         if (store.getIncomingEdgeIds(node)) |edge_ids| {
             for (edge_ids) |eid| {
-                if (store.getEdgeHydrated(eid)) |edge| {
+                if ((try store.getEdgeHydratedChecked(eid))) |edge| {
                     if (!scope.edgeTraversable(store, edge)) continue;
                     try in_tmp.append(allocator, edge.from_id);
                 }

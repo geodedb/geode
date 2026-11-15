@@ -309,7 +309,7 @@ pub fn findEdgeBetween(
     store: *graph_store.GraphStore,
     from_id: u64,
     to_id: u64,
-) tenant_visibility.TenancyError!?*const graph_store.Edge {
+) !?*const graph_store.Edge {
     var scope = try ExprScope.init(allocator);
     defer scope.deinit();
     return findScopedEdgeBetween(store, from_id, to_id, &scope);
@@ -322,7 +322,7 @@ fn findScopedEdgeBetween(
     from_id: u64,
     to_id: u64,
     scope: *ExprScope,
-) ?*const graph_store.Edge {
+) !?*const graph_store.Edge {
     return findScopedEdgeOfType(store, from_id, to_id, &.{}, scope);
 }
 
@@ -333,23 +333,23 @@ fn findScopedEdgeOfType(
     to_id: u64,
     types: []const []const u8,
     scope: *ExprScope,
-) ?*const graph_store.Edge {
+) !?*const graph_store.Edge {
     if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
             if (edge.to_id != to_id) continue;
             if (!typeAllowed(types, edge.label)) continue;
             if (!scope.edgeWalkable(store, edge)) continue;
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
+            if ((try store.getEdgePtrHydratedChecked(edge_id))) |edge_ptr| return edge_ptr;
         }
     }
     if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
-            const edge = store.getEdgeHydrated(edge_id) orelse continue;
+            const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
             if (edge.to_id != from_id) continue;
             if (!typeAllowed(types, edge.label)) continue;
             if (!scope.edgeWalkable(store, edge)) continue;
-            if (store.getEdgePtrHydrated(edge_id)) |edge_ptr| return edge_ptr;
+            if ((try store.getEdgePtrHydratedChecked(edge_id))) |edge_ptr| return edge_ptr;
         }
     }
     return null;
@@ -580,7 +580,7 @@ const PatternWalk = struct {
             for (edge_ids) |edge_id| {
                 // SONNY-1326: read the edge BY VALUE for every decision; the
                 // raw `*Edge` is taken only for the binding below.
-                const edge = self.store.getEdgeHydrated(edge_id) orelse continue;
+                const edge = (try self.store.getEdgeHydratedChecked(edge_id)) orelse continue;
                 // An undirected self-loop was read from both lists; it is one
                 // match.
                 if (side == 1 and hop.rel.dir == .undirected and edge.from_id == edge.to_id) continue;
@@ -605,7 +605,7 @@ const PatternWalk = struct {
                 defer freeExtendedEnv(self.allocator, right_env, env);
                 var next_env = right_env;
                 if (bound_rel == null) if (hop.rel.name) |rn| {
-                    const edge_ptr = self.store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge_ptr = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     next_env = try right_env.withBinding(self.allocator, rn, .{ .Edge = edge_ptr });
                 };
                 defer freeExtendedEnv(self.allocator, next_env, right_env);
@@ -653,7 +653,7 @@ const PatternWalk = struct {
 
             var edges_ok = true;
             for (path.edges.items) |eid| {
-                const e = self.store.getEdgeHydrated(eid) orelse {
+                const e = (try self.store.getEdgeHydratedChecked(eid)) orelse {
                     edges_ok = false;
                     break;
                 };
@@ -676,7 +676,7 @@ const PatternWalk = struct {
                 edge_values = try self.allocator.alloc(Value, path.edges.items.len);
                 var resolved: usize = 0;
                 for (path.edges.items, edge_values) |eid, *slot| {
-                    const ep = self.store.getEdgePtrHydrated(eid) orelse break;
+                    const ep = (try self.store.getEdgePtrHydratedChecked(eid)) orelse break;
                     slot.* = .{ .Edge = ep };
                     resolved += 1;
                 }
@@ -866,7 +866,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         // Explore neighbors using adjacency indexes (O(degree) instead of O(E))
         if (hop.rel.dir != .left) if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
-                const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
                 if (!typeAllowed(hop.rel.types, edge.label)) continue;
                 const neighbor_id = edge.to_id;
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: the frontier gate — the
@@ -887,7 +887,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (hop.rel.dir != .right) {
             if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
-                    const edge = store.getEdgeHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
                     if (!typeAllowed(hop.rel.types, edge.label)) continue;
                     const neighbor_id = edge.from_id;
                     if (!scope.stepVisible(store, edge, neighbor_id)) continue;
@@ -986,7 +986,7 @@ fn materializePath(
         // a parallel edge the session may not traverse is never attached.
         if (idx > 0) {
             const prev_id = node_ids[idx - 1];
-            if (findScopedEdgeOfType(store, prev_id, node_id, types, scope)) |edge_ptr| {
+            if (try findScopedEdgeOfType(store, prev_id, node_id, types, scope)) |edge_ptr| {
                 try path_edges.append(allocator, edge_ptr);
             }
         }
