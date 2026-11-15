@@ -159,9 +159,11 @@ SONNY-6279.
   `...LogEncryptionMismatch`) and is left as it is
   (`test-sonny6622-raft-v022-adapt`). The graphs an entry's apply writes are
   hydrated when the entry enters the log or before a restarted node
-  replays it, and the labels and relationship types it writes get their
-  (durably persisted) label ids then too, not under `inner_mutex`
-  (`test-sonny6631-apply-hydration-off-mutex`, SONNY-6633). InstallSnapshot
+  replays it, not under `inner_mutex`
+  (`test-sonny6631-apply-hydration-off-mutex`). A label or relationship type
+  new to a graph is still written to its label dictionary durably (two
+  fsyncs per shard set) under `inner_mutex` (SONNY-6633 item 4, open).
+  InstallSnapshot
   carries its chunk data, BLAKE3 digest and configuration on the wire, and a
   refused snapshot reaches the leader as a refusal; a snapshot carries the
   idempotency-key table (`test-sonny6633-snapshot-wire`).

@@ -1525,13 +1525,12 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
     return .{ .key = key, .entries = entries };
 }
 
-/// SONNY-6631: call `f(ctx, graph, payload)` for each entry of a batch: the
-/// graph it writes and its lone-entry payload (borrowing into `data`),
-/// without allocating: the Raft receive paths hydrate the graphs and intern
-/// the names before the apply. Stops at the first malformed entry
+/// SONNY-6631: call `f(ctx, graph)` for the graph each entry of a batch
+/// writes (borrowing into `data`), without allocating: the Raft receive
+/// paths hydrate them before the apply. Stops at the first malformed entry
 /// (its apply refuses the batch); a version this build does not know is
 /// `UnsupportedBatchVersion`.
-pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8, []const u8) void) !void {
+pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8) void) !void {
     if (!isBatchPayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_BATCH.len };
     if (try r.byte() != BATCH_VERSION) return BatchError.UnsupportedBatchVersion;
@@ -1540,8 +1539,8 @@ pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf
     if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
     for (0..count) |_| {
         _ = try r.byte();
-        const graph = try r.str16();
-        f(ctx, graph, try r.str32());
+        f(ctx, try r.str16());
+        _ = try r.str32();
     }
 }
 
@@ -1616,8 +1615,6 @@ pub const Effect = struct {
     /// Property keys and labels it sets or removes on existing nodes.
     written_keys: []const []const u8 = &.{},
     written_labels: []const []const u8 = &.{},
-    /// SONNY-6633 (4): relationship types the entry creates edges with.
-    edge_types: []const []const u8 = &.{},
 };
 
 fn readProps(allocator: std.mem.Allocator, r: *Reader) ![]const Prop {
@@ -1642,7 +1639,6 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     var ids = std.ArrayList(u64).empty;
     var keys = std.ArrayList([]const u8).empty;
     var labels = std.ArrayList([]const u8).empty;
-    var edge_types = std.ArrayList([]const u8).empty;
     if (isNodeCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC.len };
         out.graph = try r.str16();
@@ -1663,7 +1659,7 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
             for ([_]Endpoint{ try readEndpoint(&r), try readEndpoint(&r) }) |ep| {
                 if (ep == .absolute_id) try ids.append(allocator, ep.absolute_id);
             }
-            try edge_types.append(allocator, try r.str16());
+            _ = try r.str16();
             _ = try readProps(allocator, &r);
         }
     } else if (isDeletePayload(data)) {
@@ -1697,7 +1693,6 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     out.ids = ids.items;
     out.written_keys = keys.items;
     out.written_labels = labels.items;
-    out.edge_types = edge_types.items;
     return out;
 }
 
