@@ -1040,6 +1040,16 @@ What exists:
 - The offline `geode user mfa-setup` and `geode user mfa enable` print the
   same warning. `geode user mfa enable` needs `--code` with a code that
   verifies (SONNY-6608: without it, it turned MFA on).
+- The offline `geode user mfa-verify` applies the same limit as
+  `geode.auth.mfa_verify` (five failures, a five-minute lockout, reset by a
+  code that verifies), kept in a sealed `MfaAttempts` record in
+  `__geode_security` (SONNY-6614): the server keeps its count in process
+  memory, and each run of the command is a new process, so before it had
+  no limit at all. The attempt is counted and saved before the code is
+  checked; one that cannot be saved is refused unchecked. Being a store
+  write, it is refused while a server holds the data directory (or pass
+  `--force`, as the other offline writers). The server's own count stays
+  in memory: a server restart clears a lockout it set.
 - `geode user show` prints the stored MFA state, e.g. `MFA: disabled
   (enrolled, 8 recovery codes; not enforced at login yet, SONNY-6604)` or
   `MFA: disabled (not enrolled)` (SONNY-6609).

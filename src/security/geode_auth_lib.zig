@@ -962,27 +962,39 @@ pub const SecurityManager = struct {
                     var it = p.value.object.iterator();
                     while (it.next()) |entry| {
                         if (entry.value_ptr.* != .string) continue;
-                        try attrs.put(
-                            try self.allocator.dupe(u8, entry.key_ptr.*),
-                            try self.allocator.dupe(u8, entry.value_ptr.string),
-                        );
+                        // SONNY-6614: a copy the map did not take is freed.
+                        const k = try self.allocator.dupe(u8, entry.key_ptr.*);
+                        errdefer self.allocator.free(k);
+                        const v = try self.allocator.dupe(u8, entry.value_ptr.string);
+                        errdefer self.allocator.free(v);
+                        try attrs.put(k, v);
                     }
                 }
             }
         }
 
+        // SONNY-6614: each copy is freed when a later step fails (they were
+        // made inside the struct literal and leaked).
+        const username_copy = try self.allocator.dupe(u8, username);
+        errdefer self.allocator.free(username_copy);
+        const email_copy = try self.allocator.dupe(u8, email);
+        errdefer self.allocator.free(email_copy);
+        const hash_copy = try self.allocator.dupe(u8, password_hash);
+        errdefer self.allocator.free(hash_copy);
+        const secret_copy: ?[]const u8 = if (mfa_secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| self.allocator.free(c);
         const user = User{
             .id = id,
-            .username = try self.allocator.dupe(u8, username),
-            .email = try self.allocator.dupe(u8, email),
-            .password_hash = try self.allocator.dupe(u8, password_hash),
+            .username = username_copy,
+            .email = email_copy,
+            .password_hash = hash_copy,
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = is_active,
             .is_superuser = is_superuser,
             .mfa_enabled = mfa_enabled,
-            .mfa_secret = if (mfa_secret) |s| try self.allocator.dupe(u8, s) else null,
+            .mfa_secret = secret_copy,
             .attributes = attrs,
             .password_reset_required = password_reset_required,
             .auth_version = @max(@as(u64, 1), auth_version),
@@ -2111,6 +2123,31 @@ pub const SecurityManager = struct {
             old.deinit(self.allocator);
         }
         user.recovery_codes = list;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6614-SM-FORGET-MFA; FEATURE="MFA authentication"; ASPECT=DroppedUserMfaCleared; STATUS=TESTED; TEST=tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6614: clear `username`'s MFA state (DROP USER,
+    /// `auth_dispatch.handleUserDelete`): MFA off, the secret zeroed and
+    /// freed, the recovery codes freed. No such user: nothing to do.
+    pub fn forgetMfaState(self: *Self, username: []const u8) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            const user = entry.value_ptr;
+            if (!std.mem.eql(u8, user.username, username)) continue;
+            user.mfa_enabled = false;
+            if (user.mfa_secret) |sec| {
+                crypto_backend.secureZero(@constCast(sec));
+                self.allocator.free(sec);
+                user.mfa_secret = null;
+            }
+            if (user.recovery_codes) |*codes| {
+                for (codes.items) |c| self.allocator.free(c);
+                codes.deinit(self.allocator);
+                user.recovery_codes = null;
+            }
+        }
     }
 
     /// SONNY-6600: convert codes still held in plaintext (stored before

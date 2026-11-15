@@ -129,3 +129,107 @@ fn mfaSetEnabled(ctx: ?*anyopaque, username: []const u8, enabled: bool) anyerror
     const agm: *AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     try agm.setMfaEnabledWriteThrough(&agm.hmac_key, username, enabled);
 }
+
+/// SONNY-6614: SecurityManager as the server builds it at startup
+/// (`server_init.hydrateSecurityManagerFromGraph`), and what it loaded.
+pub const LoadedSecurityManager = struct {
+    sm: geode.auth.SecurityManager,
+    role_count: usize,
+    user_count: usize,
+    assignment_count: usize,
+};
+
+/// Build SecurityManager from the stored records: the roles, the users
+/// (their MFA state with `hydrateSecurityManagerMfa`), the role
+/// memberships. `hmac_key`: the security graph's key, for the runtime
+/// write-through and for opening the MFA secrets.
+pub fn hydrateSecurityManager(allocator: std.mem.Allocator, agm: *AuthGraphManager, hmac_key: ?[32]u8) !LoadedSecurityManager {
+    const geode_auth = geode.auth;
+    var sm = try geode_auth.SecurityManager.initEmpty(allocator);
+    // CANARY: REQ=REQ-SONNY-6614-SM-LOAD-ERRDEFER; FEATURE="AuthGraphManager Integration"; ASPECT=LoadFreesOnFailure; STATUS=TESTED; TEST=tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6614: a load that fails part way frees everything (it leaked the
+    // SecurityManager and every record it had copied).
+    errdefer sm.deinit();
+
+    // Hydrate roles first so user-role memberships can be restored without side effects.
+    var role_count: usize = 0;
+    var role_it = agm.storage.roleIterator();
+    while (role_it.next()) |record| {
+        // SONNY-6614: copies the map did not take are freed.
+        const name = try allocator.dupe(u8, record.getName());
+        errdefer allocator.free(name);
+        const description = try allocator.dupe(u8, record.getDescription());
+        errdefer allocator.free(description);
+        const role = geode_auth.Role{
+            .id = record.id,
+            .name = name,
+            .description = description,
+            .permissions = std.ArrayList(geode_auth.PermissionId).empty,
+            .created_at = record.created_at,
+            .is_system = record.is_system,
+            .priority = record.priority,
+            .parent_role = if (record.parent_role == 0) null else record.parent_role,
+        };
+        try sm.roles.put(record.id, role);
+        role_count += 1;
+    }
+
+    var user_count: usize = 0;
+    var it = agm.storage.userIterator();
+    while (it.next()) |record| {
+        try sm.hydrateUser(
+            record.id,
+            record.getUsername(),
+            record.getEmail(),
+            record.getPasswordHash(),
+            record.is_superuser,
+            record.is_active,
+            record.is_default_user,
+            record.password_reset_required,
+            record.mfa_enabled,
+            null, // SONNY-6609: the secret is stored sealed; loaded below
+            record.auth_version,
+            record.getAttributesJson(),
+        );
+        user_count += 1;
+    }
+    // SONNY-6609: each user's TOTP secret (opened) and recovery codes.
+    if (hmac_key) |k| agm.hmac_key = k;
+    _ = try hydrateSecurityManagerMfa(allocator, agm, &sm);
+
+    var assignment_count: usize = 0;
+    var membership_it = agm.storage.userIterator();
+    while (membership_it.next()) |record| {
+        const role_ids = try agm.storage.listUserRoleIds(allocator, record.id);
+        defer allocator.free(role_ids);
+
+        if (role_ids.len == 0) continue;
+        var entry = try sm.rbac.user_roles.getOrPut(record.id);
+        if (!entry.found_existing) {
+            // SONNY-6614: an entry whose list could not be made is removed
+            // (its value was undefined, and the deinit freed it).
+            entry.value_ptr.* = std.ArrayList(geode_auth.RoleId).initCapacity(allocator, role_ids.len) catch |err| {
+                _ = sm.rbac.user_roles.remove(record.id);
+                return err;
+            };
+        }
+        for (role_ids) |role_id| {
+            try entry.value_ptr.append(allocator, role_id);
+            assignment_count += 1;
+        }
+    }
+
+    if (hmac_key) |k| sm.hmac_key = k;
+    return .{ .sm = sm, .role_count = role_count, .user_count = user_count, .assignment_count = assignment_count };
+}
+
+/// SONNY-6614: SecurityManager's hooks for the auth procedures
+/// (`auth_dispatch.setSecurityManagerHooks`).
+pub fn securityManagerHooks(sm: *geode.auth.SecurityManager) auth_dispatch.SecurityManagerHooks {
+    return .{ .ctx = @ptrCast(sm), .forget_mfa_fn = &smForgetMfa };
+}
+
+fn smForgetMfa(ctx: ?*anyopaque, username: []const u8) void {
+    const sm: *geode.auth.SecurityManager = @ptrCast(@alignCast(ctx.?));
+    sm.forgetMfaState(username);
+}

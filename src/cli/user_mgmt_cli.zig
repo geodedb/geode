@@ -308,6 +308,8 @@ fn subcommandMutatesAuthStore(subcommand: []const u8) bool {
         "create",      "import",          "delete",         "update",
         "assign-role", "disable",         "enable",         "mfa",
         "mfa-setup",   "change-password", "reset-password",
+        // SONNY-6614: it stores its attempt count.
+        "mfa-verify",
     };
     for (mutating) |m| {
         if (std.mem.eql(u8, subcommand, m)) return true;
@@ -1007,6 +1009,34 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         defer std.crypto.secureZero(u8, &secret_buf);
         const secret = openStoredMfaSecret(&mgr, &read_key, existing, &secret_buf);
 
+        // CANARY: REQ=REQ-SONNY-6614-OFFLINE-MFA-LIMIT; FEATURE="MFA authentication"; ASPECT=OfflineAttemptLimit; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6614: the online limit (geode.auth.mfa_verify: 5 failures, a
+        // 5-minute lockout, reset on success), kept in the sealed MfaAttempts
+        // record (the server keeps its count in process memory; each run of
+        // this command is a new process). The attempt is counted and saved
+        // BEFORE the code is checked, and reset after a code that verifies:
+        // an attempt that cannot be counted is refused unchecked, and an
+        // interrupted run leaves it counted. It had no limit.
+        const geode_auth_dispatch = geode.auth_dispatch;
+        const now_ms = compat_milliTimestamp();
+        const prev = mgr.mfaAttempts(existing.id) orelse @TypeOf(mgr.storage).MfaAttemptState{};
+        if (now_ms < prev.lockout_until_ms) {
+            std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        const counted = prev.fail_count +| 1;
+        mgr.storage.setMfaAttempts(existing.id, .{
+            .fail_count = counted,
+            .lockout_until_ms = if (counted >= geode_auth_dispatch.mfa_max_attempts) now_ms + geode_auth_dispatch.mfa_lockout_ms else 0,
+        }) catch |err| {
+            std.debug.print("Error: the attempt could not be counted ({s}); the code was not checked\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        cli_auth.sealAndSaveNow(allocator, &mgr) catch |err| {
+            std.debug.print("Error: the attempt could not be saved ({s}); the code was not checked\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+
         const code_str = token.?;
         if (code_str.len != 6) {
             std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
@@ -1029,6 +1059,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
+        // Verified: the count starts again (saved by deinitAndSaveCliAuth).
+        try mgr.storage.setMfaAttempts(existing.id, .{});
         printOut("MFA token verified for {s}\n", .{username});
         return;
     }

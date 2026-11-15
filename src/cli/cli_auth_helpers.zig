@@ -294,6 +294,16 @@ pub fn changeKey(allocator: std.mem.Allocator) ![32]u8 {
     return kr.key;
 }
 
+/// SONNY-6614: seal the command's change into the chain and write it out
+/// NOW (before a step that may end the process with `std.process.exit`,
+/// which runs no defer, so `deinitAndSaveCliAuth` would not). The chain
+/// must have verified first (`requireIntactChain`).
+pub fn sealAndSaveNow(allocator: std.mem.Allocator, mgr: *AuthGraphManager) !void {
+    const key = try changeKey(allocator);
+    try mgr.sealChain(&key);
+    graph_store.getGlobalStore(allocator).saveIfDirty();
+}
+
 /// SONNY-6609: the key the store's sealed MFA secrets open with, for a
 /// command that reads one without changing the store (`geode user
 /// mfa-verify`): the verified key, else the store's existing key (never

@@ -4,6 +4,29 @@
 
 ### Security
 
+- **The SecurityManager load frees everything when it fails, DROP USER
+  clears the user's MFA state from SecurityManager, and the offline
+  `geode user mfa-verify` has the online attempt limit (SONNY-6614).** The
+  startup load of SecurityManager (now
+  `auth_startup_hydration.hydrateSecurityManager`) had no errdefer: an
+  allocation failure part way leaked the SecurityManager and every record
+  it had copied (shown under every allocation failure: 208 leaked
+  allocations), and `SecurityManager.hydrateUser` leaked the copies it had
+  made; both free them now, and a role-membership entry whose list cannot
+  be made is removed instead of left undefined. DROP USER left the user's
+  TOTP secret, recovery codes and MFA flag in SecurityManager; it clears
+  them. The offline `geode user mfa-verify` had no attempt limit (the
+  server's count lives in its process memory; each run of the command is a
+  new process): it now keeps a sealed `MfaAttempts` record in
+  `__geode_security` with the online rule (five failures, a five-minute
+  lockout, reset on success), counting the attempt before the code is
+  checked. **User-visible:** `geode user mfa-verify` writes the store now,
+  so it is refused while a server holds the data directory unless
+  `--force` is given (it takes `--force` now). Test harness:
+  `proto_test_util.ServerHandle.stopGracefully` (SIGTERM, wait, then
+  SIGKILL past a bound); `deinit` stays SIGKILL. Regressions: `zig build
+  test-sonny6614-auth-residuals`, `zig build test-sonny6614-offline-verify`.
+
 - **The TOTP secret is encrypted at rest; no loop2 snapshot of the
   security graph; SecurityManager gets the stored recovery codes; DROP
   USER reports a missing user; `geode user show` prints the MFA state

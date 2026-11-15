@@ -596,6 +596,9 @@ pub const AuthGraphManager = struct {
         // SONNY-6608: MFA recovery-code records
         try self.verifyMfaRecoveryRecords(hmac_key, &hmac_list);
 
+        // SONNY-6614: MFA attempt records
+        try self.verifyMfaAttemptRecords(hmac_key, &hmac_list);
+
         // SONNY-6352: the records read must be the records counted. A
         // mismatch (the maps changed between the count and the reads) fails
         // the verification; it reached `computeChainHashChecked`'s
@@ -891,6 +894,9 @@ pub const AuthGraphManager = struct {
 
         // SONNY-6608: MFA recovery-code records
         try self.sealMfaRecoveryRecords(hmac_key, &hmac_list);
+
+        // SONNY-6614: MFA attempt records
+        try self.sealMfaAttemptRecords(hmac_key, &hmac_list);
 
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
@@ -1271,7 +1277,8 @@ pub const AuthGraphManager = struct {
             @as(u64, self.storage.policy_cache.count()) +
             @as(u64, self.storage.graph_grant_nodes.count()) +
             @as(u64, self.storage.fle_role_grant_nodes.count()) +
-            @as(u64, self.storage.mfa_recovery_nodes.count());
+            @as(u64, self.storage.mfa_recovery_nodes.count()) +
+            @as(u64, self.storage.mfa_attempt_nodes.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
@@ -2515,6 +2522,41 @@ pub const AuthGraphManager = struct {
         }
     }
 
+    // -- MfaAttempts HMAC chain support (SONNY-6614) --
+
+    fn sealMfaAttemptRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.mfa_attempt_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |uid| {
+            const node_id = self.storage.mfa_attempt_nodes.get(uid) orelse continue;
+            const computed = computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyMfaAttemptRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.mfa_attempt_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    /// SONNY-6614: `user_id`'s stored offline MFA attempts, or null.
+    pub fn mfaAttempts(self: *Self, user_id: u64) ?UserStorageBackend.MfaAttemptState {
+        return self.storage.getMfaAttempts(user_id);
+    }
+
     // -- FleRoleGrant HMAC chain support (SONNY-6341) --
 
     fn sealFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -2769,6 +2811,28 @@ fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.Gr
         .{ .key = "user_id", .value = uid_str },
     };
 
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
+/// SONNY-6614: the HMAC of a MfaAttempts node, from its stored fields.
+fn computeMfaAttemptsHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) [32]u8 {
+    const int = struct {
+        fn get(st: *graph_store.GraphStore, nid: u64, key: []const u8, default: i64) i64 {
+            return if (st.getNodeProperty(nid, key)) |v| if (v == .Int) v.Int else default else default;
+        }
+    }.get;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{int(store, node_id, "user_id", -1)}) catch "-1";
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{int(store, node_id, "fail_count", -1)}) catch "-1";
+    var lock_buf: [20]u8 = undefined;
+    const lock_str = std.fmt.bufPrint(&lock_buf, "{d}", .{int(store, node_id, "lockout_until_ms", -1)}) catch "-1";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "fail_count", .value = count_str },
+        .{ .key = "kind", .value = "MfaAttempts" },
+        .{ .key = "lockout_until_ms", .value = lock_str },
+        .{ .key = "user_id", .value = uid_str },
+    };
     return computeRecordHmacChecked(hmac_key, &props);
 }
 

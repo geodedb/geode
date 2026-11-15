@@ -251,6 +251,9 @@ const g_mfa_store_alloc: std.mem.Allocator = std.heap.c_allocator;
 
 const MFA_MAX_ATTEMPTS: u32 = 5;
 const MFA_LOCKOUT_MS: i64 = 300_000; // 5 minutes
+/// SONNY-6614: the limit the offline `geode user mfa-verify` applies too.
+pub const mfa_max_attempts = MFA_MAX_ATTEMPTS;
+pub const mfa_lockout_ms = MFA_LOCKOUT_MS;
 
 fn ensureMfaStoreInit() void {
     if (!g_mfa_store_init) {
@@ -358,6 +361,22 @@ pub const MfaPersistCallbacks = struct {
 };
 
 var g_mfa_persist: MfaPersistCallbacks = .{};
+
+/// SONNY-6614: SecurityManager's copy of the users' MFA state
+/// (`auth_startup_hydration.securityManagerHooks`, installed by
+/// `server_init` once SecurityManager is at its final address). Unset: no
+/// SecurityManager.
+pub const SecurityManagerHooks = struct {
+    ctx: ?*anyopaque = null,
+    /// Clear `username`'s MFA state (DROP USER).
+    forget_mfa_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) void = null,
+};
+
+var g_sm_hooks: SecurityManagerHooks = .{};
+
+pub fn setSecurityManagerHooks(h: SecurityManagerHooks) void {
+    g_sm_hooks = h;
+}
 
 pub fn setMfaPersistCallbacks(cb: MfaPersistCallbacks) void {
     g_mfa_persist = cb;
@@ -842,6 +861,9 @@ fn handleUserDelete(allocator: std.mem.Allocator, proc_name: []const u8, call_st
     // with the user record); a user made again under the name is not
     // enrolled.
     forgetMfaEnrollment(username);
+    // SONNY-6614: and SecurityManager's copy (it kept the dropped user's
+    // secret and recovery codes).
+    if (g_sm_hooks.forget_mfa_fn) |f| f(g_sm_hooks.ctx, username);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");

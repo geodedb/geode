@@ -144,6 +144,40 @@ pub const ServerHandle = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6614-GRACEFUL-STOP; FEATURE="Test harness"; ASPECT=GracefulServerStop; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=testing; UPDATED=2026-11-15
+    /// How `stopGracefully` stopped the server.
+    pub const StopOutcome = enum {
+        /// It shut itself down after SIGTERM (its shutdown checkpoint ran).
+        exited,
+        /// It was still running at the bound and was SIGKILLed.
+        killed,
+    };
+
+    /// SONNY-6614: SIGTERM, then wait (`timeout_ms` at most) for the
+    /// server's own clean shutdown, which runs the shutdown checkpoint and
+    /// writes its side-car files; SIGKILL only past the bound. Then the
+    /// handle is released as `deinit` releases it. For tests of shutdown or
+    /// side-car behaviour only: `deinit`, the default teardown, stays
+    /// SIGKILL (a stuck graceful shutdown must not hang the build).
+    pub fn stopGracefully(self: *ServerHandle, timeout_ms: u64) StopOutcome {
+        var outcome: StopOutcome = .exited;
+        if (self.child.id) |pid| {
+            posix.kill(pid, .TERM) catch {};
+            const deadline = compat_milliTimestamp() + @as(i64, @intCast(timeout_ms));
+            while (processAlive(pid)) {
+                if (compat_milliTimestamp() > deadline) {
+                    outcome = .killed;
+                    break;
+                }
+                compat_sleep(20 * std.time.ns_per_ms);
+            }
+        }
+        // Reaps the exited process (a SIGKILL to a zombie does nothing), or
+        // kills the one still running.
+        self.deinit();
+        return outcome;
+    }
+
     /// Get the server address for connecting
     pub fn getAddr(self: *const ServerHandle) []const u8 {
         return self.addr;

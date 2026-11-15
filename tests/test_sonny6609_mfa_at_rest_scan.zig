@@ -146,30 +146,12 @@ const Server = struct {
         allocator.free(self.addr);
     }
 
-    /// SIGTERM and wait (60 s at most) for the server to exit, so it runs
-    /// its shutdown checkpoint (which writes the loop2 hydration snapshots);
-    /// then `stop` (SIGKILL, reap). `ServerHandle.deinit` alone SIGKILLs.
-    fn stopGracefully(self: *Server, allocator: std.mem.Allocator) void {
-        if (self.proc.child.id) |pid| {
-            std.posix.kill(pid, .TERM) catch {};
-            const t0 = monoMillis();
-            while (monoMillis() - t0 < 60_000) {
-                if (exited(pid)) break;
-                var req = linux.timespec{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
-                _ = linux.nanosleep(&req, null);
-            }
-        }
-        self.stop(allocator);
-    }
-
-    /// The process has exited (a zombie, not yet reaped) or is gone.
-    fn exited(pid: std.posix.pid_t) bool {
-        var path_buf: [64]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/stat", .{pid}) catch return true;
-        var buf: [512]u8 = undefined;
-        const stat = std.Io.Dir.cwd().readFile(std.Io.Threaded.global_single_threaded.io(), path, &buf) catch return true;
-        const close = std.mem.lastIndexOfScalar(u8, stat, ')') orelse return true;
-        return close + 2 < stat.len and stat[close + 2] == 'Z';
+    /// SIGTERM and wait (60 s at most) for the server's own shutdown, so it
+    /// runs its shutdown checkpoint (which writes the loop2 hydration
+    /// snapshots); `stop` SIGKILLs (SONNY-6614: `ServerHandle.stopGracefully`).
+    fn stopGracefully(self: *Server, allocator: std.mem.Allocator) !void {
+        defer allocator.free(self.addr);
+        if (self.proc.stopGracefully(60_000) != .exited) return error.ServerDidNotShutDown;
     }
 };
 
@@ -241,7 +223,7 @@ test "SONNY-6609 (1)(4): no file of the data directory holds the TOTP secret; ge
         secret = row[0]["MFA secret: ".len..];
         // Some data in another graph, so a checkpoint has work.
         _ = try adminRow(aa, s.addr, "CREATE (:Doc6609 {v: 1})");
-        s.stopGracefully(testing.allocator);
+        try s.stopGracefully(testing.allocator);
     }
     try testing.expect(secret.len >= 16);
 
