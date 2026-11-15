@@ -211,9 +211,9 @@ test "SONNY-6608 (1)(2): offline mfa-setup stores the secret with MFA off and th
     const aa = arena.allocator();
     const dir = try bootstrappedStore(aa, "cli");
     defer removeDir(dir);
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "cl6608", "cl6608@example.com", "--password", user_pw, "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "cl6608", "cl6608@example.com", "--password", user_pw, "--data-dir", dir });
 
-    const out = try runOk(aa, &.{ binary_path, "user", "mfa-setup", "cl6608", "--force", "--data-dir", dir });
+    const out = try runOk(aa, &.{ binary_path, "user", "mfa-setup", "cl6608", "--data-dir", dir });
     const sp = "MFA secret: ";
     const at = std.mem.indexOf(u8, out, sp) orelse return error.NoSecretPrinted;
     const rest = out[at + sp.len ..];
@@ -237,7 +237,7 @@ test "SONNY-6608 (1)(2): offline mfa-setup stores the secret with MFA off and th
     try expectDigestsOf(st, codes.items);
 
     // (2) enable without --code: refused, nothing changed.
-    const r = try runGeode(aa, &.{ binary_path, "user", "mfa", "enable", "cl6608", "--force", "--data-dir", dir });
+    const r = try runGeode(aa, &.{ binary_path, "user", "mfa", "enable", "cl6608", "--data-dir", dir });
     st = try storedMfa(aa, dir, "cl6608");
     if (r.code == 0 or st.enabled) {
         std.debug.print("SONNY-6608 (2): geode user mfa enable without --code exited {d} and left mfa_enabled={}:\n{s}\n", .{ r.code, st.enabled, r.output });
@@ -245,9 +245,9 @@ test "SONNY-6608 (1)(2): offline mfa-setup stores the secret with MFA off and th
     }
 
     // With a code that verifies: on; disable: off.
-    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "cl6608", "--code", try codeFor(aa, secret), "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "cl6608", "--code", try codeFor(aa, secret), "--data-dir", dir });
     try testing.expect((try storedMfa(aa, dir, "cl6608")).enabled);
-    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "disable", "cl6608", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "disable", "cl6608", "--data-dir", dir });
     try testing.expect(!(try storedMfa(aa, dir, "cl6608")).enabled);
 }
 

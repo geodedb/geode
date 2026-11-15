@@ -4,6 +4,28 @@
 
 ### Security
 
+- **Offline `geode user mfa enable --code` counts against the attempt
+  limit; the server's MFA lockout survives a restart; SecurityManager
+  follows the MFA procedures and drops a dropped user; an in-process store
+  no longer holds the data directory (SONNY-6619).** `geode user mfa enable
+  --code` checked the code with no attempt limit; it now counts against the
+  sealed `MfaAttempts` record with `mfa-verify` (5 failures, 5-minute
+  lockout, counted before the check). `geode.auth.mfa_verify` kept its
+  lockout in process memory; the transition into lockout (the fifth
+  failure) and the reset after a stored lockout are now stored in
+  `MfaAttempts` and loaded at startup. Failures below the limit stay in
+  memory: storing each would re-seal the whole chain per wrong guess.
+  SecurityManager now takes mfa_setup's new secret and codes and
+  mfa_enable / mfa_disable's flag, and DROP USER removes the user from it
+  (record, roles, sessions). timeseries-storage opens each graph's
+  `timeseries` directory for its WAL and never closes it, so a process
+  that had opened the store (the offline CLI, test fixtures) kept a
+  descriptor in the data directory and the offline CLI's live-server guard
+  treated it as a holder; geode's timeseries `Store.deinit` now closes it
+  (the library fix is owed upstream). The offline-CLI regression tests no
+  longer pass `--force`. Regressions: `zig build test-sonny6619-mfa-limits`,
+  `zig build test-sonny6619-offline`.
+
 - **The SecurityManager load frees everything when it fails, DROP USER
   clears the user's MFA state from SecurityManager, and the offline
   `geode user mfa-verify` has the online attempt limit (SONNY-6614).** The

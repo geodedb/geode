@@ -246,7 +246,7 @@ test "SONNY-6609 (1)(4): no file of the data directory holds the TOTP secret; ge
         std.debug.print("SONNY-6609 (4): geode user show prints no MFA state:\n{s}\n", .{out});
         return error.NoMfaStateShown;
     }
-    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "sc6609", "--code", try codeFor(aa, secret), "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "mfa", "enable", "sc6609", "--code", try codeFor(aa, secret), "--data-dir", dir });
     out = try runOk(aa, &.{ binary_path, "user", "show", "sc6609", "--data-dir", dir });
     try testing.expect(std.mem.indexOf(u8, out, "MFA: enabled (enrolled") != null);
     // A user with no enrollment.

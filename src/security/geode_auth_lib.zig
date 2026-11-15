@@ -2125,28 +2125,82 @@ pub const SecurityManager = struct {
         user.recovery_codes = list;
     }
 
-    // CANARY: REQ=REQ-SONNY-6614-SM-FORGET-MFA; FEATURE="MFA authentication"; ASPECT=DroppedUserMfaCleared; STATUS=TESTED; TEST=tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
-    /// SONNY-6614: clear `username`'s MFA state (DROP USER,
-    /// `auth_dispatch.handleUserDelete`): MFA off, the secret zeroed and
-    /// freed, the recovery codes freed. No such user: nothing to do.
-    pub fn forgetMfaState(self: *Self, username: []const u8) void {
-        self.auth_mu.lock();
-        defer self.auth_mu.unlock();
+    fn userIdByNameLocked(self: *Self, username: []const u8) ?UserId {
         var it = self.users.iterator();
         while (it.next()) |entry| {
-            const user = entry.value_ptr;
-            if (!std.mem.eql(u8, user.username, username)) continue;
-            user.mfa_enabled = false;
-            if (user.mfa_secret) |sec| {
-                crypto_backend.secureZero(@constCast(sec));
-                self.allocator.free(sec);
-                user.mfa_secret = null;
-            }
-            if (user.recovery_codes) |*codes| {
-                for (codes.items) |c| self.allocator.free(c);
-                codes.deinit(self.allocator);
-                user.recovery_codes = null;
-            }
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) return entry.key_ptr.*;
+        }
+        return null;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-FOLLOWS-MFA; FEATURE="MFA authentication"; ASPECT=SecurityManagerMfaCurrent; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: `username`'s MFA state after geode.auth.mfa_setup: the new
+    /// secret and recovery codes (digests), MFA off. No such user: nothing.
+    pub fn loadMfaStateByName(self: *Self, username: []const u8, secret: ?[]const u8, digests: []const [32]u8, enabled: bool) !void {
+        const id = blk: {
+            self.auth_mu.lock();
+            defer self.auth_mu.unlock();
+            break :blk self.userIdByNameLocked(username) orelse return;
+        };
+        try self.loadMfaState(id, secret, digests);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    /// SONNY-6619: `username`'s MFA flag after mfa_enable / mfa_disable.
+    pub fn setMfaEnabledByName(self: *Self, username: []const u8, enabled: bool) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-REMOVE-USER; FEATURE="AuthGraphManager Integration"; ASPECT=DroppedUserRemoved; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: remove `username` (DROP USER) with everything held for
+    /// it: its record (password hash, MFA secret zeroed, recovery codes,
+    /// attributes), its role memberships, its sessions. SONNY-6614 cleared
+    /// the MFA state only and left the user. No such user: nothing to do.
+    pub fn removeUserByName(self: *Self, username: []const u8) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        var kv = self.users.fetchRemove(id) orelse return;
+        const user = &kv.value;
+        self.allocator.free(user.username);
+        self.allocator.free(user.email);
+        crypto_backend.secureZero(@constCast(user.password_hash));
+        self.allocator.free(user.password_hash);
+        if (user.mfa_secret) |sec| {
+            crypto_backend.secureZero(@constCast(sec));
+            self.allocator.free(sec);
+        }
+        if (user.recovery_codes) |*codes| {
+            for (codes.items) |c| self.allocator.free(c);
+            codes.deinit(self.allocator);
+        }
+        var attr_it = user.attributes.iterator();
+        while (attr_it.next()) |attr| {
+            self.allocator.free(attr.key_ptr.*);
+            self.allocator.free(attr.value_ptr.*);
+        }
+        user.attributes.deinit();
+        if (self.rbac.user_roles.fetchRemove(id)) |r| {
+            var roles = r.value;
+            roles.deinit(self.allocator);
+        }
+        // Its sessions (collected first: removing while iterating rehashes).
+        var doomed: std.ArrayList([]const u8) = .empty;
+        defer doomed.deinit(self.allocator);
+        var sit = self.sessions.iterator();
+        while (sit.next()) |e| {
+            if (e.value_ptr.user_id == id) doomed.append(self.allocator, e.key_ptr.*) catch break;
+        }
+        for (doomed.items) |key| {
+            const skv = self.sessions.fetchRemove(key) orelse continue;
+            if (skv.value.ip_address) |ip| self.allocator.free(ip);
+            if (skv.value.user_agent) |ua| self.allocator.free(ua);
+            self.allocator.free(skv.key);
         }
     }
 

@@ -110,6 +110,38 @@ const mfa_not_enforced_note =
     \\
 ;
 
+// CANARY: REQ=REQ-SONNY-6614-OFFLINE-MFA-LIMIT; FEATURE="MFA authentication"; ASPECT=OfflineAttemptLimit; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6614 / SONNY-6619: before an offline command checks a TOTP code
+/// (`mfa-verify`, `mfa enable --code`), apply the online limit
+/// (geode.auth.mfa_verify: 5 failures, a 5-minute lockout, reset on
+/// success), kept in the sealed MfaAttempts record (each run of the
+/// command is a new process). Refuses (exits) a locked-out user; counts the
+/// attempt and saves it BEFORE the code is checked, so an attempt that
+/// cannot be counted is refused unchecked and an interrupted run leaves it
+/// counted. The caller resets the count after a code that verifies
+/// (`mgr.storage.setMfaAttempts(id, .{})`, saved with the command).
+fn beginOfflineMfaAttempt(allocator: std.mem.Allocator, mgr: anytype, user_id: u64, username: []const u8) void {
+    const geode_auth_dispatch = geode.auth_dispatch;
+    const now_ms = compat_milliTimestamp();
+    const prev = mgr.mfaAttempts(user_id) orelse @TypeOf(mgr.storage).MfaAttemptState{};
+    if (now_ms < prev.lockout_until_ms) {
+        std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    const counted = prev.fail_count +| 1;
+    mgr.storage.setMfaAttempts(user_id, .{
+        .fail_count = counted,
+        .lockout_until_ms = if (counted >= geode_auth_dispatch.mfa_max_attempts) now_ms + geode_auth_dispatch.mfa_lockout_ms else 0,
+    }) catch |err| {
+        std.debug.print("Error: the attempt could not be counted ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    cli_auth.sealAndSaveNow(allocator, mgr) catch |err| {
+        std.debug.print("Error: the attempt could not be saved ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 /// SONNY-6609: a user's TOTP secret in plaintext (the store holds it
 /// sealed), into `buf`; exits with an error when it has none or it does not
 /// open.
@@ -1009,33 +1041,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         defer std.crypto.secureZero(u8, &secret_buf);
         const secret = openStoredMfaSecret(&mgr, &read_key, existing, &secret_buf);
 
-        // CANARY: REQ=REQ-SONNY-6614-OFFLINE-MFA-LIMIT; FEATURE="MFA authentication"; ASPECT=OfflineAttemptLimit; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=security; UPDATED=2026-11-15
-        // SONNY-6614: the online limit (geode.auth.mfa_verify: 5 failures, a
-        // 5-minute lockout, reset on success), kept in the sealed MfaAttempts
-        // record (the server keeps its count in process memory; each run of
-        // this command is a new process). The attempt is counted and saved
-        // BEFORE the code is checked, and reset after a code that verifies:
-        // an attempt that cannot be counted is refused unchecked, and an
-        // interrupted run leaves it counted. It had no limit.
-        const geode_auth_dispatch = geode.auth_dispatch;
-        const now_ms = compat_milliTimestamp();
-        const prev = mgr.mfaAttempts(existing.id) orelse @TypeOf(mgr.storage).MfaAttemptState{};
-        if (now_ms < prev.lockout_until_ms) {
-            std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-        const counted = prev.fail_count +| 1;
-        mgr.storage.setMfaAttempts(existing.id, .{
-            .fail_count = counted,
-            .lockout_until_ms = if (counted >= geode_auth_dispatch.mfa_max_attempts) now_ms + geode_auth_dispatch.mfa_lockout_ms else 0,
-        }) catch |err| {
-            std.debug.print("Error: the attempt could not be counted ({s}); the code was not checked\n", .{@errorName(err)});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        cli_auth.sealAndSaveNow(allocator, &mgr) catch |err| {
-            std.debug.print("Error: the attempt could not be saved ({s}); the code was not checked\n", .{@errorName(err)});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
+        beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
         const code_str = token.?;
         if (code_str.len != 6) {
@@ -1143,6 +1149,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             var secret_buf: [64]u8 = undefined;
             defer std.crypto.secureZero(u8, &secret_buf);
             const secret = openStoredMfaSecret(&mgr, &enable_key, existing, &secret_buf);
+            // SONNY-6619: the code counts against the attempt limit, as
+            // mfa-verify's (it had none: an unlimited guessing route).
+            beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
             const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
                 std.debug.print("Error: invalid code format\n", .{});
@@ -1159,6 +1168,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Error: invalid code - TOTP verification failed\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+            // SONNY-6619: verified, the count starts again.
+            try mgr.storage.setMfaAttempts(existing.id, .{});
         }
         try mgr.storage.updateUser(existing.id, null, null, null, enable, null);
 

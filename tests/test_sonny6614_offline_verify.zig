@@ -186,19 +186,16 @@ fn storedAttempts(dir: []const u8, user: []const u8) !?Attempts {
 
 fn enrolledStore(aa: std.mem.Allocator, tag: []const u8, user: []const u8) !struct { dir: []const u8, secret: []const u8 } {
     const dir = try bootstrappedStore(aa, tag);
-    _ = try runOk(aa, &.{ binary_path, "user", "create", user, "x@example.com", "--password", user_pw, "--force", "--data-dir", dir });
-    const out = try runOk(aa, &.{ binary_path, "user", "mfa-setup", user, "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", user, "x@example.com", "--password", user_pw, "--data-dir", dir });
+    const out = try runOk(aa, &.{ binary_path, "user", "mfa-setup", user, "--data-dir", dir });
     const sp = "MFA secret: ";
     const at = std.mem.indexOf(u8, out, sp) orelse return error.NoSecretPrinted;
     const rest = out[at + sp.len ..];
     return .{ .dir = dir, .secret = rest[0 .. std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len] };
 }
 
-/// `--force`: this test process held the data dir open (bootstrappedStore),
-/// and mfa-verify, which now writes its attempt record, is refused while
-/// another process holds it.
 fn verify(aa: std.mem.Allocator, dir: []const u8, user: []const u8, token: []const u8) !Run {
-    return runGeode(aa, &.{ binary_path, "user", "mfa-verify", user, "--token", token, "--force", "--data-dir", dir });
+    return runGeode(aa, &.{ binary_path, "user", "mfa-verify", user, "--token", token, "--data-dir", dir });
 }
 
 test "SONNY-6614 (3): offline mfa-verify locks out after five failures, across runs; the lockout refuses a right code" {
@@ -239,7 +236,7 @@ test "SONNY-6614 (3): offline mfa-verify counts failures and a right code resets
     try testing.expect((try verify(aa, e.dir, "rs6614", "000000")).code != 0);
     try testing.expect((try verify(aa, e.dir, "rs6614", "000000")).code != 0);
     try testing.expectEqual(@as(u32, 2), ((try storedAttempts(e.dir, "rs6614")) orelse return error.NoAttemptRecord).fail_count);
-    _ = try runOk(aa, &.{ binary_path, "user", "mfa-verify", "rs6614", "--token", try codeFor(aa, e.secret), "--force", "--data-dir", e.dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "mfa-verify", "rs6614", "--token", try codeFor(aa, e.secret), "--data-dir", e.dir });
     const st = (try storedAttempts(e.dir, "rs6614")) orelse return error.NoAttemptRecord;
     try testing.expectEqual(@as(u32, 0), st.fail_count);
     try testing.expectEqual(@as(i64, 0), st.lockout_until_ms);

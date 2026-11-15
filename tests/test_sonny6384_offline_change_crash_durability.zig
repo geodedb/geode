@@ -244,7 +244,7 @@ test "SONNY-6384: security-graph writes after an offline user change survive a S
         s.kill(allocator);
     }
     // 2. An offline change.
-    try runOk(aa, &.{ binary_path, "user", "create", "off6384", "off6384@example.com", "--password", offline_pw, "--role", "readwrite", "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "off6384", "off6384@example.com", "--password", offline_pw, "--role", "readwrite", "--data-dir", dir });
     // 3. The server writes the security graph over the wire, then dies.
     {
         var s = try Server.start(allocator, dir);

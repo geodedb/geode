@@ -1048,8 +1048,19 @@ What exists:
   no limit at all. The attempt is counted and saved before the code is
   checked; one that cannot be saved is refused unchecked. Being a store
   write, it is refused while a server holds the data directory (or pass
-  `--force`, as the other offline writers). The server's own count stays
-  in memory: a server restart clears a lockout it set.
+  `--force`, as the other offline writers). `geode user mfa enable
+  --code` counts against the same record (SONNY-6619; it had no limit).
+- The server's lockout survives a restart (SONNY-6619): the fifth failure
+  stores the lockout in the same `MfaAttempts` record, and the first
+  success after a stored lockout stores the reset; the server loads the
+  records at startup. A failure below the limit is counted in memory
+  only: storing it would re-seal the whole HMAC chain (every security
+  record's HMAC rewritten) on every wrong guess, a cost an attacker could
+  impose at will. The trade-off: a restart forgets up to four failures
+  that had not reached the limit.
+- SecurityManager (library-only until SONNY-6604) follows `mfa_setup`
+  (new secret and codes, MFA off) and `mfa_enable` / `mfa_disable`, and
+  `DROP USER` removes the user from it entirely (SONNY-6619).
 - `geode user show` prints the stored MFA state, e.g. `MFA: disabled
   (enrolled, 8 recovery codes; not enforced at login yet, SONNY-6604)` or
   `MFA: disabled (not enrolled)` (SONNY-6609).

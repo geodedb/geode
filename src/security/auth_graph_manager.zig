@@ -2552,6 +2552,25 @@ pub const AuthGraphManager = struct {
         }
     }
 
+    /// SONNY-6619: `geode.auth.mfa_verify`'s write-through of a lockout
+    /// transition (into lockout, or the reset after a stored one): the
+    /// user's MfaAttempts record, the chain resealed. All of it or none.
+    pub fn setMfaAttemptsWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, state: UserStorageBackend.MfaAttemptState) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getMfaAttempts(uid);
+        errdefer {
+            if (old) |o| {
+                self.storage.setMfaAttempts(uid, o) catch |err| logRestoreFailure("MFA attempts", err);
+            } else _ = self.storage.removeMfaAttempts(uid);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
+        try self.storage.setMfaAttempts(uid, state);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, if (state.lockout_until_ms != 0) "MFA_LOCKOUT" else "MFA_ATTEMPTS_RESET", uid, username, null);
+    }
+
     /// SONNY-6614: `user_id`'s stored offline MFA attempts, or null.
     pub fn mfaAttempts(self: *Self, user_id: u64) ?UserStorageBackend.MfaAttemptState {
         return self.storage.getMfaAttempts(user_id);

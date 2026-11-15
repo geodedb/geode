@@ -82,6 +82,8 @@ pub fn hydrateMfaEnrollments(allocator: std.mem.Allocator, agm: *AuthGraphManage
         const digests = try agm.mfaRecoveryDigests(allocator, id);
         defer if (digests) |d| allocator.free(d);
         try auth_dispatch.loadMfaEnrollment(rec.getUsername(), secret, digests orelse &.{});
+        // SONNY-6619: a stored lockout (or offline count) survives a restart.
+        if (agm.mfaAttempts(id)) |a| try auth_dispatch.loadMfaAttempts(rec.getUsername(), a.fail_count, a.lockout_until_ms);
         loaded += 1;
     }
     return loaded;
@@ -117,12 +119,18 @@ pub fn mfaPersistCallbacks(agm: *AuthGraphManager) auth_dispatch.MfaPersistCallb
         .ctx = @ptrCast(agm),
         .enroll_fn = &mfaEnroll,
         .set_enabled_fn = &mfaSetEnabled,
+        .set_attempts_fn = &mfaSetAttempts,
     };
 }
 
 fn mfaEnroll(ctx: ?*anyopaque, username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) anyerror!void {
     const agm: *AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     try agm.enrollMfaWriteThrough(&agm.hmac_key, username, secret_base32, recovery_digests);
+}
+
+fn mfaSetAttempts(ctx: ?*anyopaque, username: []const u8, fail_count: u32, lockout_until_ms: i64) anyerror!void {
+    const agm: *AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.setMfaAttemptsWriteThrough(&agm.hmac_key, username, .{ .fail_count = fail_count, .lockout_until_ms = lockout_until_ms });
 }
 
 fn mfaSetEnabled(ctx: ?*anyopaque, username: []const u8, enabled: bool) anyerror!void {
@@ -223,13 +231,29 @@ pub fn hydrateSecurityManager(allocator: std.mem.Allocator, agm: *AuthGraphManag
     return .{ .sm = sm, .role_count = role_count, .user_count = user_count, .assignment_count = assignment_count };
 }
 
-/// SONNY-6614: SecurityManager's hooks for the auth procedures
+/// SONNY-6614 / SONNY-6619: SecurityManager's hooks for the auth procedures
 /// (`auth_dispatch.setSecurityManagerHooks`).
 pub fn securityManagerHooks(sm: *geode.auth.SecurityManager) auth_dispatch.SecurityManagerHooks {
-    return .{ .ctx = @ptrCast(sm), .forget_mfa_fn = &smForgetMfa };
+    return .{
+        .ctx = @ptrCast(sm),
+        .remove_user_fn = &smRemoveUser,
+        .load_mfa_fn = &smLoadMfa,
+        .set_mfa_enabled_fn = &smSetMfaEnabled,
+    };
 }
 
-fn smForgetMfa(ctx: ?*anyopaque, username: []const u8) void {
-    const sm: *geode.auth.SecurityManager = @ptrCast(@alignCast(ctx.?));
-    sm.forgetMfaState(username);
+fn smOf(ctx: ?*anyopaque) *geode.auth.SecurityManager {
+    return @ptrCast(@alignCast(ctx.?));
+}
+
+fn smRemoveUser(ctx: ?*anyopaque, username: []const u8) void {
+    smOf(ctx).removeUserByName(username);
+}
+
+fn smLoadMfa(ctx: ?*anyopaque, username: []const u8, secret: []const u8, digests: []const [32]u8) anyerror!void {
+    try smOf(ctx).loadMfaStateByName(username, secret, digests, false);
+}
+
+fn smSetMfaEnabled(ctx: ?*anyopaque, username: []const u8, enabled: bool) void {
+    smOf(ctx).setMfaEnabledByName(username, enabled);
 }
