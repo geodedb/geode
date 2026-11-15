@@ -197,7 +197,7 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
     var kept: usize = 0;
     for (result.rows, keep) |row, *k| {
         key.clearRetainingCapacity();
-        for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, scratch, val);
+        for (row) |val| try distinct_set.appendGroupKeyPart(&key, scratch, val);
         const gop = try seen.getOrPut(scratch, key.written());
         k.* = !gop.found_existing;
         if (k.*) {
@@ -237,6 +237,6 @@ pub fn createRowHashKey(allocator: std.mem.Allocator, row: []const Value) ![]u8 
     defer arena.deinit();
     var key: std.Io.Writer.Allocating = .init(allocator);
     defer key.deinit();
-    for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, arena.allocator(), val);
+    for (row) |val| try distinct_set.appendGroupKeyPart(&key, arena.allocator(), val);
     return allocator.dupe(u8, key.written());
 }

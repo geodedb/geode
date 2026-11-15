@@ -5145,14 +5145,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             // GAP-0220 FIX: Use try for proper error propagation
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
-            const key_writer = &key_aw.writer;
             // GAP-ENT-0055: each key follows a projection alias (`GROUP BY
             // s`) to its underlying expression before evaluating against the
             // input row (`keys`, above).
             for (keys) |key_expr| {
                 const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env);
                 // SONNY-2675: the key's typed canonical encoding.
-                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
+                try distinct_set.appendGroupKeyPart(&key_aw, allocator, key_val);
             }
             // SONNY-6498: the writer keeps the bytes until they are a slice (a
             // failed copy left them in a list nothing freed).
@@ -5225,12 +5224,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     // GAP-0220 FIX: Use try for proper error propagation
                     var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                     errdefer key_aw.deinit();
-                    const key_writer = &key_aw.writer;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
                             const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env);
                             // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
+                            try distinct_set.appendGroupKeyPart(&key_aw, allocator, key_val);
                         }
                     }
                     // SONNY-6498: the writer keeps the bytes until they are a slice (a

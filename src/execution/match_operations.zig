@@ -2729,7 +2729,7 @@ pub fn indexServedGroupByFastPath(
             else => return null,
         };
         merge_key.clearRetainingCapacity();
-        try distinct_set.writeGroupKeyPart(&merge_key.writer, sa, val);
+        try distinct_set.appendGroupKeyPart(&merge_key, sa, val);
         const gop = try merged_index.getOrPut(try sa.dupe(u8, merge_key.written()));
         if (gop.found_existing) {
             merged_counts.items[gop.value_ptr.*] += s.count;
@@ -2809,10 +2809,13 @@ pub fn indexServedGroupByFastPath(
     }
 
     _ = g_index_served_aggregate_total.fetchAdd(1, .monotonic);
+    // SONNY-6613: the rows' strings are copies on `allocator`: the result
+    // owns them, so a caller that frees it on an error frees them too.
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -3054,11 +3057,10 @@ pub fn groupByAggregateFastPath(
                 // this path cannot return without an owned copy declines.
                 var key_val_captures: [MAX_KEYS]Value = undefined;
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
-                const key_w = &key_aw.writer;
                 for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
                     const pv: graph_store.PropertyValue = prop_store.getNodeProperty(node_id, kprop) orelse .Null;
                     const key_val = fastPathKeyValue(pv) orelse return null;
-                    try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                    try distinct_set.appendGroupKeyPart(&key_aw, ga, key_val);
                     key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
                 }
                 // SONNY-6498: the writer keeps the bytes until they are a slice (a
@@ -3151,7 +3153,6 @@ pub fn groupByAggregateFastPath(
             // SONNY-2675: see the resident branch above.
             var key_val_captures: [MAX_KEYS]Value = undefined;
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
-            const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
                 const raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
                 // m1: the engine-owned bytes are freed when this block exits
@@ -3164,7 +3165,7 @@ pub fn groupByAggregateFastPath(
                 defer _ = ext_scratch.reset(.retain_capacity);
                 const pv: graph_store.PropertyValue = if (raw) |r| (storageToGraphPv(ext_scratch.allocator(), r) orelse return null) else .Null;
                 const key_val = fastPathKeyValue(pv) orelse return null;
-                try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
+                try distinct_set.appendGroupKeyPart(&key_aw, ga, key_val);
                 key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
             }
             // SONNY-6498: the writer keeps the bytes until they are a slice (a
@@ -3298,10 +3299,13 @@ pub fn groupByAggregateFastPath(
         n_rows_filled += 1;
     }
 
+    // SONNY-6613: as `indexServedGroupByFastPath`'s: the key strings are
+    // copies the result owns.
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -5081,7 +5085,6 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // GAP-0220 FIX: Use try for proper error propagation
                         var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
                         errdefer key_aw.deinit();
-                        const key_writer = &key_aw.writer;
                         for (self.group_by.keys) |key_expr| {
                             // SONNY-6498: a key that fails fails the statement (it grouped as NULL).
                             const key_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), key_expr, env) catch |err| {
@@ -5090,7 +5093,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 return err;
                             };
                             // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
+                            try distinct_set.appendGroupKeyPart(&key_aw, self.allocator, key_val);
                         }
                         // SONNY-6498: the writer keeps the bytes until they are a slice (a
                         // failed copy left them in a list nothing freed).
