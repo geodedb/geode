@@ -177,7 +177,6 @@ pub const entries = [_]Entry{
     .{ .path = "tests/e2e_protocol_profile_memory_fragmentation.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: cannot dereference non-pointer type 'json.dynamic.Value'" },
     .{ .path = "tests/e2e_protocol_profile_schema_json.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: cannot dereference non-pointer type 'json.dynamic.Value'" },
     .{ .path = "tests/e2e_protocol_profile_snapshot.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: cannot dereference non-pointer type 'json.dynamic.Value'" },
-    .{ .path = "tests/e2e_protocol_profile_spill_first_index.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: cannot dereference non-pointer type 'json.dynamic.Value'" },
     .{ .path = "tests/e2e_protocol_profile_struct.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: cannot dereference non-pointer type 'json.dynamic.Value'" },
     .{ .path = "tests/e2e_quic_explain_smoke.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: expected type '@typeInfo(@typeInfo(@TypeOf(e2e_quic_explain_smoke.run)).@\"fn\".return_type.?).error_union.error" },
     .{ .path = "tests/e2e_rls_integration.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: unused function parameter" },

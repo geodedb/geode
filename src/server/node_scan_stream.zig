@@ -286,15 +286,34 @@ pub const NodeScanStream = struct {
             .projection => {
                 // SONNY-1221: a projection's column types depend on its values.
                 // Type them with the executor path's own inference
-                // (`proto_util.buildSchemaDefinition`: the first non-null value
-                // among the first `column_type_sample_rows` rows) over the rows
-                // `prefetchSchemaSample` built -- exactly the rows this stream
-                // serves first -- so both paths report the same type for the
-                // same rows, and NULL only when every sampled value is null or
-                // no row matched. This used to hard-code NULL for every column.
+                // (`proto_util.buildSchemaDefinition`, over every row it is
+                // given) over the rows `prefetchSchemaSample` built -- exactly
+                // the rows this stream serves first -- so both paths report the
+                // same type for the same rows, and NULL only when every value
+                // is null or no row matched. This used to hard-code NULL for every column.
                 // Without the prefetch there are no rows to type from, and
                 // every column would silently come out NULL.
                 std.debug.assert(self.prefetch_attempted);
+                // CANARY: REQ=REQ-SONNY-6562-DECLARED-TYPE; FEATURE="ResultMetadata"; ASPECT=StreamSchemaUnread; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=engine; UPDATED=2026-11-15
+                // SONNY-6562: a declared type describes every value of its
+                // column (ISO/IEC 39075:2024 22.18). When the sample did not
+                // exhaust the scan, the rows after it are unread when this
+                // frame is sent and a property may hold any type in them, so
+                // each such column is the open dynamic union type, ANY. The
+                // sample's type was declared, and an eleventh row holding a
+                // string contradicted an INTEGER column. A column projecting
+                // the scanned node itself is a NODE in every row.
+                if (self.scanRemaining()) {
+                    var cols = try std.ArrayList(schema.ColumnDefinition).initCapacity(allocator, self.columns.len);
+                    for (self.columns, self.ret_items) |name, item| {
+                        const bare_node = item.expr == .Ident and std.mem.eql(u8, item.expr.Ident.orig, self.var_name);
+                        cols.appendAssumeCapacity(.{
+                            .name = try allocator.dupe(u8, name),
+                            .type = try allocator.dupe(u8, if (bare_node) "NODE" else "ANY"),
+                        });
+                    }
+                    return .{ .columns = cols };
+                }
                 const sample: [][]Value = if (self.prefetched) |pre| pre.result.rows[pre.next..] else &.{};
                 const view = ExecutionResult{
                     .columns = self.columns,

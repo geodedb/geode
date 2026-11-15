@@ -567,3 +567,45 @@ test "SONNY-6562: PROFILE reports no spill (the executor never spills) under a s
     }
     try testing.expectEqual(@as(usize, 0), failures);
 }
+
+test "SONNY-6562: buildSchemaDefinition declares each column the 22.18 / 22.19 combination of all its values" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Value = geode.value_types.Value;
+    const dec = Value{ .Decimal = .{ .coeff = 125, .scale = 2 } };
+    const Case = struct { values: []const Value, want: []const u8 };
+    const empty_list: []Value = &.{};
+    const cases = [_]Case{
+        .{ .values = &.{ .{ .Int = 1 }, dec }, .want = "DECIMAL" },
+        .{ .values = &.{ dec, .{ .Int = 1 } }, .want = "DECIMAL" },
+        .{ .values = &.{ .{ .SmallInt = 1 }, .{ .BigInt = 2 } }, .want = "BIGINT" },
+        .{ .values = &.{ .{ .SmallInt = 1 }, .{ .Int = 2 } }, .want = "INTEGER" },
+        .{ .values = &.{ .{ .Int = 1 }, .{ .Double = 2 } }, .want = "DOUBLE" },
+        .{ .values = &.{ dec, .{ .Real = 2 } }, .want = "DOUBLE" },
+        .{ .values = &.{ .{ .Real = 1 }, .{ .Real = 2 } }, .want = "REAL" },
+        .{ .values = &.{ .{ .Real = 1 }, .{ .Double = 2 } }, .want = "DOUBLE" },
+        .{ .values = &.{ .Null, .{ .Int = 1 }, .Null }, .want = "INTEGER" },
+        .{ .values = &.{ .Null, .Null }, .want = "NULL" },
+        .{ .values = &.{}, .want = "NULL" },
+        .{ .values = &.{ .{ .Str = "a" }, .{ .Text = "b" } }, .want = "STRING" },
+        .{ .values = &.{ .{ .Bool = true }, .{ .Bool = false } }, .want = "BOOLEAN" },
+        .{ .values = &.{ .{ .Str = "a" }, .{ .Int = 1 } }, .want = "ANY" },
+        .{ .values = &.{ .{ .Bool = true }, .{ .Int = 1 } }, .want = "ANY" },
+        .{ .values = &.{ .{ .List = empty_list }, .{ .Int = 1 } }, .want = "ANY" },
+        .{ .values = &.{ .{ .List = empty_list }, .{ .List = empty_list } }, .want = "LIST" },
+        // ANY absorbs everything after it.
+        .{ .values = &.{ .{ .Str = "a" }, .{ .Int = 1 }, dec }, .want = "ANY" },
+    };
+    for (cases) |c| {
+        const rows = try a.alloc([]Value, c.values.len);
+        for (c.values, rows) |v, *row| {
+            row.* = try a.alloc(Value, 1);
+            row.*[0] = v;
+        }
+        var columns = [_][]const u8{"c"};
+        const result = geode.execution.ExecutionResult{ .columns = &columns, .rows = rows, .flags = .empty };
+        const def = try geode.proto_util.buildSchemaDefinition(a, &result);
+        try testing.expectEqualStrings(c.want, def.columns.items[0].type);
+    }
+}

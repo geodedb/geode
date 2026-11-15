@@ -856,21 +856,30 @@ fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.Arr
     return list;
 }
 
-/// Leading rows `inferColumnType` samples to type a column. SONNY-1221: the
-/// node-scan fast path builds exactly this many rows before its schema frame
-/// (`NodeScanStream.prefetchSchemaSample`), so both paths type a column from
-/// the same rows.
+/// Rows the node-scan fast path builds before its schema frame
+/// (`NodeScanStream.prefetchSchemaSample`, SONNY-1221). SONNY-6562: a stream
+/// those rows exhaust is typed from them exactly as the executor's result
+/// (`inferColumnType` reads every row); a longer one has not been read when
+/// the frame is sent, so its projection columns are declared ANY.
 pub const column_type_sample_rows: usize = 10;
 
+// CANARY: REQ=REQ-SONNY-6562-DECLARED-TYPE; FEATURE="ResultMetadata"; ASPECT=ColumnTypeFromAllRows; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=server; UPDATED=2026-11-15
+/// SONNY-6562: a column's declared type is the combination of the types of
+/// all its values (ISO/IEC 39075:2024 14.2 SR for a UNION's operands, 22.18 /
+/// 22.19; `type_helpers.combineTypeNames`): NULL when every value is null,
+/// ANY when values of different primary base types meet. It was the type of
+/// the first non-null value among the first 10 rows, so a UNION, an ORDER BY
+/// or a later row could hold a value its declared type contradicts.
 fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
-    const sample_size = @min(rows.len, column_type_sample_rows);
-    for (rows[0..sample_size]) |row| {
+    var declared: []const u8 = "NULL";
+    for (rows) |row| {
         if (col_idx >= row.len) continue;
         const val = row[col_idx];
         if (val == .Null) continue;
-        return type_helpers.getTypeName(val);
+        declared = type_helpers.combineTypeNames(declared, type_helpers.getTypeName(val));
+        if (std.mem.eql(u8, declared, "ANY")) break;
     }
-    return "NULL";
+    return declared;
 }
 
 pub fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.Value {

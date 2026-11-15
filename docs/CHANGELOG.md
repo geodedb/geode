@@ -2467,6 +2467,50 @@
 
 ### Fixed
 
+- **Wire result metadata describes the result it is sent with (SONNY-6562,
+  BREAKING: declared column types change).** Over QUIC and gRPC:
+  (1) A decimal (`RETURN 1.25`, any fixed-point value) is declared `DECIMAL`,
+  ISO/IEC 39075:2024 21.2's exact numeric type; it was `FLOAT`, the name of
+  an approximate type. `type()` and `valueType()` answer `DECIMAL` for it
+  too. (2) A column's declared type is the combination of the types of all
+  its values (14.2, 22.18 / 22.19): exact numerics combine to the wider one
+  (`DECIMAL` over the integer types), an approximate value makes the column
+  `DOUBLE` (`REAL` only when every value is), character strings `STRING`, a
+  zoned and a local datetime or time the zoned type, and values of different
+  base types `ANY` (18.9's open dynamic union type); NULL adds nothing. It was
+  the type of the first non-null value among the first 10 rows, so
+  `RETURN 2 AS a UNION RETURN 1.25 AS a` declared `INTEGER` for a column
+  holding 1.25, and an ORDER BY, a CASE, an OPTIONAL MATCH or an eleventh row
+  could contradict a declared type. The node-scan stream (`MATCH (n:L)
+  RETURN n.p` served without the executor) sends its schema frame after 10
+  rows: when those are all its rows it declares their combined type, as the
+  executor would; when more rows follow it declares each property column
+  `ANY` (a bare node column stays `NODE`), since it has not read them (it
+  declared the sample's type). Clients that switch on a declared type must
+  accept `DECIMAL` and `ANY`; the value kinds on the wire are unchanged.
+  (3) `ordered` / `order_keys` are set exactly when the statement that
+  returns the rows ends in an ORDER BY (14.10; a UNION's trailing ORDER BY,
+  14.2): `FOR a IN [2, 1, 3] RETURN a ORDER BY a DESC`, a FOR whose body
+  reads, a chain whose last part orders (`MATCH ... WITH n MATCH ... RETURN
+  ... ORDER BY k`) and `CALL p() YIELD x RETURN x ORDER BY x` reported
+  `ordered:false`, and a WITH's ORDER BY ahead of an unordered RETURN (`WITH
+  3 AS x ORDER BY x WITH x RETURN x`) reported `ordered:true`. One function,
+  `query_traits.resultOrderBy`, now decides both the flag and the keys on
+  both transports. (4) PROFILE reports no spill: the executor never spills a
+  sort, DISTINCT, UNION or GROUP BY, but a version-1 PROFILE under
+  `GEODE_SPILL_THRESHOLD_BYTES` (or `GEODE_QUERY_MEM_LIMIT_BYTES`) set
+  `spill_reason:"threshold"` and a spill counter of 1 because its synthetic
+  peak passed the threshold. The variables no longer change any output
+  (docs/kb/PROFILING.md, docs/DOCKER_OVERVIEW.md);
+  tests/e2e_protocol_profile_spill_first_index.zig, which no step ran and
+  which pinned the made-up spill, is removed. docs/BINARY_PROTOCOL.md
+  now describes the SCHEMA types, the ordering flag and the version-1 and
+  version-2 PROFILE payloads geode sends. Regressions: `zig build
+  test-sonny6562-wire-metadata` (5 tests, a real server over both
+  transports, the protobuf value kinds checked against each declared type),
+  `test-sonny6548-wire-result-metadata` (now in the aggregate),
+  `test-sonny1221-fast-path-schema` (a stream longer than its sample declares
+  `ANY`).
 - **An ORDER BY on a column the ordered index cannot serve no longer starts
   its build (SONNY-6555 item 3, SONNY-6518 item 6).** `orderedScanFastPath`
   started the value-ordered index's background build (and its persisting
