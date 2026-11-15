@@ -5336,6 +5336,7 @@ REQ-SONNY-6598-KDF-FAULT-HOOK,AuthOutcomeClassification,TestOnlyKdfFaultHook,TES
 REQ-SONNY-6598-MFA-VERIFY-ERRORS,AuthOutcomeClassification,MfaVerifyErrors,TESTED,,,security,2026-11-15,src/execution/auth_dispatch.zig,1153
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,Argon2idVerifyErrors,TESTED,,,security,2026-11-15,src/security/geode_auth_lib.zig,2250
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors,TESTED,,,security,2026-11-15,src/security/user_management.zig,677
+REQ-SONNY-6613-SINGLE-QUOTED-ALIAS,GQLParser,AliasIsIdentifier,TESTED,,,parser,2026-11-15,tests/test_sonny6613_quoted_alias.zig,10
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38
