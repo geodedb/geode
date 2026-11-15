@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T16:27:51.319240597Z",
+  "generated_at": "2026-11-15T16:53:26.915178979Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78556,6 +78556,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83646,7 +83665,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4154
+      "TESTED": 4155
     },
     "by_aspect": {
       "2PC": 3,
@@ -86420,7 +86439,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 372,
+      "Regression": 373,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

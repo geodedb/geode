@@ -18,6 +18,10 @@ pub const BodyFault = struct {
     st: *graph_store.GraphStore,
     nodes: std.testing.FailingAllocator,
     edges: std.testing.FailingAllocator,
+    /// SONNY-6607: the adjacency caches (`outgoing_edges` / `incoming_edges`),
+    /// failed only by `adjacencyOn`.
+    adj_out: std.testing.FailingAllocator,
+    adj_in: std.testing.FailingAllocator,
 
     /// `self` must not move afterwards (the caches point into it while on).
     pub fn init(self: *BodyFault, st: *graph_store.GraphStore) void {
@@ -25,6 +29,8 @@ pub const BodyFault = struct {
             .st = st,
             .nodes = std.testing.FailingAllocator.init(st.nodes.allocator, .{}),
             .edges = std.testing.FailingAllocator.init(st.edges.allocator, .{}),
+            .adj_out = std.testing.FailingAllocator.init(st.outgoing_edges.allocator, .{}),
+            .adj_in = std.testing.FailingAllocator.init(st.incoming_edges.allocator, .{}),
         };
     }
 
@@ -60,6 +66,28 @@ pub const BodyFault = struct {
         for (edge_ids) |id| self.st.edges.remove(id);
     }
 
+    /// SONNY-6607: evict every node's adjacency lists (the engine keeps them).
+    pub fn evictAdjacency(self: *BodyFault) !void {
+        const a = std.testing.allocator;
+        const node_ids = try self.st.getAllNodesForTenant(a, null);
+        defer a.free(node_ids);
+        for (node_ids) |id| {
+            self.st.outgoing_edges.remove(id);
+            self.st.incoming_edges.remove(id);
+        }
+    }
+
+    /// SONNY-6607: every adjacency rebuild fails from now on (until `off`);
+    /// node and edge bodies still rebuild.
+    pub fn adjacencyOn(self: *BodyFault) void {
+        inline for (.{ &self.adj_out, &self.adj_in }) |f| {
+            f.has_induced_failure = false;
+            f.fail_index = f.alloc_index;
+        }
+        self.st.outgoing_edges.allocator = self.adj_out.allocator();
+        self.st.incoming_edges.allocator = self.adj_in.allocator();
+    }
+
     /// Every body rebuild fails from now on (until `off`).
     pub fn on(self: *BodyFault) void {
         self.onFrom(0);
@@ -79,8 +107,10 @@ pub const BodyFault = struct {
     pub fn off(self: *BodyFault) bool {
         self.st.nodes.allocator = self.nodes.internal_allocator;
         self.st.edges.allocator = self.edges.internal_allocator;
-        self.nodes.fail_index = std.math.maxInt(usize);
-        self.edges.fail_index = std.math.maxInt(usize);
-        return self.nodes.has_induced_failure or self.edges.has_induced_failure;
+        self.st.outgoing_edges.allocator = self.adj_out.internal_allocator;
+        self.st.incoming_edges.allocator = self.adj_in.internal_allocator;
+        inline for (.{ &self.nodes, &self.edges, &self.adj_out, &self.adj_in }) |f| f.fail_index = std.math.maxInt(usize);
+        return self.nodes.has_induced_failure or self.edges.has_induced_failure or
+            self.adj_out.has_induced_failure or self.adj_in.has_induced_failure;
     }
 };
