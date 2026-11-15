@@ -237,6 +237,15 @@ pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 // handler below returns bytes from `self.allocator`: fixed text goes through
 // `ownedCopy`, never a literal (an invalid free). A callback that returns an
 // error hands nothing over.
+//
+// SONNY-6552: each result is the MCP 2025-11-25 result object on one line
+// (the stdio transport is newline-delimited), and a request geode cannot
+// answer is a JSON-RPC error, signalled by the Zig error the library maps
+// (mcp.zig processJsonValue): `error.InvalidParams` -> -32602 (an unknown
+// tool or prompt, a bad prompt argument, a cursor geode never issued),
+// `error.ResourceNotFound` -> -32002 (an unknown resource URI). The
+// library's `ToolNotFound` / `PromptNotFound` map to -32002, which the
+// spec gives to resources only, so geode does not use them.
 // CANARY: REQ=REQ-SONNY-6531-MCP-OWNERSHIP; FEATURE="MCPResultOwnership"; ASPECT=AllocatorOwnedHandlerResults; STATUS=TESTED; TEST=tests/test_sonny6531_mcp_ownership.zig; OWNER=mcp; UPDATED=2026-11-14
 
 /// A copy of `text` from the allocator the mcp server frees results with.
@@ -246,7 +255,7 @@ fn ownedCopy(ctx: ?*anyopaque, text: []const u8) ![]const u8 {
 }
 
 fn listToolsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    return ownedCopy(ctx, tools.listTools(cursor));
+    return ownedCopy(ctx, try tools.listTools(cursor));
 }
 
 fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, cancel: *const mcp.CancelToken) anyerror![]const u8 {
@@ -259,7 +268,8 @@ fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, ca
 }
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    return ownedCopy(ctx, resources.listResources(cursor));
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return resources.listResources(self.allocator, cursor);
 }
 
 fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
@@ -268,7 +278,8 @@ fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
 }
 
 fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
-    return ownedCopy(ctx, resources.listResourceTemplates());
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return resources.listResourceTemplates(self.allocator);
 }
 
 // GAP-0516: Resource subscriptions are intentionally unsupported.
@@ -319,11 +330,13 @@ fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
 }
 
 fn listPromptsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    return ownedCopy(ctx, prompts.listPrompts(cursor));
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return prompts.listPrompts(self.allocator, cursor);
 }
 
 fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) anyerror![]const u8 {
-    return ownedCopy(ctx, prompts.getPrompt(name, args_json));
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return prompts.getPrompt(self.allocator, name, args_json);
 }
 
 // GAP-0516: completion/complete is optional per MCP spec §4.4.
@@ -485,15 +498,19 @@ test "SONNY-6531: every handler returns a result from the server's allocator" {
         try listResourcesHandler(server, null),
         try listResourceTemplatesHandler(server),
         try listPromptsHandler(server, null),
-        try getPromptHandler(server, "find_nodes", null),
-        try getPromptHandler(server, "no_such_prompt", "{}"),
-        try readResourceHandler(server, "unknown://resource"),
+        try getPromptHandler(server, "find_nodes", "{\"label\":\"Person\"}"),
         try completeHandler(server, "{}"),
     };
     for (results) |r| {
         try std.testing.expect(r.len > 0);
         allocator.free(r);
     }
+    // SONNY-6552: an unknown prompt, a missing required argument, an
+    // unknown URI and a cursor are errors (nothing is handed over).
+    try std.testing.expectError(error.InvalidParams, getPromptHandler(server, "no_such_prompt", "{}"));
+    try std.testing.expectError(error.InvalidParams, getPromptHandler(server, "find_nodes", null));
+    try std.testing.expectError(error.ResourceNotFound, readResourceHandler(server, "unknown://resource"));
+    try std.testing.expectError(error.InvalidParams, listResourcesHandler(server, "next"));
 }
 
 test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {

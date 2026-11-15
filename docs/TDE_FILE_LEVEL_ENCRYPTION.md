@@ -79,11 +79,11 @@ fuzz target; no server code path calls it.
 
 ### Distributed Consensus (Raft)
 
-| Component     | File Name        | Source File                           |
-| ------------- | ---------------- | ------------------------------------- |
-| Raft State    | `raft_state.bin` | `src/distributed/raft_persistent.zig` |
-| Raft Snapshot | `snapshot.bin`   | `src/distributed/raft_persistent.zig` |
-| Raft Log      | `raft_log.bin`   | `src/distributed/raft_persistent.zig` |
+Not encrypted. The cluster's Raft hard state, log and snapshots are written
+by the pinned raft library's `FileStorage` (`hard_state`, `entries.wal`,
+snapshot files) in the node's raft directory, in plaintext. The
+`src/distributed/raft_persistent.zig` wrapper this table named was reached by
+nothing in the server and was removed (SONNY-6563).
 
 ## Technical Implementation
 
@@ -237,7 +237,6 @@ All TDE-protected files include CANARY markers for requirement traceability:
 | File                         | Aspect        |
 | ---------------------------- | ------------- |
 | `hnsw_persist.zig`           | HNSWIndex     |
-| `raft_persistent.zig`        | RaftState     |
 | `catalog.zig`                | SchemaCatalog |
 | `fle_catalog.zig`            | FLECatalog    |
 

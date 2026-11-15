@@ -8,6 +8,7 @@ const graph_store = @import("../graph_store.zig");
 const heap = @import("../storage/heap.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
+const eval = @import("../eval.zig");
 const property_codec = @import("../property_value_codec.zig");
 const unique_constraints = @import("../execution/unique_constraints.zig");
 const fle_integration = @import("../fle_integration.zig");
@@ -717,6 +718,35 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.LabelDictionaryDiverged => .{ .code = "58000", .message = "LabelDictionaryDiverged: the graph's shard label dictionaries disagree, so it is not opened and refuses reads and writes; other graphs are unaffected. The server log names the graph and says whether GEODE_LABEL_DICT_ADOPT_SHARD0 can repair it or it needs a manual repair" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6547-TRANSPORT-PARITY; FEATURE="StorageIntegrity"; ASPECT=SharedHandlerErrorAnswer; STATUS=TESTED; TEST=tests/test_sonny6547_transport_parity.zig; OWNER=transport; UPDATED=2026-11-14
+/// SONNY-6547 (1): the answer to an error a request handler did not answer
+/// itself, when the error is one the client must be told about as itself: a
+/// limit the statement ran into (`eval.isResourceLimitError`) or the
+/// storage-integrity refusal of a graph (`graph_store.GraphQuarantineError`).
+/// Null for any other error. The node-scan stream's errors were answered
+/// only for a limit and returned out of the handler otherwise, so a scan of
+/// a damaged graph failed the gRPC call and answered QUIC with the generic
+/// "Internal Server Error".
+pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
+    if (eval.isResourceLimitError(err)) return mapError(err);
+    return switch (err) {
+        error.GraphQuarantined,
+        error.ChecksumMismatch,
+        error.DataCorruption,
+        error.InvalidData,
+        error.LabelDictionaryDiverged,
+        => mapError(err),
+        else => null,
+    };
+}
+
+/// SONNY-6547 (1): the answer both transports give to an error a request
+/// handler failed with: `statementErrorInfo`, else the generic 58000
+/// "Internal Server Error" (the error's name is logged, not sent).
+pub fn unhandledErrorInfo(err: anyerror) ErrorInfo {
+    return statementErrorInfo(err) orelse .{ .code = "58000", .message = "Internal Server Error" };
 }
 
 pub fn buildStatus(allocator: std.mem.Allocator, status_class: []const u8, flagger_findings: []const []const u8) !schema.Status {

@@ -56,8 +56,8 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     // Get random port
     const port = util.getRandomPort() catch |err| {
         util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);

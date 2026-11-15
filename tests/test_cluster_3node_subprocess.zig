@@ -3,7 +3,8 @@
 // Subprocess 3-node cluster smoke test.
 //
 // What this test exercises:
-//   * Spawning three real `./zig-out/bin/geode serve` child processes on
+//   * Spawning three real `geode serve` child processes (this build's
+//     geode, `geode_test_bin.geode_exe`) on
 //     loopback with distinct cluster_port / client port / data_dir per node.
 //   * Each child reaches the `[startup] Cluster coordinator started` log
 //     line within 30s (proves the cluster bootstrap path lights up end-to-
@@ -33,14 +34,10 @@
 //
 // Skip semantics:
 //   The test SKIPS (returns error.SkipZigTest) when:
-//     - the geode binary is missing — build it first with `zig build`.
 //     - openssl is unavailable (the test CA and node leaf are generated
 //       with it; peers verify each other's TLS certificate against it).
 //     - $GEODE_SKIP_SUBPROC_CLUSTER is set, so flaky CI runs can opt out
 //       without removing the test from the build matrix.
-//   Skip is preferred over hard-fail because the test depends on a
-//   pre-built binary in zig-out/bin which CI orchestration may not have
-//   populated for every test step.
 
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
@@ -303,20 +300,16 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     //     the dispatch path for 30s+.
     //
     // The `GEODE_SKIP_SUBPROC_CLUSTER` opt-out is retained so flaky CI
-    // runners (or environments without a built geode binary in
-    // zig-out/bin) can still skip without removing the test from the
-    // build matrix.
-
-    // The test must run from the geode repo root because the binary path
-    // is relative.  std.testing's harness sets cwd to the repo root.
+    // runners can still skip without removing the test from the build
+    // matrix.
     const binary_path = geode_test_bin.geode_exe;
     const io_check = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io_check, binary_path, .{}) catch {
-        std.debug.print(
-            "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
-            .{binary_path},
-        );
-        return error.SkipZigTest;
+    // SONNY-6548: binary_path is the geode this build emitted (the step
+    // depends on it), so a missing binary is a broken build: fail, do not
+    // skip, and do not point at zig-out/bin, which nothing here runs.
+    std.Io.Dir.cwd().access(io_check, binary_path, .{}) catch |err| {
+        std.debug.print("the geode this build emitted is missing at {s}\n", .{binary_path});
+        return err;
     };
 
     // Allocate ports — high range to avoid CI collisions.  Cluster ports

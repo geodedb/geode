@@ -11,16 +11,15 @@
 // most test roots import these files through the `geode` module. The inline
 // tests of raft_consensus.zig, cluster.zig and cluster_auth.zig were
 // collected only by the unfiltered graph_store.zig / eval.zig roots (which
-// did not compile from 300eb9a94 until 12879e5d1); twophase.zig's by none.
-// `zig build test-sonny6459-distributed-inline` builds this root, wired like
-// the graph_store.zig test root, with filters that select those four files'
-// tests. (twophase.zig's two `TwoPCCoordinator.handleMessage` tests, which
-// could not compile, left with the dead coordinator wrapper: SONNY-6463.)
+// did not compile from 300eb9a94 until 12879e5d1). `zig build
+// test-sonny6459-distributed-inline` builds this root, wired like the
+// graph_store.zig test root, with filters that select those files' tests.
+// (twophase.zig, whose inline tests ran here too, was reached by nothing in
+// the server and was removed: SONNY-6563.)
 // Test-only; never linked into the shipped binary.
 
 test {
     _ = @import("distributed/raft_consensus.zig");
     _ = @import("distributed/cluster.zig");
-    _ = @import("distributed/twophase.zig");
     _ = @import("distributed/cluster_auth.zig");
 }

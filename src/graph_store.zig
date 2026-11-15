@@ -1745,27 +1745,6 @@ pub const CompactPropertyMap = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2026-06-11
-pub const PathOptions = struct {
-    min_length: ?u32 = null,
-    max_length: ?u32 = null,
-    exact_length: ?u32 = null,
-};
-
-pub const ExpandOptions = struct {
-    max_depth: u32 = 5,
-};
-
-pub const Path = struct {
-    nodes: []u64,
-    edges: []u64,
-};
-
-pub const PathFilter = struct {
-    node_predicate: ?*const fn (*const Node) bool = null,
-    edge_predicate: ?*const fn (*const Edge) bool = null,
-};
-
 fn isInternalPersistedPropertyKey(key: []const u8) bool {
     return std.mem.eql(u8, key, INTERNAL_NODE_ID_PROPERTY_KEY) or
         std.mem.eql(u8, key, INTERNAL_EDGE_ID_PROPERTY_KEY) or
@@ -4711,6 +4690,17 @@ pub const GraphStore = struct {
         return self.graphsContains(graph_name);
     }
 
+    /// `listGraphNames`: a copy of `name` added to `names` unless `seen`
+    /// holds it; `seen` borrows the copy. Nothing fails once the copy exists.
+    fn appendGraphNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), seen: *std.StringHashMap(void), name: []const u8) !void {
+        if (seen.contains(name)) return;
+        try seen.ensureUnusedCapacity(1);
+        try names.ensureUnusedCapacity(allocator, 1);
+        const copy = try allocator.dupe(u8, name);
+        names.appendAssumeCapacity(copy);
+        seen.putAssumeCapacityNoClobber(copy, {});
+    }
+
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
         var names = std.ArrayList([]const u8).empty;
         errdefer {
@@ -4720,14 +4710,12 @@ pub const GraphStore = struct {
             names.deinit(allocator);
         }
 
+        // SONNY-6547 (2): the set borrows the copies `names` owns (it is
+        // freed first: defers run in reverse). It owned its own copies and
+        // freed one twice when an allocation after its insert failed (the
+        // insert's `errdefer` and the set's `defer`); SHOW GRAPHS crashed.
         var seen = std.StringHashMap(void).init(allocator);
-        defer {
-            var seen_it = seen.iterator();
-            while (seen_it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            seen.deinit();
-        }
+        defer seen.deinit();
 
         if (global_adapter) |adapter| {
             const persisted_names = try adapter.listGraphNames(allocator);
@@ -4738,32 +4726,14 @@ pub const GraphStore = struct {
                 allocator.free(persisted_names);
             }
 
-            for (persisted_names) |name| {
-                const seen_key = try allocator.dupe(u8, name);
-                errdefer allocator.free(seen_key);
-                const seen_result = try seen.getOrPut(seen_key);
-                if (!seen_result.found_existing) {
-                    try names.append(allocator, try allocator.dupe(u8, name));
-                } else {
-                    allocator.free(seen_key);
-                }
-            }
+            for (persisted_names) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
         }
 
         // SONNY-3233 (round 15, F12): the registry's names copied under
         // `graphs_lock`.
         const registry = try self.graphNamesCopy(allocator);
         defer freeGraphNames(allocator, registry);
-        for (registry) |name| {
-            const seen_key = try allocator.dupe(u8, name);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, name));
-            } else {
-                allocator.free(seen_key);
-            }
-        }
+        for (registry) |name| try appendGraphNameOnce(allocator, &names, &seen, name);
 
         return names.toOwnedSlice(allocator);
     }
@@ -10166,388 +10136,6 @@ pub const GraphStore = struct {
         return false;
     }
 
-    pub fn freePath(self: *const GraphStore, path: Path) void {
-        self.allocator.free(path.nodes);
-        self.allocator.free(path.edges);
-    }
-
-    pub fn freePaths(self: *const GraphStore, paths: []Path) void {
-        for (paths) |path| {
-            self.freePath(path);
-        }
-        self.allocator.free(paths);
-    }
-
-    pub fn findPaths(self: *GraphStore, start: u64, end: u64, options: PathOptions) ![]Path {
-        const bounds = self.resolvePathBounds(options);
-        var paths = std.ArrayList(Path).init(self.allocator);
-        errdefer paths.deinit(self.allocator);
-
-        var path_nodes = std.ArrayList(u64).init(self.allocator);
-        defer path_nodes.deinit(self.allocator);
-        var path_edges = std.ArrayList(u64).init(self.allocator);
-        defer path_edges.deinit(self.allocator);
-
-        try path_nodes.append(self.allocator, start);
-        try self.collectPaths(start, end, bounds.min, bounds.max, false, null, &path_nodes, &path_edges, &paths);
-
-        return paths.toOwnedSlice(self.allocator);
-    }
-
-    pub fn findPathsBidirectional(self: *GraphStore, start: u64, end: u64, options: PathOptions) ![]Path {
-        const bounds = self.resolvePathBounds(options);
-        var paths = std.ArrayList(Path).init(self.allocator);
-        errdefer paths.deinit(self.allocator);
-
-        var path_nodes = std.ArrayList(u64).init(self.allocator);
-        defer path_nodes.deinit(self.allocator);
-        var path_edges = std.ArrayList(u64).init(self.allocator);
-        defer path_edges.deinit(self.allocator);
-
-        try path_nodes.append(self.allocator, start);
-        try self.collectPaths(start, end, bounds.min, bounds.max, true, null, &path_nodes, &path_edges, &paths);
-
-        return paths.toOwnedSlice(self.allocator);
-    }
-
-    pub fn findPathsFiltered(self: *GraphStore, start: u64, end: u64, options: PathOptions, filter: PathFilter) ![]Path {
-        const bounds = self.resolvePathBounds(options);
-        var paths = std.ArrayList(Path).init(self.allocator);
-        errdefer paths.deinit(self.allocator);
-
-        var path_nodes = std.ArrayList(u64).init(self.allocator);
-        defer path_nodes.deinit(self.allocator);
-        var path_edges = std.ArrayList(u64).init(self.allocator);
-        defer path_edges.deinit(self.allocator);
-
-        try path_nodes.append(self.allocator, start);
-        try self.collectPaths(start, end, bounds.min, bounds.max, false, &filter, &path_nodes, &path_edges, &paths);
-
-        return paths.toOwnedSlice(self.allocator);
-    }
-
-    pub fn shortestPath(self: *GraphStore, start: u64, end: u64) !?Path {
-        if (start == end) {
-            return Path{
-                .nodes = try self.allocator.dupe(u64, &[_]u64{start}),
-                .edges = try self.allocator.alloc(u64, 0),
-            };
-        }
-
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var parent = std.AutoHashMap(u64, struct { node: u64, edge: u64 }).init(self.allocator);
-        defer parent.deinit();
-
-        var queue = std.ArrayList(u64).init(self.allocator);
-        defer queue.deinit();
-
-        try queue.append(self.allocator, start);
-        try visited.put(start, {});
-
-        var head: usize = 0;
-        while (head < queue.items.len) : (head += 1) {
-            const current = queue.items[head];
-            if (current == end) break;
-
-            if (self.outAdjItems(current)) |outgoing| {
-                for (outgoing) |edge_id| {
-                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
-                        const next = edge.to_id;
-                        if (visited.contains(next)) continue;
-                        try visited.put(next, {});
-                        try parent.put(next, .{ .node = current, .edge = edge_id });
-                        try queue.append(self.allocator, next);
-                    }
-                }
-            }
-        }
-
-        if (!parent.contains(end)) return null;
-
-        var nodes_rev = std.ArrayList(u64).init(self.allocator);
-        var edges_rev = std.ArrayList(u64).init(self.allocator);
-        defer nodes_rev.deinit(self.allocator);
-        defer edges_rev.deinit(self.allocator);
-
-        var current = end;
-        try nodes_rev.append(self.allocator, current);
-        while (current != start) {
-            const info = parent.get(current) orelse break;
-            try edges_rev.append(self.allocator, info.edge);
-            current = info.node;
-            try nodes_rev.append(self.allocator, current);
-        }
-
-        std.mem.reverse(u64, nodes_rev.items);
-        std.mem.reverse(u64, edges_rev.items);
-
-        return Path{
-            .nodes = try self.allocator.dupe(u64, nodes_rev.items),
-            .edges = try self.allocator.dupe(u64, edges_rev.items),
-        };
-    }
-
-    pub fn allShortestPaths(self: *GraphStore, start: u64, end: u64) ![]Path {
-        if (start == end) {
-            var only = std.ArrayList(Path).init(self.allocator);
-            try only.append(self.allocator, .{
-                .nodes = try self.allocator.dupe(u64, &[_]u64{start}),
-                .edges = try self.allocator.alloc(u64, 0),
-            });
-            return only.toOwnedSlice(self.allocator);
-        }
-
-        var distance = std.AutoHashMap(u64, u32).init(self.allocator);
-        defer distance.deinit();
-        var parents = std.AutoHashMap(u64, std.ArrayList(struct { node: u64, edge: u64 })).init(self.allocator);
-        defer {
-            var it = parents.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit(self.allocator);
-            }
-            parents.deinit();
-        }
-
-        var queue = std.ArrayList(u64).init(self.allocator);
-        defer queue.deinit();
-
-        try queue.append(self.allocator, start);
-        try distance.put(start, 0);
-
-        var head: usize = 0;
-        while (head < queue.items.len) : (head += 1) {
-            const current = queue.items[head];
-            const current_dist = distance.get(current) orelse 0;
-            if (self.outAdjItems(current)) |outgoing| {
-                for (outgoing) |edge_id| {
-                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
-                        const next = edge.to_id;
-                        const next_dist = current_dist + 1;
-                        if (distance.get(next)) |existing| {
-                            if (next_dist == existing) {
-                                const entry = try parents.getOrPut(next);
-                                if (!entry.found_existing) {
-                                    entry.value_ptr.* = std.ArrayList(struct { node: u64, edge: u64 }).init(self.allocator);
-                                }
-                                try entry.value_ptr.append(self.allocator, .{ .node = current, .edge = edge_id });
-                            }
-                            continue;
-                        }
-                        try distance.put(next, next_dist);
-                        const entry = try parents.getOrPut(next);
-                        if (!entry.found_existing) {
-                            entry.value_ptr.* = std.ArrayList(struct { node: u64, edge: u64 }).init(self.allocator);
-                        }
-                        try entry.value_ptr.append(self.allocator, .{ .node = current, .edge = edge_id });
-                        try queue.append(self.allocator, next);
-                    }
-                }
-            }
-        }
-
-        if (!distance.contains(end)) {
-            return self.allocator.alloc(Path, 0);
-        }
-
-        var results = std.ArrayList(Path).init(self.allocator);
-        errdefer {
-            for (results.items) |path| self.freePath(path);
-            results.deinit(self.allocator);
-        }
-
-        var nodes_stack = std.ArrayList(u64).init(self.allocator);
-        defer nodes_stack.deinit(self.allocator);
-        var edges_stack = std.ArrayList(u64).init(self.allocator);
-        defer edges_stack.deinit(self.allocator);
-
-        try nodes_stack.append(self.allocator, end);
-        try self.backtrackShortestPaths(start, end, &parents, &nodes_stack, &edges_stack, &results);
-
-        return results.toOwnedSlice(self.allocator);
-    }
-
-    pub fn kShortestPaths(self: *GraphStore, start: u64, end: u64, k: usize) ![]Path {
-        const max_len: u32 = if (self.nodes.count() == 0) 0 else @intCast(self.nodes.count());
-        var all_paths = try self.findPaths(start, end, .{ .max_length = max_len });
-
-        if (all_paths.len <= k) return all_paths;
-
-        std.sort.block(Path, all_paths, {}, struct {
-            fn less(_: void, a: Path, b: Path) bool {
-                return a.edges.len < b.edges.len;
-            }
-        }.less);
-
-        for (all_paths[k..]) |path| {
-            self.freePath(path);
-        }
-
-        const out = try self.allocator.alloc(Path, k);
-        std.mem.copyForwards(Path, out, all_paths[0..k]);
-        self.allocator.free(all_paths);
-        return out;
-    }
-
-    pub fn expandFromNode(self: *GraphStore, start: u64, options: ExpandOptions) ![]u64 {
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-
-        var queue = std.ArrayList(struct { node: u64, depth: u32 }).init(self.allocator);
-        defer queue.deinit();
-
-        var result = std.ArrayList(u64).init(self.allocator);
-        errdefer result.deinit(self.allocator);
-
-        try queue.append(self.allocator, .{ .node = start, .depth = 0 });
-        try visited.put(start, {});
-        try result.append(self.allocator, start);
-
-        var head: usize = 0;
-        while (head < queue.items.len) : (head += 1) {
-            const current = queue.items[head];
-            if (current.depth >= options.max_depth) continue;
-
-            if (self.outAdjItems(current.node)) |outgoing| {
-                for (outgoing) |edge_id| {
-                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
-                        const next = edge.to_id;
-                        if (visited.contains(next)) continue;
-                        try visited.put(next, {});
-                        try result.append(self.allocator, next);
-                        try queue.append(self.allocator, .{ .node = next, .depth = current.depth + 1 });
-                    }
-                }
-            }
-        }
-
-        return result.toOwnedSlice(self.allocator);
-    }
-
-    fn resolvePathBounds(self: *GraphStore, options: PathOptions) struct { min: u32, max: u32 } {
-        _ = self;
-        if (options.exact_length) |exact| {
-            return .{ .min = exact, .max = exact };
-        }
-        const min_len: u32 = options.min_length orelse 1;
-        const max_len: u32 = options.max_length orelse min_len + 10;
-        return .{ .min = min_len, .max = max_len };
-    }
-
-    fn collectPaths(
-        self: *GraphStore,
-        current: u64,
-        end: u64,
-        min_len: u32,
-        max_len: u32,
-        bidirectional: bool,
-        filter: ?*const PathFilter,
-        path_nodes: *std.ArrayList(u64),
-        path_edges: *std.ArrayList(u64),
-        results: *std.ArrayList(Path),
-    ) !void {
-        const depth: u32 = @intCast(path_edges.items.len);
-
-        if (depth >= min_len and current == end) {
-            const nodes_copy = try self.allocator.dupe(u64, path_nodes.items);
-            const edges_copy = try self.allocator.dupe(u64, path_edges.items);
-            try results.append(self.allocator, .{ .nodes = nodes_copy, .edges = edges_copy });
-        }
-
-        if (depth >= max_len) return;
-
-        const visit = struct {
-            fn shouldSkip(nodes: []const u64, next: u64, target: u64) bool {
-                if (next == target) return false;
-                for (nodes) |node| {
-                    if (node == next) return true;
-                }
-                return false;
-            }
-        }.shouldSkip;
-
-        if (self.outAdjItems(current)) |outgoing| {
-            for (outgoing) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
-                    const next = edge.to_id;
-                    if (visit(path_nodes.items, next, end)) continue;
-                    if (filter) |flt| {
-                        if (flt.edge_predicate) |pred| {
-                            if (!pred(edge)) continue;
-                        }
-                        if (flt.node_predicate) |pred| {
-                            if (self.nodes.getPtr(next)) |node_ptr| {
-                                if (!pred(node_ptr)) continue;
-                            } else continue;
-                        }
-                    }
-
-                    try path_nodes.append(self.allocator, next);
-                    try path_edges.append(self.allocator, edge_id);
-                    try self.collectPaths(next, end, min_len, max_len, bidirectional, filter, path_nodes, path_edges, results);
-                    _ = path_nodes.pop();
-                    _ = path_edges.pop();
-                }
-            }
-        }
-
-        if (bidirectional) {
-            if (self.inAdjItems(current)) |incoming| {
-                for (incoming) |edge_id| {
-                    if (self.getEdgePtrHydrated(edge_id)) |edge| {
-                        const next = edge.from_id;
-                        if (visit(path_nodes.items, next, end)) continue;
-                        if (filter) |flt| {
-                            if (flt.edge_predicate) |pred| {
-                                if (!pred(edge)) continue;
-                            }
-                            if (flt.node_predicate) |pred| {
-                                if (self.nodes.getPtr(next)) |node_ptr| {
-                                    if (!pred(node_ptr)) continue;
-                                } else continue;
-                            }
-                        }
-
-                        try path_nodes.append(self.allocator, next);
-                        try path_edges.append(self.allocator, edge_id);
-                        try self.collectPaths(next, end, min_len, max_len, bidirectional, filter, path_nodes, path_edges, results);
-                        _ = path_nodes.pop();
-                        _ = path_edges.pop();
-                    }
-                }
-            }
-        }
-    }
-
-    fn backtrackShortestPaths(
-        self: *GraphStore,
-        start: u64,
-        current: u64,
-        parents: *std.AutoHashMap(u64, std.ArrayList(struct { node: u64, edge: u64 })),
-        nodes_stack: *std.ArrayList(u64),
-        edges_stack: *std.ArrayList(u64),
-        results: *std.ArrayList(Path),
-    ) !void {
-        if (current == start) {
-            const nodes_copy = try self.allocator.dupe(u64, nodes_stack.items);
-            const edges_copy = try self.allocator.dupe(u64, edges_stack.items);
-            std.mem.reverse(u64, nodes_copy);
-            std.mem.reverse(u64, edges_copy);
-            try results.append(self.allocator, .{ .nodes = nodes_copy, .edges = edges_copy });
-            return;
-        }
-
-        if (parents.get(current)) |plist| {
-            for (plist.items) |info| {
-                try edges_stack.append(self.allocator, info.edge);
-                try nodes_stack.append(self.allocator, info.node);
-                try self.backtrackShortestPaths(start, info.node, parents, nodes_stack, edges_stack, results);
-                _ = edges_stack.pop();
-                _ = nodes_stack.pop();
-            }
-        }
-    }
-
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
     // GAP-0291: Resolve tenant_id from the per-thread FLE context set by the connection handler.
@@ -13584,6 +13172,23 @@ pub const GraphStore = struct {
     /// per-graph load: the resident IdMap re-insert is idempotent and the
     /// deferred indexes are built from the engine scan.
     pub fn ensureGraphHydrated(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, true);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrateWithoutCompletionPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6547 (4): `ensureGraphHydrated` without the completion persist
+    /// (`persistHydrationProductsForGraph`), for the Raft apply paths: they
+    /// run under the Raft node's `inner_mutex`, and that persist is a
+    /// checkpoint of the graph, which waits up to 5 s for the graph's lock,
+    /// so a local request holding it stopped the whole Raft node for that
+    /// long. The products stay memory-only until the next full checkpoint
+    /// (a crash before it re-pays this hydration's scan on the next first
+    /// touch, as before the completion persist existed).
+    pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) void {
+        self.ensureGraphHydratedImpl(graph_name, false);
+    }
+
+    fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const entry = blk: {
             self.hydration_mutex.lockUncancelable(io);
@@ -13652,7 +13257,7 @@ pub const GraphStore = struct {
         // class), and never when the hydration was served entirely from
         // counter-current snapshots (nothing new to persist). Best-effort:
         // persist errors are logged inside and never fail the triggering query.
-        if (outcome == .rebuilt) {
+        if (persist and outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
     }
@@ -18919,11 +18524,14 @@ pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const
 /// (`takeQuarantinedReadError`).
 ///
 /// `hydrate`: a graph not hydrated yet is hydrated first, so its damage is
-/// found before the program reads or writes it. The transports pass it for a
-/// change (the write fast paths read no resident product, and wrote to a
-/// damaged store whose hydration had not run yet); their reads hydrate in
-/// the read snapshot (`snapshotUnderReadLock`) and are checked after it. The
-/// executor's gate passes it for every program (SONNY-6541 (3)).
+/// found before the program reads or writes it. The executor's gate passes
+/// it for every program (SONNY-6541 (3)), and so do the transports
+/// (SONNY-6547 (1)): they passed it for a change only (the write fast paths
+/// read no resident product, and wrote to a damaged store whose hydration had
+/// not run yet) and counted on a read's snapshot (`snapshotUnderReadLock`)
+/// to hydrate, but a read served engine-direct (no row-security engine
+/// installed: the handlers called in process) has no snapshot and answered
+/// rows from the damaged store.
 pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, hydrate: bool) ?GraphQuarantineError {
     clearQuarantinedReadError();
     const store = getPrimaryGlobalStore(allocator);

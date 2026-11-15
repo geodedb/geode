@@ -1,13 +1,6 @@
 const std = @import("std");
-const geode_test_bin = @import("geode_test_bin");
-const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
-
-fn run(args: []const []const u8) ![]u8 {
-    const res = try cli_test_util.run(args);
-    std.testing.allocator.free(res.err);
-    return res.out;
-}
+const profile_util = @import("profile_test_util.zig");
 
 fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []usize } {
     const allocator = testing.allocator;
@@ -47,45 +40,36 @@ fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []u
     return .{ .indices = indices_slice, .nets = nets_slice };
 }
 
+// SONNY-6548: ported from the deleted client's `--profile-memcurve` flag and
+// `RETURN a AS x DISTINCT` with an array `--param` (neither exists). A read
+// takes the trace-backed version-2 payload, whose memory figures are honest
+// zeros and which has no mem_curve; the version-1 payload (data changes,
+// tenant-bound and RLS sessions) carries the synthetic memory model and the
+// curve when the server runs with GEODE_PROFILE_MEMCURVE
+// (docs/EXPLAIN_PROFILE.md). The op count is taken from `ops` only: the
+// substring count also counted peak_contributors' `{op, bytes_alloc}`.
 test "protocol: PROFILE mem_curve invariants monotonic indices & nets" {
-    const exe = geode_test_bin.geode_exe;
-    const out = try run(&.{ exe, "--profile-memcurve", "PROFILE RETURN a AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 2", "--param", "a", "[1,1,2,3,5,8]" });
-    defer testing.allocator.free(out);
-    var it = std.mem.splitScalar(u8, out, '\n');
-    _ = it.next(); // schema
-    const profile_line = it.next() orelse return error.MissingProfile;
+    const a = testing.allocator;
+    const profile_line = try profile_util.runProfile(a, "PROFILE CREATE (:MemCurve6548 {k: 1})", &.{"GEODE_PROFILE_MEMCURVE=1"});
+    defer a.free(profile_line);
+    try testing.expect(std.mem.indexOf(u8, profile_line, "\"profile_version\":1") != null);
     const parsed = try parseMemCurve(profile_line);
-    defer testing.allocator.free(parsed.indices);
-    defer testing.allocator.free(parsed.nets);
-    try testing.expect(parsed.indices.len == parsed.nets.len);
-    if (parsed.indices.len > 0) {
-        var i: usize = 1;
-        while (i < parsed.indices.len) : (i += 1) {
-            try testing.expect(parsed.indices[i] > parsed.indices[i - 1]);
-            // nets must be monotonic non-decreasing (no negative freed_bytes effect)
-            try testing.expect(parsed.nets[i] >= parsed.nets[i - 1]);
-        }
-        // Final net must equal memory.net_bytes summary
-        const mem_tag = "\"memory\":{";
-        const mem_pos_opt = std.mem.indexOf(u8, profile_line, mem_tag) orelse return error.MissingMemory;
-        var mpos = mem_pos_opt + mem_tag.len;
-        const nb_tag = "\"net_bytes\":";
-        if (!std.mem.startsWith(u8, profile_line[mpos..], nb_tag)) return error.BadMemoryBlock;
-        mpos += nb_tag.len;
-        const nb_begin = mpos;
-        while (mpos < profile_line.len and profile_line[mpos] >= '0' and profile_line[mpos] <= '9') mpos += 1;
-        const nb_slice = profile_line[nb_begin..mpos];
-        const net_bytes_summary = try std.fmt.parseInt(usize, nb_slice, 10);
-        try testing.expectEqual(parsed.nets[parsed.nets.len - 1], net_bytes_summary);
-        // Invariant: mem_curve length equals number of ops
-        var op_count: usize = 0;
-        var search_idx: usize = 0;
-        const op_pat = "\"op\":\"";
-        while (true) {
-            const pos = std.mem.indexOfPos(u8, profile_line, search_idx, op_pat) orelse break;
-            op_count += 1;
-            search_idx = pos + op_pat.len;
-        }
-        try testing.expectEqual(op_count, parsed.indices.len);
+    defer a.free(parsed.indices);
+    defer a.free(parsed.nets);
+    try testing.expect(parsed.indices.len > 0);
+    try testing.expectEqual(parsed.indices.len, parsed.nets.len);
+    var i: usize = 1;
+    while (i < parsed.indices.len) : (i += 1) {
+        try testing.expect(parsed.indices[i] > parsed.indices[i - 1]);
+        // nets non-decreasing (no negative freed_bytes effect)
+        try testing.expect(parsed.nets[i] >= parsed.nets[i - 1]);
     }
+    var json = try std.json.parseFromSlice(std.json.Value, a, profile_line, .{});
+    defer json.deinit();
+    const root = json.value.object;
+    // The final point equals memory.net_bytes.
+    const net_bytes = root.get("memory").?.object.get("net_bytes").?.integer;
+    try testing.expectEqual(@as(i64, @intCast(parsed.nets[parsed.nets.len - 1])), net_bytes);
+    // One point per operator.
+    try testing.expectEqual(root.get("ops").?.array.items.len, parsed.indices.len);
 }

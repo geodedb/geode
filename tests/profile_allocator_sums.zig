@@ -19,48 +19,31 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 test "profile: memory block contains total_alloc_bytes (v2)" {
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
+    defer testing.allocator.free(res.out);
+    defer testing.allocator.free(res.err);
     try testing.expectEqual(@as(i32, 0), res.code);
     try testing.expect(contains(res.out, "\"profile_version\":2"));
     try testing.expect(contains(res.out, "total_alloc_bytes"));
 }
 
-// Approximate invariant: sum of op-level "bytes_alloc" fields equals memory.total_alloc_bytes.
-// For a lightweight check we extract integers via a simple scan (not full JSON parse) limited to small profile output.
+// Invariant: the per-op "bytes_alloc" values sum to memory.total_alloc_bytes.
+// SONNY-6548: the token scan also summed the `{op, bytes_alloc}` entries of
+// peak_contributors (the top ops repeated), so it never held; parse the JSON
+// and sum `ops` only. A UNION takes the version-1 payload, whose memory
+// figures are the synthetic model (docs/EXPLAIN_PROFILE.md).
 test "profile: per-op bytes_alloc sum equals memory.total_alloc_bytes" {
+    const a = testing.allocator;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 2 AS x ORDER BY x" });
+    defer a.free(res.out);
+    defer a.free(res.err);
     try testing.expectEqual(@as(i32, 0), res.code);
-    const out = res.out;
-    var it = std.mem.tokenizeAny(u8, out, " ,\n\r\t{}[]:\"\"");
-    var sum_ops: u64 = 0;
-    var total: u64 = 0;
-    var last_key: []const u8 = &.{};
-    while (it.next()) |tok| {
-        if (std.mem.eql(u8, tok, "bytes_alloc")) {
-            last_key = tok;
-            continue;
-        }
-        if (std.mem.eql(u8, tok, "total_alloc_bytes")) {
-            last_key = tok;
-            continue;
-        }
-        if (last_key.len != 0) {
-            if (std.mem.eql(u8, last_key, "bytes_alloc")) {
-                if (std.fmt.parseUnsigned(u64, tok, 10)) |v| {
-                    sum_ops += v;
-                } else |_| {}
-                last_key = &.{};
-            } else if (std.mem.eql(u8, last_key, "total_alloc_bytes")) {
-                if (std.fmt.parseUnsigned(u64, tok, 10)) |v| {
-                    total = v;
-                } else |_| {}
-                last_key = &.{};
-            }
-        }
-    }
-    // Allow equality or small discrepancy (e.g., allocator metadata). Expect within 0.5% or absolute diff <= 64 bytes.
-    const diff = if (sum_ops > total) sum_ops - total else total - sum_ops;
-    if (total > 0) {
-        try testing.expect(diff <= 64 or (diff * 1000 / total) <= 5);
-    }
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, std.mem.trim(u8, res.out, " \n\r\t"), .{});
+    defer parsed.deinit();
+    const profile = parsed.value.object.get("profile").?.object;
+    var sum_ops: i64 = 0;
+    for (profile.get("ops").?.array.items) |op| sum_ops += op.object.get("bytes_alloc").?.integer;
+    const total = profile.get("memory").?.object.get("total_alloc_bytes").?.integer;
+    try testing.expect(total > 0);
+    try testing.expectEqual(total, sum_ops);
 }

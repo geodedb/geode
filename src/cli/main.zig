@@ -917,7 +917,8 @@ const DsnParseResult = struct {
     /// SONNY-6551: `username`/`user` and `password`/`pass` query
     /// parameters, percent-decoded (owned; `deinit`).
     query_credentials: dsn_credentials.QueryCredentials = .{},
-    graph: ?[]const u8 = null, // graph name from URL path
+    /// The graph name from the URL path, percent-decoded (owned; SONNY-6550).
+    graph: ?[]u8 = null,
 
     /// SONNY-6551: per field, the userinfo wins over the query parameter
     /// (docs/DSN.md); an empty userinfo user name counts as absent.
@@ -939,6 +940,8 @@ const DsnParseResult = struct {
         if (self.credentials) |*c| c.deinit(allocator);
         self.credentials = null;
         self.query_credentials.deinit(allocator);
+        if (self.graph) |g| allocator.free(g);
+        self.graph = null;
     }
 };
 
@@ -963,7 +966,7 @@ fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
     } else if (std.mem.startsWith(u8, dsn, "grpc://")) {
         rest = dsn["grpc://".len..];
         use_grpc = true;
-    } else if (if (std.mem.indexOf(u8, dsn, "://")) |sep| std.mem.indexOfAny(u8, dsn[0..sep], "/?@") == null else false) {
+    } else if (dsn_credentials.schemeEnd(dsn) != null) {
         // SONNY-6531: any other scheme (http, https, tcp, ...), in the
         // MCP path's words; the DSN is not echoed (it may carry a password).
         zig_quic_bridge.printEndpointError(error.UnsupportedScheme);
@@ -986,19 +989,30 @@ fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
         zig_quic_bridge.printEndpointError(error.InvalidDSN);
         return null;
     }
+    // SONNY-6550: a fragment is refused, as geode-client-zig refuses it (it
+    // was ignored here, and dialled).
+    if (std.mem.indexOfScalar(u8, authority.rest, '#') != null) {
+        zig_quic_bridge.printEndpointError(error.DsnFragment);
+        return null;
+    }
 
-    // Extract graph name from URL path (e.g. host:3141/mygraph -> graph = "mygraph")
-    var graph: ?[]const u8 = null;
+    // Extract graph name from URL path (e.g. host:3141/mygraph -> graph =
+    // "mygraph"), percent-decoded like geode-client-zig's (SONNY-6550).
+    var graph: ?[]u8 = null;
     if (authority.rest.len > 0 and authority.rest[0] == '/') {
-        const path_end = std.mem.indexOfAny(u8, authority.rest, "?#") orelse authority.rest.len;
+        const path_end = std.mem.indexOfScalar(u8, authority.rest, '?') orelse authority.rest.len;
         const path = authority.rest[1..path_end];
         if (path.len > 0) {
-            graph = path;
+            graph = dsn_credentials.percentDecode(allocator, path) catch |err| {
+                zig_quic_bridge.printEndpointError(err);
+                return null;
+            };
         }
     }
 
     var credentials: ?dsn_credentials.Credentials = if (authority.userinfo) |userinfo|
         dsn_credentials.decodeUserinfo(allocator, userinfo) catch |err| {
+            if (graph) |g| allocator.free(g);
             zig_quic_bridge.printEndpointError(err);
             return null;
         }
@@ -1006,6 +1020,7 @@ fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
         null;
     const query_credentials = dsn_credentials.decodeQueryCredentials(allocator, authority.rest) catch |err| {
         if (credentials) |*c| c.deinit(allocator);
+        if (graph) |g| allocator.free(g);
         zig_quic_bridge.printEndpointError(err);
         return null;
     };

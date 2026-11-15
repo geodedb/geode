@@ -672,7 +672,7 @@ fn finishStagePart(allocator: std.mem.Allocator, staged_in: ExecutionResult, par
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
-// CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=IMPL; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-11-14
+// CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-11-14
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
     // SONNY-3040: no part after the first writes (the dispatcher refused or
     // rewrote such a chain before it got here); this chain executor would

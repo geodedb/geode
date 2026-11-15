@@ -244,8 +244,9 @@ pub const filterYieldColumns = execution_helpers.filterYieldColumns;
 pub const executeCallSubquery = call_operations.executeCallSubquery;
 pub const executeCallStatement = call_operations.executeCallStatement;
 pub const executeCallProcedure = call_operations.executeCallProcedure;
-pub const getGlobalCdcEngine = call_operations.getGlobalCdcEngine;
-pub const getCdcMutex = call_operations.getCdcMutex;
+pub const CdcRefusal = call_operations.CdcRefusal;
+pub const cdcDiagnosticsAnswer = call_operations.cdcDiagnosticsAnswer;
+pub const cdcControlAnswer = call_operations.cdcControlAnswer;
 
 // Re-export MATCH operation functions for backward compatibility (M1 Phase 6 extraction)
 pub const executeMatchCreateQuery = match_operations.executeMatchCreateQuery;

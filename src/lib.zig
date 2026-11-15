@@ -217,7 +217,6 @@ pub const types = struct {
     pub const extended = @import("types/extended.zig");
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
-    pub const hash = @import("types/hash.zig");
     pub const vector = @import("types/vector.zig");
     pub const geographic = @import("types/geographic.zig");
     pub const cryptographic = @import("types/cryptographic.zig");
@@ -225,8 +224,6 @@ pub const types = struct {
 
 // Re-export server graph common types
 pub const graph_common = @import("types/graph_common.zig");
-// Re-export materialized views
-pub const materialized_views = @import("query/materialized_views.zig");
 // GAP-0876: enhanced materialized view manager (exact-match query rewrite,
 // API level). Standalone subsystem — not yet consulted by the execution
 // path; exported so the named regression test
@@ -350,8 +347,6 @@ pub const net_policy = @import("net_policy.zig");
 // Distributed systems modules
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
-    pub const raft_log_storage = @import("distributed/raft_log_storage.zig");
-    pub const raft_persistent = @import("distributed/raft_persistent.zig");
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
     pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
@@ -365,9 +360,6 @@ pub const distributed = struct {
     /// file-path import that would split cluster_auth.zig across modules.
     pub const cluster_auth = @import("distributed/cluster_auth.zig");
     pub const raft = @import("raft");
-    pub const query_planner = @import("distributed/query_planner.zig");
-    pub const twophase = @import("distributed/twophase.zig");
-    pub const value_convert = @import("distributed/value_convert.zig");
     /// GPS Phase 6 Task 6-3: Principal identity envelope for cluster RPCs.
     pub const principal_envelope = @import("distributed/principal_envelope.zig");
 };

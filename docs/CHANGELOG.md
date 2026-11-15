@@ -4,6 +4,35 @@
 
 ### Security
 
+- **geode-client-zig v0.3.17: one set of DSN rules on every client path
+  (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
+  geode-client-zig, which split the userinfo at the first `@` anywhere in
+  the DSN (a password holding `@` was cut short and its tail dialled as the
+  host; an `@` in a query value moved the host into it), decoded `+` as a
+  space, passed malformed `%` escapes through as typed and did not decode
+  the graph path. v0.3.17 reads the userinfo by RFC 3986 §3.2 like the
+  CLI's `--dsn`, and geode's `dsn_credentials` is now a re-export of the
+  library's `config.redact` (one implementation; its decoder allocates a
+  credential once at its exact size, where geode's resized the buffer and
+  could free an unzeroed copy). The MCP endpoint now gives a userinfo
+  credential precedence over a `user=` / `pass=` query parameter, per field,
+  as docs/DSN.md and the CLI do (the library lets the query parameter win;
+  geode puts the userinfo back). `geode query` / `geode shell` `--dsn`
+  percent-decode the graph path like the library (`/my%5Fgraph` binds
+  `my_graph`). A fragment and an out-of-range timeout get their own
+  messages; no message echoes the DSN. **BREAKING (MCP endpoint):** a `%`
+  in the user name, password, graph path or any query value must start a
+  `%XX` escape (`50%off` is refused, `%25` is a literal `%`), `+` is a
+  literal plus, and an `@` after the host (a raw `/`, `?` or `#` in a
+  password, an `@` in the graph path or a query value) is refused; encode
+  it as `%40`. **BREAKING (MCP endpoint and `--dsn`):** a fragment
+  (`#...`) is refused (`--dsn` ignored it and dialled). **BREAKING (`--dsn`):**
+  a `%` in the graph path must start a `%XX` escape. Port 0 is refused by
+  the library itself now (`parseDSN` and `GeodeClient.connect`), so geode's
+  own MCP port-0 check is gone; the IPv6 zone check stays. Regressions:
+  `zig build test-sonny6550-dsn-rules`, `test-sonny6551-dsn-query-credentials`
+  (shell and MCP endpoint precedence against a real server),
+  `test-sonny6494-mcp-dsn-errors`, `test-sonny6531-cli-address-errors`.
 - **Saved sessions: one std.json writer and reader, a private file, never
   through a symbolic link (SONNY-6551 items 1 and 2).** `geode auth login
   --save-session` wrote hand-built, unescaped JSON with the key
@@ -2525,6 +2554,49 @@
   `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
   22G03 for a NULL argument: each now answers NULL. Regression: `zig build
   test-sonny6555-null-arguments`.
+- **A cluster node's vote is on disk before its grant can leave the node
+  (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
+  its transport from inside `step()` and writes the hard state (term,
+  voted_for; fsync) only in `advance()`, which `RaftNode.drainReady` calls
+  after `step()` returns. Geode's bridge queued the grant on the peer's
+  outbox at once and the outbox thread sends without the raft mutex, so a
+  node could tell a candidate "granted", crash before the fsync, restart
+  with no vote for that term and grant it to another candidate: two
+  leaders in one term. The bridge now holds everything the library sends
+  during `step` / `tick` / `propose` until `advance()` has succeeded, then
+  queues it; if `ready()` or `advance()` fails the held messages are
+  dropped (raft resends). Leader AppendEntries now leave after the
+  leader's own append is durable (one fsync later than before). The vote
+  already survived a clean restart (the library stores term and vote
+  together); `test-raft-hardstate-durability` now asserts it and that the
+  restarted node refuses a second candidate in the same term. Regression:
+  `zig build test-sonny6563-vote-persist-before-send` (the grant reached
+  the network while the disk held term 0, voted_for null).
+
+- **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
+  (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
+  nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC
+  answered `NO_ENGINE` to every CDC_CONTROL action and reported CDC
+  disabled, while gRPC read the running engine. Both transports now answer
+  through one implementation (`storage_dispatch.cdcDiagnosticsAnswer` /
+  `cdcControlAnswer`) and the field is deleted. **Changed refusals (both
+  frames, both transports):** an unauthenticated caller is refused `28000`
+  and a caller that is not an administrator `42501` (QUIC: an error frame;
+  gRPC: grpc-status 16 / 7 with a grpc-message starting with the SQLSTATE).
+  QUIC refused a non-admin's diagnostics `42000` (the 18 other privilege
+  refusals answer `42501`) and answered its CDC_CONTROL `PERMISSION_DENIED`;
+  gRPC answered a non-admin's or an unauthenticated caller's diagnostics
+  with an empty "CDC disabled" payload and its CDC_CONTROL
+  `AUTH_REQUIRED`. In cluster mode CDC_CONTROL is refused
+  (`CLUSTER_NOT_LEADER` / `CLUSTER_WRITE_NOT_REPLICABLE`) as `CALL
+  cdc.reset_guardrails()` is. `GEODE_CDC_ENABLE=1`, which
+  docs/QUICK_REFERENCE.md documents and nothing read, starts the engine at
+  startup through the path `CALL cdc.enable()` takes; the engine lives in
+  the process allocator and `CALL cdc.disable()` now frees it
+  (`CDCEngine.deinit`). Regression: `zig build
+  test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
+  40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
+
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
@@ -2536,6 +2608,74 @@
   (`geode.storage`, `graph=`, `error=`), as this file's other
   operator-facing errors do (GAP-ENT-0038), so operators still see it and
   the test no longer counts it as a failure.
+
+- **`geode mcp` answers the MCP 2025-11-25 result objects and error codes,
+  one message per line (SONNY-6552).** **BREAKING for MCP clients** that
+  read the old shapes: `resources/list`, `resources/templates/list` and
+  `prompts/list` returned bare, pretty-printed arrays instead of
+  `{"resources":[...]}`, `{"resourceTemplates":[...]}` and
+  `{"prompts":[...]}`; `resources/read` returned a bare
+  `{uri,mimeType,text}` instead of `{"contents":[...]}`; an unknown prompt
+  or resource URI was a success carrying `{"error": ...}` and is now a
+  JSON-RPC error (`-32602` / `-32002`); an unknown tool was `-32603`
+  InternalError and is now `-32602`, the spec's protocol error. The
+  pretty-printed results spanned many lines, so on the newline-delimited
+  stdio transport a client reading one message per line could not decode
+  them; every result is now serialized on one line. A list `cursor` is
+  `-32602` (each list is one page; geode never issues one). `prompts/get`
+  refuses (`-32602`) a missing required argument, an argument the prompt
+  does not take and a non-string value, and writes the argument values into
+  the prompt text (they were ignored). The `query` tool no longer
+  advertises `catalog` / `graph` and the `graphs` tool no longer advertises
+  `catalog` (all were ignored; the `graphs` tool parsed `catalog` into
+  memory its own block-scoped `defer` freed at once); passing them is now
+  an `isError` tool result. `query` with `parameters` failed every call
+  (`"{any}"` printed the formatter, not JSON) and now sends them; a
+  statement the server reports as failed is `isError: true` for `schema`,
+  `explain`, `catalogs` and `graphs` too, not only `query`. `geode mcp`
+  and `geode completion` return through `main` instead of
+  `std.process.exit` (exit code unchanged), so a Debug build reports their
+  leaks. See [MCP_SERVER.md](MCP_SERVER.md#result-shapes-and-error-codes-sonny-6552).
+  Regression (field by field against the schema, through
+  `mcp.Server.processMessage` and a real `geode mcp --stdio` session):
+  `zig build test-sonny6552-mcp-result-shapes`; `test-sonny6531-mcp-ownership`
+  and `test-gap0875` updated to the new codes.
+- **A failed transport-parity run fails its smoke (SONNY-6548 item 4).**
+  Four `test-transport-parity` smokes (order metadata, US001, illegal order
+  key, varlen dataset rows) caught a failed parity run, a port allocation
+  or a server that never became ready, printed a skip mark and returned, so
+  the step passed; they now return the error. The CASE 3VL smoke bound `a`
+  with the deleted client's array `--param` expansion, compared two equal
+  error outputs, and passed until a failed query exited 1 (SONNY-6369); it
+  now uses `FOR a IN [null, true, false]` and checks the three rows.
+  `test-cluster-3node-subprocess` and `test-datadir-lock-subprocess` spawn
+  the geode this build emitted, so a missing binary now fails them instead
+  of skipping with "run `zig build` first to populate zig-out/bin".
+  `benchmarks/benchmark_rls_abac_variance.zig`, which no step built, timed a
+  placeholder policy mock (`tests/canary_rls_abac.zig`), not geode's
+  RLS/ABAC; both are removed and BENCHMARK_REPORT.md no longer cites it.
+- **The 67 allowlisted test files that compiled but failed are triaged
+  (SONNY-6548 item 1).** 21 had a stale expectation (behaviour that changed
+  on purpose: `Catalog.addGraph` no longer persists, a PATH renders as
+  `{"nodes","edges"}`, a DECIMAL as a JSON string, ExecutionGuardTrip is a
+  flagger finding, the variance thresholds were raised, a read takes the
+  version-2 PROFILE) or a test defect (a dataset nothing seeds, a data dir
+  in the checkout, a duplicate check keyed on the first edge only, a BEGIN
+  after COMMIT expected to fail, a BEGIN before HELLO, op counts that also
+  counted `peak_contributors`); they are corrected and run in
+  `zig build test-sonny6542-revived`. 46 are removed: written for the
+  deleted client's options (`--begin`/`--commit`, `--utf16-input`,
+  `--dist-enable-*`, `--no-estimates`, `--profile-memcurve`, array
+  `--param` expansion), for US001 (never emitted; docs/BINARY_PROTOCOL.md),
+  for exit 2 on a query error (it is 1, SONNY-6369), for the old
+  `"result":{"type":"PROFILE"}` shape and the version-1 synthetic PROFILE
+  of a read (the 25-file `e2e_protocol_profile_*` battery), or vacuous
+  (`test_gap_0193_*`: ~420 parse-only and `@hasDecl` checks under feature
+  CANARY markers; `e2e_hash_functions.zig`: mocked execution). Product bugs
+  they exposed are intentionally red reproductions, out of the aggregate
+  and listed in docs/KNOWN_TEST_ISSUES.md: `test-sonny6548-cli-query-options`,
+  `-quic-cdc-control`, `-wire-result-metadata`,
+  `-raft-persistent-voted-for`, `-gql-identifier-words`.
 
 - **Every `tests/*.zig` file is compiled by a build step or listed with the
   reason it is not, and configuration fails otherwise (SONNY-6542).** 564
@@ -2781,6 +2921,90 @@
   1,000,000-element literal is still refused with 54000. Regression:
   `zig build test-sonny6540-vector-literal-parse` (`test-eng3922` is green
   again).
+- **A refused graph answers every statement alike over QUIC, gRPC and the
+  request handlers called in process (SONNY-6547 item 1).** Against a real
+  server, QUIC and gRPC already agreed on all 85 shapes of the regression (a
+  graph quarantined by zeroed node pages, the default one and a second one,
+  and a graph whose shard label dictionaries diverged; every read and write
+  shape of test-sonny6523-quarantine-fail-closed, first statement after a
+  restart and again): a server always installs a row-security engine, so
+  its reads go through a read snapshot that hydrates the graph first. The
+  gRPC handler called in process with no row-security engine (embedded
+  use) serves reads engine-direct and differed on 45 of 85 answers: 24 read
+  the damaged graph and answered rows (a quarantine fail-open; the
+  transport gate hydrated a graph only for a change), and 21 failed the
+  call with a handler error (the node-scan stream returned every error but
+  a limit out of the handler; the QUIC connection loop answers such an
+  error with the generic "58000 Internal Server Error"). Both transports'
+  gates now hydrate for a read too, as the executor's does (SONNY-6541
+  item 3); the node-scan stream answers a storage-integrity refusal as
+  itself; and an error a handler leaves unanswered is answered the same way
+  by both (`proto_util.unhandledErrorInfo`: a limit or a storage-integrity
+  refusal as itself, anything else 58000 "Internal Server Error"; gRPC
+  failed the call). Regression: `zig build test-sonny6547-transport-parity`
+  (real server, QUIC and gRPC, plus the gRPC handler in process). The
+  regression's gRPC client opens one connection per Execute: the test
+  client (`grpc_query_transport`) sends every Execute on HTTP/2 stream 3.
+- **SHOW GRAPHS fails when its graph listing fails (SONNY-6547 item 2).** It
+  answered an empty graph list instead (`listGraphNames(...) catch null`),
+  the defect SONNY-6541 item 4 fixed for SHOW TABLES: forced in the
+  regression by failing each of the statement's allocations in turn, two
+  of which answered zero rows. The same sweep then crashed:
+  `StorageAdapter.listGraphNames` and `GraphStore.listGraphNames` freed a
+  graph name twice when an allocation after it was added to their
+  de-duplication set failed (the insert's `errdefer` and the set's
+  `defer`); the set now borrows the names. The other listing calls of the
+  SHOW / `db.*` handlers already propagate their errors (sweep in the
+  SONNY-6547 report). Regression: `zig build
+  test-sonny6547-show-graphs-errors`.
+- **A Raft `drop_graph` apply refused because the graph is in use no longer
+  reports the graph dropped (SONNY-6547 item 3).** `GraphStore.dropGraph`
+  refuses (`ObjectInUse`) a caller that holds the graph's read lock or a
+  graph an open session transaction changed; the apply logged that, then
+  logged the graph as dropped and returned success, so the entry counted as
+  applied while the node kept the graph (every node replaying the log later
+  drops it). It now fails: the Raft node counts and logs a committed entry
+  not applied. The reported trigger, a one-voter cluster applying a drop
+  on the proposer's own thread while it holds the graph's read lock, does
+  not occur with the pinned raft library: a propose only appends, and the
+  entry commits and applies on the next tick or step, on a thread that
+  holds no graph lock; the regression runs it on a real one-voter cluster
+  (the apply waits for the proposer's read lock, then drops the graph).
+  Nothing in the server proposes a `schema_change` today (item 6).
+  Regression: `zig build test-sonny6547-single-voter-drop`.
+- **A replicated write's first hydration of its graph no longer stops the
+  Raft node (SONNY-6547 item 4).** A Raft apply runs under the node's
+  `inner_mutex`; the graph-mutation apply (and the 2PC decide apply)
+  hydrated its graph there, and a first hydration persists its products
+  with a checkpoint of the graph, which waits up to 5 s for the graph's
+  lock. With a local reader holding that lock the leader's `inner_mutex`
+  was unavailable for 6.3 s (measured: no tick, so no heartbeat, no inbound
+  message, no propose; in a real cluster longer than an election timeout).
+  The leader now hydrates an entry's graph before it proposes it, without
+  `inner_mutex` (`raft_apply.prehydrateForApply` from
+  `ClusterCoordinator.proposeWrite`), and the apply paths hydrate without
+  the completion persist (`GraphStore.ensureGraphHydratedForReplicatedApply`;
+  the next full checkpoint persists the products). Apply order is
+  unchanged. Measured after: 117-129 ms longest wait (three runs) for `inner_mutex`.
+  Remaining: on a follower, or for entries replayed after a restart, the
+  hydration scan itself (no lock wait) still runs under `inner_mutex`.
+  Regression: `zig build test-sonny6547-apply-hydration-stall`.
+- **Docs no longer claim two-phase commit or replicated DDL in cluster mode
+  (SONNY-6547 item 6).** The only server code that proposes a Raft entry is
+  `statement_proposals.zig` (through `ClusterCoordinator.proposeWrite`), and
+  it proposes `graph_mutation` entries only: no `schema_change`,
+  `config_change`, `snapshot_pointer`, `txn_prepare` or `txn_decide`. CREATE
+  / DROP GRAPH, index, constraint, policy, auth and tenant DDL are refused in
+  cluster mode (`cluster.gateUnreplicatedWrite`). The apply arms for those
+  entries (`raft_apply.zig`, `TxnCoordinator`) stay, as the tested receiving
+  side of future features, and say so. `src/distributed/twophase.zig` is
+  not compiled into the `geode` binary (no symbol of it in a Debug build;
+  only `src/lib.zig`'s re-export and tests reference it); its removal waits
+  for the `tests/all_tests.zig` cleanup (SONNY-6542), which imports its
+  unit test. Corrected: CLAUDE.md (Phase 5), docs/FEATURES_OVERVIEW.md,
+  docs/CURRENT_ARCHITECTURE.md, docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md,
+  docs/KNOWN_TEST_ISSUES.md (the coordinator IS instantiated in cluster
+  mode) and src/distributed/README.md.
 - **The SONNY-6377 "a chunk that timed out is not replayed" test no longer
   depends on a slow server (SONNY-6534).** It gave `geode query --file` a
   4 s `--timeout` for 400 CREATEs and counted on the server needing longer;
@@ -6723,6 +6947,50 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **Distributed modules the server never reached (SONNY-6563, SONNY-6567
+  item 7).** Each had no reference chain from the server root (`lib.zig`
+  exported some as unreferenced `distributed.*` decls; the rest were
+  imported only by their own test roots or by each other) and no symbol in
+  the Debug `geode` binary: `src/distributed/raft_persistent.zig` (it
+  persisted the term and not the vote, so a reopened node forgot its vote;
+  the cluster uses the raft library's FileStorage, which keeps both),
+  `raft_log_storage.zig` with `raft_consensus.PersistentStorage` and the
+  no-op `RaftNode.setStorage`, `twophase.zig` (a 2PC transport) and
+  `value_convert.zig`, `query_planner.zig` (`DistributedQueryPlanner`,
+  `FederationManager`) and the never-assigned
+  `ServerState.distributed_query_planner`, `network_transport.zig`,
+  `enhanced_query_transport.zig`, `node_registry.zig` and its test,
+  `sharding.zig`, `consistent_hash.zig`, `federation_flag.zig`; with their
+  tests, benchmarks and steps (`test-dist-query-planner`, `test-sharding`,
+  `test-gap0889`, `test-sonny6487-federation-flag-inline`, the red
+  `test-sonny6548-raft-persistent-voted-for`; `test-gap0870` keeps its Raft
+  command half, `test-sonny6453-cluster-peer-tls` its raft / coordinator
+  dial). `src/distributed/README.md` lists what remains, all of it reached
+  by the server. docs/TDE_FILE_LEVEL_ENCRYPTION.md named
+  `raft_persistent.zig` as the encrypted Raft state: the Raft hard state,
+  log and snapshots are written in plaintext by the library's FileStorage.
+
+- **Product code no build reached, which no longer compiled (SONNY-6548 item
+  3).** Zig analyzes lazily, so these compiled only because nothing in the
+  server referenced them: `src/types/hash.zig` (`hash`, `argon2idStrHash`,
+  `argon2idStrVerify`, `blake2bKdf` did not compile; `lib.zig` re-exported
+  it as `types.hash`, and `HashData`/`Blake2bKdf`/`Blake2sKdf`/
+  `Argon2idHash` in `src/types/evaluator_functions.zig` and
+  `cryptographic.hashString` called it, none of them called; GQL has no
+  such functions, `RETURN HashData(...)` is 42883),
+  `src/query/materialized_views.zig` (exported as `materialized_views`, no
+  caller; the GAP-0876 manager in `src/query/enhanced_materialized_views.zig`
+  stays), `src/optimizer/selectivity_estimator.zig` (imported only by two
+  dead tests; the server's estimator is `index_selectivity`), and
+  `GraphStore.findPaths`, `findPathsBidirectional`, `findPathsFiltered`,
+  `shortestPath`, `allShortestPaths`, `kShortestPaths`, `expandFromNode` with
+  their helpers and `PathOptions`/`ExpandOptions`/`Path`/`PathFilter` in
+  `src/graph_store.zig` (`std.ArrayList.init`; the executor's path matching
+  is in `src/execution/match_operations.zig`). The seven listed tests that
+  named them go too. CANARY markers that claimed TESTED for this code
+  (`REQ-MATERIALIZED-VIEWS-001..005`, `REQ-GQL-HASH-FUNC-001`,
+  `REQ-GQL-PATH-UTIL-001`) go with it.
 
 - **`tests/benchmark_merge_adapter_variance.zig` (SONNY-6541 item 6).**
   `tests/all_tests.zig` imported it as an unreferenced constant, so nothing

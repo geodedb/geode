@@ -9,6 +9,17 @@
 // Thread-safety: the callback runs inside the Raft tick loop which is
 // single-threaded per RaftNode.  The GraphStore itself uses internal locking,
 // so concurrent access from the query engine is safe.
+//
+// What reaches this module (SONNY-6547 (6)): the server proposes only
+// `graph_mutation` entries (`statement_proposals.zig`, through
+// `ClusterCoordinator.proposeWrite`), plus the raft library's own no-op.
+// Nothing in the server proposes `schema_change`, `config_change`,
+// `snapshot_pointer`, `txn_prepare` or `txn_decide`: their arms below are
+// the receiving side of features that do not exist yet (replicated DDL,
+// dynamic membership, log truncation, distributed transactions), kept
+// because they are safe and tested, and exercised only by tests that
+// propose or apply such entries directly. In cluster mode the DDL they
+// would carry is refused (`cluster.gateUnreplicatedWrite`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -165,7 +176,8 @@ pub fn resetSnapshotPointer() void {
 // Committed txn_prepare / txn_decide entries route into the existing 2PC
 // machinery (`txn_coordinator.TxnCoordinator`): prepare buffers the write
 // set + takes locks, decide(commit) applies the write set to the store,
-// decide(abort) releases without applying.
+// decide(abort) releases without applying. No server code proposes such an
+// entry (SONNY-6547 (6)): geode runs no distributed transaction.
 // ---------------------------------------------------------------------------
 
 var g_txn_coordinator: ?*TxnCoordinator = null;
@@ -226,6 +238,23 @@ pub fn resetGlobalIdempotencyDedup() void {
 /// used to derive a deterministic, restart-idempotent node id.
 pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anyerror![]u8 {
     return applyCommand(allocator, g_store, cmd, raft_index);
+}
+
+// CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=PrehydrateBeforePropose; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+/// SONNY-6547 (4): hydrate the graph a `graph_mutation` entry's apply writes
+/// (`applyGraphMutationInner`), for a proposer to call before it takes the
+/// Raft node's `inner_mutex`: the apply then finds the graph hydrated and
+/// builds nothing under `inner_mutex`. The products are not persisted here
+/// either (the proposer may hold the graph's lock, which that persist's
+/// checkpoint waits for); the next full checkpoint persists them. Ordering
+/// is unchanged: hydration builds resident indexes from the engine, as any
+/// first read of the graph does, and writes nothing.
+pub fn prehydrateForApply(cmd: Command) void {
+    const store = g_store orelse return;
+    switch (cmd) {
+        .graph_mutation => |gm| store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default"),
+        else => {},
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +385,9 @@ fn applySnapshotPointer(allocator: Allocator, sp: SnapshotPointer) ![]u8 {
 // The APPLY path below does not depend on it: write sets use the native G2PC
 // codec (txn_coordinator.serializeWriteSet / deserializeWriteSet), so the
 // full prepare → decide → store-mutation path is real and exercised by
-// in-process tests constructing commands directly (test-gap0870).
+// in-process tests constructing commands directly (test-gap0870). It is
+// reached only that way: nothing in the server proposes these entries
+// (SONNY-6547 (6)).
 // ---------------------------------------------------------------------------
 
 // CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyTxnPrepare; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
@@ -439,9 +470,17 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
     // so a checkpoint of the graph waits for it (every local writer holds
     // the graph's rwlock, which this thread must not take: see
     // `ManagedGraph.replicated_apply_mutex`). The graph is hydrated first,
-    // outside it: a first hydration persists its products with a checkpoint
-    // of the graph.
-    store.ensureGraphHydrated(graph_name);
+    // outside it.
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=ApplyHydratesWithoutPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    // SONNY-6547 (4): this runs under the Raft node's `inner_mutex`, so a
+    // first hydration here does not persist its products: that persist is a
+    // checkpoint of the graph, which waits up to 5 s for the graph's lock
+    // (held by any local request on the graph), and the whole Raft node
+    // waited with it (no tick, no heartbeat, no inbound message; 6.3 s
+    // measured). The leader hydrates an entry's graph before it proposes
+    // it, without `inner_mutex` (`prehydrateForApply`); a graph hydrated
+    // here is persisted by the next full checkpoint.
+    store.ensureGraphHydratedForReplicatedApply(graph_name);
     const apply_adapter = graph_store_mod.getGlobalAdapter();
     const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
     defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);
@@ -650,6 +689,9 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
 // Schema change handler
 // ---------------------------------------------------------------------------
 
+/// SONNY-6547 (6): nothing in the server proposes a `schema_change`; CREATE
+/// and DROP GRAPH are refused in cluster mode (`gateUnreplicatedWrite`).
+/// This is the receiving side of a future replicated DDL, reached by tests.
 fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaChange) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: schema_change received but no store registered", &.{});
@@ -702,10 +744,24 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
-                // SONNY-3028: the apply thread has no engine transaction open
-                // on the graph; kept for the error set.
+                // CANARY: REQ=REQ-SONNY-6547-REPLICATED-DROP-IN-USE; FEATURE="DistributedCluster"; ASPECT=RefusedDropFailsApply; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-14
+                // SONNY-6547 (3): the graph is in use on this node (the
+                // applying thread holds its read lock, or a session
+                // transaction changed it, SONNY-3134): nothing was dropped,
+                // and the apply fails, so the Raft node counts and logs a
+                // committed entry not applied. It logged the refusal, then
+                // the graph as dropped, and reported the entry applied while
+                // the node kept the graph. An apply runs on the thread that
+                // ticks or steps the node (the raft library commits on a
+                // tick or a step, never in a propose), which holds no graph
+                // lock. What a replicated drop does to an open transaction is
+                // for the replicated DDL feature to decide: nothing proposes
+                // a `schema_change` today (SONNY-6547 (6)).
                 error.ObjectInUse => {
-                    log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
+                    log.err("raft apply: drop_graph refused, the graph is in use on this node; the entry is not applied here", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    return err;
                 },
                 // SONNY-6433: no room to record the graph lock; nothing was
                 // dropped, and the apply fails.

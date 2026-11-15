@@ -67,12 +67,13 @@ const McpErrorResult = struct {
     isError: bool = true,
 };
 
-/// List available Geode MCP tools
-/// Returns JSON array of tool definitions
+/// List available Geode MCP tools: a ListToolsResult `{"tools":[...]}`.
 /// Static text: the server.zig handler hands the mcp server a copy
 /// (SONNY-6531, the server frees every handler result).
-pub fn listTools(cursor: ?[]const u8) []const u8 {
-    _ = cursor; // Pagination not needed for small tool list
+/// SONNY-6552: the list is one page and geode never issues a cursor, so a
+/// cursor is invalid: `error.InvalidParams` (-32602, MCP pagination).
+pub fn listTools(cursor: ?[]const u8) error{InvalidParams}![]const u8 {
+    if (cursor != null) return error.InvalidParams;
     return tools_json;
 }
 
@@ -130,7 +131,12 @@ pub fn callTool(
     } else if (std.mem.eql(u8, name, "diagnostics")) {
         return getDiagnostics(allocator, args_json);
     } else {
-        return error.UnknownTool;
+        // SONNY-6552: an unknown tool is a protocol error, -32602 in MCP
+        // 2025-11-25 (tools "Error Handling"). The library answers
+        // `error.InvalidParams` with -32602; `error.ToolNotFound` it maps to
+        // -32002, and an error it does not know (the old `UnknownTool`) to
+        // -32603 InternalError.
+        return error.InvalidParams;
     }
 }
 
@@ -149,6 +155,13 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: 
     defer parsed.deinit();
 
     const query = parsed.value.query;
+
+    // SONNY-6552: the query runs on the session's graph; the tool selects
+    // no catalog or graph, so it does not advertise either, and refuses
+    // them rather than run the query somewhere the caller did not ask for.
+    if (parsed.value.catalog != null or parsed.value.graph != null) {
+        return try formatErrorResponse(allocator, "the query tool takes no 'catalog' or 'graph' argument; name the graph in the GQL text");
+    }
 
     // Spec geode-vectorization-and-reranking: instruction boundary — retrieved
     // text must not be able to mutate through the single query tool. Fail
@@ -172,10 +185,12 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: 
     };
     defer client.deinit();
 
-    // Build params JSON if provided
+    // Build params JSON if provided. SONNY-6552: serialized with
+    // std.json; the old "{any}" format printed the formatter struct, not
+    // JSON, so every call with parameters failed with InvalidParams.
     var params_json: ?[]const u8 = null;
     if (parsed.value.parameters) |p| {
-        params_json = std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(p, .{})}) catch null;
+        params_json = try std.json.Stringify.valueAlloc(allocator, p, .{});
     }
     defer if (params_json) |pj| allocator.free(pj);
 
@@ -193,11 +208,17 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: 
     // query ran successfully or blew up. Detect a non-success status
     // class and convert it to an MCP error result; pass-through on
     // success.
+    return try formatBackendResult(allocator, result);
+}
+
+/// A backend result as a CallToolResult: `isError: true` when the server
+/// reported a failure (GAP-0345), a tool execution error per MCP
+/// 2025-11-25; the plain result otherwise. Takes ownership of `result`.
+fn formatBackendResult(allocator: std.mem.Allocator, result: []u8) ![]const u8 {
     if (looksLikeQueryError(result)) {
         defer allocator.free(result);
         return try formatErrorResponse(allocator, result);
     }
-
     return try formatToolResult(allocator, result);
 }
 
@@ -238,14 +259,15 @@ fn getSchema(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
-    return try formatToolResult(allocator, result);
+    return try formatBackendResult(allocator, result);
 }
 
 /// Explain a GQL query plan
 fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
     // GAP-0345: same fix as executeQuery — wrap argument parse failure
     // as a structured MCP error result rather than a raw error JSON.
-    const parsed = std.json.parseFromSlice(QueryArgs, allocator, args_json, .{}) catch {
+    // SONNY-6552: only the advertised `query`; anything else is refused.
+    const parsed = std.json.parseFromSlice(LspQueryArgs, allocator, args_json, .{}) catch {
         return try formatErrorResponse(allocator, "Invalid query arguments");
     };
     defer parsed.deinit();
@@ -261,7 +283,7 @@ fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
-    return try formatToolResult(allocator, result);
+    return try formatBackendResult(allocator, result);
 }
 
 /// List available catalogs
@@ -277,20 +299,20 @@ fn listCatalogs(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
-    return try formatToolResult(allocator, result);
+    return try formatBackendResult(allocator, result);
 }
 
-/// List available graphs in a catalog
+/// List the graphs the caller can see (SHOW GRAPHS).
+/// SONNY-6552: the tool used to advertise a `catalog` argument, parse it
+/// into a slice that its block-scoped `defer p.deinit()` freed at once,
+/// and hand that dangling slice to a client call that ignored it. geode
+/// has no per-catalog graph listing, so the tool takes no arguments and
+/// refuses any (an execution error, not a silently ignored filter).
 fn listGraphs(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
-    // Parse catalog argument if provided
-    var catalog: ?[]const u8 = null;
-    if (args_json.len > 2) { // More than just "{}"
-        const parsed = std.json.parseFromSlice(struct { catalog: ?[]const u8 = null }, allocator, args_json, .{}) catch null;
-        if (parsed) |p| {
-            catalog = p.value.catalog;
-            defer p.deinit();
-        }
-    }
+    const parsed = std.json.parseFromSlice(struct {}, allocator, args_json, .{}) catch {
+        return try formatErrorResponse(allocator, "Invalid arguments: the graphs tool takes no arguments (no 'catalog': geode lists the graphs the caller can see)");
+    };
+    parsed.deinit();
 
     const endpoint_str = endpoint orelse "localhost:3141";
 
@@ -299,11 +321,11 @@ fn listGraphs(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []
     };
     defer client.deinit();
 
-    const result = client.listGraphs(catalog) catch |err| {
+    const result = client.listGraphs() catch |err| {
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
-    return try formatToolResult(allocator, result);
+    return try formatBackendResult(allocator, result);
 }
 
 // =============================================================================
@@ -458,6 +480,7 @@ fn classifyForReadOnly(allocator: std.mem.Allocator, query: []const u8) ReadOnly
 const QueryArgs = struct {
     query: []const u8,
     parameters: ?std.json.Value = null,
+    // Not advertised; parsed only to refuse them (SONNY-6552).
     catalog: ?[]const u8 = null,
     graph: ?[]const u8 = null,
 };
@@ -470,11 +493,11 @@ const QueryArgs = struct {
 /// outer "tools" wrapper and single-line framing live here. Newlines are
 /// avoided so newline-delimited stdio MCP transports work.
 const tools_json = "{\"tools\":[" ++
-    "{\"name\":\"query\",\"description\":\"Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to execute (ISO/IEC 39075:2024 compliant)\"},\"parameters\":{\"type\":\"object\",\"description\":\"Optional query parameters as key-value pairs\"},\"catalog\":{\"type\":\"string\",\"description\":\"Target catalog name (default: 'default')\"},\"graph\":{\"type\":\"string\",\"description\":\"Target graph name (default: 'default')\"}},\"required\":[\"query\"]}}," ++
+    "{\"name\":\"query\",\"description\":\"Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to execute (ISO/IEC 39075:2024 compliant)\"},\"parameters\":{\"type\":\"object\",\"description\":\"Optional query parameters as key-value pairs\"}},\"required\":[\"query\"]}}," ++
     "{\"name\":\"schema\",\"description\":\"Get the database schema including node labels, relationship types, and property definitions.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"explain\",\"description\":\"Get the execution plan for a GQL query without running it. Useful for query optimization.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to explain\"}},\"required\":[\"query\"]}}," ++
     "{\"name\":\"catalogs\",\"description\":\"List all available catalogs in the database.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
-    "{\"name\":\"graphs\",\"description\":\"List all available graphs in the current or specified catalog.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"catalog\":{\"type\":\"string\",\"description\":\"Catalog name (default: 'default')\"}}}}," ++
+    "{\"name\":\"graphs\",\"description\":\"List the graphs the caller can see.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"validate\",\"description\":\"Validate GQL syntax and return diagnostics including Geode extensions (FLE, BACKUP/RESTORE, SESSION, double-dash comments). Does not require a running Geode server.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to validate\"}},\"required\":[\"query\"]}}," ++
     "{\"name\":\"complete\",\"description\":\"Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures including Geode extensions (BACKUP, RESTORE, SESSION, FLE annotations).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query text\"},\"line\":{\"type\":\"integer\",\"description\":\"Cursor line number (1-indexed)\"},\"column\":{\"type\":\"integer\",\"description\":\"Cursor column number (1-indexed)\"}},\"required\":[\"query\",\"line\",\"column\"]}}," ++
     "{\"name\":\"hover\",\"description\":\"Get hover information (documentation) for the GQL element at a position.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query text\"},\"line\":{\"type\":\"integer\",\"description\":\"Cursor line number (1-indexed)\"},\"column\":{\"type\":\"integer\",\"description\":\"Cursor column number (1-indexed)\"}},\"required\":[\"query\",\"line\",\"column\"]}}," ++
@@ -486,7 +509,7 @@ const tools_json = "{\"tools\":[" ++
 // =============================================================================
 
 test "listTools returns valid JSON" {
-    const result = listTools(null);
+    const result = try listTools(null);
     try std.testing.expect(result.len > 0);
     // MCP framework contract: tools/list result must be an object
     // {"tools":[...]}.  See vendor/devnw/zig/mcp/src/mcp.zig:1186-1188.
@@ -515,7 +538,7 @@ test "formatErrorResponse formats correctly" {
 }
 
 test "listTools contains all required tools" {
-    const result = listTools(null);
+    const result = try listTools(null);
 
     // Verify all 9 tools are present (5 database + 4 LSP)
     try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"query\"") != null);
@@ -532,7 +555,7 @@ test "listTools contains all required tools" {
 
 test "listTools contains valid JSON structure" {
     const allocator = std.testing.allocator;
-    const result = listTools(null);
+    const result = try listTools(null);
 
     // Parse to verify it's valid JSON
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, result, .{}) catch {
@@ -551,12 +574,15 @@ test "listTools contains valid JSON structure" {
     try std.testing.expectEqual(@as(usize, 9), tools_field.array.items.len);
 }
 
-test "listTools cursor is ignored" {
-    const result1 = listTools(null);
-    const result2 = listTools("some_cursor");
+test "listTools refuses a cursor it never issued (SONNY-6552)" {
+    // The list is one page; MCP pagination: an invalid cursor is -32602.
+    try std.testing.expectError(error.InvalidParams, listTools("some_cursor"));
+}
 
-    // Both should return the same result (cursor is ignored)
-    try std.testing.expectEqualStrings(result1, result2);
+test "listTools advertises no input property a tool ignores (SONNY-6552)" {
+    const result = try listTools(null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"catalog\":{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"graph\":{") == null);
 }
 
 test "formatToolResult with special characters" {

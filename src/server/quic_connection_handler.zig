@@ -3926,7 +3926,9 @@ fn runStreamQueryLoopWithReader(
                 const dur_s = duration.seconds();
                 om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
                 log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
+                // SONNY-6547 (1): as gRPC answers it (`unhandledErrorInfo`).
+                const info = proto_util.unhandledErrorInfo(err);
+                sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
                 continue;
             };
             const dur_s = duration.seconds();
@@ -4589,7 +4591,8 @@ fn processFirstStreamPacket(
             const dur_s = duration.seconds();
             om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {};
+            const info = proto_util.unhandledErrorInfo(err); // SONNY-6547 (1)
+            sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{}) catch {};
             return true;
         };
         const dur_s = duration.seconds();
@@ -6656,6 +6659,19 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
     fle_integration.setCurrentUserRole(null);
 }
 
+/// SONNY-6561: why this session may not send CDC_DIAGNOSTICS / CDC_CONTROL
+/// (the gRPC handler refuses the same callers with the same SQLSTATEs).
+fn cdcFrameRefusal(gpa: std.mem.Allocator, state: *ServerState) !?execution.CdcRefusal {
+    switch (try validateSessionAuth(gpa, state)) {
+        .ok => {},
+        .missing, .invalidated => return .unauthenticated,
+    }
+    if (!user_mgmt.isAuthEnabled()) return null;
+    const role = state.authenticated_role orelse return .not_admin;
+    if (state.authenticated_user == null or @as(user_mgmt.Role, @enumFromInt(role)) != .Admin) return .not_admin;
+    return null;
+}
+
 fn validateSessionAuth(gpa: std.mem.Allocator, state: *ServerState) !SessionAuthStatus {
     if (!user_mgmt.isAuthEnabled()) return .ok;
     const username = state.authenticated_user orelse return .missing;
@@ -7923,7 +7939,10 @@ fn handleClientMessage(
             if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
                 query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
             {
-                if (graph_store.programQuarantineError(gpa, &.{lock_graph}, is_mutation)) |qerr| {
+                // SONNY-6547 (1): a read is hydrated first too (see the gRPC
+                // handler's gate): served engine-direct, it has no read
+                // snapshot to find the damage.
+                if (graph_store.programQuarantineError(gpa, &.{lock_graph}, true)) |qerr| {
                     const info = proto_util.mapError(qerr);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
@@ -8785,8 +8804,9 @@ fn handleClientMessage(
                                     // SONNY-3348 (round 19, m2): any error the
                                     // scan fails with fails its transaction.
                                     failed_in_txn = true;
-                                    if (!geode.eval.isResourceLimitError(err)) return err;
-                                    const info = proto_util.mapError(err);
+                                    // SONNY-6547 (1): and a storage-integrity
+                                    // refusal answers as itself, as a limit does.
+                                    const info = proto_util.statementErrorInfo(err) orelse return err;
                                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                                     return;
                                 };
@@ -9449,66 +9469,20 @@ fn handleClientMessage(
             }
         },
         .cdc_diag => {
-            switch (try validateSessionAuth(gpa, state)) {
-                .ok => {},
-                .missing, .invalidated => {
-                    try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
-                    return;
-                },
+            // SONNY-6561: the engine and the answer are the gRPC handler's
+            // (`execution.cdcDiagnosticsAnswer`); a refusal is its SQLSTATE.
+            if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
+                return;
             }
-            if (user_mgmt.isAuthEnabled()) {
-                const is_admin = if (state.authenticated_role) |r|
-                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
-                else
-                    false;
-                if (state.authenticated_user == null or !is_admin) {
-                    try sendExecuteError(gpa, stream, "42000", "Permission denied: Admin role required for CDC diagnostics", &.{}, &.{});
-                    return;
-                }
-            }
-            if (state.cdc_engine) |eng| {
-                const payload = try eng.exportDiagnostics(gpa);
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
-            } else {
-                const payload = schema.CdcDiagnosticsResponse{
-                    .config = .{ .enabled = false },
-                    .engine = .{ .is_running = false },
-                    .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-                    .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-                    .version = try gpa.dupe(u8, @import("build_options").version),
-                    .timestamp_ms = compat_milliTimestamp(),
-                };
-                try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
-            }
+            try sendQuicMessage(gpa, stream, .{ .cdc_diag = try execution.cdcDiagnosticsAnswer(gpa) });
         },
         .cdc_ctrl => |ctrl| {
-            switch (try validateSessionAuth(gpa, state)) {
-                .ok => {},
-                .missing, .invalidated => {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "AUTH_REQUIRED"), .guardrail_epoch = 0 } });
-                    return;
-                },
+            if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
+                return;
             }
-            if (user_mgmt.isAuthEnabled()) {
-                const is_admin = if (state.authenticated_role) |r|
-                    @as(user_mgmt.Role, @enumFromInt(r)) == .Admin
-                else
-                    false;
-                if (state.authenticated_user == null or !is_admin) {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "PERMISSION_DENIED"), .guardrail_epoch = 0 } });
-                    return;
-                }
-            }
-            if (state.cdc_engine) |eng| {
-                if (std.ascii.eqlIgnoreCase(ctrl.action, "RESET_GUARDRAILS")) {
-                    eng.resetGuardrailState();
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = true, .status = try gpa.dupe(u8, "OK"), .guardrail_epoch = eng.guardrail_epoch } });
-                } else {
-                    try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "UNSUPPORTED"), .guardrail_epoch = eng.guardrail_epoch } });
-                }
-            } else {
-                try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = .{ .success = false, .status = try gpa.dupe(u8, "NO_ENGINE"), .guardrail_epoch = 0 } });
-            }
+            try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = try execution.cdcControlAnswer(gpa, ctrl.action) });
         },
         .backup => |backup_req| {
             switch (try validateSessionAuth(gpa, state)) {

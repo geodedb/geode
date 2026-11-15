@@ -459,8 +459,15 @@
             // the address, names prefer IPv4 then fall back to IPv6), distinct
             // client-identity errors and zeroed key copies. Lockstep with quic
             // v0.1.51 (one quic module).
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.16#d56dd52b090f172738d73b50d1e49044a1143f17",
-            .hash = "geode_client_zig-0.3.16-8ysbV8uHDACwhQqH1Tbbo2MKjyXDWGDeY__Fu6yhHjDJ",
+            // 2026-11-14: v0.3.17 (c33cf73, SONNY-6550) — DSN userinfo ends at
+            // the last '@' of the authority (RFC 3986 3.2), an '@' after it is
+            // UnencodedCredentialDelimiter, strict %XX decoding of credentials,
+            // query values and the graph path ('+' literal), port 0 refused by
+            // parseDSN and GeodeClient.connect, fragments refused, toDSN
+            // encodes credentials, and the config.redact module geode's
+            // dsn_credentials now delegates to. Same quic v0.1.51.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.17#c33cf73375ce90712feaee70f2067da3daaf10a8",
+            .hash = "geode_client_zig-0.3.17-8ysbV8s7DQCWO_Vx2NGRxuhuKk6nDd-sGBKCPof1Au9s",
         },
 
         // =======================================================================

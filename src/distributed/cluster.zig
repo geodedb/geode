@@ -2521,6 +2521,10 @@ pub const ClusterCoordinator = struct {
     ///
     /// Thread-safe: takes `self.raft.inner_mutex` internally.
     pub fn proposeWrite(self: *ClusterCoordinator, command: raft_consensus.Command) !u64 {
+        // SONNY-6547 (4): the graph the entry's apply writes is hydrated
+        // here, on the proposing thread, before `inner_mutex` is taken: the
+        // apply would otherwise hydrate it under `inner_mutex`.
+        raft_apply.prehydrateForApply(command);
         return self.raft.proposeCommand(command);
     }
 

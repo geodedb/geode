@@ -34,7 +34,7 @@
 //   which is NOT what these cases exercise).
 //
 // Skip semantics mirror tests/test_cluster_3node_subprocess.zig: skip when
-// the binary is missing or $GEODE_SKIP_SUBPROC_CLUSTER is set.
+// $GEODE_SKIP_SUBPROC_CLUSTER is set (a missing geode binary fails).
 //
 // ---------------------------------------------------------------------
 // 2026-08-31: post-fix residuals (cases 4-6 below), RED at HEAD
@@ -304,18 +304,18 @@ const Fixture = struct {
     }
 };
 
-/// Returns null when the lane must SKIP (no binary / opt-out env).
+/// Returns null when the lane must SKIP (not Linux, or the opt-out env).
 fn setUp(gpa: std.mem.Allocator, tag: []const u8) !?Fixture {
     if (comptime builtin.os.tag != .linux) return null;
     if (getenvOwned("GEODE_SKIP_SUBPROC_CLUSTER") != null) return null;
 
     const io_fs = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
-        std.debug.print(
-            "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
-            .{binary_path},
-        );
-        return null;
+    // SONNY-6548: binary_path is the geode this build emitted (the step
+    // depends on it), so a missing binary is a broken build: fail, do not
+    // skip, and do not point at zig-out/bin, which nothing here runs.
+    std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch |err| {
+        std.debug.print("the geode this build emitted is missing at {s}\n", .{binary_path});
+        return err;
     };
 
     var arena = std.heap.ArenaAllocator.init(gpa);

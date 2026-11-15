@@ -20,6 +20,11 @@
 // (`tools/call` query, `resources/read`), the built `geode mcp` and
 // `geode query` binaries. No server is needed: each case fails before
 // dialling.
+//
+// SONNY-6550: v0.3.17 refuses port 0 itself, and names a malformed
+// percent-escape (user name, password, graph path or a query value) and an
+// `@` after the host. A fragment is its generic `InvalidDSN`; geode tells it
+// apart from a bad host so the message says what is wrong.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -35,8 +40,19 @@ const host_msg = "Invalid Geode endpoint DSN: the host must be";
 const port_msg = "Invalid Geode endpoint DSN: the port must be 1-65535";
 const scheme_msg = "Invalid Geode endpoint DSN: unsupported scheme";
 const zone_msg = "Invalid Geode endpoint DSN: an IPv6 address with a zone";
+// SONNY-6550: geode-client-zig v0.3.17 names these causes itself.
+const pct_msg = "Invalid Geode endpoint DSN: a % must start a %XX escape";
+const delim_msg = "Invalid Geode endpoint DSN: an @ follows the host";
+const fragment_msg = "Invalid Geode endpoint DSN: a fragment";
 
 const cases = [_]Case{
+    .{ .dsn = "quic://localhost:3141/g#frag", .expect = fragment_msg },
+    .{ .dsn = "localhost:3141?page_size=5#frag", .expect = fragment_msg },
+    .{ .dsn = "quic://admin:pa%GGss@localhost:3141", .expect = pct_msg },
+    .{ .dsn = "quic://localhost:3141/50%off", .expect = pct_msg },
+    .{ .dsn = "quic://localhost:3141?user=geode&pass=50%", .expect = pct_msg },
+    .{ .dsn = "quic://admin:pa/ss@localhost:3141", .expect = delim_msg },
+    .{ .dsn = "quic://localhost:3141?pass=a@evil.example", .expect = delim_msg },
     .{ .dsn = "::1:3141", .expect = host_msg },
     .{ .dsn = "quic://::1:3141/g", .expect = host_msg },
     .{ .dsn = "[::1]3141", .expect = host_msg },
@@ -170,6 +186,9 @@ test "SONNY-6494: geode mcp refuses a malformed --endpoint at startup without ec
     for ([_]Case{
         .{ .dsn = "quic://admin:s3cret-pw@::1:3141", .expect = host_msg },
         .{ .dsn = "quic://admin:s3cret-pw@localhost:0", .expect = port_msg },
+        .{ .dsn = "quic://admin:s3cret-pw@localhost:3141/g#s3cret-pw", .expect = fragment_msg },
+        .{ .dsn = "quic://admin:s3cret-pw%G0@localhost:3141", .expect = pct_msg },
+        .{ .dsn = "quic://admin:s3cret/pw@localhost:3141", .expect = delim_msg },
     }) |c| {
         const r = try runGeode(a, &.{ geode_test_bin.geode_exe, "mcp", "--stdio", "--no-auth", "--endpoint", c.dsn }, 30);
         defer r.deinit(a);

@@ -22,19 +22,32 @@ test "OPTIONAL MATCH left-outer preservation and path alias" {
     defer server.deinit();
     const addr = server.getAddr();
 
-    // Query with path alias and OPTIONAL-like pattern where second hop may not exist
-    // Our exec applies LOJ preservation per hop; this should not error and should emit rows
-    util.progress("Running query...", .{});
-    const q = "MATCH p=(a:Person)-[r:KNOWS]->(b) RETURN a, b, r, p ORDER BY a LIMIT 2";
-    const res = try run_query(allocator, addr, q);
+    // SONNY-6548: the test assumed a seeded Person graph (the server starts
+    // empty) and the deleted client's path rendering (`"p":[...]`); a PATH
+    // renders as `{"nodes":[...],"edges":[...]}` (query_result_accumulator).
+    util.progress("Seeding...", .{});
+    const seed = try run_query(allocator, addr, "CREATE (:OptPath6548 {name: 'A'})-[:KNOWS6548]->(:OptPath6548 {name: 'B'})");
+    defer allocator.free(seed.stdout);
+    defer allocator.free(seed.stderr);
+    try testing.expectEqual(@as(i32, 0), seed.exit_code);
+
+    util.progress("Running path query...", .{});
+    const res = try run_query(allocator, addr, "MATCH p = (a:OptPath6548)-[r:KNOWS6548]->(b) RETURN a.name AS a, b.name AS b, p ORDER BY a LIMIT 2");
     defer allocator.free(res.stdout);
     defer allocator.free(res.stderr);
     try testing.expectEqual(@as(i32, 0), res.exit_code);
-    // Verify we got columns and rows JSON
     try testing.expect(std.mem.indexOf(u8, res.stdout, "\"columns\"") != null);
-    try testing.expect(std.mem.indexOf(u8, res.stdout, "\"rows\"") != null);
-    // Verify path alias appears as JSON array in rows (p: [ {"id":...}, ... ])
-    try testing.expect(std.mem.indexOf(u8, res.stdout, "\"p\":[") != null);
+    try testing.expect(std.mem.indexOf(u8, res.stdout, "{\"name\":\"p\",\"type\":\"PATH\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, res.stdout, "\"a\":\"A\",\"b\":\"B\",\"p\":{\"nodes\":[") != null);
+    try testing.expect(std.mem.indexOf(u8, res.stdout, "\"edges\":[{") != null);
+
+    // OPTIONAL MATCH preserves the row with no match (left outer join).
+    util.progress("Running OPTIONAL MATCH query...", .{});
+    const opt = try run_query(allocator, addr, "MATCH (a:OptPath6548) OPTIONAL MATCH (a)-[:KNOWS6548]->(b) RETURN a.name AS a, b.name AS b ORDER BY a");
+    defer allocator.free(opt.stdout);
+    defer allocator.free(opt.stderr);
+    try testing.expectEqual(@as(i32, 0), opt.exit_code);
+    try testing.expect(std.mem.indexOf(u8, opt.stdout, "\"rows\":[{\"a\":\"A\",\"b\":\"B\"},{\"a\":\"B\",\"b\":null}]") != null);
 
     util.testPass();
 }
