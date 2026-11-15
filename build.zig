@@ -10729,6 +10729,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6594_index_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6594_index_step = b.step("test-sonny6594-index-build-read-failure", "Run SONNY-6594 item 2 regression (a durable store, every body evicted and its rebuild made to fail: CREATE INDEX USING vector in process and over gRPC in process fails or leaves no index without the row; knn afterwards answers every row)");
     sonny6594_index_step.dependOn(&run_sonny6594_index_tests.step);
+    // SONNY-6594 (3): a write that cannot read its target edge fails with the
+    // read's error; MERGE never creates a second edge beside an unreadable one.
+    const sonny6594_write_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_write_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_write_test_mod.link_libc = true;
+    sonny6594_write_test_mod.addImport("geode", root_mod);
+    sonny6594_write_test_mod.addImport("schema", schema_mod);
+    sonny6594_write_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_write_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_write_test_mod.addImport("logging", logging_mod);
+    sonny6594_write_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_write_tests = b.addTest(.{ .root_module = sonny6594_write_test_mod });
+    const run_sonny6594_write_tests = b.addRunArtifact(sonny6594_write_tests);
+    shardDep(test_step, &run_sonny6594_write_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_write_step = b.step("test-sonny6594-write-read-failure", "Run SONNY-6594 item 3 regression (a durable store, gRPC in process, every edge body evicted and its rebuild made to fail: MERGE of an existing edge, SET on an edge, DELETE of an edge and DETACH DELETE fail with the read's own error (53200) and change nothing, or have exactly the healthy effect; MERGE never creates a second edge)");
+    sonny6594_write_step.dependOn(&run_sonny6594_write_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.

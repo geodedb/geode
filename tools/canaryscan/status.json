@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:59:43.089982494Z",
+  "generated_at": "2026-11-15T14:00:38.870520784Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78499,6 +78499,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6594-WRITE-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_write_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_write_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83589,7 +83608,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4151
+      "TESTED": 4152
     },
     "by_aspect": {
       "2PC": 3,
@@ -86363,7 +86382,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 369,
+      "Regression": 370,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
