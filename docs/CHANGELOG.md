@@ -2438,6 +2438,30 @@
 
 ### Fixed
 
+- **gRPC client: every RPC on a connection gets its own HTTP/2 stream, and
+  a pushed result is never cut short silently (SONNY-6567 item 1).** The
+  client transport (`src/client/grpc_query_transport.zig`) sent every
+  Execute on stream 3, so a second Execute on one connection reused a
+  closed stream (RFC 9113 §5.1.1) and failed with `IncompleteResponse`; the
+  library's `StreamingQueryAdapter` and the test client now take odd,
+  increasing ids from a per-connection `StreamIds` (which refuses to wrap:
+  `StreamIdsExhausted`, open a new connection), and a response is read only
+  from its own stream. The CLI opens a connection per Execute and keeps
+  using stream 3. Two defects the large-response check found: the client
+  raised the per-stream receive window (SETTINGS) but never the
+  connection window, which stays 65,535 octets until a WINDOW_UPDATE on
+  stream 0, and the gRPC server cannot read WINDOW_UPDATEs while it pushes
+  a result (SONNY-1560), so a result over 64 KiB was refused after its
+  first pages; the client now raises the connection window to 16 MiB at
+  connect. And `collectQueryWithTransport` took a pushed result whose
+  stream ended before its final page for a complete one: `geode query
+  --grpc` printed 384 of 4,000 rows and exited 0. It now fails with
+  `IncompleteResponse` (the CLI's "the server closed the connection before
+  the query completed", exit 1). Regression: `zig build
+  test-sonny6567-grpc-stream-ids` (a real server: eight Execute RPCs, a
+  4,000-row and a 90,000-row response and one more Execute on one
+  connection; a multi-statement `--file` over gRPC).
+
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when

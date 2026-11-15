@@ -1695,6 +1695,8 @@ pub const GrpcProtoClient = struct {
     allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     session_id: []const u8 = "",
+    /// SONNY-6567 (1): every RPC on the connection takes its own stream id.
+    stream_ids: grpc_query_transport.StreamIds = .{},
 
     /// SONNY-6301: the socket read/write timeout. It was 5 s, so a loaded
     /// server answering in 6 s failed the test. TCP reports a server that
@@ -1736,9 +1738,10 @@ pub const GrpcProtoClient = struct {
     }
 
     pub fn hello(self: *GrpcProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
-        const resp = try grpc_query_transport.hello(
+        const resp = try grpc_query_transport.helloOn(
             allocator,
             self.stream,
+            try self.stream_ids.take(),
             .{
                 .username = username,
                 .password = password,
@@ -1779,9 +1782,10 @@ pub const GrpcProtoClient = struct {
         password: []const u8,
         graph: []const u8,
     ) !HelloResult {
-        const resp = try grpc_query_transport.hello(
+        const resp = try grpc_query_transport.helloOn(
             allocator,
             self.stream,
+            try self.stream_ids.take(),
             .{
                 .username = username,
                 .password = password,
@@ -1850,7 +1854,7 @@ pub const GrpcProtoClient = struct {
         page_size: u32,
     ) !ExecResult {
         try self.ensureHello(allocator);
-        var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = self.stream };
+        var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = self.stream, .stream_ids = &self.stream_ids };
         var transport = adapter.asTransport();
 
         var result = try query_runner.collectQueryWithTransport(allocator, &transport, .{

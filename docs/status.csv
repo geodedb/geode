@@ -858,7 +858,7 @@ REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TES
 REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TESTED,,,index,2026-08-24,src/server/proto_util.zig,349
 REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TESTED,,,index,2026-08-24,tests/test_eng3906_index_with_params.zig,54
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,CliPlaintextDiagnostic,TESTED,,,transport,2026-08-24,src/cli/main.zig,2134
-REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,,,transport,2026-08-24,src/client/grpc_query_transport.zig,196
+REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,,,transport,2026-08-24,src/client/grpc_query_transport.zig,229
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,DualListenerLifetime,TESTED,,,transport,2026-08-24,src/server/main.zig,2476
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawIoUnitWiring,TESTED,,,transport,2026-08-25,build.zig,5639
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawReadCoalescedFrames,TESTED,,,transport,2026-08-25,src/transport/grpc_tls.zig,469
@@ -5342,6 +5342,7 @@ REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,,,mcp,2026
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,,,mcp,2026-11-14,src/mcp/resources.zig,13
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,,,mcp,2026-11-14,tests/test_sonny6552_mcp_result_shapes.zig,39
 REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,Regression,TESTED,,,transport,2026-11-14,tests/test_sonny6567_grpc_stream_ids.zig,21
+REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,StreamIdAllocation,TESTED,,,transport,2026-11-14,src/client/grpc_query_transport.zig,49
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38

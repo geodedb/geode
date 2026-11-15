@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T09:27:04.293373383Z",
+  "generated_at": "2026-11-15T12:02:38.045573879Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79291,6 +79291,20 @@
       "features": [
         {
           "feature": "GrpcTransport",
+          "aspect": "StreamIdAllocation",
+          "status": "TESTED",
+          "files": [
+            "src/client/grpc_query_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "GrpcTransport",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -84408,7 +84422,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4184
+      "TESTED": 4185
     },
     "by_aspect": {
       "2PC": 3,
@@ -87740,6 +87754,7 @@
       "StreamCloseBeforeTeardown": 1,
       "StreamFairness": 1,
       "StreamHandler": 1,
+      "StreamIdAllocation": 1,
       "StreamPoolSizing": 1,
       "StreamReadPollCadence": 1,
       "StreamToFile": 1,

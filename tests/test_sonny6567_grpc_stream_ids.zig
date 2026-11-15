@@ -26,9 +26,12 @@ const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
+const grpc_query_transport = geode.grpc_query_transport;
+
 const SEQUENTIAL: usize = 8;
 const BIG_ROWS: usize = 4000;
 const PAD_LEN: usize = 200;
+const HUGE_ROWS: usize = 90_000;
 
 fn io() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -121,7 +124,7 @@ test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection
 
     // A large response on a late stream: well over the connection-level
     // window, so the client's WINDOW_UPDATEs must reach the server on it.
-    const big_q = try std.fmt.allocPrint(allocator, "UNWIND range(1, {d}) AS i RETURN i, '{s}' AS pad", .{ BIG_ROWS, "p" ** PAD_LEN });
+    const big_q = try std.fmt.allocPrint(allocator, "FOR i IN range(0, {d}) RETURN i AS i, '{s}' AS pad", .{ BIG_ROWS, "p" ** PAD_LEN });
     defer allocator.free(big_q);
     if (execute(&client, allocator, "large response", big_q)) |r_const| {
         var r = r_const;
@@ -137,6 +140,21 @@ test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection
             std.mem.eql(u8, r.rows[0][0].string, "after");
         if (!right) failures += 1;
     } else failures += 1;
+
+    // A response larger than the client's 16 MiB windows: the server cannot
+    // take the client's WINDOW_UPDATEs while it pushes (SONNY-1560), so it
+    // may refuse a page. Either every row arrives or the RPC fails; a short
+    // answer reported as a success is the defect.
+    const huge_q = try std.fmt.allocPrint(allocator, "FOR i IN range(0, {d}) RETURN i AS i, '{s}' AS pad", .{ HUGE_ROWS, "p" ** PAD_LEN });
+    defer allocator.free(huge_q);
+    if (client.executeAndCollect(allocator, huge_q, util.emptyParams(), 1000)) |r_const| {
+        var r = r_const;
+        defer r.deinit(allocator);
+        std.debug.print("SONNY-6567 (1) response over the windows: {d} rows (want {d}), error {s}\n", .{ r.rows.len, HUGE_ROWS, r.error_code orelse "none" });
+        if (r.error_code == null and r.rows.len != HUGE_ROWS) failures += 1;
+    } else |err| {
+        std.debug.print("SONNY-6567 (1) response over the windows: the RPC failed: {s}\n", .{@errorName(err)});
+    }
 
     try testing.expectEqual(@as(usize, 0), failures);
 }
@@ -179,4 +197,16 @@ test "SONNY-6567 (1): a multi-statement --file runs over gRPC" {
     std.debug.print("SONNY-6567 (1) --file over gRPC exited {d}\nstdout: {s}\nstderr: {s}\n", .{ code, r.stdout, r.stderr });
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, r.stdout, "\"c\":3") != null);
+}
+
+test "SONNY-6567 (1): client stream ids are odd, increasing, and never wrap" {
+    var ids: grpc_query_transport.StreamIds = .{};
+    try testing.expectEqual(@as(u31, 1), try ids.take());
+    try testing.expectEqual(@as(u31, 3), try ids.take());
+    try testing.expectEqual(@as(u31, 5), try ids.take());
+
+    var last: grpc_query_transport.StreamIds = .{ .next = std.math.maxInt(u31) };
+    try testing.expectEqual(@as(u31, std.math.maxInt(u31)), try last.take());
+    try testing.expectError(error.StreamIdsExhausted, last.take());
+    try testing.expectError(error.StreamIdsExhausted, last.take());
 }
