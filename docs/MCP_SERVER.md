@@ -265,7 +265,9 @@ geode-client-zig v0.3.18; before, the parameter was refused because the
 library waited a fixed 30 s). Query, transaction and ping requests still
 wait a fixed 30 s for their answers ([DSN.md](DSN.md#timeout-parameters)).
 Without a `hello_name` the HELLO names the client `geode-mcp`, with geode's
-version.
+version. A `grpc://` endpoint needs `tls=0`: geode-client-zig's gRPC client
+has no TLS and refuses rather than send in plaintext, and the tools and
+resources answer that, not a bare `ConnectionFailed` (SONNY-6617).
 
 ## Verification
 

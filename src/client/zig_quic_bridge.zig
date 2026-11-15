@@ -143,6 +143,10 @@ pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
         error.MalformedDsnParameter => "Invalid Geode endpoint DSN: a query parameter must be name=value, joined by &",
         error.InvalidDsnBoolean => "Invalid Geode endpoint DSN: a boolean parameter (insecure_tls_skip_verify, insecure, skip_verify, tls) takes true, false, 1, 0, yes, no, on or off",
         error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
+        // SONNY-6617 (3): geode-client-zig's gRPC client refuses TLS rather
+        // than send in plaintext; since v0.3.18 insecure=true no longer
+        // turns TLS off by itself.
+        error.TlsNotImplemented => "Geode endpoint: the gRPC client has no TLS, so a grpc:// endpoint needs tls=0 (plaintext, development only; insecure=true does not turn TLS off); use quic:// for an encrypted connection (docs/DSN.md)",
         error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
         else => null,
     };
@@ -264,6 +268,20 @@ pub fn initClient(
     username: ?[]const u8,
     password: ?[]const u8,
 ) !zig_client.GeodeClient {
+    return initClientWithOptions(allocator, host, port, tls_config, username, password, .{});
+}
+
+/// `initClient` with the client's timeout and HELLO name (SONNY-6617:
+/// `geode query` and `geode shell` pass the DSN timeout / --timeout).
+pub fn initClientWithOptions(
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    port: u16,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+    opts: ClientOptions,
+) !zig_client.GeodeClient {
     const policy = verificationPolicy(tls_config);
     if (policy == .skip_no_trust_material) {
         // SONNY-6453: the geode auth rule for every CLI command.
@@ -281,7 +299,7 @@ pub fn initClient(
         username,
         password,
         policy != .verify,
-        .{},
+        opts,
     );
 }
 

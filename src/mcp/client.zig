@@ -32,6 +32,9 @@ pub const GeodeClientError = error{
     ServerError,
     InvalidParams,
     UnsupportedParamType,
+    /// SONNY-6617 (3): a gRPC endpoint with TLS on (geode-client-zig's gRPC
+    /// client has no TLS); `endpointErrorMessage` says what to do.
+    TlsNotImplemented,
 };
 
 /// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
@@ -157,6 +160,7 @@ pub const GeodeClient = struct {
             error.ReceiveTimeout, error.ConnectionTimeout => GeodeClientError.Timeout,
             error.WriteError => GeodeClientError.StreamError,
             error.OutOfMemory => GeodeClientError.OutOfMemory,
+            error.TlsNotImplemented => GeodeClientError.TlsNotImplemented,
             else => GeodeClientError.ConnectionFailed,
         };
     }

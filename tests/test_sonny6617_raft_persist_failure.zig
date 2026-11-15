@@ -132,6 +132,8 @@ test "SONNY-6617 (1): a node whose Raft hard-state write fails sends nothing, th
     } else |err| try std.testing.expectEqualStrings("RaftStoragePersistFailed", @errorName(err));
     for (0..20) |_| try node.tick();
     try std.testing.expectEqual(@as(usize, 0), net.sends);
+    try std.testing.expect(node.persistStalled());
+    try std.testing.expectError(error.RaftStoragePersistFailed, node.proposeCommand(.{ .write = "x" }));
 
     // Writable again: a tick retries the write and the vote leaves.
     try chmod(dir, 0o755);
@@ -144,6 +146,7 @@ test "SONNY-6617 (1): a node whose Raft hard-state write fails sends nothing, th
     try std.testing.expectEqual(@as(u64, 7), net.at_send[0].term);
     try std.testing.expectEqual(@as(u64, 7), net.at_send[0].disk.term);
     try std.testing.expectEqual(@as(?u64, 2), net.at_send[0].disk.voted_for);
+    try std.testing.expect(!node.persistStalled());
 
     // And the node takes Raft input again: a vote in a later term.
     try node.stepInner(3, voteRequest(9, 3));

@@ -2952,6 +2952,21 @@ pub const RaftNode = struct {
     /// the consumer instead of sending them from `step()` / `tick()`.
     inner_transport: ?raft_lib.Transport = null,
 
+    // CANARY: REQ=REQ-SONNY-6617-RAFT-PERSIST-RETRY; FEATURE="Raft Consensus Persistence"; ASPECT=PersistFailureRetried; STATUS=TESTED; TEST=tests/test_sonny6617_raft_persist_failure.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6617: the Ready whose `advancePersist()` failed, kept (with
+    /// the inner node untouched) until a retry writes it; null otherwise.
+    /// While set the node takes no Raft input (`step`, `tick`, `propose`):
+    /// stepping would mutate the log the Ready's committed entries borrow
+    /// from. `tick` retries the write with backoff (`persist_retry_wait`).
+    stalled_ready: ?raft_lib.Ready = null,
+    /// Ticks to wait before the next persist retry, and the next backoff.
+    persist_retry_wait: u32 = 0,
+    persist_backoff: u32 = 1,
+    /// Failed persist attempts since the last success (for logs and stats).
+    persist_failures: u64 = 0,
+    /// `stalled_ready != null`, readable without `inner_mutex`.
+    persist_stalled: bool = false,
+
     pub fn init(
         allocator: Allocator,
         id: u64,
@@ -3206,6 +3221,7 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
+        if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         try self.inner.step(from, msg);
         self.drainReady();
     }
@@ -3214,6 +3230,9 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
+        // SONNY-6617: no election or heartbeat timer runs while a persist
+        // failure is pending (a stalled leader lets the cluster fail over).
+        if (self.stalled_ready != null) return self.retryStalledPersist();
         try self.inner.tick(null);
         self.drainReady();
     }
@@ -3293,6 +3312,14 @@ pub const RaftNode = struct {
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
 
+        // SONNY-6617: dropped while a persist failure is pending; the sender
+        // retries (Raft tolerates message loss).
+        if (self.stalled_ready != null) {
+            if (converted_entries) |ce| for (ce) |entry| self.allocator.free(entry.data);
+            log.debug("raft message dropped: Raft storage write pending retry", &.{Attr.uint("from", from)});
+            return;
+        }
+
         // raft-0.1.3 RaftNode.step takes (from, msg); the older 3-arg form
         // (with a trailing thread-pool param) is gone.
         self.inner.step(from, raft_msg) catch |err| {
@@ -3338,6 +3365,8 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         if (!self.lockInnerForRequest()) return error.GraphNotFound;
         defer self.inner_mutex.unlock(io);
+        // SONNY-6617: a node whose Raft storage write failed takes no write.
+        if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         if (self.inner.role != .leader) return error.NotLeader;
         try self.inner.propose(cmd_bytes);
         const new_index = self.inner.log.lastIndex();
@@ -3453,8 +3482,13 @@ pub const RaftNode = struct {
     /// 5. `advanceApply()`, which releases the Ready (and the committed
     ///    entries' data).
     ///
-    /// If persisting fails nothing is sent or applied: Raft resends what
-    /// matters (a candidate asks again, a leader re-replicates).
+    /// If persisting fails nothing is sent or applied, and the node pauses
+    /// (SONNY-6617): it keeps the Ready, takes no Raft input, and `tick`
+    /// retries the write with backoff (`retryStalledPersist`). Retrying,
+    /// not stopping the node, because the write is idempotent and the
+    /// usual causes (a full or read-only disk) clear without a restart; a
+    /// paused leader stops heartbeating, so the cluster fails over to a
+    /// node that can write meanwhile.
     fn drainReady(self: *RaftNode) void {
         const rd = self.inner.ready() catch |err| {
             log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
@@ -3476,9 +3510,68 @@ pub const RaftNode = struct {
         }
 
         self.inner.advancePersist() catch |err| {
-            log.warn("raft persist error; Ready not sent or applied", &.{Attr.string("error", @errorName(err))});
+            self.stalled_ready = rd;
+            @atomicStore(bool, &self.persist_stalled, true, .release);
+            self.persist_failures = 1;
+            self.persist_backoff = 1;
+            self.persist_retry_wait = 0;
+            log.err("raft storage write failed: this node sends no vote or reply, applies nothing and takes no Raft input until the write succeeds (retried every few ticks); check the Raft data directory (disk full, read-only, permissions)", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("node_id", self.id),
+                Attr.uint("term", self.inner.current_term),
+            });
             return;
         };
+        self.finishReady(rd);
+    }
+
+    /// SONNY-6617: the most ticks between two persist retries.
+    const persist_backoff_max_ticks: u32 = 64;
+
+    /// SONNY-6617: retry the stalled Ready's `advancePersist()`. It is
+    /// idempotent: it re-writes the hard state (still unacknowledged by
+    /// `advanceApply`) and re-appends the unstable entries, truncating the
+    /// storage from their first index. On success the Ready is sent and
+    /// applied as `drainReady` would have; on failure the wait doubles, up
+    /// to `persist_backoff_max_ticks`. Under `inner_mutex`.
+    fn retryStalledPersist(self: *RaftNode) void {
+        if (self.persist_retry_wait > 0) {
+            self.persist_retry_wait -= 1;
+            return;
+        }
+        const rd = self.stalled_ready orelse return;
+        self.inner.advancePersist() catch |err| {
+            self.persist_failures += 1;
+            self.persist_retry_wait = self.persist_backoff;
+            self.persist_backoff = @min(self.persist_backoff * 2, persist_backoff_max_ticks);
+            log.err("raft storage write still failing; node remains paused", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("node_id", self.id),
+                Attr.uint("attempts", self.persist_failures),
+                Attr.uint("next_retry_ticks", self.persist_retry_wait),
+            });
+            return;
+        };
+        log.info("raft storage write succeeded; node resumes", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("attempts", self.persist_failures + 1),
+        });
+        self.stalled_ready = null;
+        @atomicStore(bool, &self.persist_stalled, false, .release);
+        self.persist_failures = 0;
+        self.persist_backoff = 1;
+        self.persist_retry_wait = 0;
+        self.finishReady(rd);
+    }
+
+    /// SONNY-6617: true while a failed Raft storage write is pending retry
+    /// (the node takes no Raft input and sends nothing). For health checks.
+    pub fn persistStalled(self: *RaftNode) bool {
+        return @atomicLoad(bool, &self.persist_stalled, .acquire);
+    }
+
+    /// Steps 3-5 of `drainReady` for a Ready that `advancePersist()` wrote.
+    fn finishReady(self: *RaftNode, rd: raft_lib.Ready) void {
 
         // CANARY: REQ=REQ-DIST-RAFT-DRAINREADY-DISPATCH; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=DrainReadyMessages; STATUS=TESTED; TEST=tests/test_drainready_dispatch.zig; OWNER=distributed; UPDATED=2026-11-15
         for (rd.messages) |out| {

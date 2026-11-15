@@ -146,7 +146,10 @@ SONNY-6279.
   before it is applied or acknowledged
   (`test-sonny6611-raft-persist-before-apply`). Leader AppendEntries,
   heartbeats and InstallSnapshot go out at once, each with its own copy of
-  the entry and snapshot data.
+  the entry and snapshot data. If the Raft storage write fails, the node
+  pauses (no Raft input, nothing sent or applied, proposals refused with
+  `RaftStoragePersistFailed`) and each tick retries the write with backoff
+  until it succeeds (`test-sonny6617-raft-persist-failure`).
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and

@@ -2874,6 +2874,35 @@
 
 ### Fixed
 
+- **A cluster node whose Raft storage write fails pauses and retries
+  instead of stopping for good; `geode query` / `geode shell` apply a DSN
+  timeout; `geode mcp` says what to do about a gRPC endpoint with TLS on
+  (SONNY-6617).** When `advancePersist()` failed (a full or read-only disk)
+  `drainReady` logged and returned, leaving the raft library's Ready
+  un-advanced: every later `ready()` failed with `ReadyNotAdvanced` and the
+  node never voted, acknowledged or applied again until restarted, even once
+  the disk was writable. The node now keeps the Ready and pauses: it sends
+  nothing, applies nothing, drops inbound Raft messages, refuses proposals
+  (`RaftStoragePersistFailed`) and runs no election or heartbeat timer,
+  while each tick retries the write with backoff (1 to 64 ticks); the first
+  failure is logged at error level with what to check, each retry with its
+  attempt count, and the recovery once. Retrying rather than stopping the
+  node because the write is idempotent (hard state rewritten, unstable
+  entries re-appended from their first index) and the usual causes clear
+  without a restart; a paused leader stops heartbeating, so the cluster
+  fails over meanwhile. `RaftNode.persistStalled()` reports the state.
+  **User-visible:** `geode query --dsn` takes the DSN's `connect_timeout` /
+  `timeout` / `timeout_ms` in place of `--timeout` (whole seconds, rounded
+  up; it bounds the QUIC handshake too, which `--timeout` now also does),
+  and `geode shell --dsn` waits that long for the handshake and for each
+  answer; both warned "has no effect" and waited 30 s on a server that did
+  not answer. A `geode mcp` `grpc://` endpoint with TLS on answers its
+  tools and resources with "the gRPC client has no TLS, so a grpc://
+  endpoint needs tls=0 ... use quic://" instead of `ConnectionFailed` or
+  the schema/stats offline documents. Regressions: `zig build
+  test-sonny6617-raft-persist-failure` (the node's FileStorage directory
+  made read-only, then writable), `zig build test-sonny6617-cli-dsn-timeout`.
+
 - **Cluster Raft: a committed entry is durable before it is applied, and
   votes and replies leave a node only after the state they announce is
   durable (SONNY-6611 item 7, SONNY-6592; raft v0.2.0).** `RaftNode.drainReady`
