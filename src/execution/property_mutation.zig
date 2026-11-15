@@ -366,7 +366,7 @@ pub fn setNodePropertyFromValue(
     // constraint already reads it so). `SET n.p = null` kept p with a null
     // value and `CREATE (n {p: null})` stored it, so `keys(n)` named p.
     if (value == .Null) {
-        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+        const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
         if (node.properties.contains(key)) removeNodeProperty(store, node, key);
         return;
     }

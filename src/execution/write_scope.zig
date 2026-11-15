@@ -360,7 +360,7 @@ pub fn applySetGroups(
                     .Property => |p| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, p.target.property, value),
                     .Labels => |l| for (l.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                     .AllProperties => {
-                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                         try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
                     },
                 },

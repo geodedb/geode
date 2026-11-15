@@ -1793,7 +1793,7 @@ pub fn executeCreateQuery(
             if (item.expr == .Ident) {
                 const var_name = item.expr.Ident.orig;
                 if (created_nodes.get(var_name)) |node_id| {
-                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+                    const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
                     row[i] = Value{ .Node = node };
                 } else {
                     row[i] = Value{ .Null = {} };
@@ -1807,7 +1807,7 @@ pub fn executeCreateQuery(
                 while (iter.next()) |entry| {
                     try names.append(allocator, entry.key_ptr.*);
                     const entry_node_id = entry.value_ptr.*;
-                    const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
+                    const entry_node = (try store.nodes.getOrHydratePtr(entry_node_id)) orelse return error.NodeNotFound;
                     try values.append(allocator, Value{ .Node = entry_node });
                 }
 
@@ -2081,7 +2081,7 @@ pub fn executeReturnClauseWithNodes(
     while (node_iter.next()) |entry| {
         try names.append(allocator, entry.key_ptr.*);
         const node_id = entry.value_ptr.*;
-        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+        const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
         try values.append(allocator, Value{ .Node = node });
     }
 
@@ -2941,7 +2941,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+            const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }
@@ -3212,7 +3212,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+            const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }

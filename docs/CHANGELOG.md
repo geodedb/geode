@@ -2542,6 +2542,19 @@
 
 ### Fixed
 
+- **Storage and tenant errors carry a SQLSTATE and an operator message
+  (SONNY-6612 item 3).** `StorageReadFailed` and `StorageWriteFailed` map to
+  58000, `TenantDropping` to 42501 (access rule violation, as
+  `TenantScopeRequired`) and `TenantRegistryOrphanParent` to 58000, each
+  with a message that names the error, says what happened and what to do,
+  and names no file path; they reached the client as the bare error name.
+  Regression: `zig build test-sonny6612-error-messages`.
+- **A write to a node whose body cannot be read reports the read error,
+  not NodeNotFound (SONNY-6612 item 4).** SET, REMOVE and the label writes
+  resolved their target with a hydrate whose error read as "absent" and
+  answered `NodeNotFound` (58000), sending an operator looking for a deleted
+  node; they now fail with the read's own error. Regression: `zig build
+  test-sonny6612-unreadable-node-write`.
 - **A traversal whose adjacency list cannot be read, and a MATCH fast path
   whose property read fails, fail instead of answering short (SONNY-6607
   item 1).** **BREAKING (behaviour):** `getOutgoingEdgeIds` /

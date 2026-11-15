@@ -8593,7 +8593,7 @@ pub fn applySetRemoveOverRows(
                         .Property => |prop| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value),
                         .Labels => |ls| for (ls.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                         .AllProperties => {
-                            const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                            const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                             try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
                         },
                     },
@@ -8617,7 +8617,7 @@ pub fn applySetRemoveOverRows(
             switch (cell.*) {
                 .Node => |node| switch (rc) {
                     .Property => |prop| {
-                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                         property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                     },
                     .Labels => |lr| for (lr.labels) |label| try property_mutation.removeNodeLabel(store, node.id, label),

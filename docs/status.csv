@@ -4783,7 +4783,7 @@ REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,EvalReadSites,TESTED,,,secur
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,GraphStoreCheckedRead,TESTED,,,security,2026-11-11,src/graph_store.zig,8776
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,OneReadPolicyForNodesAndEdges,TESTED,,,security,2026-11-11,src/fle_integration.zig,1033
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,Regression,TESTED,,,security,2026-11-11,tests/test_sonny6327_fle_read_gaps.zig,33
-REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,WireEncoding,TESTED,,,security,2026-11-11,src/server/proto_util.zig,988
+REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,WireEncoding,TESTED,,,security,2026-11-11,src/server/proto_util.zig,994
 REQ-SONNY-6328-TSAN-INSTRUMENTED,Race Detection,TsanCompanionsInstrumented,TESTED,,,build,2026-11-12,tests/test_sonny6328_tsan_detects_race.zig,11
 REQ-SONNY-6329-AUTH-DDL-SERIALIZED,GQL Auth DDL Persistence,AuthDdlMutex,TESTED,,,security,2026-11-12,src/security/auth_ddl_lock.zig,1
 REQ-SONNY-6329-NO-AUTH-REFUSED,ServerCli,NoAuthFlagRefused,TESTED,,,security,2026-11-12,src/server/cli_args.zig,665
@@ -5218,7 +5218,7 @@ REQ-SONNY-6547-SHOW-GRAPHS-ERRORS,SHOW GRAPHS,ListingErrorPropagates,TESTED,,,ex
 REQ-SONNY-6547-SHOW-GRAPHS-ERRORS,SHOW GRAPHS,Regression,TESTED,,,execution,2026-11-14,tests/test_sonny6547_show_graphs_errors.zig,14
 REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,GrpcExecuteFallbackAnswer,TESTED,,,transport,2026-11-14,src/transport/grpc_server.zig,1873
 REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,Regression,TESTED,,,transport,2026-11-14,tests/test_sonny6547_transport_parity.zig,36
-REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,SharedHandlerErrorAnswer,TESTED,,,transport,2026-11-14,src/server/proto_util.zig,723
+REQ-SONNY-6547-TRANSPORT-PARITY,StorageIntegrity,SharedHandlerErrorAnswer,TESTED,,,transport,2026-11-14,src/server/proto_util.zig,729
 REQ-SONNY-6550-DSN-RULES,DSN credentials,OneImplementation,TESTED,,,cli,2026-11-14,tests/test_sonny6550_dsn_rules.zig,20
 REQ-SONNY-6551-DEFAULT-DATA-DIR-ABSOLUTE,DataDirLock,RelativeXdgAndHomeIgnored,TESTED,,,storage,2026-11-14,tests/test_sonny6551_relative_state_home.zig,19
 REQ-SONNY-6551-DSN-QUERY-CREDENTIALS,DSN credentials,QueryParameterCredentials,TESTED,,,cli,2026-11-14,tests/test_sonny6551_dsn_query_credentials.zig,16
