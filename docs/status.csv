@@ -2288,8 +2288,10 @@ REQ-GQL-ISO-SEC-13-001,ISOTypeSystem,Types,TESTED,,,compliance,2026-06-11,tests/
 REQ-GQL-ISO-SEC-14-001,ISONullSemantics,ThreeValuedLogic,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,306
 REQ-GQL-ISO-SEC-15-001,ISOPathPatterns,Paths,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,339
 REQ-GQL-ISO-SEC-16-001,ISOAggregation,GroupBy,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,368
+REQ-GQL-ISO-SEC-16-11-001,ISOGraphPatternQuantifier,QuantifiedEdges,TESTED,,,compliance,2026-11-15,tests/gql_iso_conformance.zig,645
 REQ-GQL-ISO-SEC-17-001,ISOOrdering,OrderByLimit,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,389
 REQ-GQL-ISO-SEC-18-001,ISOSetOperations,Union,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,438
+REQ-GQL-ISO-SEC-21-3-001,ISOIdentifierWords,ReservedWords,TESTED,,,compliance,2026-11-15,tests/gql_iso_conformance.zig,609
 REQ-GQL-ISO-SEC-7-001,ISOGraphPatternMatching,MATCH,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,59
 REQ-GQL-ISO-SEC-9-001,ISODataManipulation,DML,TESTED,,,compliance,2026-06-11,tests/gql_iso_conformance.zig,120
 REQ-GQL-KATZ-001,Centrality,Katz,IMPL,,,graph,2026-11-12,tests/test_gap_0193_batch2_misc.zig,88
