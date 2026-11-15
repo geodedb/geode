@@ -54,6 +54,8 @@ fn monoNanos() u64 {
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
 const Harness = struct {
     allocator: std.mem.Allocator,
     tmp: std.testing.TmpDir,
@@ -70,6 +72,12 @@ const Harness = struct {
         const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
+        // Seeding is one transaction per write; under the default
+        // sync_each_commit every one fdatasyncs the WAL, which made this file
+        // take ~110 min on a loaded disk (same on main). Deferred WAL sync
+        // keeps the seed replayable and the durability case below still
+        // checkpoints + reopens. Set before the first getGlobalStore.
+        _ = setenv("GEODE_WAL_SYNC", "deferred", 1);
         graph_store.setDataDirOverride(allocator, data_dir);
         _ = graph_store.getGlobalStore(allocator);
 
