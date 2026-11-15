@@ -2602,6 +2602,14 @@
   now fills the registry from the catalog first (`armLabelRegistry`,
   SONNY-6591). (`installSnapshotData` has no production caller yet.)
   Regression: `zig build test-sonny6595-fts-snapshot-restart`.
+- **Removed an unreachable DELETE branch (SONNY-6595).** `executeDelete`
+  deleted the elements `context.bindings` named for a DELETE without a
+  MATCH clause, skipping the hooks `deleteElements` runs (the fulltext
+  delete hook among them). The bindings are set only for `MATCH ... CALL`,
+  whose CALL subquery cannot hold a DELETE, and a DELETE with no MATCH is
+  refused before it runs (its variable is not in scope), so the branch never
+  ran. Behaviour is unchanged. Regression:
+  `zig build test-sonny6595-standalone-delete`.
 
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
