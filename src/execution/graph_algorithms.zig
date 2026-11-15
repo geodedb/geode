@@ -334,7 +334,7 @@ fn findScopedEdgeOfType(
     types: []const []const u8,
     scope: *ExprScope,
 ) !?*const graph_store.Edge {
-    if (store.getOutgoingEdgeIds(from_id)) |out_edge_ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(from_id))) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
             const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
             if (edge.to_id != to_id) continue;
@@ -343,7 +343,7 @@ fn findScopedEdgeOfType(
             if ((try store.getEdgePtrHydratedChecked(edge_id))) |edge_ptr| return edge_ptr;
         }
     }
-    if (store.getOutgoingEdgeIds(to_id)) |out_edge_ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(to_id))) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
             const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
             if (edge.to_id != from_id) continue;
@@ -574,8 +574,8 @@ const PatternWalk = struct {
         if (bound_right) |v| if (v != .Node) return true;
 
         const empty = [_]u64{};
-        const outgoing: []const u64 = if (hop.rel.dir != .left) (self.store.getOutgoingEdgeIds(current.id) orelse &empty) else &empty;
-        const incoming: []const u64 = if (hop.rel.dir != .right) (self.store.getIncomingEdgeIds(current.id) orelse &empty) else &empty;
+        const outgoing: []const u64 = if (hop.rel.dir != .left) ((try self.store.getOutgoingEdgeIdsOrError(current.id)) orelse &empty) else &empty;
+        const incoming: []const u64 = if (hop.rel.dir != .right) ((try self.store.getIncomingEdgeIdsOrError(current.id)) orelse &empty) else &empty;
         for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
             for (edge_ids) |edge_id| {
                 // SONNY-1326: read the edge BY VALUE for every decision; the
@@ -864,7 +864,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         if (max_depth) |m| if (current.depth >= m) continue;
 
         // Explore neighbors using adjacency indexes (O(degree) instead of O(E))
-        if (hop.rel.dir != .left) if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
+        if (hop.rel.dir != .left) if ((try store.getOutgoingEdgeIdsOrError(current.node_id))) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
                 const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
                 if (!typeAllowed(hop.rel.types, edge.label)) continue;
@@ -885,7 +885,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         };
         // `<-` and undirected: the incoming edges
         if (hop.rel.dir != .right) {
-            if (store.getIncomingEdgeIds(current.node_id)) |in_edge_ids| {
+            if ((try store.getIncomingEdgeIdsOrError(current.node_id))) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
                     const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse continue;
                     if (!typeAllowed(hop.rel.types, edge.label)) continue;

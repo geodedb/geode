@@ -2542,6 +2542,25 @@
 
 ### Fixed
 
+- **A traversal whose adjacency list cannot be read, and a MATCH fast path
+  whose property read fails, fail instead of answering short (SONNY-6607
+  item 1).** **BREAKING (behaviour):** `getOutgoingEdgeIds` /
+  `getIncomingEdgeIds` return null both for a node with no edges and for
+  one whose evicted adjacency list could not be rebuilt, so the MATCH
+  executor, var-length / `COUNT { }` / comprehension walks, `shortestPath`,
+  BFS / DFS / Dijkstra, the centrality procedures and `indegree()` /
+  `outdegree()` took an unreadable node for a dead end. They now use
+  `getOutgoingEdgeIdsOrError` / `getIncomingEdgeIdsOrError` (null still
+  means "no edges") and fail with the read's error. Degree centrality reads
+  every degree on the calling thread (a worker read them, reaching the
+  storage adapter and counting an unreadable list as 0). The aggregate,
+  count, group-by and top-k MATCH fast paths over a bounded cache dropped a
+  row whose engine property read failed (`catch continue`) and read a
+  failed tenant-tag read as the default tenant's; both now fail. The role
+  resolver fails closed (no global role) on an unreadable HAS_ROLE
+  adjacency or role node, and `canUserAccessGraph` reads grant properties
+  with `getNodePropertyOrError`. Regression: `zig build
+  test-sonny6607-adjacency-property-read-failure`.
 - **ROLLBACK that cannot read a body it must undo fails instead of
   reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
   undo asked whether the node or edge a change was on still exists, and a

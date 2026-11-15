@@ -3952,8 +3952,8 @@ pub const PathIterator = struct {
             // (`shouldSkipByPathMode`); the caps above bound the work.
 
             // Get edges based on direction (zero-copy: no allocation needed)
-            const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getOutgoingEdgeIds(last_node_id) else null;
-            const incoming_edge_ids = if (self.rel_direction == 'l' or self.rel_direction == 'u') self.store.getIncomingEdgeIds(last_node_id) else null;
+            const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') (try self.store.getOutgoingEdgeIdsOrError(last_node_id)) else null;
+            const incoming_edge_ids = if (self.rel_direction == 'l' or self.rel_direction == 'u') (try self.store.getIncomingEdgeIdsOrError(last_node_id)) else null;
 
             // Process outgoing edges (forward direction)
             if (outgoing_edge_ids) |ids| {

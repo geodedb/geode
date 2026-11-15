@@ -85,7 +85,10 @@ pub fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_s
     // for legacy state written by pre-fix versions of geode (and a
     // belt-and-braces guarantee against any future writer that forgets
     // to revoke first).
-    const edge_ids = store.getOutgoingEdgeIds(uid) orelse return authRoleFromRecord(record);
+    // SONNY-6607 (1): an adjacency list that cannot be read is not "no
+    // HAS_ROLE edges" (that fell back to the record's role, which a newer
+    // edge may have demoted). Fail closed: no global role.
+    const edge_ids = (store.getOutgoingEdgeIdsOrError(uid) catch return .None) orelse return authRoleFromRecord(record);
     var best_role: ?geode.user_management.Role = null;
     var best_eid: u64 = 0;
     for (edge_ids) |eid| {
@@ -96,7 +99,8 @@ pub fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_s
         if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH)) continue;
         if (!std.mem.eql(u8, edge.label, HAS_ROLE)) continue;
 
-        const role_name_prop = store.getNodeProperty(edge.to_id, "name") orelse continue;
+        // SONNY-6607 (1): an unreadable role node fails closed, as above.
+        const role_name_prop = (store.getNodePropertyOrError(edge.to_id, "name") catch return .None) orelse continue;
         const role_name = switch (role_name_prop) {
             .String => |s| s,
             else => continue,

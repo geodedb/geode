@@ -1905,7 +1905,7 @@ pub fn propertyAggregateFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -1917,14 +1917,14 @@ pub fn propertyAggregateFastPath(
                 if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
             }
             if (where_pred) |p| {
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+                const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
                 };
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
-            const t_raw = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
+            const t_raw = (try adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator)) orelse continue;
             defer switch (t_raw) {
                 .string => |s| allocator.free(s),
                 .ext => |e| allocator.free(e.data),
@@ -2173,7 +2173,7 @@ pub fn pointWriteFastPath(
     // above this is 0 or 1 candidates; keep the loop defensive.
     var matched_slot: ?u64 = null;
     for (candidates) |slot_id| {
-        const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+        const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
         defer switch (w_val) {
             .string => |s| allocator.free(s),
             else => {},
@@ -2434,7 +2434,7 @@ pub fn countFilteredFastPath(
             var seek_matched: usize = 0;
             for (candidates) |slot_id| {
                 if (tenant_active) {
-                    const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                    const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                     const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                         .string => |s| s,
                         else => graph_store.DEFAULT_TENANT_ID,
@@ -2445,7 +2445,7 @@ pub fn countFilteredFastPath(
                     };
                     if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
                 }
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+                const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -2497,7 +2497,7 @@ pub fn countFilteredFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -2508,7 +2508,7 @@ pub fn countFilteredFastPath(
                 };
                 if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
             }
-            const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+            const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
             defer switch (w_val) {
                 .string => |s| allocator.free(s),
                 else => {},
@@ -2815,8 +2815,9 @@ pub fn indexServedGroupByFastPath(
 /// random read — a pure single-property read, never a whole-node decode. A
 /// `prop_head` of 0 means the node has no properties: every key reads null.
 /// Label-posting sources (`prop_head == null`) keep the `getNodeProperty`
-/// read (getNode + single-key chain walk). Errors read as null (skip),
-/// matching the existing `catch null` / `catch continue` loop semantics.
+/// read (getNode + single-key chain walk). SONNY-6607 (1): a read error is
+/// the caller's error; it read as null, so the row was skipped (or its
+/// tenant tag read as the default tenant's).
 fn readScanNodeProp(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
@@ -2824,12 +2825,12 @@ fn readScanNodeProp(
     prop_head: ?u64,
     key: []const u8,
     alloc: std.mem.Allocator,
-) ?gs.PropertyValue {
+) !?gs.PropertyValue {
     if (prop_head) |ph| {
         if (ph == 0) return null;
-        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc) catch null;
+        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc);
     }
-    return adapter.getNodeProperty(graph_name, slot_id, key, alloc) catch null;
+    return adapter.getNodeProperty(graph_name, slot_id, key, alloc);
 }
 
 pub fn groupByAggregateFastPath(
@@ -3109,7 +3110,7 @@ pub fn groupByAggregateFastPath(
             const slot_id: u64 = if (scan_label != null) scan_slots[scan_i] else scan_entries[scan_i].slot_id;
             const prop_head: ?u64 = if (scan_label != null) null else scan_entries[scan_i].rec.prop_head;
             if (tenant_active) {
-                const tprop = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
+                const tprop = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator));
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -3122,7 +3123,7 @@ pub fn groupByAggregateFastPath(
             }
 
             if (where_pred) |p| {
-                const w_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator) orelse continue;
+                const w_val = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -3135,7 +3136,7 @@ pub fn groupByAggregateFastPath(
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                const raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
+                const raw = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator));
                 // m1: the engine-owned bytes are freed when this block exits
                 // (success or error), after the capture below copied them.
                 defer if (raw) |r| switch (r) {
@@ -3170,7 +3171,7 @@ pub fn groupByAggregateFastPath(
                     .group_key => {},
                     .count_star => group.accs[item_acc_idx[i]].count += 1,
                     .count_prop => {
-                        const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator);
+                        const pv = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator));
                         if (pv) |pval| {
                             switch (pval) {
                                 .string => |s| allocator.free(s),
@@ -3180,7 +3181,7 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
+                        const t_raw = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator)) orelse continue;
                         defer switch (t_raw) {
                             .string => |s| allocator.free(s),
                             .ext => |e| allocator.free(e.data),
@@ -3552,7 +3553,7 @@ pub fn topKOrderedFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -5669,8 +5670,8 @@ const MultiChainJoin = struct {
                     return;
                 }
                 const empty = [_]u64{};
-                const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
-                const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
+                const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) ((try self.store.getOutgoingEdgeIdsOrError(left.id)) orelse &empty) else &empty;
+                const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) ((try self.store.getIncomingEdgeIdsOrError(left.id)) orelse &empty) else &empty;
                 var scanned: usize = 0;
                 for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
                     for (edge_ids) |edge_id| {
@@ -6319,8 +6320,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
                 // Zero-copy edge iteration: use getOutgoingEdgeIds/getIncomingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
-                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
-                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
+                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{} else &[_]u64{};
+                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{} else &[_]u64{};
 
                 for (outgoing_edge_ids) |edge_id| {
                     const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
@@ -6384,8 +6385,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
                 // Zero-copy edge iteration: use getIncomingEdgeIds/getOutgoingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
-                const incoming_to_right_ids = if (rel_dir == .right or rel_dir == .undirected) store.getIncomingEdgeIds(right_node.id) orelse &[_]u64{} else &[_]u64{};
-                const outgoing_from_right_ids = if (rel_dir == .left or rel_dir == .undirected) store.getOutgoingEdgeIds(right_node.id) orelse &[_]u64{} else &[_]u64{};
+                const incoming_to_right_ids = if (rel_dir == .right or rel_dir == .undirected) (try store.getIncomingEdgeIdsOrError(right_node.id)) orelse &[_]u64{} else &[_]u64{};
+                const outgoing_from_right_ids = if (rel_dir == .left or rel_dir == .undirected) (try store.getOutgoingEdgeIdsOrError(right_node.id)) orelse &[_]u64{} else &[_]u64{};
 
                 for (incoming_to_right_ids) |edge_id| {
                     const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
@@ -6510,8 +6511,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // BUG-731: honor the anchor's inline property predicate.
                 if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
-                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
                 for (outgoing_edge_ids) |edge_id| {
                     const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
@@ -7618,8 +7619,8 @@ fn executeSingleHopEdgeTraversal(
 ) !void {
     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-    const outgoing_edge_ids_std = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-    const incoming_edge_ids_std = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+    const outgoing_edge_ids_std = if (rel_direction == 'r' or rel_direction == 'u') ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+    const incoming_edge_ids_std = if (rel_direction == 'l' or rel_direction == 'u') ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
     // Helper to process one set of edges for a given target node ID extractor
     const edge_id_sets = [_]struct { edge_ids: []const u64, use_from: bool }{
@@ -9489,8 +9490,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=AggregationEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
                     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edge_ids_agg = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids_agg = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+                    const outgoing_edge_ids_agg = if (rel_direction == 'r' or rel_direction == 'u') ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+                    const incoming_edge_ids_agg = if (rel_direction == 'l' or rel_direction == 'u') ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
                     // Process outgoing edges (use to_id as target)
                     for (outgoing_edge_ids_agg) |edge_id| {

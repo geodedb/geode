@@ -747,7 +747,7 @@ fn findExistingEdge(
     props: ?[]const EvaluatedPatternProp,
     visibility: *MergeVisibility,
 ) !EdgeMatch {
-    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
+    const outgoing_ids = (try read_store.getOutgoingEdgeIdsOrError(source_id)) orelse return .none;
     var saw_hidden = false;
     for (outgoing_ids) |edge_id| {
         const edge = (try read_store.getEdgePtrHydratedChecked(edge_id)) orelse continue;

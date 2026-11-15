@@ -75,12 +75,14 @@ fn collectNodeIds(store: *graph_store.GraphStore, allocator: std.mem.Allocator, 
 const Degree = struct { out: u64, in: u64 };
 
 /// A node's raw adjacency lengths: every incident edge, all in the node's
-/// graph. Allocation-free and predicate-free, so a parallel worker may call
-/// it; only for a scope that restricts nothing (`AlgoScope.restricts`).
-fn rawDegree(store: *graph_store.GraphStore, node_id: u64) Degree {
+/// graph. Predicate-free; only for a scope that restricts nothing
+/// (`AlgoScope.restricts`). SONNY-6607 (1): an adjacency list that cannot be
+/// read is the read's error (it counted as 0), and the read may hydrate from
+/// the storage adapter, so calling thread only.
+fn rawDegree(store: *graph_store.GraphStore, node_id: u64) !Degree {
     return .{
-        .out = if (store.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0,
-        .in = if (store.getIncomingEdgeIds(node_id)) |ids| ids.len else 0,
+        .out = if ((try store.getOutgoingEdgeIdsOrError(node_id))) |ids| ids.len else 0,
+        .in = if ((try store.getIncomingEdgeIdsOrError(node_id))) |ids| ids.len else 0,
     };
 }
 
@@ -90,15 +92,15 @@ fn rawDegree(store: *graph_store.GraphStore, node_id: u64) Degree {
 /// edges into other tenants' subgraphs and edges RLS hides. Calling thread
 /// only.
 fn visibleDegree(store: *graph_store.GraphStore, node_id: u64, scope: *AlgoScope) !Degree {
-    if (!scope.restricts()) return rawDegree(store, node_id);
+    if (!scope.restricts()) return try rawDegree(store, node_id);
     var out_deg: u64 = 0;
     var in_deg: u64 = 0;
-    if (store.getOutgoingEdgeIds(node_id)) |ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(node_id))) |ids| {
         for (ids) |eid| {
             if (try scope.edgeIdTraversable(store, eid)) out_deg += 1;
         }
     }
-    if (store.getIncomingEdgeIds(node_id)) |ids| {
+    if ((try store.getIncomingEdgeIdsOrError(node_id))) |ids| {
         for (ids) |eid| {
             if (try scope.edgeIdTraversable(store, eid)) in_deg += 1;
         }
@@ -185,7 +187,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
     // SONNY-1318: the edge AND both its endpoints must be visible to the
     // session's tenant scope — never expand a frontier THROUGH an invisible
     // node, even across an edge that happens to carry the reader's own tag.
-    if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(node_id))) |out_edge_ids| {
         for (out_edge_ids) |edge_id| {
             if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                 if (!scope.edgeTraversable(store, edge)) continue;
@@ -193,7 +195,7 @@ pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std
             }
         }
     }
-    if (store.getIncomingEdgeIds(node_id)) |in_edge_ids| {
+    if ((try store.getIncomingEdgeIdsOrError(node_id))) |in_edge_ids| {
         for (in_edge_ids) |edge_id| {
             if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                 if (!scope.edgeTraversable(store, edge)) continue;
@@ -242,7 +244,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
     }
     for (node_list) |node| {
         var set = NeighborSet.init(allocator);
-        if (store.getOutgoingEdgeIds(node)) |out_edge_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(node))) |out_edge_ids| {
             for (out_edge_ids) |edge_id| {
                 if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
@@ -251,7 +253,7 @@ pub fn buildNeighborSets(node_list: []const u64, store: *graph_store.GraphStore,
                 }
             }
         }
-        if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(node))) |in_edge_ids| {
             for (in_edge_ids) |edge_id| {
                 if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                     if (!scope.edgeTraversable(store, edge)) continue;
@@ -300,16 +302,18 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     // caller, and the parallel section still runs (it fills the rows), so the
     // >32-node threshold and its worker fan-out are unchanged.
     //
-    // A scope that restricts nothing needs none of this: `visibleDegree` short-circuits
-    // to the raw adjacency lengths with no predicate call at all, so the legacy
-    // all-tenants path keeps its full parallel degree computation byte for byte.
+    // SONNY-6607 (1): an unrestricted scope's raw adjacency lengths are read
+    // here too. A worker read them, which hydrates an evicted adjacency list
+    // from the storage adapter (forbidden on a worker, as above), and a list
+    // that could not be read counted as degree 0 (a worker cannot fail the
+    // call). Read here, a failed read fails the call.
     //
     // SONNY-2685: likewise for the RLS checks, which read the active execution
     // context and the traversal's label snapshot, both thread-local: on a
     // worker they would see neither and allow every edge. Whenever the scope
     // restricts anything (a tenant scope, or an RLS policy that may deny),
     // every degree is computed here.
-    const scoped_degrees: ?[]u64 = if (!scope.restricts()) null else blk: {
+    const degrees: []u64 = blk: {
         const degs = try allocator.alloc(u64, n);
         errdefer allocator.free(degs);
         for (node_list.items, 0..) |node_id, i| {
@@ -318,23 +322,21 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         }
         break :blk degs;
     };
-    defer if (scoped_degrees) |degs| allocator.free(degs);
+    defer allocator.free(degrees);
 
     const DegreeCtx = struct {
         nodes: []const u64,
         rows: [][]Value,
-        store_ptr: *graph_store.GraphStore,
-        // SONNY-1318: non-null ONLY when the session has a concrete tenant
-        // scope, in which case it already holds every degree and the worker
-        // touches no tenant predicate, no allocator and no storage adapter.
-        scoped_degrees: ?[]const u64,
+        // SONNY-1318 / SONNY-6607: every degree, computed on the calling
+        // thread; the worker touches no tenant predicate, no allocator and no
+        // storage adapter.
+        degrees: []const u64,
     };
 
     const ctx = DegreeCtx{
         .nodes = node_list.items,
         .rows = rows,
-        .store_ptr = store,
-        .scoped_degrees = scoped_degrees,
+        .degrees = degrees,
     };
 
     // GAP-0273: Parallel degree computation — each node's degree is independent
@@ -347,18 +349,13 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
         struct {
             fn compute(_: *parallel_wrapper.Task, idx: usize, c: DegreeCtx) void {
                 const node_id = c.nodes[idx];
-                const total: u64 = if (c.scoped_degrees) |degs| degs[idx] else total_blk: {
-                    // Unrestricted: raw adjacency lengths, allocation-free.
-                    const deg = rawDegree(c.store_ptr, node_id);
-                    break :total_blk deg.out + deg.in;
-                };
+                const total: u64 = c.degrees[idx];
                 c.rows[idx][0] = safeU64ToValue(node_id);
                 c.rows[idx][1] = safeU64ToValue(total);
             }
         }.compute,
         parallel_wrapper.Thresholds.forEach,
     );
-
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
@@ -706,7 +703,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             var rank_sum: f64 = 0;
 
             // Use incoming_edges adjacency index to find predecessors in O(in_degree)
-            if (store.getIncomingEdgeIds(node)) |in_edge_ids| {
+            if ((try store.getIncomingEdgeIdsOrError(node))) |in_edge_ids| {
                 for (in_edge_ids) |edge_id| {
                     if ((try store.getEdgeHydratedChecked(edge_id))) |edge| {
                         // SONNY-1318: never accumulate rank across an edge (or
@@ -1155,7 +1152,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     const getOutNeighbors = struct {
         fn get(s: *graph_store.GraphStore, node_id: u64, alloc: std.mem.Allocator, filter: *AlgoScope) ![]u64 {
             var out = try std.ArrayList(u64).initCapacity(alloc, 0);
-            if (s.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
+            if ((try s.getOutgoingEdgeIdsOrError(node_id))) |out_edge_ids| {
                 for (out_edge_ids) |edge_id| {
                     if (s.edges.get(edge_id)) |edge| {
                         // SONNY-1318 / SONNY-2685: same visibility rule as getNeighbors.
@@ -2332,7 +2329,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
 
     for (node_list.items) |node| {
         out_tmp.clearRetainingCapacity();
-        if (store.getOutgoingEdgeIds(node)) |edge_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(node))) |edge_ids| {
             for (edge_ids) |eid| {
                 if ((try store.getEdgeHydratedChecked(eid))) |edge| {
                     // SONNY-1318: same visibility rule as getNeighbors.
@@ -2344,7 +2341,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         try outgoing.put(node, try allocator.dupe(u64, out_tmp.items));
 
         in_tmp.clearRetainingCapacity();
-        if (store.getIncomingEdgeIds(node)) |edge_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(node))) |edge_ids| {
             for (edge_ids) |eid| {
                 if ((try store.getEdgeHydratedChecked(eid))) |edge| {
                     if (!scope.edgeTraversable(store, edge)) continue;

@@ -8799,6 +8799,14 @@ pub const GraphStore = struct {
         return null;
     }
 
+    /// SONNY-6607 (1): `getNodeProperty` that tells "absent" (null) from "the
+    /// node could not be read" (the hydrate's error), which it returns as
+    /// null too. Same borrow lifetime.
+    pub fn getNodePropertyOrError(self: *GraphStore, node_id: u64, key: []const u8) !?PropertyValue {
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return null;
+        return node.properties.get(key);
+    }
+
     /// SONNY-6327: the node's property as the requesting principal may see
     /// it: a string through the shared FLE read policy
     /// (`fle_integration.readStoredString`, the one eval uses): decrypted
@@ -10150,6 +10158,24 @@ pub const GraphStore = struct {
 
     pub fn getIncomingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
         return self.inAdjItems(node_id);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE; FEATURE="StorageIntegrity"; ASPECT=ErrorReturningGetters; STATUS=TESTED; TEST=tests/test_sonny6607_adjacency_property_read_failure.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6607 (1): `getOutgoingEdgeIds` that tells "no adjacency" (null,
+    /// as before) from "could not be read" (the hydrate's error). The
+    /// unchecked getter returns null for both, so a traversal took a node
+    /// whose evicted list could not be rebuilt for a dead end.
+    pub fn getOutgoingEdgeIdsOrError(self: *const GraphStore, node_id: u64) !?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.outgoing_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
+        return adjItemsSnapshot(&p.list);
+    }
+
+    /// SONNY-6607 (1): `getIncomingEdgeIds`, as `getOutgoingEdgeIdsOrError`.
+    pub fn getIncomingEdgeIdsOrError(self: *const GraphStore, node_id: u64) !?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.incoming_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
+        return adjItemsSnapshot(&p.list);
     }
 
     /// ENG-3983: FAIL-CLOSED adjacency reads. `getOutgoingEdgeIds` /

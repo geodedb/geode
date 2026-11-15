@@ -1314,7 +1314,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1331,7 +1331,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1352,7 +1352,7 @@ pub const UserStorageBackend = struct {
         var result = std.ArrayList(u64).empty;
         defer result.deinit(allocator);
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;

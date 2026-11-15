@@ -125,7 +125,7 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try q.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
         };
-        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
             for (out_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 // SONNY-1318: the edge AND both its endpoints must be visible —
@@ -134,7 +134,7 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.to_id, current_depth + 1);
             }
         }
-        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
             for (in_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
@@ -228,7 +228,7 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try stk.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
         };
-        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
             for (out_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 // SONNY-1318: edge + both endpoints must be visible.
@@ -236,7 +236,7 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try PushDfs.push(allocator, &stack, current_path, edge.to_id, current_depth + 1);
             }
         }
-        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
             for (in_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
@@ -377,7 +377,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         {
             var nbrs: std.ArrayList(u64) = .empty;
             defer nbrs.deinit(allocator);
-            if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+            if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
                 for (out_ids) |eid| {
                     const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                     // SONNY-1318: never relax across an edge, or into a node,
@@ -386,7 +386,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
                     try nbrs.append(allocator, edge.to_id);
                 }
             }
-            if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+            if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
                 for (in_ids) |eid| {
                     const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                     if (!scope.edgeTraversable(store, edge.*)) continue;
@@ -469,14 +469,14 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         // invisible two-hop path would leak through the back door.
         const maybeEdgeCost = struct {
             fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8, filter: *AlgoScope) !?f64 {
-                if (gs.getOutgoingEdgeIds(a)) |out_ids| {
+                if ((try gs.getOutgoingEdgeIdsOrError(a))) |out_ids| {
                     for (out_ids) |eid| {
                         const e = (try gs.getEdgePtrHydratedChecked(eid)) orelse continue;
                         if (!filter.edgeTraversable(gs, e.*)) continue;
                         if (e.to_id == b) return try getEdgeWeight(gs, a, b, weight_prop, filter);
                     }
                 }
-                if (gs.getIncomingEdgeIds(a)) |in_ids| {
+                if ((try gs.getIncomingEdgeIdsOrError(a))) |in_ids| {
                     for (in_ids) |eid| {
                         const e = (try gs.getEdgePtrHydratedChecked(eid)) orelse continue;
                         if (!filter.edgeTraversable(gs, e.*)) continue;
@@ -498,14 +498,14 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         // of a full `store.edges` scan (bounded-cache-correct + O(degree)).
         var mids: std.ArrayList(u64) = .empty;
         defer mids.deinit(allocator);
-        if (store.getOutgoingEdgeIds(start_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(start_id))) |out_ids| {
             for (out_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try mids.append(allocator, edge.to_id);
             }
         }
-        if (store.getIncomingEdgeIds(start_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(start_id))) |in_ids| {
             for (in_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
@@ -586,14 +586,14 @@ pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, w
             return 1.0;
         }
     }.f;
-    if (store.getOutgoingEdgeIds(from_id)) |out_ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(from_id))) |out_ids| {
         for (out_ids) |eid| {
             const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
             if (edge.to_id != to_id or !scope.edgeTraversable(store, edge.*)) continue;
             return matchWeight(edge, weight_prop);
         }
     }
-    if (store.getIncomingEdgeIds(from_id)) |in_ids| {
+    if ((try store.getIncomingEdgeIdsOrError(from_id))) |in_ids| {
         for (in_ids) |eid| {
             const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
             if (edge.from_id != to_id or !scope.edgeTraversable(store, edge.*)) continue;

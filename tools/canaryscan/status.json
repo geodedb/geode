@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T16:53:26.915178979Z",
+  "generated_at": "2026-11-15T17:22:03.082928666Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78560,6 +78560,20 @@
       "features": [
         {
           "feature": "StorageIntegrity",
+          "aspect": "ErrorReturningGetters",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -83665,7 +83679,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4155
+      "TESTED": 4156
     },
     "by_aspect": {
       "2PC": 3,
@@ -84711,6 +84725,7 @@
       "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
       "ErrorReporting": 1,
+      "ErrorReturningGetters": 1,
       "ErrorTesting": 1,
       "ErrorTypeReexport": 1,
       "ErrorsFailStatement": 1,

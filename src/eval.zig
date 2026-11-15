@@ -3574,10 +3574,12 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     };
 
     // Counted by id: the node itself is not read again.
-    const edge_ids = switch (direction) {
-        .incoming => store.getIncomingEdgeIds(node_id),
-        .outgoing => store.getOutgoingEdgeIds(node_id),
-    } orelse return absent;
+    // SONNY-6607 (1): an adjacency list that cannot be read fails the call;
+    // it read as "no edges" (a degree of 0, or absent).
+    const edge_ids = (switch (direction) {
+        .incoming => store.getIncomingEdgeIdsOrError(node_id),
+        .outgoing => store.getOutgoingEdgeIdsOrError(node_id),
+    } catch |err| return value_types.storageReadFailed(err)) orelse return absent;
     const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
     if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };
 

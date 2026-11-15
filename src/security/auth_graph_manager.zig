@@ -2256,14 +2256,16 @@ pub const AuthGraphManager = struct {
             // rely on a cross-module reference.
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const uid_prop = self.storage.store.getNodeProperty(node_id, "user_id") orelse continue;
+            // SONNY-6607 (1): a grant whose properties cannot be read fails
+            // the check (still no access), not a silent "no grant".
+            const uid_prop = (try self.storage.store.getNodePropertyOrError(node_id, "user_id")) orelse continue;
             const stored_uid: u64 = switch (uid_prop) {
                 .Int => |v| if (v < 0) continue else @intCast(v),
                 else => continue,
             };
             if (stored_uid != user_id) continue;
 
-            const gname_prop = self.storage.store.getNodeProperty(node_id, "graph_name") orelse continue;
+            const gname_prop = (try self.storage.store.getNodePropertyOrError(node_id, "graph_name")) orelse continue;
             const stored_gname: []const u8 = switch (gname_prop) {
                 .String => |s| s,
                 else => continue,
