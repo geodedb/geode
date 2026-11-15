@@ -2689,7 +2689,6 @@ pub const SharedConnState = struct {
     disable_estimates: bool = false,
     compact_profile: bool = false,
     memcurve_profile: bool = false,
-    env_spill_threshold: usize = 0,
     env_storage_checksum_error: bool = false,
     /// #683: Cached env config pointer (global lifetime, not owned).
     env_config: ?*const server_init.EnvironmentConfig = null,
@@ -3228,7 +3227,6 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.query_mem_limit_bytes = cs.env_spill_threshold;
     state.storage_checksum_error = cs.env_storage_checksum_error;
     state.security_manager = cs.security_manager;
     state.query_optimizer = cs.shared_optimizer;
@@ -5837,7 +5835,6 @@ pub fn handleQuicConnection(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
@@ -5942,7 +5939,6 @@ pub fn handleQuicConnection(
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
     // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
@@ -6159,7 +6155,6 @@ pub fn handleQuicConnection(
         .disable_estimates = disable_estimates,
         .compact_profile = compact_profile,
         .memcurve_profile = memcurve_profile,
-        .env_spill_threshold = env_spill_threshold,
         .env_storage_checksum_error = env_storage_checksum_error,
         .env_config = env_config,
     };
@@ -7882,9 +7877,8 @@ fn handleClientMessage(
             for (base_flags) |flag| {
                 try appendFlagIfMissing(gpa, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
             }
@@ -8789,13 +8783,25 @@ fn handleClientMessage(
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(gpa);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(gpa, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| gpa.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -8853,6 +8859,9 @@ fn handleClientMessage(
                         .graph_store_dirty = profile_is_dirty,
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);

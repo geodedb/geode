@@ -9,7 +9,7 @@
 - `peak_contributors[]`: Top 3 allocation deltas (bytes_alloc) with op names.
 - `total_time_ns`: Wall-clock pipeline time.
 - `spills`: `{sort_spills, distinct_spills, union_spills}`, plus `spill_reason` only when a counter is above 0. The executor never spills to disk, so every counter is 0 and `spill_reason` is absent (SONNY-6562).
-- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — deterministic synthetic model on the fallback (v1) path, honest zeros on the trace-backed (v2) path; NOT measured allocations (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations).
+- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — zeros on both paths: allocations are not measured (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations). Until SONNY-6596 the fallback (v1) path reported a fixed synthetic model.
 - `planner_estimates` (optional if estimates enabled):
   - `sum_estimate_bytes`
   - `sum_actual_bytes`
@@ -41,8 +41,7 @@
 | Variable                      | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
 | `GEODE_NULLS_LAST`            | Nulls last ordering policy                             |
-| `GEODE_SPILL_THRESHOLD_BYTES` | Read at startup; changes no output. The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
-| `GEODE_QUERY_MEM_LIMIT_BYTES` | The same setting under another name (it wins when both are set); changes no output |
+| `GEODE_SPILL_THRESHOLD_BYTES`, `GEODE_QUERY_MEM_LIMIT_BYTES` | Not read by the server (SONNY-6596; read into a setting nothing used until then). The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
 | `GEODE_FORCE_SORT_SPILL`, `GEODE_FORCE_DISTINCT_SPILL`, `GEODE_FORCE_UNION_SPILL` | Not read by the server (SONNY-6435) |
 
 ## CLI Flags

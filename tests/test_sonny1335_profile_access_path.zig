@@ -31,8 +31,10 @@ const Access = struct {
     index_ops: usize,
     /// The non-empty `index_name`s, in operator order.
     names: []const []const u8,
-    /// Operators that say they scanned (`LabelScan`, `AllNodesScan`,
-    /// `NodeScan`).
+    /// Operators that say they scanned (`LabelScan`, `AllNodesScan`), or
+    /// the legacy executor's statement (`LegacyExecute`, which scans: it
+    /// never consults the index catalog). SONNY-6596: the version-1 payload
+    /// listed an invented `NodeScan` for it.
     scan_ops: usize,
     query: []const u8,
 
@@ -64,7 +66,7 @@ fn profile(ga: std.mem.Allocator, session: []const u8, query: []const u8) !Acces
         if (op.index_name.len > 0) try names.append(ga, op.index_name);
         if (std.mem.eql(u8, op.op, "LabelScan") or
             std.mem.eql(u8, op.op, "AllNodesScan") or
-            std.mem.eql(u8, op.op, "NodeScan")) scan_ops += 1;
+            std.mem.eql(u8, op.op, "LegacyExecute")) scan_ops += 1;
     }
     return .{ .version = p.profile_version, .index_ops = index_ops, .names = names.items, .scan_ops = scan_ops, .query = query };
 }

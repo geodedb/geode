@@ -930,7 +930,9 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         .SmallIntLit => |i| try w.print("{d}", .{i}),
         .BigIntLit => |i| try w.print("{d}", .{i}),
         .RealLit => |f| try w.print("{d}", .{f}),
-        .DoubleLit => |f| try w.print("{d}", .{f}),
+        // SONNY-6596: with its exponent, so the text reads back as an
+        // approximate numeric literal (ISO/IEC 39075:2024 21.2), not an exact one.
+        .DoubleLit => |f| try w.print("{e}", .{f}),
         .CharLit => |c| try w.print("CHAR({d})\"{s}\"", .{ c.n, c.text }),
         .VarcharLit => |v| try w.print("VARCHAR({d})\"{s}\"", .{ v.n, v.text }),
         .TextLit => |t| try w.print("\"{s}\"", .{t}),

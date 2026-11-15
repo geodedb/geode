@@ -694,14 +694,16 @@ test "geode#873-B: vector_cosine of large-magnitude vectors is a real ratio, not
 }
 
 test "geode#873-B control: a NON-FINITE vector component is already refused at construction" {
-    // GREEN today, and the reason the cosine lane above has no inf-input case:
-    // 1e39 exceeds f32 max (~3.4e38), and `vectorf32` refuses it outright
-    // rather than storing +inf. Pinned so a future "make it lenient" change
-    // cannot quietly reopen a NaN path into the Decimal conversion.
+    // The reason the cosine lane above has no inf-input case: 1e39 exceeds
+    // f32 max (~3.4e38), and `vectorf32` refuses it outright (22003) rather
+    // than storing +inf. Pinned so a future "make it lenient" change cannot
+    // quietly reopen a NaN path into the Decimal conversion. SONNY-6596:
+    // `1e39` is a DOUBLE literal now (ISO/IEC 39075 21.2); the parser refused
+    // it before as an out-of-range decimal, so the check is vectorf32's own.
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    try testing.expectError(error.Overflow, h.exec("RETURN vectorf32([1e39]) AS v"));
+    try testing.expectError(error.NumericOutOfRange, h.exec("RETURN vectorf32([1e39]) AS v"));
 }
 
 test "geode#873-B: distance()/euclidean()/manhattan() with out-of-range magnitudes error instead of panicking" {

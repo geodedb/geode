@@ -688,6 +688,34 @@ fn floatPower(base: f64, exp: i64) EvalError!Value {
     return decimalFromF64(result);
 }
 
+// CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-ARITHMETIC; FEATURE="NumericValueExpression"; ASPECT=ApproximateOperands; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=eval; UPDATED=2026-11-15
+/// SONNY-6596: the operands of a dyadic arithmetic operator as f64 when one
+/// of them is approximate (REAL or DOUBLE) and the other a number: ISO/IEC
+/// 39075:2024 20.21 <numeric value expression>, SR 2: then the result is
+/// approximate (Geode's DOUBLE). Null otherwise (both exact, or a
+/// non-number), and the exact arms decide.
+fn approximateOperands(l: Value, r: Value) ?[2]f64 {
+    const a = value_order.numberOf(l) orelse return null;
+    const b = value_order.numberOf(r) orelse return null;
+    if (a != .float and b != .float) return null;
+    return .{ numberAsF64(a), numberAsF64(b) };
+}
+
+fn numberAsF64(n: value_order.Number) f64 {
+    return switch (n) {
+        .float => |f| f,
+        .exact => |e| @as(f64, @floatFromInt(e.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(e.scale)),
+    };
+}
+
+/// An approximate result: a DOUBLE, or 22003 when it is not a finite number
+/// (20.21 GR 4: a result out of the type's range is a numeric value out of
+/// range).
+fn approximateResult(f: f64) EvalError!Value {
+    if (!std.math.isFinite(f)) return EvalError.NumericOutOfRange;
+    return .{ .Double = f };
+}
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -745,6 +773,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = std.math.add(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk try approximateResult(p[0] + p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // An instant (date, time, zoned time, local or zoned datetime)
             // plus a duration, in either order, and a duration plus a
@@ -775,6 +804,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const diff = std.math.sub(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk2 try approximateResult(p[0] - p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // An instant minus a duration, a duration minus a duration, and
             // the duration between two instants of one type (SONNY-2797).
@@ -801,6 +831,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
+            if (approximateOperands(l, r)) |p| break :blk3 try approximateResult(p[0] * p[1]);
             // A duration times a number, either order (SONNY-2797).
             if (try temporal_ops.evalTemporal(.Mul, l, r)) |v| break :blk3 v;
             return EvalError.TypeMismatch;
@@ -839,6 +870,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 
                 break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
             }
+            if (approximateOperands(l, r)) |p| {
+                // 20.21 GR 3: a zero divisor is 22012.
+                if (p[1] == 0) return EvalError.DivisionByZero;
+                break :blk4 try approximateResult(p[0] / p[1]);
+            }
             // A duration divided by a number (SONNY-2797).
             if (try temporal_ops.evalTemporal(.Div, l, r)) |v| break :blk4 v;
             return EvalError.TypeMismatch;
@@ -866,6 +902,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (l == .Decimal and r == .Int) {
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
                 break :blk_pow try floatPower(base, r.Int);
+            }
+            if (approximateOperands(l, r)) |p| {
+                if (p[0] == 0 and p[1] < 0) return EvalError.DivisionByZero;
+                break :blk_pow try approximateResult(std.math.pow(f64, p[0], p[1]));
             }
             return EvalError.TypeMismatch;
         },
@@ -1267,10 +1307,16 @@ fn applyUnary(op: ast.UnaryOp, v: Value) EvalError!Value {
         .Neg => return switch (v) {
             .Int => |i| .{ .Int = std.math.negate(i) catch return EvalError.IntegerOverflow },
             .Decimal => |d| .{ .Decimal = .{ .coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow, .scale = d.scale, .orig_scale = d.orig_scale } },
+            // SONNY-6596: every number has a monadic minus (ISO/IEC
+            // 39075:2024 20.21); `-1.5E0` is a DOUBLE.
+            .SmallInt => |i| .{ .SmallInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .BigInt => |i| .{ .BigInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .Real => |f| .{ .Real = -f },
+            .Double => |f| .{ .Double = -f },
             else => EvalError.TypeMismatch,
         },
         .Pos => return switch (v) {
-            .Int, .Decimal => v,
+            .Int, .Decimal, .SmallInt, .BigInt, .Real, .Double => v,
             else => EvalError.TypeMismatch,
         },
     }

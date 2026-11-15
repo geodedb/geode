@@ -3686,7 +3686,7 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
 /// smallest name, so the answer does not depend on hash map order. The
 /// catalog is process-wide (its rows carry no graph), so this is the index
 /// SHOW INDEXES lists for the label and property in every graph.
-fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
+pub fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
     const cat = context.catalog;
     cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());

@@ -1602,7 +1602,7 @@ REQ-GQL-013,Transactions,TxnConflictMatrixVarianceEnvelope,BENCHED,tests/benchma
 REQ-GQL-013,Transactions/MVCC,SnapshotReadView,TESTED,tests/canary_txn_snapshot_readview.zig,TestCANARY_REQ_GQL_013_SnapshotReadView,,engine,2026-11-14
 REQ-GQL-013,Transactions,SSIPhantomPrevention,TESTED,tests/canary_txn_ssi_phantom_prevention.zig,TestCANARY_REQ_GQL_013_SSIPhantomPrevention,,txn,2026-11-14
 REQ-GQL-015,Set Operations,SetOpDistinctDedupVarianceEnvelope,BENCHED,tests/benchmark_setop_distinct_dedup_variance.zig,,BenchmarkCANARY_REQ_GQL_015_SetOpDistinctDedupVarianceEnvelope,engine,2026-11-14
-REQ-GQL-016,Weighted Path Cost,Planner,TESTED,src/canary.zig,TestCANARY_REQ_GQL_016_PathWeightedCost,,planner,2025-09-20
+REQ-GQL-016,Weighted Path Cost,Planner,IMPL,src/canary.zig,,,planner,2026-11-15
 REQ-GQL-016,Path Expand Breadth,Planner,BENCHED,tests/benchmark_path_expand_breadth.zig,,BenchmarkCANARY_REQ_GQL_016_PathExpandBreadth,planner,2026-11-14
 REQ-GQL-016,Planner Paths,PathExpandBreadthVarianceEnvelope,BENCHED,tests/benchmark_path_expand_breadth_variance.zig,,BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope,planner,2026-11-14
 REQ-GQL-016,Paths,PathExpansionHeuristicVarianceEnvelope,BENCHED,tests/benchmark_path_expansion_heuristic_variance.zig,,BenchmarkCANARY_REQ_GQL_016_PathExpansionHeuristicVarianceEnvelope,planner,2026-11-14
@@ -4960,7 +4960,6 @@ REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,GrpcRefusalStatus,TESTED,src/t
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,TypeCombination,TESTED,src/eval/type_helpers.zig,tests/test_sonny6562_wire_metadata.zig,,types,2026-11-15
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,StreamSchemaUnread,TESTED,src/server/node_scan_stream.zig,tests/test_sonny6562_wire_metadata.zig,,engine,2026-11-15
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,ColumnTypeFromAllRows,TESTED,src/server/proto_util.zig,tests/test_sonny6562_wire_metadata.zig,,server,2026-11-15
-REQ-SONNY-6562-PROFILE-SPILLS,PROFILE,NoFabricatedSpill,TESTED,src/server/profile_payload.zig,tests/test_sonny6562_wire_metadata.zig,,engine,2026-11-15
 REQ-SONNY-6562-RESULT-ORDER,ResultMetadata,OrderedTruthful,TESTED,src/query/query_traits.zig,tests/test_sonny6562_wire_metadata.zig,,query,2026-11-15
 REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
@@ -4995,6 +4994,12 @@ REQ-SONNY-6570-CDC-WORKER-SLEEPS,CDC Engine,IdleWorkerSleeps,TESTED,src/streamin
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,tests/test_sonny6587_canary_markers.zig,tests/test_sonny6587_canary_markers.zig,,governance,2026-11-15
+REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,src/execution/statement_handlers.zig,tests/test_sonny6587_for_write_after_with.zig,,engine,2026-11-15
+REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,tests/test_sonny6587_for_write_after_with.zig,,,engine,2026-11-15
+REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,RangeArguments,TESTED,src/eval/call_handlers.zig,tests/test_sonny6587_list_functions.zig,,eval,2026-11-15
+REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,WrongTypeRefused,TESTED,tests/test_sonny6587_list_functions.zig,tests/test_sonny6587_list_functions.zig,,eval,2026-11-15
+REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK,PROFILE,PointWriteSeekRecord,TESTED,src/execution/match_operations.zig,tests/test_sonny6587_profile_point_write_seek.zig,,engine,2026-11-15
 REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI Backup,BackupServerNamedAsDialled,TESTED,src/cli/backup_cli.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
 REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI,RefusedConnectKeepsSession,TESTED,src/client/repl/repl_dispatch.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
 REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI,RefusedConnectAndBackupServerNamed,TESTED,tests/test_sonny6589_cli_messages.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
@@ -5020,6 +5025,15 @@ REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,T
 REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,tests/test_sonny6595_fts_snapshot_restart.zig,,,fts,2026-11-15
 REQ-SONNY-6595-STANDALONE-DELETE,DeleteStatement,UnboundDeleteDeletesNothing,TESTED,tests/test_sonny6595_standalone_delete.zig,tests/test_sonny6595_standalone_delete.zig,,engine,2026-11-15
 REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,tests/test_sonny6595_vector_write_paths.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
+REQ-SONNY-6596-APPROXIMATE-ARITHMETIC,NumericValueExpression,ApproximateOperands,TESTED,src/eval.zig,tests/test_sonny6596_approximate_literal.zig,,eval,2026-11-15
+REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,src/gql/parser.zig,tests/test_sonny6596_approximate_literal.zig,,parser,2026-11-15
+REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,tests/test_sonny6596_approximate_literal.zig,,,parser,2026-11-15
+REQ-SONNY-6596-CALL-GROUP-BY,CallProcedure,ReturnGroupBy,TESTED,src/gql/parser.zig,tests/test_sonny6596_doc_examples_parse.zig,,parser,2026-11-15
+REQ-SONNY-6596-DOC-EXAMPLES-PARSE,Documentation,GqlExamplesParse,TESTED,tests/test_sonny6596_doc_examples_parse.zig,tests/test_sonny6596_doc_examples_parse.zig,,docs,2026-11-15
+REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,src/gql/parser.zig,tests/test_sonny6596_double_quoted_identifiers.zig,,parser,2026-11-15
+REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,tests/test_sonny6596_double_quoted_identifiers.zig,,,parser,2026-11-15
+REQ-SONNY-6596-NO-SPILL-PLUMBING,ServerConfig,NoDeadSpillLimit,TESTED,tests/test_sonny6596_spill_plumbing.zig,tests/test_sonny6596_spill_plumbing.zig,,server,2026-11-15
+REQ-SONNY-6596-PROFILE-V1-MEASURED,PROFILE,NoSyntheticOperators,TESTED,src/server/profile_payload.zig,tests/test_sonny6596_profile_v1_measured.zig,,engine,2026-11-15
 REQ-SONNY-6597-HYDRATION-FLUSH-RACE,StorageIntegrity,ResidentPagesThroughPool,TESTED,src/storage/hydration_scan.zig,tests/test_sonny6597_hydration_flush_race.zig,,storage,2026-11-15
 REQ-SONNY-6597-HYDRATION-FLUSH-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6597_hydration_flush_race.zig,tests/test_sonny6597_hydration_flush_race.zig,,storage,2026-11-15
 REQ-SONNY-6598-AUTH-ERROR-AUDIT,AuthOutcomeClassification,LoginRefusalAudit,TESTED,src/security/audit.zig,tests/test_sonny6598_kdf_error_hello.zig,,security,2026-11-15

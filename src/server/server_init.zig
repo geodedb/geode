@@ -258,7 +258,6 @@ const Attr = logging.Attr;
 
 /// Environment-derived configuration flags
 pub const EnvironmentConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     memcurve_profile: bool = false,
     compact_profile: bool = false,
@@ -426,12 +425,6 @@ fn getenvSlice(name: []const u8) ?[]const u8 {
 pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profile_ref: *bool) !EnvironmentConfig {
     _ = allocator;
     var config = EnvironmentConfig{};
-
-    if (getenvSlice("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
-        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-    } else if (getenvSlice("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
-        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-    }
 
     if (getenvSlice("GEODE_NULLS_LAST")) |_| {
         server_flags.setNullsLast(true);

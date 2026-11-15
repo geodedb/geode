@@ -451,8 +451,12 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN floor(9223372036854775807.5) AS x", "9223372036854775807");
     try expectValue(s, f, "RETURN ceil(-9223372036854775808.5) AS x", "-9223372036854775808");
     try expectFail(s, f, "RETURN floor(-9223372036854775808.5) AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN floor(1e30) AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN round(1e30) AS x", &.{}, error.IntegerOverflow);
+    // SONNY-6596: `1e30` is an approximate literal (a DOUBLE) and floors to a
+    // DOUBLE (20.22 GR 12 b ii); the exact 10^30 is past i64.
+    try expectFail(s, f, "RETURN floor(1000000000000000000000000000000.0) AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN round(1000000000000000000000000000000.0) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN floor(1e30) AS x", "1e30d");
+    try expectValue(s, f, "RETURN round(2.5E0) AS x", "3d");
     try expectValue(s, f, "RETURN round(2.5) AS x", "3");
     try expectValue(s, f, "RETURN round(-2.5) AS x", "-3");
     try expectValue(s, f, "RETURN round(" ++ scale60 ++ ") AS x", "0");

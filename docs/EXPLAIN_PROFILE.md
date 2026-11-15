@@ -244,13 +244,22 @@ name (SONNY-1335).
   a scan, as EXPLAIN does. `selectivity_est` is 0 (not estimated).
 - **`profile_version` 1** (tenant-bound and RLS-evaluating sessions, data
   changes, statement targets the planned runtime declines): the payload
-  comes from the legacy executor, which never consults the index catalog
-  and scans, so it has no index operator. Before SONNY-1335 it put a
+  comes from the legacy executor. It has an index operator only for a point
+  write the exact-index seek served (`MATCH (n:L) WHERE n.k = 'v' SET ...`,
+  SONNY-6587): `NodeIndexScan`, named after the catalog btree or hash index
+  on the label and key (as version 2 names one), with the nodes the seek
+  returned and `time_ns` 0 (part of the statement's); with no such catalog
+  index, none. Otherwise the legacy executor scans. Before SONNY-1335 it put a
   `NodeIndexScan` named `"heuristic_index"` first for any WHERE or FILTER
-  equality. Its per-operator timings and memory figures remain the
-  synthetic model described under Current Limitations, so a version-1
-  payload is not evidence of an access path; a client that needs that
-  evidence should require version 2.
+  equality. The legacy executor has no operator hooks, so the statement is
+  one `LegacyExecute` operator with the wall-clock time measured around it
+  and the rows it returned; nothing else is measured (CPU time, bytes,
+  memory, a UNION's input rows: 0; no planner estimates). Until SONNY-6596
+  the payload listed a fixed operator set (a CREATE showed `NodeScan`,
+  `Expand`, `Project`; a UNION four `Union*` phases) with
+  `time_ns = 10 * (i + 1)` and 64 bytes per operator. A version-1 payload
+  is not evidence of an access path; a client that needs that evidence
+  should require version 2.
 
 Catalog index rows carry no graph: the name reported is the catalog's row
 for the label and property, whichever graph the session is on.
@@ -545,18 +554,13 @@ Be precise about provenance when reading any cost or row number Geode reports:
    statement-level wall-clock `time_ms` only (GAP-0868 residual)
 3. **No Memory Usage in statement-level PROFILE rows**: memory totals are
    only available in the QUIC wire profile payload, not the metric/value rows
-4. **QUIC wire profile memory numbers are a deterministic synthetic model,
-   not measured allocations** (GAP-0874 decision, 2026-06-10): the fallback
-   profile path (`src/server/profile_payload.zig:buildProfilePayload`) derives
-   per-op `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes`, and
-   the `mem_curve` from a fixed per-op model so the wire shape and its
-   internal invariants stay deterministic and testable (pinned by
-   `tests/e2e_protocol_profile_schema_validate.zig`,
-   `e2e_protocol_profile_memcurve_invariants.zig` and
-   `profile_allocator_sums.zig` in `zig build test-sonny6542-revived`; the
-   rest of the `e2e_protocol_profile_*` battery never ran and was removed,
-   SONNY-6548); the trace-backed v2 path reports
-   honest zeros for memory. Real per-op attribution would require
+4. **QUIC wire profile memory numbers are not measured** (GAP-0874
+   decision, 2026-06-10): both payload versions report 0 for per-op
+   `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes` and the
+   `mem_curve` points. Until SONNY-6596 the fallback path
+   (`src/server/profile_payload.zig:buildProfilePayload`) derived them, and
+   its operators and timings, from a fixed per-op model; it now reports the
+   measured statement time only (`zig build test-sonny6596-profile-v1-measured`). Real per-op attribution would require
    per-operator allocator threading — a PROFILE redesign, not planned. Real
    process-level memory telemetry is available via the OTel
    `process.runtime.zig.memory.resident_set` gauge (`/proc/self`-backed)

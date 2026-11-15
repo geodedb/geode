@@ -314,8 +314,11 @@ fn checkArithmetic(s: *Session, f: *Failures) !void {
     try expectFail(s, f, "RETURN 1000000000000000000000000000000000.0 / 3 AS x", &.{}, error.DecimalOverflow);
     try expectValue(s, f, "RETURN 1.0 / 4 AS x", "0.2500000m");
     // Decimal + and -.
-    try expectFail(s, f, "RETURN 1.5e38 + 1.5e38 AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN -1.5e38 - 1.5e38 AS x", &.{}, error.DecimalOverflow);
+    // SONNY-6596: `1.5e38` is an approximate literal (a DOUBLE, ISO/IEC
+    // 39075 21.2), so the exact operands are parameters: DECIMAL 1.5 x 10^38.
+    const big = [_]Param{.{ .name = "a", .value = .{ .Decimal = .{ .coeff = 150_000_000_000_000_000_000_000_000_000_000_000_000, .scale = 0 } } }};
+    try expectFail(s, f, "RETURN $a + $a AS x", &big, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN -$a - $a AS x", &big, error.DecimalOverflow);
     try expectValue(s, f, "RETURN 1.5 + 2.25 AS x", "3.75m");
     try expectValue(s, f, "RETURN 1.5 - 2.25 AS x", "-0.75m");
     // Integer /, % and unary minus at minInt.

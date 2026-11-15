@@ -14340,6 +14340,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_fcs_tests = b.addRunArtifact(sonny6555_fcs_tests);
     shardDep(test_step, &run_sonny6555_fcs_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-for-chain-stage", "Run SONNY-6555 item 7 regression (ISO/IEC 39075 14.3 / 14.8 / 14.11: a FOR whose body reads runs it over the FOR's whole table, at the start of a statement or after a part, so its aggregate, DISTINCT, ORDER BY and LIMIT read every element; a chain's last RETURN DISTINCT reads every row: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6555_fcs_tests.step);
+    // SONNY-6587 item 5: a FOR body that writes after a WITH runs for every row. See tests/test_sonny6587_for_write_after_with.zig.
+    const sonny6587_fww_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6587_for_write_after_with.zig"), .target = target, .optimize = optimize });
+    sonny6587_fww_mod.addImport("geode", root_mod);
+    sonny6587_fww_mod.addImport("logging", logging_mod);
+    sonny6587_fww_mod.addImport("rls_types", rls_types_mod);
+    const sonny6587_fww_tests = b.addTest(.{ .root_module = sonny6587_fww_mod });
+    const run_sonny6587_fww_tests = b.addRunArtifact(sonny6587_fww_tests);
+    shardDep(test_step, &run_sonny6587_fww_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6587-for-write-after-with", "Run SONNY-6587 item 5 regression (ISO/IEC 39075 14.8: a FOR whose body writes - CREATE, MATCH ... SET - after a WITH runs for every row of the WITH, not the first only: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6587_fww_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
@@ -19471,7 +19480,7 @@ pub fn build(b: *std.Build) void {
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
     }
-    // SONNY-6561 / SONNY-6562 / SONNY-6563 / SONNY-6564 / SONNY-6570 regressions,
+    // SONNY-6561 / SONNY-6562 / SONNY-6563 / SONNY-6564 / SONNY-6570 / SONNY-6587 / SONNY-6596 regressions,
     // with tests/all_tests.zig's module graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
@@ -19483,6 +19492,15 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6564_identifier_words.zig", .step = "test-sonny6564-identifier-words", .desc = "Run SONNY-6564 regression (ISO/IEC 39075 21.3: every non-reserved word names a variable in every binding position - SET, REMOVE, DELETE, FOR, UNWIND, aliases, parameters included; every reserved and pre-reserved word is refused there with a 42000 naming the delimited form, which works; labels, types and property names take any word; 16.11 quantifiers {m,n} {n} {m,} {,n} + * read into the *m..n bounds; over QUIC and gRPC against a real geode serve)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
         .{ .file = "tests/test_sonny6570_cdc_honesty.zig", .step = "test-sonny6570-cdc-honesty", .desc = "Run SONNY-6570 regression (every CALL cdc.* answers from the CDC engine or is refused 0A000; every CDC procedure and frame is Admin only on QUIC and gRPC; CDC changes are audited and the chain verifies; gRPC serves the .proto's GetCdcDiagnostics / ControlCdc; startCDC frees the engine when start() fails)", .weight = 2 },
+        .{ .file = "tests/test_sonny6596_approximate_literal.zig", .step = "test-sonny6596-approximate-literal", .desc = "Run SONNY-6596 item 1 regression (ISO/IEC 39075 21.2: a numeric literal with an exponent - 1.5E0, 1E3, 1.0e308 - is an approximate numeric literal evaluated as a DOUBLE and declared DOUBLE on the wire; beyond the DOUBLE range it is refused; 1.25 stays an exact DECIMAL)", .weight = 1 },
+        .{ .file = "tests/test_sonny6596_profile_v1_measured.zig", .step = "test-sonny6596-profile-v1-measured", .desc = "Run SONNY-6596 item 2 regression (over QUIC and gRPC against a real geode serve: a version-1 PROFILE - a CREATE, a UNION - is one LegacyExecute operator with the measured wall-clock time and the rows returned; no NodeScan / Expand / Union phase operators, no invented times, bytes, estimates or UNION input rows)", .weight = 1 },
+        .{ .file = "tests/test_sonny6596_double_quoted_identifiers.zig", .step = "test-sonny6596-double-quoted-identifiers", .desc = "Run SONNY-6596 item 4 regression (ISO/IEC 39075 21.3: a double-quoted delimited identifier names a node, edge or path variable, a label, a relationship type, a property, an alias, a parameter or a FOR variable; a doubled quote stands for one; an empty one is refused; where an expression starts it stays a character string literal)", .weight = 1 },
+        .{ .file = "tests/test_sonny6596_spill_plumbing.zig", .step = "test-sonny6596-spill-plumbing", .desc = "Run SONNY-6596 item 5 regression (no server source reads GEODE_SPILL_THRESHOLD_BYTES or GEODE_QUERY_MEM_LIMIT_BYTES and no session carries a query memory limit nothing enforces: the executor never spills)", .weight = 1 },
+        .{ .file = "tests/test_sonny6596_doc_examples_parse.zig", .step = "test-sonny6596-doc-examples-parse", .desc = "Run SONNY-6596 item 6 regression (every ```gql example in the listed docs - docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md and the others fixed with it - goes through the real parser and parses, so a doc example cannot rot)", .weight = 1 },
+        .{ .file = "tests/test_sonny6596_grpc_client_reuse.zig", .step = "test-sonny6596-grpc-client-reuse", .desc = "Run SONNY-6596 item 7 regression (against a real geode serve: the test helper's GrpcProtoClient runs HELLO and four parameterized queries on one HTTP/2 connection, each RPC on its own stream id)", .weight = 1 },
+        .{ .file = "tests/test_sonny6587_list_functions.zig", .step = "test-sonny6587-list-functions", .desc = "Run SONNY-6587 items 3 and 4 regression (head() and last() of a value that is no list are 22G03 as tail() is; range() keeps its documented exclusive end, answers NULL for a NULL argument, 22G03 for a non-integer one and 22023 for a zero step)", .weight = 1 },
+        .{ .file = "tests/test_sonny6587_canary_markers.zig", .step = "test-sonny6587-canary-markers", .desc = "Run SONNY-6587 item 6 regression (a TESTED CANARY marker for REQ-GQL-016 in src/canary.zig names a test some source under src/ or tests/ defines)", .weight = 1 },
+        .{ .file = "tests/test_sonny6587_profile_point_write_seek.zig", .step = "test-sonny6587-profile-point-write-seek", .desc = "Run SONNY-6587 item 2 regression (over QUIC and gRPC against a real geode serve: a PROFILE of a point write served by the exact-index seek names the catalog index covering the label and key, with the nodes the seek returned; with no catalog index it claims none)", .weight = 1 },
     };
     for (sonny656x_regressions) |reg| {
         const reg_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize }) });

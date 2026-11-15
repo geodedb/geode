@@ -447,6 +447,12 @@ pub const Parser = struct {
             self.advance();
             return out;
         }
+        if (self.isDoubleQuoted(self.cur)) {
+            var out = self.cur;
+            out.lexeme = try self.doubleQuotedName(out);
+            self.advance();
+            return out;
+        }
         if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             const out = self.cur;
             self.advance();
@@ -543,6 +549,11 @@ pub const Parser = struct {
             self.advance();
             return if (t.kind == .quoted_identifier) try self.delimitedName(t) else t.lexeme;
         }
+        if (self.isDoubleQuoted(t)) {
+            const name = try self.doubleQuotedName(t);
+            self.advance();
+            return name;
+        }
         if (self.isReservedWordToken(t)) return self.refuseReservedName(t, what);
         self.last_error = std.fmt.allocPrint(
             self.arena.allocator(),
@@ -550,6 +561,46 @@ pub const Parser = struct {
             .{ what, @tagName(t.kind), t.loc.line, t.loc.column },
         ) catch what;
         return error.UnexpectedToken;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER; FEATURE="GQLParser"; ASPECT=DelimitedIdentifier; STATUS=TESTED; TEST=tests/test_sonny6596_double_quoted_identifiers.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6596: a character string token written in double quotes, a
+    /// <double quoted character sequence> (21.1). ISO/IEC 39075:2024 21.3
+    /// makes it a <delimited identifier> as well as (21.2) a <character
+    /// string literal>. The parser reads it as a name where only a name can
+    /// stand (`expectBindingName`, `expectIdentifierOrKeyword` and the
+    /// variable declarations of a pattern); where an expression starts the
+    /// grammar admits both and gives no rule to choose, and Geode keeps the
+    /// literal, as before (docs/GQL_COMPLIANCE.md). The lexer leaves the
+    /// quotes out of the lexeme; the byte before it in the source tells.
+    fn isDoubleQuoted(self: *Parser, t: tok.Token) bool {
+        if (t.kind != .string_lit) return false;
+        const src = self.lx.src;
+        const start = @intFromPtr(t.lexeme.ptr);
+        const base = @intFromPtr(src.ptr);
+        if (start <= base or start > base + src.len) return false;
+        return src[start - base - 1] == '"';
+    }
+
+    /// The name a double-quoted delimited identifier stands for (21.3 SR 4):
+    /// its text with a doubled quote undoubled and its escapes read, never
+    /// zero-length.
+    fn doubleQuotedName(self: *Parser, t: tok.Token) ParserError![]const u8 {
+        var text = t.lexeme;
+        if (std.mem.indexOf(u8, text, "\"\"") != null) {
+            const out = try self.arena.allocator().alloc(u8, text.len);
+            var n: usize = 0;
+            var i: usize = 0;
+            while (i < text.len) : (i += 1) {
+                out[n] = text[i];
+                n += 1;
+                if (text[i] == '"' and i + 1 < text.len and text[i + 1] == '"') i += 1;
+            }
+            text = out[0..n];
+        }
+        const name = try self.unescapeString(text);
+        if (name.len == 0) return self.unexpected("a delimited identifier is not zero-length (ISO/IEC 39075:2024 21.3 SR 4)");
+        return name;
     }
 
     /// The name a delimited identifier stands for: its text with each doubled
@@ -1987,7 +2038,7 @@ pub const Parser = struct {
                                 if (self.cur.kind == .dollar) {
                                     self.advance();
                                     // SONNY-6564: a <parameter name>.
-                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
                                         try imports.append(self.arena.allocator(), try self.expectBindingName("a parameter name"));
                                     }
                                 }
@@ -2196,6 +2247,33 @@ pub const Parser = struct {
                         };
                     }
 
+                    // CANARY: REQ=REQ-SONNY-6596-CALL-GROUP-BY; FEATURE="CallProcedure"; ASPECT=ReturnGroupBy; STATUS=TESTED; TEST=tests/test_sonny6596_doc_examples_parse.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: the RETURN's GROUP BY and HAVING (ISO/IEC
+                    // 39075:2024 14.11: the <group by clause> is part of the
+                    // <return statement body>), as after MATCH and CALL { }.
+                    // `CALL algo.louvain.stream() YIELD nodeId, community
+                    // RETURN community, count(*) AS size GROUP BY community`
+                    // was a syntax error.
+                    var call_group_by: ?ast.GroupBy = null;
+                    var call_having: ?*const ast.Expr = null;
+                    if (return_clause != null and self.cur.kind == .GROUP) {
+                        self.advance();
+                        _ = try self.expect(.BY);
+                        var keys = std.ArrayList(ast.Expr).empty;
+                        while (true) {
+                            try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                            if (self.cur.kind != .comma) break;
+                            self.advance();
+                        }
+                        call_group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                        if (self.cur.kind == .HAVING) {
+                            self.advance();
+                            const h = try self.arena.allocator().create(ast.Expr);
+                            h.* = try self.parseOrExpr();
+                            call_having = h;
+                        }
+                    }
+
                     // Optional ORDER BY clause (after RETURN)
                     var order_by: ?ast.OrderBy = null;
                     if (return_clause != null and self.cur.kind == .ORDER) {
@@ -2226,6 +2304,8 @@ pub const Parser = struct {
                         .yield_items = yield_items,
                         .filter = call_filter,
                         .return_clause = return_clause,
+                        .group_by = call_group_by,
+                        .having = call_having,
                         .order_by = order_by,
                         .limit = limit,
                         .offset = offset,
@@ -3595,7 +3675,7 @@ pub const Parser = struct {
             var chain_name: ?[]const u8 = null;
             // SONNY-6564: a path variable is a binding name (PATH, a 21.3
             // reserved word, is one of the five Geode keeps).
-            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .eq) {
+            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) and self.peekKind() == .eq) {
                 chain_name = try self.expectBindingName("a path variable");
                 _ = try self.expect(.eq);
 
@@ -3865,7 +3945,7 @@ pub const Parser = struct {
         // SONNY-6564: a node variable is a binding name (21.3 SR 18): a
         // non-reserved word (`(type:T)`) or a delimited identifier names it,
         // a reserved word (`(match:X)`) is refused.
-        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
             name = try self.expectBindingName("a node variable");
         }
         var labels = std.ArrayList([]const u8).empty;
@@ -3887,7 +3967,7 @@ pub const Parser = struct {
         _ = try self.expect(.l_bracket);
         var name: ?[]const u8 = null;
         // SONNY-6564: an edge variable is a binding name, as a node's.
-        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
             name = try self.expectBindingName("an edge variable");
         }
         var types = std.ArrayList([]const u8).empty;
@@ -4014,7 +4094,7 @@ pub const Parser = struct {
                 self.advance();
                 // A quoted string literal, or a binding name (SONNY-6564:
                 // a reserved word is refused, ISO/IEC 39075:2024 21.3).
-                alias = if (self.cur.kind == .string_lit) blk: {
+                alias = if (self.cur.kind == .string_lit and !self.isDoubleQuoted(self.cur)) blk: {
                     const token = self.cur;
                     self.advance();
                     break :blk token.lexeme;
@@ -4978,27 +5058,17 @@ pub const Parser = struct {
                 }
 
                 if (has_exp) {
-                    // Parse scientific notation: parse as f64 and convert to decimal
+                    // CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-LITERAL; FEATURE="GQLParser"; ASPECT=ApproximateNumericLiteral; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: an <unsigned decimal in scientific notation>
+                    // is an <approximate numeric literal> (ISO/IEC 39075:2024
+                    // 21.2); its declared type is implementation-defined
+                    // (SR 19 c, ID079): Geode's is DOUBLE. It was evaluated
+                    // as an exact scale-15 DECIMAL. SR 20: a value beyond the
+                    // DOUBLE range is refused (GAP-0905: a clean parse error,
+                    // never a panic).
                     const value = try std.fmt.parseFloat(f64, lex);
-                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7).
-                    // GAP-0905: guard the i128 conversion — an unchecked @intFromFloat
-                    // panicked (and killed the server) for literals like 1.0e308.
-                    // 0x1p127 is 2^127 as f64; i128 holds (-2^127, 2^127). NaN fails
-                    // both comparisons and falls through to the error.
-                    const i128_limit: f64 = 0x1p127;
-                    const scaled = value * 1_000_000_000_000_000;
-                    if (scaled >= -i128_limit and scaled < i128_limit) {
-                        const coeff = @as(i128, @intFromFloat(scaled));
-                        break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
-                    }
-                    if (value >= -i128_limit and value < i128_limit) {
-                        // Too large for the scale-15 fixed-point form; fall back to an
-                        // integer-valued decimal so huge-but-representable literals work.
-                        break :blk_f .{ .Decimal = .{ .coeff = @as(i128, @intFromFloat(value)), .scale = 0 } };
-                    }
-                    // Unrepresentable in a 38-digit decimal: clean parse error, matching
-                    // the pre-existing oversized-integer-literal policy (error.Overflow).
-                    return error.Overflow;
+                    if (!std.math.isFinite(value)) return error.Overflow;
+                    break :blk_f .{ .DoubleLit = value };
                 } else {
                     // Standard decimal notation
                     var dot_idx: usize = 0;
@@ -5277,10 +5347,11 @@ pub const Parser = struct {
 
     // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=SignedNumericLiteralNotALink; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
     /// SONNY-6540: an <unsigned numeric literal> (ISO/IEC 39075:2024 21.2)
-    /// as the parser builds it: an integer or a decimal literal.
+    /// as the parser builds it: an integer, a decimal or (SONNY-6596) an
+    /// approximate numeric literal.
     fn isUnsignedNumericLiteral(e: ast.Expr) bool {
         return switch (e) {
-            .Int, .Decimal => true,
+            .Int, .Decimal, .DoubleLit => true,
             else => false,
         };
     }
@@ -5371,6 +5442,7 @@ pub const Parser = struct {
         return switch (e) {
             .Int => true,
             .Decimal => true,
+            .DoubleLit => true, // SONNY-6596: 1.5E0
             .Binary => true, // allow arithmetic expressions
             .Unary => true,
             .Ident => true,

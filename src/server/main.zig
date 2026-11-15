@@ -359,7 +359,6 @@ const ConnectionContext = struct {
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
@@ -460,7 +459,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
-        ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
         false,
         ctx.security_manager,
@@ -2062,7 +2060,6 @@ pub fn main() !void {
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
-    const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const disable_estimates = init_ctx.env_config.disable_estimates;
     const compact_profile = init_ctx.env_config.compact_profile;
@@ -2663,7 +2660,6 @@ pub fn main() !void {
         const grpc_address = grpc_bind.address;
 
         const grpc_config = grpc_transport.GrpcConfig{
-            .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
             .disable_estimates = disable_estimates,
             .compact_profile = compact_profile,
@@ -3169,7 +3165,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -3904,7 +3900,6 @@ pub fn main() !void {
                 .disable_estimates = disable_estimates,
                 .compact_profile = compact_profile,
                 .memcurve_profile = memcurve_profile,
-                .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,

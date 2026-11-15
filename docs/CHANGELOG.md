@@ -2945,6 +2945,116 @@
   the hard state (SONNY-6563). Docs that described distributed modules
   deleted in SONNY-6279 and SONNY-6563 as delivered now say they were
   removed. Regression: `zig build test-sonny6592-start-election-lock`.
+- **A PROFILE'd point write names the index its seek used (SONNY-6587).**
+  `MATCH (n:L) WHERE n.k = 'v' SET ...` on a persisted graph is served by an
+  exact-property seek (`pointWriteFastPath`); its version-1 PROFILE named no
+  index on either transport. It now reports `NodeIndexScan` with the catalog
+  btree or hash index on the label and key (the version-2 rule, SONNY-1335)
+  and the nodes the seek returned; with no catalog index, none. Regression:
+  `zig build test-sonny6587-profile-point-write-seek` (QUIC and gRPC).
+
+- **A writing FOR after a WITH leaks nothing and runs for every WITH row
+  (SONNY-6587).** `WITH 7 AS k FOR x IN [10, 20] CREATE ...` leaked the list
+  the FOR header computed on every run (SONNY-6449 fixed the same leak for a
+  FOR that reads). executeForWithBindings ran a writing body for the WITH's
+  first row only; the write allowlist admits only a one-row WITH there
+  (`MATCH (z) WITH z FOR x IN z.l CREATE ...` is refused whole, 0A000,
+  before any write), so no wrong write was reachable, and it now runs every
+  row. Regression: `zig build test-sonny6587-for-write-after-with` (every
+  session kind).
+
+- **range() refuses a non-integer argument and a zero step (SONNY-6587).**
+  `range(start, end[, step])` (a Geode extension; its end stays exclusive,
+  as documented since SONNY-6466) answered NULL for `range(1.5, 3)`,
+  `range(1, '3')` and `range(1, 4, 0)`. **BREAKING:** a value that is not an
+  integer is now 22G03 and a zero step 22023; a NULL argument still gives
+  NULL. docs/TYPES_AND_FUNCTIONS.md says so. Regression:
+  `zig build test-sonny6587-list-functions`.
+
+- **head() and last() of a value that is no list are 22G03 (SONNY-6587).**
+  They answered NULL for `head(1)`, `last('ab')` or `head({a: 1})`; tail()
+  raised 22G03 since SONNY-6555. NULL in is still NULL out, and an empty
+  list still gives NULL. **BREAKING** for a query that relied on the NULL.
+  Regression: `zig build test-sonny6587-list-functions`.
+
+- **A procedure call's RETURN takes GROUP BY and HAVING; the graph
+  algorithm guide's examples parse (SONNY-6596).** ISO/IEC 39075:2024 14.11
+  puts the `<group by clause>` in the `<return statement body>`, so `CALL
+  algo.louvain.stream() YIELD nodeId, community RETURN community,
+  collect(nodeId) AS members, count(*) AS n GROUP BY community` is valid; it
+  was a syntax error after `CALL ... YIELD` (it worked after MATCH and
+  `CALL { }`). The GROUP BY and HAVING now group the yielded rows.
+  docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md had 15 examples Geode refused: the
+  GROUP BY ones, `AS size` (SIZE is a reserved word, SONNY-6564), a `CALL`
+  followed by `MATCH` (now `MATCH ... CALL ... FILTER`), fragments ending in
+  a WITH, and a query chaining three procedure calls (a query part runs one;
+  the guide now says so). Regression:
+  `zig build test-sonny6596-doc-examples-parse` parses every ```gql example
+  of the guide through the real parser and runs a grouped procedure call.
+
+- **The spill-threshold environment variables are no longer read
+  (SONNY-6596).** The server read `GEODE_SPILL_THRESHOLD_BYTES` /
+  `GEODE_QUERY_MEM_LIMIT_BYTES` at startup and copied the value into every
+  QUIC and gRPC session (`ServerState.query_mem_limit_bytes`), where nothing
+  read it: the executor never spills and enforces no per-query memory
+  limit. The plumbing is removed and the docs say the variables are not
+  read. Regression: `zig build test-sonny6596-spill-plumbing`.
+
+- **A double-quoted delimited identifier names what a backquoted one does
+  (SONNY-6596).** ISO/IEC 39075:2024 21.3: `<delimited identifier> ::=
+  <double quoted character sequence> | <accent quoted character sequence>`.
+  Geode read `"x"` as a string literal everywhere, so `("n":L)`, `:"My
+  Label"`, `n."k"`, `$"p"` and `FOR "i" IN ...` were syntax errors, and
+  `RETURN 1 AS "x""y"` named the column `x""y`. Where only a name can stand
+  (a variable, label, relationship type, property, alias or parameter
+  name) a double-quoted sequence is now a delimited identifier: a doubled
+  quote stands for one, an empty one is refused (SR 4). Where an expression
+  starts it stays a string literal (`RETURN "x"`): the grammar admits both
+  readings there (docs/GQL_COMPLIANCE.md). Regression:
+  `zig build test-sonny6596-double-quoted-identifiers`.
+
+- **A version-1 PROFILE reports the measured execution, nothing invented
+  (SONNY-6596).** The version-1 payload (a PROFILE the planned read runtime
+  does not serve: a data change, a UNION, a tenant-bound or RLS session)
+  was a fixed model: a `PROFILE CREATE` listed `NodeScan`, `Expand` and
+  `Project`, a UNION `UnionLeft` / `UnionTails` / `UnionDedup` /
+  `SetOpUnion`, each with `time_ns = 10 * (i + 1)`, `cpu_time_ns = 5 * (i +
+  1)`, 64 bytes allocated, planner estimates, and a UNION's `input_rows` as
+  the part count times the output rows. **BREAKING:** the legacy executor's
+  statement is now one `LegacyExecute` operator (phase `EXECUTE`, the name
+  the version-2 trace uses) with the wall-clock time measured around it on
+  QUIC and gRPC and the rows it returned; CPU time, bytes, memory, the
+  memory curve and a UNION's input rows are 0, `planner_estimates` and
+  `distinct_fill_pct` are absent, and the `U:UnionPhaseTimings` flag is no
+  longer sent (no UNION phase is timed). Regression:
+  `zig build test-sonny6596-profile-v1-measured`; the revived
+  `e2e_protocol_union_*` and `profile_allocator_sums` tests
+  (`test-sonny6542-revived`) and `test-sonny1335-profile-access-path` now
+  check the measured shape.
+
+- **A numeric literal with an exponent is an approximate number, a DOUBLE
+  (SONNY-6596).** ISO/IEC 39075:2024 21.2 makes `1.5E0`, `1E3` and `2.5e-1`
+  <approximate numeric literal>s, whose declared type is an approximate
+  numeric type (SR 19 c; Geode's is DOUBLE). The parser evaluated them as
+  exact DECIMALs at scale 15 (`RETURN 1.5E0` answered `1.500000000000000`,
+  declared DECIMAL on the wire), fell back to a scale-0 DECIMAL past 10^23
+  and refused `1.0e308`, a DOUBLE value. **BREAKING:** such a literal is now
+  a DOUBLE (`1.5E0` answers 1.5, declared `DOUBLE`; a stored one reads back
+  as a DOUBLE); `1.0e308` evaluates; a literal past the DOUBLE range
+  (`1e309`) is still a parse error. A literal without an exponent (`1.25`)
+  stays an exact DECIMAL. Arithmetic now takes an approximate operand
+  (20.21 SR 2: one approximate operand makes the result a DOUBLE): `+`,
+  `-`, `*`, `/`, `^` and monadic minus answered 22G03 for any DOUBLE or REAL
+  (a `$d` parameter, a `CAST(... AS DOUBLE)`, a stored double); a zero
+  divisor is 22012 and a non-finite result 22003. `round()` and
+  `st_point()` take a DOUBLE (they answered 22G03), and `vectorf32()`
+  refuses a component past the REAL range (it stored an infinity).
+  Regression: `zig build test-sonny6596-approximate-literal`; expectations
+  that relied on the exact reading (`1.5e38 + 1.5e38` overflowing a
+  DECIMAL, `floor(1e30)` past i64) now use exact operands
+  (`test-gap0905`, `test-sonny2739-float-narrowing`,
+  `test-sonny2769-integer-overflow`).
+
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no

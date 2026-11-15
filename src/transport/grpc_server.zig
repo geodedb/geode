@@ -111,7 +111,6 @@ const log = logging.scoped("grpc");
 const Attr = logging.Attr;
 
 pub const GrpcConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     disable_estimates: bool = false,
     compact_profile: bool = false,
@@ -875,7 +874,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
     // GAP-0756: Wire the shared query optimizer so the gRPC handler hits the
@@ -3224,9 +3222,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             for (base_flags) |flag| {
                 try appendFlagIfMissing(allocator, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(allocator, &flags, server_flags.F_UNION_PHASES);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
@@ -3730,6 +3727,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3737,7 +3737,16 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(allocator);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(allocator, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| allocator.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3789,6 +3798,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         .graph_store_dirty = store_ptr.isDirty(),
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:37:20.135270447Z",
+  "generated_at": "2026-11-15T19:41:35.227470607Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -24359,16 +24359,14 @@
         {
           "feature": "Weighted Path Cost",
           "aspect": "Planner",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_016_PathWeightedCost"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Path Expand Breadth",
@@ -78275,25 +78273,6 @@
       ]
     },
     {
-      "id": "REQ-SONNY-6562-PROFILE-SPILLS",
-      "features": [
-        {
-          "feature": "PROFILE",
-          "aspect": "NoFabricatedSpill",
-          "status": "TESTED",
-          "files": [
-            "src/server/profile_payload.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6562_wire_metadata.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-11-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-SONNY-6562-RESULT-ORDER",
       "features": [
         {
@@ -78865,6 +78844,97 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6587-CANARY-TRUTH",
+      "features": [
+        {
+          "feature": "Governance",
+          "aspect": "CanaryTestExists",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6587_canary_markers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6587_canary_markers.zig"
+          ],
+          "benches": [],
+          "owner": "governance",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6587-FOR-WRITE-EVERY-ROW",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "WriteBodyAfterWith",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig",
+            "tests/test_sonny6587_for_write_after_with.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6587_for_write_after_with.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6587-LIST-FUNCTION-ARGS",
+      "features": [
+        {
+          "feature": "ListFunctions",
+          "aspect": "RangeArguments",
+          "status": "TESTED",
+          "files": [
+            "src/eval/call_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6587_list_functions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "ListFunctions",
+          "aspect": "WrongTypeRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6587_list_functions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6587_list_functions.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK",
+      "features": [
+        {
+          "feature": "PROFILE",
+          "aspect": "PointWriteSeekRecord",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6587_profile_point_write_seek.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6589-CLI-ADDRESS-MESSAGES",
       "features": [
         {
@@ -79274,6 +79344,141 @@
           ],
           "benches": [],
           "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-APPROXIMATE-ARITHMETIC",
+      "features": [
+        {
+          "feature": "NumericValueExpression",
+          "aspect": "ApproximateOperands",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_approximate_literal.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-APPROXIMATE-LITERAL",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "ApproximateNumericLiteral",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig",
+            "tests/test_sonny6596_approximate_literal.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_approximate_literal.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-CALL-GROUP-BY",
+      "features": [
+        {
+          "feature": "CallProcedure",
+          "aspect": "ReturnGroupBy",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_doc_examples_parse.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-DOC-EXAMPLES-PARSE",
+      "features": [
+        {
+          "feature": "Documentation",
+          "aspect": "GqlExamplesParse",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6596_doc_examples_parse.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_doc_examples_parse.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "DelimitedIdentifier",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig",
+            "tests/test_sonny6596_double_quoted_identifiers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_double_quoted_identifiers.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-NO-SPILL-PLUMBING",
+      "features": [
+        {
+          "feature": "ServerConfig",
+          "aspect": "NoDeadSpillLimit",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6596_spill_plumbing.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_spill_plumbing.zig"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6596-PROFILE-V1-MEASURED",
+      "features": [
+        {
+          "feature": "PROFILE",
+          "aspect": "NoSyntheticOperators",
+          "status": "TESTED",
+          "files": [
+            "src/server/profile_payload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6596_profile_v1_measured.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-15"
         }
       ]
@@ -85238,9 +85443,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 533,
+      "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4226
+      "TESTED": 4236
     },
     "by_aspect": {
       "2PC": 3,
@@ -85377,6 +85582,8 @@
       "ApplyTxnPrepare": 1,
       "ApplyUnderTenant": 1,
       "ApplyUpdate": 1,
+      "ApproximateNumericLiteral": 1,
+      "ApproximateOperands": 1,
       "ArgParsing": 1,
       "ArgReachability": 1,
       "Argon2idVerifyErrors": 1,
@@ -85599,6 +85806,7 @@
       "CallbacksStorage": 1,
       "CallerOwnedUserCopies": 1,
       "CanUserAccessGraphLocked": 1,
+      "CanaryTestExists": 1,
       "Cancel": 1,
       "CandidateRowVisibility": 1,
       "CandidateShardReadLocks": 1,
@@ -86052,6 +86260,7 @@
       "DeleteReturn": 1,
       "DeleteReturnBeforePropose": 1,
       "DeleteRoundTrip": 1,
+      "DelimitedIdentifier": 1,
       "DeltaGuardPreview": 1,
       "Density": 1,
       "DenyOverridesAllow": 1,
@@ -86623,6 +86832,7 @@
       "GovernanceTest": 2,
       "GpsActionClassification": 1,
       "GpsDecryptFieldGate": 1,
+      "GqlExamplesParse": 1,
       "GqlExecution": 1,
       "GqlFunction": 21,
       "GrantCallbacks": 1,
@@ -87304,13 +87514,13 @@
       "NoCredentialsNoUnsafePath": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
       "NoDeadRemotePath": 1,
+      "NoDeadSpillLimit": 1,
       "NoDeadWalWrapperOrFalseTestedMarkers": 1,
       "NoEnvOverride": 1,
       "NoFabricatedIndexScan": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
-      "NoFabricatedSpill": 1,
       "NoFakeOverheadMeasurement": 1,
       "NoFakePerformanceImpact": 1,
       "NoFallbackSnapshot": 1,
@@ -87349,6 +87559,7 @@
       "NoRolesUnauthorized": 1,
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
+      "NoSyntheticOperators": 1,
       "NoTmpCertFallback": 1,
       "NoUnauditedOpen": 1,
       "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
@@ -87701,6 +87912,7 @@
       "PointReadReclassify": 1,
       "PointUnadvertised": 1,
       "PointWriteFastPathEnvLeak": 1,
+      "PointWriteSeekRecord": 1,
       "Policy": 1,
       "PolicyCRUD": 1,
       "PolicyCatalogActions": 1,
@@ -87973,6 +88185,7 @@
       "RaftStorage": 1,
       "RaftStorageSealOpenRefuse": 1,
       "RandAlias": 1,
+      "RangeArguments": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
       "RangeLookupOncePerCommit": 1,
@@ -88173,6 +88386,7 @@
       "ReturnAggregation": 1,
       "ReturnAndSorting": 1,
       "ReturnFix": 1,
+      "ReturnGroupBy": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
       "ReturnThroughMain": 2,
@@ -88995,6 +89209,7 @@
       "WorkerRoundTrip": 1,
       "Wrapper": 1,
       "WriteBlocked": 1,
+      "WriteBodyAfterWith": 1,
       "WriteBodyComposition": 1,
       "WriteChokepoint": 2,
       "WriteChokepointEveryLabel": 1,
@@ -89016,6 +89231,7 @@
       "WriterOutsideUserStoreMutex": 1,
       "WrittenOnceAtOutput": 2,
       "WrongArgumentCount": 1,
+      "WrongTypeRefused": 1,
       "WrongUserExcluded": 1,
       "Wtf8LossyDecode": 1,
       "XSSPrevention": 1,

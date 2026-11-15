@@ -12,15 +12,17 @@ fn contains(h: []const u8, n: []const u8) bool {
     return std.mem.indexOf(u8, h, n) != null;
 }
 
-test "protocol: PROFILE UNION allocation deltas present" {
+// SONNY-6596: allocations are not measured on the version-1 path, so the
+// fields are present and 0 (they were a fixed 64 bytes per invented
+// operator: UnionLeft, UnionTails, SetOpUnion).
+test "protocol: PROFILE UNION allocation fields present and unmeasured" {
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     try std.testing.expectEqual(@as(i32, 0), res.code);
-    try std.testing.expect(contains(res.out, "\"UnionLeft\""));
-    try std.testing.expect(contains(res.out, "\"UnionTails\""));
-    try std.testing.expect(contains(res.out, "\"SetOpUnion\""));
-    try std.testing.expect(contains(res.out, "\"memory\""));
-    try std.testing.expect(contains(res.out, "\"bytes_alloc\""));
-    try std.testing.expect(contains(res.out, "\"percent_peak\""));
+    try std.testing.expect(contains(res.out, "\"op\":\"LegacyExecute\""));
+    try std.testing.expect(!contains(res.out, "\"UnionLeft\""));
+    try std.testing.expect(contains(res.out, "\"memory\":{\"net_bytes\":0,\"peak_bytes\":0,\"total_alloc_bytes\":0}"));
+    try std.testing.expect(contains(res.out, "\"bytes_alloc\":0"));
+    try std.testing.expect(contains(res.out, "\"percent_peak\":0"));
 }
