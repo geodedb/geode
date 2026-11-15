@@ -159,7 +159,62 @@ SONNY-6279.
   `...LogEncryptionMismatch`) and is left as it is
   (`test-sonny6622-raft-v022-adapt`). The graphs an entry's apply writes are
   hydrated when the entry enters the log or before a restarted node
-  replays it, not under `inner_mutex` (`test-sonny6631-apply-hydration-off-mutex`).
+  replays it, not under `inner_mutex`
+  (`test-sonny6631-apply-hydration-off-mutex`). A label or relationship type
+  new to a graph is still written to its label dictionary durably (two
+  fsyncs per shard set) under `inner_mutex` (SONNY-6633 item 4, open).
+  InstallSnapshot
+  carries its chunk data, BLAKE3 digest and configuration on the wire, and a
+  refused snapshot reaches the leader as a refusal; a snapshot carries the
+  idempotency-key table (`test-sonny6633-snapshot-wire`).
+
+### Raft snapshots into the durable store (SONNY-6633 item 2: blocked)
+
+A snapshot cannot be restored into the server's durable store, so the
+follower refuses it (`RaftSnapshotRestoreNotDurable`) and pauses, and the
+server takes no Raft snapshots (the log grows without bound). Two things
+block it:
+
+1. **No live engine swap.** A graph's storage engine cannot be closed and
+   reopened on other files while the server runs: requests hold pins and
+   `rwlock`s on it, and neither graph-storage nor `StorageAdapter` has a
+   swap (`storage/backup.zig` `restoreBesideDataDir` restores beside the
+   data directory and asks for a restart for the same reason).
+   `installSnapshotData` only rebuilds memory (`clearNodes`, `*NoSave`).
+2. **A lossy snapshot.** The JSON-lines snapshot
+   (`GraphStore.serializeSnapshot`) writes every `ExtValue` property
+   (vectors, temporal, network, spatial values) as the string `"<ext>"`, and
+   it carries no empty graphs,
+   tenants, indexes, constraints or catalog entries.
+
+Design to unblock it:
+
+- **Snapshot format:** a lossless per-graph engine export, the backup
+  archive (`storage/backup.zig`), of the user graphs only (not
+  `__geode_security`, whose contents are per node), plus the idempotency
+  table, taken at the leader's applied index: checkpoint every graph, then
+  copy (hard-link) its files while the apply path is paused, outside
+  `inner_mutex`.
+- **Swap:** `StorageAdapter.swapGraphFiles(name, staged_dir)` (new, and a
+  graph-storage reopen-from-directory if the engine needs one): drain pins,
+  take the graph's `rwlock` EXCLUSIVE and `replicated_apply_mutex`, close
+  the engine, `rename` live -> `<name>.old` and staged -> live on the same
+  file system, fsync the parent, reopen, drop the graph's resident caches
+  and mark it pending hydration, delete `<name>.old`.
+- **Crash safety:** before the first rename write
+  `<data_dir>/raft/restore.intent` (snapshot index and term, staged paths),
+  fsynced; startup finishes or rolls back an intent it finds before the
+  store opens. The Raft snapshot is persisted (`advancePersist`) only after
+  every graph is swapped and the intent removed: a crash before leaves the
+  node behind, and the leader sends the snapshot again.
+- **Off `inner_mutex`:** the swap takes graph locks, so `drainReady` must
+  hand a Ready with a snapshot to a restore thread and keep the node paused
+  (as `stalled_ready` does) until it finishes.
+- **Applied index:** the store records the Raft index it reflects
+  (with the intent and at each checkpoint), so a restarted node replays only
+  the entries after it.
+- Then the server takes snapshots (`reportSnapshot`) past an entry/size
+  threshold (raft `Config.snapshot_threshold`, `Ready.should_snapshot`).
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and

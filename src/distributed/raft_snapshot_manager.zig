@@ -2,6 +2,7 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const GraphStore = graph_store.GraphStore;
 const PropertyValue = graph_store.PropertyValue;
+const cluster_replication = @import("cluster_replication.zig");
 
 // CANARY: REQ=REQ-GQL-RAFT-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotCreation; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
 // CANARY: REQ=REQ-GQL-RAFT-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotInstallation; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
@@ -109,23 +110,55 @@ pub fn installSnapshotData(
 }
 
 // CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RaftSnapshotPayload; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
-/// SONNY-6622: the state-machine snapshot a leader hands the raft library
-/// (`RaftNode.inner.reportSnapshot`): the CRC32 of the JSON-lines snapshot
-/// (4 bytes, big-endian), then the snapshot. The caller frees it.
-pub fn encodeRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore) ![]u8 {
-    const snap = try createSnapshotData(allocator, store);
-    defer allocator.free(snap.data);
-    const out = try allocator.alloc(u8, 4 + snap.data.len);
-    std.mem.writeInt(u32, out[0..4], snap.checksum, .big);
-    @memcpy(out[4..], snap.data);
-    return out;
+// CANARY: REQ=REQ-SONNY-6633-DEDUP-IN-SNAPSHOT; FEATURE="DistributedCluster"; ASPECT=SnapshotCarriesDedup; STATUS=TESTED; TEST=tests/test_sonny6633_snapshot_wire.zig; OWNER=distributed; UPDATED=2026-11-15
+/// The state-machine snapshot a leader hands the raft library
+/// (`reportSnapshot`), SONNY-6622 / SONNY-6633:
+///
+///   "GRS2" | u32 CRC32 of the rest (big-endian) | u64 JSON-lines length |
+///   JSON-lines snapshot of the store | idempotency table
+///   (`IdempotencyDedup.serialize`, empty table when `dedup` is null).
+///
+/// The idempotency table travels with the store: it is otherwise rebuilt by
+/// replaying the committed log, and the snapshot replaces the entries that
+/// would rebuild it (SONNY-6633 item 6). The caller frees the result.
+pub const raft_snapshot_magic = "GRS2";
+
+pub fn encodeRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore, dedup: ?*const cluster_replication.IdempotencyDedup) ![]u8 {
+    const data = try store.serializeSnapshot(allocator);
+    defer allocator.free(data);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, raft_snapshot_magic);
+    try out.appendNTimes(allocator, 0, 4); // CRC, below
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, data.len, .big);
+    try out.appendSlice(allocator, &len_buf);
+    try out.appendSlice(allocator, data);
+    if (dedup) |d| {
+        try d.serialize(&out, allocator);
+    } else {
+        try out.appendNTimes(allocator, 0, 4);
+    }
+    std.mem.writeInt(u32, out.items[4..8], Crc32.hash(out.items[8..]), .big);
+    return out.toOwnedSlice(allocator);
 }
 
-/// SONNY-6622: install a payload `encodeRaftSnapshot` made into `store`,
-/// replacing its contents (`installSnapshotData`).
-pub fn installRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore, payload: []const u8) !void {
-    if (payload.len < 4) return error.InvalidJsonLine;
-    try installSnapshotData(allocator, store, payload[4..], std.mem.readInt(u32, payload[0..4], .big));
+/// Install a payload `encodeRaftSnapshot` made: `store`'s contents are
+/// replaced (`installSnapshotData`), then `dedup`'s, when given. Everything
+/// is checked before anything is replaced.
+pub fn installRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore, payload: []const u8, dedup: ?*cluster_replication.IdempotencyDedup) !void {
+    if (payload.len < 16 or !std.mem.eql(u8, payload[0..4], raft_snapshot_magic)) return error.InvalidJsonLine;
+    if (Crc32.hash(payload[8..]) != std.mem.readInt(u32, payload[4..8], .big)) return error.ChecksumMismatch;
+    const data_len = std.mem.readInt(u64, payload[8..16], .big);
+    if (data_len > payload.len - 16) return error.InvalidJsonLine;
+    const data = payload[16..][0..@intCast(data_len)];
+    const dedup_bytes = payload[16 + data.len ..];
+    // Check the table first: it must not fail after the store was replaced.
+    var check = cluster_replication.IdempotencyDedup.init(allocator);
+    defer check.deinit();
+    try check.replaceFrom(dedup_bytes);
+    try installSnapshotData(allocator, store, data, Crc32.hash(data));
+    if (dedup) |d| try d.replaceFrom(dedup_bytes);
 }
 
 /// Parse a single JSON-lines entry and apply it to the store.

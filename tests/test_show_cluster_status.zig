@@ -28,6 +28,8 @@ const geode = @import("geode");
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
 const cluster_mod = geode.distributed.cluster;
 const raft_lib = geode.distributed.raft;
+// SONNY-6633 (5): every message with its real sender (it was guessed).
+const raft_net = @import("raft_inproc_net.zig");
 const admin_ddl = geode.execution.admin_ddl;
 const execution = geode.execution;
 const value_types = geode.value_types;
@@ -177,11 +179,9 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
     const coords: []*ClusterCoordinator = coords_storage[0..];
 
     // Wire raft over InProcessTransport.
-    var ipt = raft_lib.InProcessTransport.init(a);
+    var ipt = raft_net.RaftNet.init(a);
     defer ipt.deinit();
-    for (1..4) |id| try ipt.register(id);
-    const transport = ipt.transport();
-    for (coords) |c| c.raft.setInnerTransport(transport);
+    for (coords, 1..) |c, id| c.raft.setInnerTransport(ipt.transportFor(id));
 
     // Drive ticking + message routing until exactly one leader emerges.
     const deadline_ms: i64 = nowMillis() + 10_000;
@@ -195,8 +195,9 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
             defer a.free(msgs);
             if (msgs.len == 0) continue;
             const target_idx = id - 1;
-            for (msgs) |msg| {
-                const inferred_from = inferSender(msg, @intCast(id));
+            for (msgs) |d| {
+                const msg = d.msg;
+                const inferred_from = d.from;
                 coords[target_idx].raft.stepInner(inferred_from, msg) catch |err| {
                     freeMsgPayload(a, msg);
                     return err;
@@ -317,28 +318,7 @@ test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leade
     // the file is ever stripped of explicit Value typings.
 }
 
-/// Mirror of inferSender from test_cluster_3node_election.zig — kept in this
-/// file rather than imported because tests live in a flat directory and we
-/// don't want to plumb a shared util module just for two helpers.
-fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
-    return switch (msg) {
-        .request_vote => |rv| rv.candidate_id,
-        .append_entries => |ae| ae.leader_id,
-        .install_snapshot => |is| is.leader_id,
-        .request_vote_response,
-        .append_entries_response,
-        .install_snapshot_response,
-        => blk: {
-            var i: u64 = 1;
-            while (i <= 3) : (i += 1) {
-                if (i != recipient_id) break :blk i;
-            }
-            break :blk recipient_id;
-        },
-    };
-}
-
 fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
     // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
-    raft_lib.InProcessTransport.freeMessage(allocator, msg);
+    raft_net.freeMessage(allocator, msg);
 }

@@ -2188,6 +2188,13 @@ pub const InstallSnapshot = struct {
     offset: u64,
     data: []const u8,
     done: bool,
+    /// SONNY-6633: BLAKE3 digest of the whole snapshot (final chunk; zero
+    /// otherwise) and the configuration it was taken at, carried end to end
+    /// (the raft library refuses a snapshot whose digest does not match).
+    checksum: [32]u8 = std.mem.zeroes([32]u8),
+    voters: []const u64 = &.{},
+    voters_outgoing: []const u64 = &.{},
+    is_joint: bool = false,
 };
 
 pub const InstallSnapshotResponse = struct {
@@ -2409,20 +2416,40 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .conflict_index = aer.conflict_index,
             .conflict_term = aer.conflict_term,
         } },
-        .install_snapshot => |is| .{ .install_snapshot = .{
-            .term = is.term,
-            .leader_id = is.leader_id,
-            .last_included_index = is.last_included_index,
-            .last_included_term = is.last_included_term,
-            .offset = is.offset,
-            .done = is.done,
-        } },
-        // raft_schema.InstallSnapshotResponse has no `success` field on the
-        // wire schema; the receiving side defaults `success = true` (absence
-        // implies ACK), mirroring the behavior already documented in
-        // `protoToMessage` below.
+        // SONNY-6633: the chunk, the digest and the configuration go on the
+        // wire (they were dropped, so no snapshot could be installed over
+        // QUIC). Owned copies: the envelope's deinit frees them.
+        .install_snapshot => |is| blk: {
+            const data: []const u8 = if (is.data.len > 0) try allocator.dupe(u8, is.data) else "";
+            errdefer if (data.len > 0) allocator.free(data);
+            const zero = std.mem.zeroes([32]u8);
+            const checksum: []const u8 = if (!std.mem.eql(u8, &is.checksum, &zero)) try allocator.dupe(u8, &is.checksum) else "";
+            errdefer if (checksum.len > 0) allocator.free(checksum);
+            var voters = std.ArrayList(u64).empty;
+            errdefer voters.deinit(allocator);
+            try voters.appendSlice(allocator, is.voters);
+            var outgoing = std.ArrayList(u64).empty;
+            errdefer outgoing.deinit(allocator);
+            try outgoing.appendSlice(allocator, is.voters_outgoing);
+            break :blk .{ .install_snapshot = .{
+                .term = is.term,
+                .leader_id = is.leader_id,
+                .last_included_index = is.last_included_index,
+                .last_included_term = is.last_included_term,
+                .offset = is.offset,
+                .data = data,
+                .done = is.done,
+                .checksum = checksum,
+                .voters = voters,
+                .voters_outgoing = outgoing,
+                .is_joint = is.is_joint,
+            } };
+        },
+        // SONNY-6633: a refusal is sent as `failed` (absent from an older
+        // peer, which therefore still acknowledges).
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
             .term = isr.term,
+            .failed = !isr.success,
         } },
     };
 }
@@ -2514,23 +2541,38 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .conflict_index = aer.conflict_index,
             .conflict_term = aer.conflict_term,
         } },
-        .install_snapshot => |is| .{ .install_snapshot = .{
-            .term = is.term,
-            .leader_id = is.leader_id,
-            .last_included_index = is.last_included_index,
-            .last_included_term = is.last_included_term,
-            .offset = is.offset,
-            .data = &.{},
-            .done = is.done,
-        } },
+        // SONNY-6633: owned copies (the decode buffer is freed when
+        // decodeRaftFrame returns), freed by `freeMessage`.
+        .install_snapshot => |is| blk: {
+            var checksum = std.mem.zeroes([32]u8);
+            switch (is.checksum.len) {
+                0 => {},
+                32 => @memcpy(&checksum, is.checksum),
+                else => return error.InvalidFrame,
+            }
+            const data: []const u8 = if (is.data.len > 0) try allocator.dupe(u8, is.data) else &.{};
+            errdefer if (data.len > 0) allocator.free(data);
+            const voters: []const u64 = if (is.voters.items.len > 0) try allocator.dupe(u64, is.voters.items) else &.{};
+            errdefer if (voters.len > 0) allocator.free(voters);
+            const outgoing: []const u64 = if (is.voters_outgoing.items.len > 0) try allocator.dupe(u64, is.voters_outgoing.items) else &.{};
+            break :blk .{ .install_snapshot = .{
+                .term = is.term,
+                .leader_id = is.leader_id,
+                .last_included_index = is.last_included_index,
+                .last_included_term = is.last_included_term,
+                .offset = is.offset,
+                .data = data,
+                .done = is.done,
+                .checksum = checksum,
+                .voters = voters,
+                .voters_outgoing = outgoing,
+                .is_joint = is.is_joint,
+            } };
+        },
         .install_snapshot_response => |isr| .{
             .install_snapshot_response = .{
                 .term = isr.term,
-                // raft_schema.InstallSnapshotResponse has no `success` field on
-                // the wire schema; default to true on receipt (absence implies
-                // ACK).  Mismatch tracked in the distributed roadmap; harmless
-                // for the bootstrap/start path.
-                .success = true,
+                .success = !isr.failed,
             },
         },
     };
@@ -2551,8 +2593,16 @@ fn freeMessage(allocator: Allocator, msg: *Message) void {
             }
             if (ae.entries.len > 0) allocator.free(ae.entries);
         },
+        .install_snapshot => |is| freeSnapshotSlices(allocator, is),
         else => {},
     }
+}
+
+/// SONNY-6633: an InstallSnapshot's owned chunk and configuration copies.
+fn freeSnapshotSlices(allocator: Allocator, is: InstallSnapshot) void {
+    if (is.data.len > 0) allocator.free(is.data);
+    if (is.voters.len > 0) allocator.free(is.voters);
+    if (is.voters_outgoing.len > 0) allocator.free(is.voters_outgoing);
 }
 
 fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
@@ -2575,7 +2625,7 @@ pub fn freeOutboundMessage(allocator: Allocator, msg: Message) void {
             }
             if (ae.entries.len > 0) allocator.free(ae.entries);
         },
-        .install_snapshot => |is| if (is.data.len > 0) allocator.free(is.data),
+        .install_snapshot => |is| freeSnapshotSlices(allocator, is),
         else => {},
     }
 }
@@ -3354,8 +3404,8 @@ pub const RaftNode = struct {
                 .offset = is.offset,
                 .data = is.data,
                 .done = is.done,
-                .checksum = std.mem.zeroes([32]u8),
-                .config = .{ .voters = &.{}, .voters_outgoing = &.{}, .is_joint = false },
+                .checksum = is.checksum,
+                .config = .{ .voters = is.voters, .voters_outgoing = is.voters_outgoing, .is_joint = is.is_joint },
             } },
             .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
                 .term = isr.term,
@@ -3968,15 +4018,28 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
         // in `sendSnapshotTo`, freed when the bridge's `send` returns; the
         // outbox encodes the message later, on the peer's drain thread, so
         // the message owns a copy (freed in `freeOutboundMessage`).
-        .install_snapshot => |is| Message{ .install_snapshot = .{
-            .term = is.term,
-            .leader_id = is.leader_id,
-            .last_included_index = is.last_included_index,
-            .last_included_term = is.last_included_term,
-            .offset = is.offset,
-            .data = if (is.data.len > 0) try allocator.dupe(u8, is.data) else &.{},
-            .done = is.done,
-        } },
+        // SONNY-6633: and the digest and configuration, copied (the library
+        // may free its config slices once `send` returns).
+        .install_snapshot => |is| blk: {
+            const data: []const u8 = if (is.data.len > 0) try allocator.dupe(u8, is.data) else &.{};
+            errdefer if (data.len > 0) allocator.free(data);
+            const voters: []const u64 = if (is.config.voters.len > 0) try allocator.dupe(u64, is.config.voters) else &.{};
+            errdefer if (voters.len > 0) allocator.free(voters);
+            const outgoing: []const u64 = if (is.config.voters_outgoing.len > 0) try allocator.dupe(u64, is.config.voters_outgoing) else &.{};
+            break :blk Message{ .install_snapshot = .{
+                .term = is.term,
+                .leader_id = is.leader_id,
+                .last_included_index = is.last_included_index,
+                .last_included_term = is.last_included_term,
+                .offset = is.offset,
+                .data = data,
+                .done = is.done,
+                .checksum = is.checksum,
+                .voters = voters,
+                .voters_outgoing = outgoing,
+                .is_joint = is.config.is_joint,
+            } };
+        },
         .install_snapshot_response => |isr| Message{ .install_snapshot_response = .{
             .term = isr.term,
             .success = isr.success,
@@ -4040,8 +4103,8 @@ pub fn geodeMessageToRaftLib(msg: Message) raft_lib.Message {
             .offset = is.offset,
             .data = is.data,
             .done = is.done,
-            .checksum = std.mem.zeroes([32]u8),
-            .config = .{ .voters = &.{}, .voters_outgoing = &.{}, .is_joint = false },
+            .checksum = is.checksum,
+            .config = .{ .voters = is.voters, .voters_outgoing = is.voters_outgoing, .is_joint = is.is_joint },
         } },
         .install_snapshot_response => |isr| raft_lib.Message{ .install_snapshot_response = .{
             .term = isr.term,

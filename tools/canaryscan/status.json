@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T22:41:29.256217294Z",
+  "generated_at": "2026-11-15T23:55:06.688425595Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80967,6 +80967,58 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6633-DEDUP-IN-SNAPSHOT",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DedupSerialized",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6633_snapshot_wire.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "SnapshotCarriesDedup",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_snapshot_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6633_snapshot_wire.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6633-SNAPSHOT-WIRE",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6633_snapshot_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6633_snapshot_wire.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -86058,7 +86110,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4270
+      "TESTED": 4273
     },
     "by_aspect": {
       "2PC": 3,
@@ -86849,6 +86901,7 @@
       "DecryptUnauthenticated": 1,
       "DecryptionFailureReturnsRedacted": 1,
       "DecryptionTest": 1,
+      "DedupSerialized": 1,
       "DeepCompare": 1,
       "DeepNodeDestroy": 1,
       "DefaultDataDirScoping": 2,
@@ -88904,7 +88957,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 394,
+      "Regression": 395,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -89323,6 +89376,7 @@
       "SmallestPostingPreselect": 1,
       "SmartKernelLoader": 1,
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,
+      "SnapshotCarriesDedup": 1,
       "SnapshotCleanup": 1,
       "SnapshotCompactionVarianceEnvelope": 1,
       "SnapshotCopiesEvictedEdges": 1,
