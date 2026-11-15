@@ -2616,6 +2616,14 @@
 
 ### Fixed
 
+- **A single-quoted sequence is no alias (SONNY-6613).** `RETURN 1 AS 'x'`
+  named the column x; ISO/IEC 39075:2024 14.11 takes an `<identifier>` after
+  AS, and a single-quoted sequence is only a character string literal
+  (21.2). **BREAKING:** it is now a syntax error (42000) in RETURN, WITH and
+  YIELD; write `AS x`, ``AS `x` `` or `AS "x"`. No query in Geode's tests,
+  docs or the integration-harness specs used the form. Regression:
+  `zig build test-sonny6613-quoted-alias`.
+
 - **A PROFILE'd point write names the index its seek used (SONNY-6587).**
   `MATCH (n:L) WHERE n.k = 'v' SET ...` on a persisted graph is served by an
   exact-property seek (`pointWriteFastPath`); its version-1 PROFILE named no

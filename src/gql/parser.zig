@@ -4092,13 +4092,12 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                // A quoted string literal, or a binding name (SONNY-6564:
-                // a reserved word is refused, ISO/IEC 39075:2024 21.3).
-                alias = if (self.cur.kind == .string_lit and !self.isDoubleQuoted(self.cur)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token.lexeme;
-                } else try self.expectBindingName("an alias");
+                // A binding name (SONNY-6564: a reserved word is refused,
+                // ISO/IEC 39075:2024 21.3), delimited by accents or (SONNY-6596)
+                // double quotes. SONNY-6613: a single-quoted sequence is a
+                // character string literal only (21.2), never an <identifier>
+                // (14.11 <return item alias>); `AS 'x'` named the column.
+                alias = try self.expectBindingName("an alias");
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
             if (self.cur.kind != .comma) break;
