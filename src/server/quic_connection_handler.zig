@@ -9471,18 +9471,23 @@ fn handleClientMessage(
         .cdc_diag => {
             // SONNY-6561: the engine and the answer are the gRPC handler's
             // (`execution.cdcDiagnosticsAnswer`); a refusal is its SQLSTATE.
+            // SONNY-6570: a refusal is an audit record.
+            const actor: execution.CdcActor = .{ .username = state.authenticated_user orelse "" };
             if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                execution.auditCdcFrameRefusal(gpa, "CDC_DIAGNOSTICS", actor, refusal);
                 try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
                 return;
             }
             try sendQuicMessage(gpa, stream, .{ .cdc_diag = try execution.cdcDiagnosticsAnswer(gpa) });
         },
         .cdc_ctrl => |ctrl| {
+            const actor: execution.CdcActor = .{ .username = state.authenticated_user orelse "" };
             if (try cdcFrameRefusal(gpa, state)) |refusal| {
+                execution.auditCdcFrameRefusal(gpa, "CDC_CONTROL", actor, refusal);
                 try sendExecuteError(gpa, stream, refusal.sqlstate(), refusal.message(), &.{}, &.{});
                 return;
             }
-            try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = try execution.cdcControlAnswer(gpa, ctrl.action) });
+            try sendQuicMessage(gpa, stream, .{ .cdc_ctrl = try execution.cdcControlAnswer(gpa, ctrl.action, actor) });
         },
         .backup => |backup_req| {
             switch (try validateSessionAuth(gpa, state)) {

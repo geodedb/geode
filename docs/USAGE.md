@@ -87,31 +87,14 @@ it; geode cannot restore into a running server's live store. The CLI waits
 up to 300 s for the server's answer to a backup or a server restore; set
 `--timeout <seconds>` for larger stores.
 
-### CDC Webhook Configuration
+### CDC
 
-Configure webhooks with enhanced reliability:
-
-```yaml
-# cdc-config.yaml
-webhooks:
-  - name: primary
-    endpoint: https://api.example.com/webhook
-    headers:
-      Authorization: 'Bearer ${WEBHOOK_TOKEN}'
-      X-Tenant-ID: 'tenant-123'
-      X-Environment: 'production'
-    retry:
-      max_attempts: 5
-      base_delay_ms: 100
-      max_delay_ms: 30000
-    dlq:
-      enabled: true
-      max_size: 10000
-      retention_hours: 168
-    idempotency:
-      enabled: true
-      header: 'X-Idempotency-Key'
-```
+Change capture is not implemented (SONNY-6570; the capture feature is
+SONNY-6572): no write is captured, so nothing reaches a webhook or any other
+sink. The server reads no `cdc-config.yaml`. `CALL cdc.enable()` (Admin only)
+starts the CDC engine and `CALL cdc.status()` reports its state; see
+[SERVER_FEATURES.md](SERVER_FEATURES.md#51-change-data-capture-cdc-engine) for
+which `cdc.*` procedures answer and which are refused with 0A000.
 
 ### Cost-Based Optimizer (Always On)
 
@@ -272,11 +255,6 @@ geode_storage_pages_total
 geode_storage_wal_segments_total
 geode_storage_cache_hit_ratio
 
-# CDC metrics
-geode_cdc_events_sent_total
-geode_cdc_webhook_retries_total
-geode_cdc_dlq_size
-
 # Backup metrics
 geode_backup_last_success_timestamp
 geode_backup_size_bytes
@@ -297,19 +275,6 @@ geode query "CALL system.federation.status()"
 grep "federation" /var/log/geode/geode.log
 ```
 
-#### CDC Webhook Issues
-
-```bash
-# Check webhook endpoint
-curl -X POST https://api.example.com/webhook -H "Authorization: Bearer token"
-
-# View DLQ contents
-geode query "SELECT * FROM system.cdc.dlq"
-
-# Check retry metrics
-geode query "CALL system.cdc.metrics()"
-```
-
 #### Performance Problems
 
 ```bash
@@ -325,7 +290,6 @@ geode query "CALL system.resources()"
 ```
 /var/log/geode/geode.log        # Main server log
 /var/log/geode/query.log        # Query audit log
-/var/log/geode/cdc.log          # CDC specific log
 /var/log/geode/federation.log   # Federation operations
 ```
 
@@ -354,13 +318,6 @@ geode query "CALL system.resources()"
    auth records needs the HMAC key, so store it with your other key material
 4. **Copy backups off the host** - geode writes local files only; copy them
    to object storage or another machine with your own tool
-
-### CDC
-
-1. **Configure appropriate batch sizes** - Balance latency vs throughput
-2. **Monitor DLQ size** - Alert on growth
-3. **Use idempotency keys** - Prevent duplicates
-4. **Set reasonable retry limits** - Avoid infinite loops
 
 ## Migration Guide
 

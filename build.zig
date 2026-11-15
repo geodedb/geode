@@ -18880,7 +18880,7 @@ pub fn build(b: *std.Build) void {
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
     }
-    // SONNY-6561 / SONNY-6563 regressions, with tests/all_tests.zig's module
+    // SONNY-6561 / SONNY-6563 / SONNY-6570 regressions, with tests/all_tests.zig's module
     // graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },

@@ -463,6 +463,8 @@ pub const CDCEngine = struct {
         }
 
         self.is_running = true;
+        // SONNY-6570: a failed start leaves the engine stopped.
+        errdefer self.is_running = false;
         self.start_time_ms = compat_milliTimestamp();
         // record lifecycle diagnostic
         self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
@@ -1303,9 +1305,13 @@ fn freeEventShallow(allocator: Allocator, ev: *ChangeEvent) void {
 }
 
 // System procedures for CDC control
+// CANARY: REQ=REQ-SONNY-6570-CDC-START-NO-LEAK; FEATURE="CDC Engine"; ASPECT=StartFailureFreesEngine; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=streaming; UPDATED=2026-11-15
+/// SONNY-6570: a failed init or start frees the engine (it leaked).
 pub fn startCDC(allocator: Allocator, config: CDCConfig) !*CDCEngine {
     const engine = try allocator.create(CDCEngine);
+    errdefer allocator.destroy(engine);
     engine.* = try CDCEngine.init(allocator, config);
+    errdefer engine.deinit();
     try engine.start();
     return engine;
 }

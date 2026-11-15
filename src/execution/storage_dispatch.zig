@@ -190,11 +190,66 @@ pub fn cdcDiagnosticsAnswer(allocator: std.mem.Allocator) !schema.CdcDiagnostics
     };
 }
 
+/// SONNY-6570: who sent a CDC frame or ran a CDC procedure, for its audit
+/// record.
+pub const CdcActor = struct {
+    username: []const u8 = "",
+    user_id: u64 = 0,
+};
+
+// CANARY: REQ=REQ-SONNY-6570-CDC-AUDIT; FEATURE="CDCProcedures"; ASPECT=AuditedChanges; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
+/// SONNY-6570: the audit record of a CDC change (`CALL cdc.enable()` ...,
+/// a CDC_CONTROL frame) that ran (`failure` null) or failed. No CDC frame
+/// or procedure was audited. Call it holding no CDC lock.
+pub fn auditCdcChange(allocator: std.mem.Allocator, action: []const u8, actor: CdcActor, details: []const u8, failure: ?[]const u8) void {
+    const audit_mod = @import("../security/audit.zig");
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    w.writeAll(details) catch {};
+    if (failure) |f| w.print("{s}error={s}", .{ if (details.len > 0) " " else "", f }) catch {};
+    audit_mod.logSecurityGraphEvent(allocator, .{
+        .event_type = .configuration_change,
+        .action = action,
+        .user_id = actor.user_id,
+        .username = actor.username,
+        .details = w.buffered(),
+        .result_failure = failure != null,
+    });
+}
+
+/// SONNY-6570: the audit record of a refused CDC_DIAGNOSTICS / CDC_CONTROL
+/// frame (`frame` names it), as `fle_admin.requireAdmin` audits a refused
+/// procedure.
+pub fn auditCdcFrameRefusal(allocator: std.mem.Allocator, frame: []const u8, actor: CdcActor, refusal: CdcRefusal) void {
+    const audit_mod = @import("../security/audit.zig");
+    audit_mod.logSecurityGraphEvent(allocator, .{
+        .event_type = .access_denied,
+        .action = frame,
+        .user_id = actor.user_id,
+        .username = actor.username,
+        .details = switch (refusal) {
+            .unauthenticated => "CDC administration denied: unauthenticated",
+            .not_admin => "CDC administration denied: admin role required",
+        },
+        .result_failure = true,
+    });
+}
+
 /// SONNY-6561: the CDC_CONTROL answer for an authorized caller, the one both
 /// transports send. RESET_GUARDRAILS is the one action. In cluster mode the
 /// frame is refused as `CALL cdc.reset_guardrails()` is (the engine is
-/// node-local, `gateUnreplicatedWrite`).
-pub fn cdcControlAnswer(allocator: std.mem.Allocator, action: []const u8) !schema.CdcControlResponse {
+/// node-local, `gateUnreplicatedWrite`). SONNY-6570: every answer is an
+/// audit record (action `CDC_CONTROL`).
+pub fn cdcControlAnswer(allocator: std.mem.Allocator, action: []const u8, actor: CdcActor) !schema.CdcControlResponse {
+    const resp = try cdcControlAnswerUnaudited(allocator, action);
+    var buf: [192]u8 = undefined;
+    const shown = action[0..@min(action.len, 64)];
+    const details = std.fmt.bufPrint(&buf, "action={s} status={s} guardrail_epoch={d}", .{ shown, resp.status, resp.guardrail_epoch }) catch "";
+    auditCdcChange(allocator, "CDC_CONTROL", actor, details, if (resp.success) null else resp.status);
+    return resp;
+}
+
+fn cdcControlAnswerUnaudited(allocator: std.mem.Allocator, action: []const u8) !schema.CdcControlResponse {
     cluster_mod.gateUnreplicatedWrite() catch |err| return .{
         .success = false,
         .status = try allocator.dupe(u8, switch (err) {
@@ -822,34 +877,99 @@ fn handleTdeTestKmsAttestation(allocator: std.mem.Allocator, _: ast.CallProcedur
 // ---------------------------------------------------------------------------
 const CdcHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!ExecutionResult;
 
+// CANARY: REQ=REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES; FEATURE="CDCProcedures"; ASPECT=EngineStateOnly; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
+/// SONNY-6570: the procedures that answer from the running engine or change
+/// it. Change capture is not implemented (SONNY-6572): no write path feeds
+/// the engine, so it holds no change events.
 const cdc_table = std.StaticStringMap(CdcHandler).initComptime(.{
     .{ "cdc.enable", handleCdcEnable },
     .{ "cdc.disable", handleCdcDisable },
     .{ "cdc.status", handleCdcStatus },
     .{ "cdc.export_diagnostics", handleCdcExportDiagnostics },
-    .{ "cdc.get_events", handleCdcGetEvents },
-    .{ "cdc.pause", handleCdcPause },
-    .{ "cdc.resume", handleCdcResume },
-    .{ "cdc.set_guardrail", handleCdcSetGuardrail },
     .{ "cdc.get_guardrail_status", handleCdcGetGuardrailStatus },
     .{ "cdc.reset_guardrails", handleCdcResetGuardrails },
-    .{ "cdc.get_watermark", handleCdcGetWatermark },
-    .{ "cdc.get_pending_events", handleCdcGetPendingEvents },
-    .{ "cdc.configure_adaptive_flush", handleCdcConfigureAdaptiveFlush },
-    .{ "cdc.get_flush_metrics", handleCdcGetFlushMetrics },
-    .{ "cdc.get_malformed_records", handleCdcGetMalformedRecords },
-    .{ "cdc.get_corruption_analysis", handleCdcGetCorruptionAnalysis },
-    .{ "cdc.get_ordered_events", handleCdcGetOrderedEvents },
-    .{ "cdc.check_duplicates", handleCdcCheckDuplicates },
-    .{ "cdc.get_change_status", handleCdcGetChangeStatus },
-    .{ "cdc.configure_change_stream", handleCdcConfigureChangeStream },
-    .{ "cdc.set_retention_policy", handleCdcSetRetentionPolicy },
-    .{ "cdc.cleanup_expired_events", handleCdcCleanupExpiredEvents },
-    .{ "cdc.get_telemetry_metrics", handleCdcGetTelemetryMetrics },
-    .{ "cdc.get_performance_alerts", handleCdcGetPerformanceAlerts },
     .{ "cdc.stop", handleCdcStop },
     .{ "cdc.start", handleCdcStart },
 });
+
+// CANARY: REQ=REQ-SONNY-6570-CDC-REFUSED-PROCEDURES; FEATURE="CDCProcedures"; ASPECT=RefuseNotImplemented; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
+/// SONNY-6570: the procedures that cannot answer truthfully while change
+/// capture is not implemented, and why. They returned an invented event,
+/// fixed rows or fixed numbers, or changed nothing and reported success;
+/// they are refused with `error.CdcNotImplemented` (SQLSTATE 0A000).
+// SONNY-6570: these were STATUS=TESTED against a geodetestlab spec while
+// they answered invented data; they are not implemented (refused 0A000)
+// until change capture is (SONNY-6572).
+// CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-016; FEATURE="CDCProcedures"; ASPECT=GetCorruptionAnalysis; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-017; FEATURE="CDCProcedures"; ASPECT=GetOrderedEvents; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetChangeStatus; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureChangeStream; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-022; FEATURE="CDCProcedures"; ASPECT=CleanupExpiredEvents; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+// CANARY: REQ=REQ-CDC-PROC-024; FEATURE="CDCProcedures"; ASPECT=GetPerformanceAlerts; STATUS=STUB; OWNER=cdc; UPDATED=2026-11-15
+const cdc_refused = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "cdc.get_events", "no change is captured, so there are no change events to return" },
+    .{ "cdc.get_ordered_events", "no change is captured, so there are no change events to order" },
+    .{ "cdc.get_pending_events", "no change is captured, so no change event is pending" },
+    .{ "cdc.check_duplicates", "no change is captured, so there are no change events to check for duplicates" },
+    .{ "cdc.get_change_status", "there is no change stream, so it has no position, lag or byte count" },
+    .{ "cdc.get_watermark", "there is no change stream, so it has no watermark or flow control" },
+    .{ "cdc.get_flush_metrics", "the engine flushes no change events and keeps no flush latency or flush count" },
+    .{ "cdc.get_telemetry_metrics", "the engine keeps no event rate, latency, memory use or error rate" },
+    .{ "cdc.get_performance_alerts", "the engine raises no performance alerts" },
+    .{ "cdc.get_malformed_records", "no change record is ingested, so none is malformed (the engine's malformed-record counters are in CALL cdc.export_diagnostics())" },
+    .{ "cdc.get_corruption_analysis", "no change record is ingested, so none is analysed for corruption" },
+    .{ "cdc.pause", "the engine has no paused state (CALL cdc.stop() and CALL cdc.start() stop and start it)" },
+    .{ "cdc.resume", "the engine has no paused state (CALL cdc.stop() and CALL cdc.start() stop and start it)" },
+    .{ "cdc.set_guardrail", "the engine does not use these thresholds (its guardrails are the malformed-record ratios GEODE_CDC_MALFORMED_WARN_PCT and GEODE_CDC_MALFORMED_ABORT_PCT)" },
+    .{ "cdc.configure_adaptive_flush", "the engine flushes no change events, and the procedure configured nothing" },
+    .{ "cdc.configure_change_stream", "there is no change stream to configure" },
+    .{ "cdc.set_retention_policy", "the engine retains no change events" },
+    .{ "cdc.cleanup_expired_events", "the engine retains no change events to clean up" },
+});
+
+threadlocal var t_cdc_refusal_buf: [512]u8 = undefined;
+threadlocal var t_cdc_refusal_len: usize = 0;
+
+const cdc_refusal_generic = "This cdc.* procedure is not implemented: change capture is not implemented (see SONNY-6572)";
+
+/// The message of this thread's latest `error.CdcNotImplemented`
+/// (proto_util.mapError reads it on the same thread).
+pub fn cdcNotImplementedMessage() []const u8 {
+    if (t_cdc_refusal_len == 0) return cdc_refusal_generic;
+    return t_cdc_refusal_buf[0..t_cdc_refusal_len];
+}
+
+fn setCdcRefusal(proc_name: []const u8, reason: []const u8) void {
+    const text = std.fmt.bufPrint(&t_cdc_refusal_buf, "CALL {s}() is not implemented: change capture is not implemented (see SONNY-6572); {s}", .{ proc_name, reason }) catch {
+        t_cdc_refusal_len = 0;
+        return;
+    };
+    t_cdc_refusal_len = text.len;
+}
+
+/// SONNY-6570: every `cdc.*` procedure is CDC administration, Admin only, as
+/// the CDC_DIAGNOSTICS / CDC_CONTROL frames are. `proc_name` is lowercase.
+pub fn isCdcProcedure(proc_name: []const u8) bool {
+    return std.mem.startsWith(u8, proc_name, "cdc.");
+}
+
+/// SONNY-6570: the CDC procedures that change (or would change) the engine;
+/// every run is an audit event, success or failure.
+pub fn isAuditedCdcChange(proc_name: []const u8) bool {
+    return cdc_mutating_set.has(proc_name);
+}
 
 /// Execute a CDC procedure. Returns null if not recognized.
 pub fn executeCdc(
@@ -857,6 +977,10 @@ pub fn executeCdc(
     proc_name: []const u8,
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
+    if (cdc_refused.get(proc_name)) |reason| {
+        setCdcRefusal(proc_name, reason);
+        return error.CdcNotImplemented;
+    }
     if (cdc_table.get(proc_name)) |handler| {
         // Cluster fail-closed: see GateStorageProcs (mutating procs only).
         if (cdc_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
@@ -865,600 +989,134 @@ pub fn executeCdc(
     return null;
 }
 
-fn handleCdcEnable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    try enableCdc();
-
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "enabled" };
+fn oneRow(allocator: std.mem.Allocator, names: []const []const u8, values: []const Value) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, names.len);
+    for (names, 0..) |n, i| columns[i] = try allocator.dupe(u8, n);
+    const row = try allocator.dupe(Value, values);
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+fn handleCdcEnable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
+    // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
+    try enableCdc();
+    return oneRow(allocator, &.{"status"}, &.{Value{ .Str = "enabled" }});
+}
+
 fn handleCdcDisable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    const status_str: []const u8 = "disabled";
-    var final_count: i64 = 0;
-
     if (global_cdc_engine) |engine| {
-        final_count = @intCast(engine.total_events);
         engine.deinit();
         cdcEngineAllocator().destroy(engine);
         global_cdc_engine = null;
     }
-
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "final_statistics");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = status_str };
-    row[1] = Value{ .Str = "CDC disabled successfully" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return oneRow(allocator, &.{ "status", "final_statistics" }, &.{ Value{ .Str = "disabled" }, Value{ .Str = "CDC disabled successfully" } });
 }
 
 fn handleCdcStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
+    // SONNY-6570: last_checkpoint was total_events again; the engine has no
+    // checkpoint.
     var enabled = false;
     var streaming = false;
     var event_count: i64 = 0;
-    var last_checkpoint: i64 = 0;
-
     if (global_cdc_engine) |engine| {
         const status = cdc_mod.getCDCStatus(engine);
         enabled = true;
         streaming = status.is_running;
         event_count = @intCast(status.total_events);
-        last_checkpoint = @intCast(status.total_events);
     }
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "enabled");
-    columns[1] = try allocator.dupe(u8, "streaming");
-    columns[2] = try allocator.dupe(u8, "event_count");
-    columns[3] = try allocator.dupe(u8, "last_checkpoint");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Bool = enabled };
-    row[1] = Value{ .Bool = streaming };
-    row[2] = Value{ .Int = event_count };
-    row[3] = Value{ .Int = last_checkpoint };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return oneRow(allocator, &.{ "enabled", "streaming", "event_count" }, &.{ Value{ .Bool = enabled }, Value{ .Bool = streaming }, Value{ .Int = event_count } });
 }
 
 fn handleCdcExportDiagnostics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var event_count: i64 = 0;
     var malformed_count: i64 = 0;
     var last_seq_id: i64 = 0;
-
     if (global_cdc_engine) |engine| {
         event_count = @intCast(engine.total_events);
         malformed_count = @intCast(engine.malformed_change_records);
-        last_seq_id = @intCast(engine.next_sequence);
+        // SONNY-6570: next_sequence is the next number to assign (it was
+        // reported as the last one assigned).
+        last_seq_id = @intCast(engine.next_sequence -| 1);
     }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "event_count");
-    columns[1] = try allocator.dupe(u8, "malformed_count");
-    columns[2] = try allocator.dupe(u8, "last_seq_id");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = event_count };
-    row[1] = Value{ .Int = malformed_count };
-    row[2] = Value{ .Int = last_seq_id };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    // Return empty result if no engine
-    if (global_cdc_engine == null) {
-        const columns = try allocator.alloc([]const u8, 5);
-        columns[0] = try allocator.dupe(u8, "seq_id");
-        columns[1] = try allocator.dupe(u8, "event_type");
-        columns[2] = try allocator.dupe(u8, "operation");
-        columns[3] = try allocator.dupe(u8, "timestamp");
-        columns[4] = try allocator.dupe(u8, "payload");
-        const rows = try allocator.alloc([]Value, 0);
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-
-    // For now, return a single sample event
-    const columns = try allocator.alloc([]const u8, 5);
-    columns[0] = try allocator.dupe(u8, "seq_id");
-    columns[1] = try allocator.dupe(u8, "event_type");
-    columns[2] = try allocator.dupe(u8, "operation");
-    columns[3] = try allocator.dupe(u8, "timestamp");
-    columns[4] = try allocator.dupe(u8, "payload");
-    const row = try allocator.alloc(Value, 5);
-    row[0] = Value{ .Int = 1 };
-    row[1] = Value{ .Str = "data_change" };
-    row[2] = Value{ .Str = "insert" };
-    row[3] = Value{ .Str = "2025-10-25T00:00:00Z" };
-    row[4] = Value{ .Str = "{}" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcPause(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-006; FEATURE="CDCProcedures"; ASPECT=Pause; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "paused" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcResume(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-007; FEATURE="CDCProcedures"; ASPECT=Resume; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "resumed" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcSetGuardrail(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-008; FEATURE="CDCProcedures"; ASPECT=SetGuardrail; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-
-    // Validate arguments
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-
-        // Require exactly 2 arguments
-        if (args.len != 2) {
-            return error.InvalidGuardrailConfiguration;
-        }
-
-        // First argument must be a string (threshold name)
-        if (args[0].* != .String) {
-            return error.InvalidGuardrailConfiguration;
-        }
-        const threshold_name = args[0].String;
-
-        // Validate threshold name (must be one of the valid types)
-        const valid_thresholds = [_][]const u8{ "warn_threshold", "abort_threshold", "max_events" };
-        var is_valid_name = false;
-        for (valid_thresholds) |valid_name| {
-            if (std.mem.eql(u8, threshold_name, valid_name)) {
-                is_valid_name = true;
-                break;
-            }
-        }
-        if (!is_valid_name) {
-            return error.InvalidGuardrailConfiguration;
-        }
-
-        // Second argument must be an integer (threshold value)
-        if (args[1].* != .Int) {
-            return error.InvalidGuardrailConfiguration;
-        }
-        const threshold_value = args[1].Int;
-
-        // Value must be non-negative
-        if (threshold_value < 0) {
-            return error.InvalidGuardrailConfiguration;
-        }
-    }
-
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "guardrail_configured" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return oneRow(allocator, &.{ "event_count", "malformed_count", "last_seq_id" }, &.{ Value{ .Int = event_count }, Value{ .Int = malformed_count }, Value{ .Int = last_seq_id } });
 }
 
 fn handleCdcGetGuardrailStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
+    // SONNY-6570: the thresholds are the engine's malformed-record ratios
+    // (they were 1000 and 10000, which nothing used); with no engine there
+    // are none.
     var current_epoch: i64 = 0;
+    var warn_threshold: Value = .Null;
+    var abort_threshold: Value = .Null;
     var pending_events: i64 = 0;
-
     if (global_cdc_engine) |engine| {
         current_epoch = @intCast(engine.guardrail_epoch);
+        warn_threshold = .{ .Double = engine.config.malformed_warn_pct };
+        abort_threshold = .{ .Double = engine.config.malformed_abort_pct };
         pending_events = @intCast(engine.event_buffer.items.len);
     }
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "current_epoch");
-    columns[1] = try allocator.dupe(u8, "warn_threshold");
-    columns[2] = try allocator.dupe(u8, "abort_threshold");
-    columns[3] = try allocator.dupe(u8, "pending_events");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = current_epoch };
-    row[1] = Value{ .Int = 1000 };
-    row[2] = Value{ .Int = 10000 };
-    row[3] = Value{ .Int = pending_events };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return oneRow(allocator, &.{ "current_epoch", "warn_threshold", "abort_threshold", "pending_events" }, &.{ Value{ .Int = current_epoch }, warn_threshold, abort_threshold, Value{ .Int = pending_events } });
 }
 
 fn handleCdcResetGuardrails(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    var new_epoch: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        engine.resetGuardrailState();
-        new_epoch = @intCast(engine.guardrail_epoch);
-    }
-
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "new_epoch");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = "reset_complete" };
-    row[1] = Value{ .Int = new_epoch };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetWatermark(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var current_watermark: i64 = 0;
-    var pending_bytes: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        current_watermark = @intCast(engine.next_sequence);
-        pending_bytes = @intCast(engine.peak_buffer);
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "current_watermark");
-    columns[1] = try allocator.dupe(u8, "pending_bytes");
-    columns[2] = try allocator.dupe(u8, "flow_control_active");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = current_watermark };
-    row[1] = Value{ .Int = pending_bytes };
-    row[2] = Value{ .Bool = false };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetPendingEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var count: i64 = 0;
-    var memory_usage: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        count = @intCast(engine.event_buffer.items.len);
-        memory_usage = @intCast(engine.peak_buffer);
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "count");
-    columns[1] = try allocator.dupe(u8, "oldest_timestamp");
-    columns[2] = try allocator.dupe(u8, "memory_usage");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = count };
-    row[1] = Value{ .Str = "2025-10-25T00:00:00Z" };
-    row[2] = Value{ .Int = memory_usage };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcConfigureAdaptiveFlush(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-013; FEATURE="CDCProcedures"; ASPECT=ConfigureAdaptiveFlush; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "configured" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetFlushMetrics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var current_batch_size: i64 = 100;
-    var adaptive_adjustments: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        current_batch_size = @intCast(engine.dynamic_batch_size);
-        adaptive_adjustments = @intCast(engine.batch_adjustments);
-    }
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "current_batch_size");
-    columns[1] = try allocator.dupe(u8, "avg_latency_ms");
-    columns[2] = try allocator.dupe(u8, "total_flushes");
-    columns[3] = try allocator.dupe(u8, "adaptive_adjustments");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = current_batch_size };
-    row[1] = Value{ .Int = 10 };
-    row[2] = Value{ .Int = 0 };
-    row[3] = Value{ .Int = adaptive_adjustments };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetMalformedRecords(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var record_count: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        record_count = @intCast(engine.malformed_change_records);
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "record_count");
-    columns[1] = try allocator.dupe(u8, "corruption_types");
-    columns[2] = try allocator.dupe(u8, "recovery_attempts");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = record_count };
-    row[1] = Value{ .Str = "none" };
-    row[2] = Value{ .Int = 0 };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetCorruptionAnalysis(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-016; FEATURE="CDCProcedures"; ASPECT=GetCorruptionAnalysis; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "prefix_retained");
-    columns[1] = try allocator.dupe(u8, "hash_validation");
-    columns[2] = try allocator.dupe(u8, "repair_suggestions");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Bool = true };
-    row[2] = Value{ .Str = "no_corruption_detected" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetOrderedEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-017; FEATURE="CDCProcedures"; ASPECT=GetOrderedEvents; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "seq_id");
-    columns[1] = try allocator.dupe(u8, "timestamp");
-    columns[2] = try allocator.dupe(u8, "operation_order");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = 1 };
-    row[1] = Value{ .Str = "2025-10-25T00:00:00Z" };
-    row[2] = Value{ .Int = 1 };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcCheckDuplicates(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var unique_events: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        unique_events = @intCast(engine.total_events);
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "duplicate_count");
-    columns[1] = try allocator.dupe(u8, "dedup_strategy");
-    columns[2] = try allocator.dupe(u8, "unique_events");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = 0 };
-    row[1] = Value{ .Str = "hash_based" };
-    row[2] = Value{ .Int = unique_events };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetChangeStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetChangeStatus; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-02-04
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var change_position: i64 = 0;
-    var pending_events: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        change_position = @intCast(engine.total_change_attempts);
-        pending_events = @intCast(engine.event_buffer.items.len);
-    }
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "change_position");
-    columns[1] = try allocator.dupe(u8, "ingest_lag_ms");
-    columns[2] = try allocator.dupe(u8, "processed_bytes");
-    columns[3] = try allocator.dupe(u8, "pending_events");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = change_position };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Int = 0 };
-    row[3] = Value{ .Int = pending_events };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcConfigureChangeStream(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-020; FEATURE="CDCProcedures"; ASPECT=ConfigureChangeStream; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-02-04
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "stream_position");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = "configured" };
-    row[1] = Value{ .Int = 0 };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcSetRetentionPolicy(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-021; FEATURE="CDCProcedures"; ASPECT=SetRetentionPolicy; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "retention_policy_set" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcCleanupExpiredEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-022; FEATURE="CDCProcedures"; ASPECT=CleanupExpiredEvents; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "cleaned_events");
-    columns[1] = try allocator.dupe(u8, "bytes_freed");
-    columns[2] = try allocator.dupe(u8, "oldest_remaining_event");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = 0 };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Str = "2025-10-25T00:00:00Z" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetTelemetryMetrics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    const events_per_second: i64 = 0;
-    var memory_usage_bytes: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        memory_usage_bytes = @intCast(engine.peak_buffer);
-    }
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "events_per_second");
-    columns[1] = try allocator.dupe(u8, "avg_processing_latency_ms");
-    columns[2] = try allocator.dupe(u8, "memory_usage_bytes");
-    columns[3] = try allocator.dupe(u8, "error_rate");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = events_per_second };
-    row[1] = Value{ .Int = 5 };
-    row[2] = Value{ .Int = memory_usage_bytes };
-    row[3] = Value{ .Int = 0 };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleCdcGetPerformanceAlerts(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-024; FEATURE="CDCProcedures"; ASPECT=GetPerformanceAlerts; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "alert_type");
-    columns[1] = try allocator.dupe(u8, "threshold_exceeded");
-    columns[2] = try allocator.dupe(u8, "current_value");
-    columns[3] = try allocator.dupe(u8, "recommended_action");
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Str = "none" };
-    row[1] = Value{ .Bool = false };
-    row[2] = Value{ .Str = "0" };
-    row[3] = Value{ .Str = "no_action_required" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // SONNY-6570: with no engine nothing is reset (it answered
+    // "reset_complete").
+    const engine = global_cdc_engine orelse return error.CdcNotEnabled;
+    engine.resetGuardrailState();
+    return oneRow(allocator, &.{ "status", "new_epoch" }, &.{ Value{ .Str = "reset_complete" }, Value{ .Int = @intCast(engine.guardrail_epoch) } });
 }
 
 fn handleCdcStop(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    var final_event_count: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        final_event_count = @intCast(engine.total_events);
-        engine.stop();
-    }
-
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "final_event_count");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = "stopped" };
-    row[1] = Value{ .Int = final_event_count };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    const engine = global_cdc_engine orelse return error.CdcNotEnabled;
+    const final_event_count: i64 = @intCast(engine.total_events);
+    engine.stop();
+    return oneRow(allocator, &.{ "status", "final_event_count" }, &.{ Value{ .Str = "stopped" }, Value{ .Int = final_event_count } });
 }
 
 fn handleCdcStart(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=cdc; UPDATED=2026-11-15
     global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    var recovered_event_count: i64 = 0;
-
-    if (global_cdc_engine) |engine| {
-        engine.start() catch |err| switch (err) {
-            // error-policy: A — geode.cdc.start is intentionally idempotent;
-            // an already-running engine still reports status="started".
-            error.AlreadyRunning => {},
-            // error-policy: C — the procedure reports status="started"; a real
-            // start failure (e.g. worker pool spawn) must propagate instead of
-            // lying to the client.
-            else => return err,
-        };
-        recovered_event_count = @intCast(engine.total_events);
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "recovered_event_count");
-    columns[2] = try allocator.dupe(u8, "checkpoint_restored");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = "started" };
-    row[1] = Value{ .Int = recovered_event_count };
-    row[2] = Value{ .Bool = true };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // SONNY-6570: with no engine nothing starts (it answered "started" with
+    // checkpoint_restored = true; the engine has no checkpoint, and
+    // recovered_event_count recovered nothing).
+    const engine = global_cdc_engine orelse return error.CdcNotEnabled;
+    engine.start() catch |err| switch (err) {
+        // error-policy: A — geode.cdc.start is intentionally idempotent;
+        // an already-running engine still reports status="started".
+        error.AlreadyRunning => {},
+        // error-policy: C — the procedure reports status="started"; a real
+        // start failure (e.g. worker pool spawn) must propagate instead of
+        // lying to the client.
+        else => return err,
+    };
+    return oneRow(allocator, &.{ "status", "event_count" }, &.{ Value{ .Str = "started" }, Value{ .Int = @intCast(engine.total_events) } });
 }
 
 // ===========================================================================

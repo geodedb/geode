@@ -247,6 +247,8 @@ pub const executeCallProcedure = call_operations.executeCallProcedure;
 pub const CdcRefusal = call_operations.CdcRefusal;
 pub const cdcDiagnosticsAnswer = call_operations.cdcDiagnosticsAnswer;
 pub const cdcControlAnswer = call_operations.cdcControlAnswer;
+pub const CdcActor = call_operations.CdcActor;
+pub const auditCdcFrameRefusal = call_operations.auditCdcFrameRefusal;
 
 // Re-export MATCH operation functions for backward compatibility (M1 Phase 6 extraction)
 pub const executeMatchCreateQuery = match_operations.executeMatchCreateQuery;

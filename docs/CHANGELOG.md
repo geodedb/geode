@@ -4,6 +4,42 @@
 
 ### Security
 
+- **CDC procedures answer the engine's state or refuse, Admin only, audited
+  (SONNY-6570).** Change capture is not implemented (SONNY-6572): no write
+  path feeds the CDC engine, so no change is ever captured. The `CALL cdc.*`
+  procedures answered as if it were. **BREAKING:** `cdc.get_events` (one
+  invented event: seq 1, insert, `2025-10-25T00:00:00Z`, `{}`),
+  `get_ordered_events`, `get_pending_events`, `check_duplicates`,
+  `get_change_status`, `get_watermark`, `get_flush_metrics` (avg latency
+  10), `get_telemetry_metrics` (latency 5), `get_performance_alerts`,
+  `get_malformed_records`, `get_corruption_analysis`, and `pause`, `resume`,
+  `set_guardrail`, `configure_adaptive_flush`, `configure_change_stream`,
+  `set_retention_policy`, `cleanup_expired_events` (which changed nothing and
+  reported success) now fail with SQLSTATE 0A000, the message naming the
+  procedure, "change capture is not implemented (see SONNY-6572)" and why.
+  **BREAKING:** `cdc.start()`, `cdc.stop()` and `cdc.reset_guardrails()`
+  with CDC not enabled fail 55000 (they answered `started` /
+  `checkpoint_restored = true`, `stopped`, `reset_complete`); `cdc.status()`
+  drops `last_checkpoint` (it was `event_count` again); `cdc.start()`
+  answers `status, event_count` (no `recovered_event_count`, no
+  `checkpoint_restored`); `cdc.get_guardrail_status()` reports the engine's
+  malformed-record ratios as `warn_threshold` / `abort_threshold` (they were
+  1000 / 10000, which nothing used; null with no engine);
+  `cdc.export_diagnostics()` reports `last_seq_id` as the last sequence
+  number assigned (0), not the next one. **BREAKING:** every `cdc.*`
+  procedure is Admin only (42501 otherwise, an `access_denied` audit
+  record), like the CDC_DIAGNOSTICS / CDC_CONTROL frames; a readwrite or
+  readonly user could read `cdc.status()` / `cdc.export_diagnostics()` and
+  run `cdc.enable()` / `cdc.disable()`. `cdc.enable` / `disable` / `start` /
+  `stop` / `reset_guardrails` and every attempt at a refused configuration
+  procedure write an audit record (success or failure), a CDC_CONTROL frame
+  one with action `CDC_CONTROL`, and a refused CDC frame an `access_denied`
+  one; nothing CDC did was audited. gRPC serves the CDC frames under the
+  names `src/proto/geode.proto` declares and the clients' generated stubs
+  call, `GetCdcDiagnostics` and `ControlCdc` (they answered UNIMPLEMENTED),
+  as well as `/CdcDiag` / `/CdcCtrl`. `cdc_enhanced.startCDC` frees the
+  engine when `start()` fails (it leaked it). Regression:
+  `zig build test-sonny6570-cdc-honesty`.
 - **geode-client-zig v0.3.17: one set of DSN rules on every client path
   (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
   geode-client-zig, which split the userinfo at the first `@` anywhere in

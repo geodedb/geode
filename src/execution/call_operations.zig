@@ -31,6 +31,8 @@ pub const executeCallProcedure = procedure_registry.executeCallProcedure;
 pub const CdcRefusal = procedure_registry.CdcRefusal;
 pub const cdcDiagnosticsAnswer = procedure_registry.cdcDiagnosticsAnswer;
 pub const cdcControlAnswer = procedure_registry.cdcControlAnswer;
+pub const CdcActor = procedure_registry.CdcActor;
+pub const auditCdcFrameRefusal = procedure_registry.auditCdcFrameRefusal;
 
 /// Execute CALL subquery statement
 /// Executes the subquery statement (Query, Call, Create, etc.) with context

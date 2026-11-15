@@ -1314,6 +1314,10 @@ pub const GeodeGrpcServer = struct {
         "/geode.GeodeService/Rollback",
         "/geode.GeodeService/Savepoint",
         "/geode.GeodeService/RollbackTo",
+        // SONNY-6570: the names src/proto/geode.proto declares (the clients'
+        // generated stubs call these), and the older short names.
+        "/geode.GeodeService/GetCdcDiagnostics",
+        "/geode.GeodeService/ControlCdc",
         "/geode.GeodeService/CdcDiag",
         "/geode.GeodeService/CdcCtrl",
         "/geode.GeodeService/Backup",
@@ -1406,9 +1410,9 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             const resp = try handleRollbackTo(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
-        } else if (std.mem.endsWith(u8, method, "/CdcDiag")) {
+        } else if (std.mem.endsWith(u8, method, "/GetCdcDiagnostics") or std.mem.endsWith(u8, method, "/CdcDiag")) {
             return sendCdcReply(trans, try handleCdcDiag(request_bytes, allocator), allocator);
-        } else if (std.mem.endsWith(u8, method, "/CdcCtrl")) {
+        } else if (std.mem.endsWith(u8, method, "/ControlCdc") or std.mem.endsWith(u8, method, "/CdcCtrl")) {
             return sendCdcReply(trans, try handleCdcCtrl(request_bytes, allocator), allocator);
         } else if (std.mem.endsWith(u8, method, "/Backup")) {
             const resp = try handleBackup(request_bytes, allocator);
@@ -4485,6 +4489,21 @@ fn cdcRefusal(session_id: []const u8, allocator: std.mem.Allocator) !?execution.
     };
 }
 
+/// SONNY-6570: the session's user name, copied into `buf`, for a CDC audit
+/// record ("" with no session).
+fn cdcActor(session_id: []const u8, buf: []u8) execution.CdcActor {
+    if (session_id.len == 0) return .{};
+    const store = getSessionStore() orelse return .{};
+    const entry = store.acquire(session_id) orelse return .{};
+    defer store.release(entry);
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const name = entry.state.authenticated_user orelse return .{};
+    const n = @min(name.len, buf.len);
+    @memcpy(buf[0..n], name[0..n]);
+    return .{ .username = buf[0..n] };
+}
+
 fn cdcRefusalGrpcStatus(refusal: execution.CdcRefusal) u8 {
     return switch (refusal) {
         .unauthenticated => 16, // UNAUTHENTICATED
@@ -4517,7 +4536,11 @@ fn handleCdcDiag(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcRe
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.CdcDiagnosticsRequest, &reader, allocator) catch return .invalid;
     defer req.deinit(allocator);
-    if (try cdcRefusal(req.session_id, allocator)) |refusal| return .{ .refused = refusal };
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| {
+        var name_buf: [256]u8 = undefined;
+        execution.auditCdcFrameRefusal(allocator, "CDC_DIAGNOSTICS", cdcActor(req.session_id, &name_buf), refusal);
+        return .{ .refused = refusal };
+    }
 
     var resp = try execution.cdcDiagnosticsAnswer(allocator);
     defer resp.deinit(allocator);
@@ -4538,9 +4561,14 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcRe
         return .{ .answer = try encodeMessage(allocator, inval_resp) };
     };
     defer req.deinit(allocator);
-    if (try cdcRefusal(req.session_id, allocator)) |refusal| return .{ .refused = refusal };
+    var name_buf: [256]u8 = undefined;
+    const actor = cdcActor(req.session_id, &name_buf);
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| {
+        execution.auditCdcFrameRefusal(allocator, "CDC_CONTROL", actor, refusal);
+        return .{ .refused = refusal };
+    }
 
-    var resp = try execution.cdcControlAnswer(allocator, req.action);
+    var resp = try execution.cdcControlAnswer(allocator, req.action, actor);
     defer resp.deinit(allocator);
     return .{ .answer = try encodeMessage(allocator, resp) };
 }

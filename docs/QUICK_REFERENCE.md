@@ -225,7 +225,7 @@ export GEODE_ORDER_KEYS_EXPR=0       # Identifier-only ORDER BY keys (expression
 
 # Performance
 export GEODE_TELEMETRY_PAGING=1      # Enable telemetry
-export GEODE_CDC_ENABLE=1            # Enable CDC
+export GEODE_CDC_ENABLE=1            # Start the CDC engine (it captures no changes: SONNY-6570)
 
 # QUIC settings
 export GEODE_QUIC_FORCE_CLOSE=1      # Force connection close

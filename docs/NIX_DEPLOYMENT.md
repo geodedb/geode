@@ -240,12 +240,9 @@ services.geode = {
   # local files written by `geode backup create`; SONNY-6290). Schedule that
   # command yourself and copy the file with your own tool.
 
-  # Change Data Capture
-  cdc = {
-    enable = true;
-    webhookUrl = "https://api.prod.com/geode-events";
-    retention = "30d";
-  };
+  # No CDC option: the module has none, and a server captures no changes
+  # (SONNY-6570; change capture is SONNY-6572). GEODE_CDC_ENABLE=1 starts the
+  # CDC engine, which nothing feeds.
 
   # Monitoring and metrics
   monitoring = {
@@ -880,7 +877,6 @@ services.geode = {
   performance.memoryLimit = "16GB";
   tls.generateSelfSigned = false;
   backup.enable = true;
-  cdc.enable = true;
   monitoring.enable = true;
 };
 ```

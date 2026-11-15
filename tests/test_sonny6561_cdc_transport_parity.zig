@@ -523,7 +523,8 @@ test "SONNY-6561: GEODE_CDC_ENABLE=1 starts the CDC engine at startup, as CALL c
     try testing.expectEqualStrings(qd, gd);
     const status = try quicCall(a, &srv, .admin, "CALL cdc.status()");
     defer a.free(status);
-    try testing.expectEqualStrings("rows cols=enabled,streaming,event_count,last_checkpoint [true,true,0,0]", status);
+    // SONNY-6570: last_checkpoint (total_events again) is gone.
+    try testing.expectEqualStrings("rows cols=enabled,streaming,event_count [true,true,0]", status);
 }
 
 test "SONNY-6561: in cluster mode CDC_CONTROL is refused as CALL cdc.reset_guardrails() is" {
@@ -540,7 +541,7 @@ test "SONNY-6561: in cluster mode CDC_CONTROL is refused as CALL cdc.reset_guard
     defer if (saved) |c| cluster.setGlobalClusterCoordinator(c) else cluster.clearGlobalClusterCoordinator();
 
     for ([_][]const u8{ "RESET_GUARDRAILS", "UNKNOWN_ACTION", "" }) |action| {
-        var resp = try storage_dispatch.cdcControlAnswer(a, action);
+        var resp = try storage_dispatch.cdcControlAnswer(a, action, .{});
         defer resp.deinit(a);
         try testing.expect(!resp.success);
         try testing.expectEqualStrings("CLUSTER_NOT_LEADER", resp.status);

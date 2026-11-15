@@ -551,7 +551,39 @@ struct PathCacheEntry {
 **Implementation**: `/src/streaming/cdc_enhanced.zig`
 **CANARY**: `REQ-GQL-042` (47 CDC markers - highest count)
 
-**Core Features**:
+> **Status (SONNY-6570, 2026-11-15): change capture is NOT implemented.**
+> The engine can be started, stopped and inspected, but no write path feeds
+> it: a `CREATE`, `SET`, `DELETE` or `MERGE` produces no change event, its
+> event counters stay 0, and nothing reaches a sink. Change capture is a
+> separate story (SONNY-6572). The features below describe the engine
+> library (`CDCEngine.captureChange` / `ingestChangeRecord`, exercised by its
+> unit tests), not what a running server delivers.
+
+#### CDC procedures (`CALL cdc.*`)
+
+Every `cdc.*` procedure is **Admin only** (42501 for any other role, as the
+CDC_DIAGNOSTICS / CDC_CONTROL frames), on QUIC and gRPC. `enable`, `disable`,
+`start`, `stop` and `reset_guardrails`, and an attempt to run a refused
+configuration procedure, write an audit record (action = the procedure name,
+result success or failure); a CDC_CONTROL frame writes one with action
+`CDC_CONTROL`, and a refused frame an `access_denied` record.
+
+| Procedure | Answer |
+|---|---|
+| `cdc.enable()` | Starts the engine (idempotent). `status = 'enabled'`. |
+| `cdc.disable()` | Stops and frees the engine (idempotent). `status = 'disabled'`. |
+| `cdc.status()` | `enabled` (an engine exists), `streaming` (it runs), `event_count` (its captured-event counter: 0, since nothing is captured). |
+| `cdc.export_diagnostics()` | `event_count`, `malformed_count`, `last_seq_id` (the last sequence number assigned; 0 when none). The full engine diagnostics are the CDC_DIAGNOSTICS frame. |
+| `cdc.get_guardrail_status()` | `current_epoch` (the guardrail epoch), `warn_threshold` / `abort_threshold` (the engine's malformed-record ratios, `GEODE_CDC_MALFORMED_WARN_PCT` / `_ABORT_PCT`, default 0.05 / 0.50; null with no engine), `pending_events` (buffered events: 0). |
+| `cdc.reset_guardrails()` | Clears the guardrail latches; `new_epoch` is the epoch after. 55000 when CDC is not enabled. |
+| `cdc.stop()` / `cdc.start()` | Stop / start the engine's worker; 55000 when CDC is not enabled. |
+| `cdc.get_events`, `get_ordered_events`, `get_pending_events`, `check_duplicates`, `get_change_status`, `get_watermark`, `get_flush_metrics`, `get_telemetry_metrics`, `get_performance_alerts`, `get_malformed_records`, `get_corruption_analysis`, `pause`, `resume`, `set_guardrail`, `configure_adaptive_flush`, `configure_change_stream`, `set_retention_policy`, `cleanup_expired_events` | **0A000** (feature not supported): the message names the procedure, "change capture is not implemented (see SONNY-6572)" and why. Before SONNY-6570 these returned an invented event, fixed rows or fixed numbers, or changed nothing and reported success. |
+
+The gRPC service serves the CDC frames under the names `src/proto/geode.proto`
+declares, `/geode.GeodeService/GetCdcDiagnostics` and
+`/geode.GeodeService/ControlCdc`, and under the older `/CdcDiag` / `/CdcCtrl`.
+
+**Core Features** (engine library; see the status note above):
 
 - Real-time change event streaming
 - Multiple sink support: Kafka, Webhook, File (plus an in-memory sink for testing). Kinesis and Pub/Sub are **planned, not implemented** — configuring them fails loud at startup with `error.SinkNotImplemented` (GAP-0872)
@@ -641,9 +673,10 @@ pub const CDCConfig = struct {
 
 **Performance**:
 
-- Event capture: <10μs overhead per write
-- Kafka throughput: 50,000-100,000 events/sec
-- Adaptive flush: reduces latency by 60-80%
+- Event capture: none — no write is captured (SONNY-6570 / SONNY-6572), so
+  there is no per-write overhead to report and no server-side sink
+  throughput. The library's own benchmarks (`tests/benchmark_cdc_*.zig`)
+  measure the engine fed directly, not a server.
 
 ### 5.2 Kafka Integration
 
@@ -1115,7 +1148,7 @@ Total CANARY markers: 1284 tracking governance compliance
 
 **Top 10 Features by CANARY Count**:
 
-1. **CDC Engine** (47 markers): Change data capture with adaptive backpressure
+1. **CDC Engine** (47 markers): the CDC engine library (adaptive backpressure); a server captures no changes (SONNY-6570)
 2. **Network Transport** (35 markers): QUIC protocol implementation
 3. **Query Planner** (27 markers): Cost-based query optimization
 4. **Governance** (25 markers): CANARY system itself
@@ -1221,7 +1254,7 @@ Also read: `listen_grpc`, `persist_interval`, `idle_in_transaction_timeout`,
 
 **AST**: Abstract Syntax Tree - parsed representation of GQL query
 **CANARY**: Governance marker for requirement tracking
-**CDC**: Change Data Capture - streaming database changes
+**CDC**: Change Data Capture - streaming database changes (not implemented in the server: no write is captured, SONNY-6570)
 **CBO**: Cost-Based Optimizer - query plan cost estimation
 **GQL**: Graph Query Language (ISO/IEC 39075:2024)
 **HNSW**: Hierarchical Navigable Small World - vector index algorithm

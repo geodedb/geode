@@ -25,6 +25,12 @@ const ExecutionContext = execution.ExecutionContext;
 // CANARY: REQ=REQ-SONNY-6334-FLE-ADMIN-GATE; FEATURE="FieldLevelEncryption"; ASPECT=AdminOnlyKeyAdministration; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
 /// Admin only, or the refusal (audited). `proc_name` is lowercase.
 pub fn requireAdmin(allocator: std.mem.Allocator, proc_name: []const u8, context: ExecutionContext) !void {
+    return requireAdminFor(allocator, proc_name, context, "key administration");
+}
+
+/// `requireAdmin` for another kind of administration (`what` names it in
+/// the refusal's audit record; SONNY-6570: CDC administration).
+pub fn requireAdminFor(allocator: std.mem.Allocator, proc_name: []const u8, context: ExecutionContext, what: []const u8) !void {
     const gps = @import("../security/gps.zig");
     const user_mgmt = @import("../security/user_management.zig");
     if (gps.isInsecureAllowAll()) return;
@@ -32,6 +38,7 @@ pub fn requireAdmin(allocator: std.mem.Allocator, proc_name: []const u8, context
     const om = @import("otel_metrics");
     const audit_mod = @import("../security/audit.zig");
     const duration = om.DurationTimer.start();
+    var details_buf: [128]u8 = undefined;
     // The session's authenticated role; a context that carries only a
     // principal (in-process callers) is judged by the principal's roles.
     const authenticated = context.role != null or
@@ -43,7 +50,7 @@ pub fn requireAdmin(allocator: std.mem.Allocator, proc_name: []const u8, context
             .event_type = .access_denied,
             .action = proc_name,
             .username = context.user orelse "",
-            .details = "key administration denied: unauthenticated",
+            .details = deniedDetails(&details_buf, what, "unauthenticated"),
             .result_failure = true,
         });
         return error.Unauthenticated;
@@ -55,12 +62,16 @@ pub fn requireAdmin(allocator: std.mem.Allocator, proc_name: []const u8, context
             .action = proc_name,
             .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
             .username = context.user orelse "",
-            .details = "key administration denied: admin role required",
+            .details = deniedDetails(&details_buf, what, "admin role required"),
             .result_failure = true,
         });
         return error.Unauthorized;
     }
     om.recordAuthzCheck(.allow, .rbac, duration.seconds());
+}
+
+fn deniedDetails(buf: []u8, what: []const u8, why: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s} denied: {s}", .{ what, why }) catch why;
 }
 
 fn principalIsAdmin(context: ExecutionContext) bool {

@@ -202,7 +202,7 @@ Geode ships four built-in roles that cannot be deleted:
 
 | Role name | Meaning |
 |---|---|
-| `admin` | Full administrative access — required for user/role mutations |
+| `admin` | Full administrative access — required for user/role mutations, FLE/TDE key administration and CDC administration (every `cdc.*` procedure and the CDC_DIAGNOSTICS / CDC_CONTROL frames, SONNY-6570) |
 | `user` | Standard authenticated user |
 | `readwrite` | Read and write access to graph data |
 | `readonly` | Read-only access to graph data |
