@@ -40,11 +40,40 @@ const h2_client_initial_window: u32 = 16 * 1024 * 1024;
 /// RFC 9113 §6.9.2: every flow-control window starts at 65,535 octets.
 const h2_default_window: u32 = 65_535;
 
-/// Peer's SETTINGS_MAX_FRAME_SIZE, learned in `drainInitialSettings` and read by
-/// `sendRequest` to cap outbound DATA-frame fragmentation. Thread-local so each
-/// connection (the CLI query thread, a distributed-coordination worker) keeps
-/// its own negotiated value without a shared-state race.
-threadlocal var tl_peer_max_frame_size: usize = h2_default_max_frame_size;
+// CANARY: REQ=REQ-SONNY-6607-GRPC-FRAME-SIZE; FEATURE="GrpcTransport"; ASPECT=PerConnectionMaxFrameSize; STATUS=TESTED; TEST=tests/test_sonny6607_grpc_frame_size.zig; OWNER=transport; UPDATED=2026-11-15
+/// Peer's SETTINGS_MAX_FRAME_SIZE per connection (keyed by its socket),
+/// learned in `drainInitialSettings` / `readResponse` and read by
+/// `sendRequest` to cap outbound DATA-frame fragmentation. SONNY-6607 (5): it
+/// was a thread-local, so two connections used from one thread shared it,
+/// and a request on one went out in frames sized by the other's peer (a
+/// FRAME_SIZE_ERROR). A connection with no entry (none learned, or the
+/// entry could not be stored) uses the default every peer accepts.
+var peer_frame_sizes: std.AutoHashMapUnmanaged(std.posix.socket_t, usize) = .empty;
+var peer_frame_sizes_mutex: std.Io.Mutex = .init;
+
+fn frameSizesIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn peerMaxFrameSize(stream: std.Io.net.Stream) usize {
+    peer_frame_sizes_mutex.lockUncancelable(frameSizesIo());
+    defer peer_frame_sizes_mutex.unlock(frameSizesIo());
+    return peer_frame_sizes.get(stream.socket.handle) orelse h2_default_max_frame_size;
+}
+
+fn setPeerMaxFrameSize(stream: std.Io.net.Stream, size: ?usize) void {
+    peer_frame_sizes_mutex.lockUncancelable(frameSizesIo());
+    defer peer_frame_sizes_mutex.unlock(frameSizesIo());
+    const v = size orelse {
+        _ = peer_frame_sizes.remove(stream.socket.handle);
+        return;
+    };
+    // Process-lifetime map (one small entry per open socket handle, reused
+    // with the handle). Out of memory: the default, which is always safe.
+    peer_frame_sizes.put(std.heap.smp_allocator, stream.socket.handle, v) catch {
+        _ = peer_frame_sizes.remove(stream.socket.handle);
+    };
+}
 
 // CANARY: REQ=REQ-SONNY-6567-GRPC-STREAM-IDS; FEATURE="GrpcTransport"; ASPECT=StreamIdAllocation; STATUS=TESTED; TEST=tests/test_sonny6567_grpc_stream_ids.zig; OWNER=transport; UPDATED=2026-11-14
 /// SONNY-6567 (1): the client stream ids of ONE connection. RFC 9113 §5.1.1:
@@ -122,9 +151,9 @@ pub fn connectPlaintext(
     errdefer stream.close(io);
 
     setSocketTimeouts(stream, timeout_secs);
-    // Reset the negotiated peer frame size for this (thread's) connection; it is
-    // refined below when the peer's SETTINGS arrive.
-    tl_peer_max_frame_size = h2_default_max_frame_size;
+    // A new connection (on a socket handle an earlier one may have used)
+    // starts at the default; refined when the peer's SETTINGS arrive.
+    setPeerMaxFrameSize(stream, null);
     try writeAll(stream, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
     // Advertise a large receive window so a big streamed response is not stalled
     // by the 65535-byte default per-stream window (RFC 7540 §6.9.2). Connection-
@@ -154,10 +183,10 @@ fn writeSetting(dest: *[6]u8, id: u16, value: u32) void {
 }
 
 /// Parse a SETTINGS frame payload and apply the peer's SETTINGS_MAX_FRAME_SIZE
-/// to `tl_peer_max_frame_size`, so `sendRequest` can split an oversized request
-/// into frames the peer will accept. Malformed/partial payloads are ignored
-/// (the default stays in effect).
-fn applyPeerSettings(payload: []const u8) void {
+/// to this connection (`stream`), so `sendRequest` can split an oversized
+/// request into frames the peer will accept. Malformed/partial payloads are
+/// ignored (the default stays in effect).
+fn applyPeerSettings(stream: std.Io.net.Stream, payload: []const u8) void {
     var i: usize = 0;
     while (i + 6 <= payload.len) : (i += 6) {
         const id = (@as(u16, payload[i]) << 8) | @as(u16, payload[i + 1]);
@@ -170,7 +199,7 @@ fn applyPeerSettings(payload: []const u8) void {
             // default (a smaller value would be a peer protocol violation, and a
             // smaller split gains nothing).
             const clamped = @max(@as(usize, value), h2_default_max_frame_size);
-            tl_peer_max_frame_size = @min(clamped, @as(usize, 16_777_215));
+            setPeerMaxFrameSize(stream, @min(clamped, @as(usize, 16_777_215)));
         }
     }
 }
@@ -191,7 +220,7 @@ pub fn drainInitialSettings(
             got_settings_ack = true;
         } else {
             // The peer's own SETTINGS: learn its MAX_FRAME_SIZE, then ACK.
-            applyPeerSettings(frame.payload);
+            applyPeerSettings(stream, frame.payload);
             try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
         }
     }
@@ -320,7 +349,7 @@ pub fn sendRequest(
     // as one oversized frame drew a spec-correct FRAME_SIZE_ERROR from the server
     // and looked like a bogus TLS reset to the caller. END_STREAM rides ONLY the
     // final frame; the gRPC message boundary is the whole reassembled byte run.
-    const chunk_size = @max(tl_peer_max_frame_size, @as(usize, 1));
+    const chunk_size = @max(peerMaxFrameSize(stream), @as(usize, 1));
     var offset: usize = 0;
     if (grpc_frame.len == 0) {
         // Degenerate: still send an empty END_STREAM DATA frame.
@@ -440,7 +469,7 @@ pub fn readResponseOn(
 
         if (frame_type == H2_SETTINGS) {
             if ((flags & 0x1) == 0) {
-                applyPeerSettings(payload);
+                applyPeerSettings(stream, payload);
                 try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
             }
             allocator.free(payload);

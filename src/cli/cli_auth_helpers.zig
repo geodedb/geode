@@ -261,7 +261,11 @@ pub const ChainCheckError = error{ AuthChainTampered, AuthChainUnverifiable, Hma
 /// was changed.
 pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphManager) ChainCheckError!void {
     g_empty_store = false;
-    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) {
+    // SONNY-6594 (5): a chain root that cannot be read is not "no root": the
+    // store is not taken for empty, and `verifyChain` below fails with the
+    // read's error (`g_verify_failure`).
+    const no_root = if (mgr.storage.loadChainRoot()) |root| root == null else |_| false;
+    if (mgr.countAuthRecords() == 0 and no_root) {
         g_empty_store = true;
         return;
     }

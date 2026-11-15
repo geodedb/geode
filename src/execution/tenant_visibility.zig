@@ -555,7 +555,7 @@ pub fn edgeIdTraversable(
     store: *graph_store.GraphStore,
     edge_id: u64,
     filter_tenant: ?[]const u8,
-) bool {
+) !bool {
     if (filter_tenant == null) return true;
     // Review R1 — read the edge BY VALUE. `getEdgePtrHydrated` hands back a raw
     // `*Edge` pointing into the bounded edge-body cache; `graph_store.zig`
@@ -564,7 +564,7 @@ pub fn edgeIdTraversable(
     // safe accessor — it copies the body under the per-shard map lock SHARED,
     // which is exactly what `getNeighbors` already uses. This predicate runs on
     // analytical reads that overlap ingest, so it takes the by-value accessor.
-    const edge = store.getEdgeHydrated(edge_id) orelse return false;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return false;
     return edgeTraversable(store, edge, filter_tenant);
 }
 

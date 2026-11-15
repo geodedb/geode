@@ -455,10 +455,14 @@ const isMutatingStatement = query_traits.isMutatingStatement;
 
 const isMutatingProgram = query_traits.isMutatingProgram;
 
+/// SONNY-6607 (3): as the gRPC handler's `index_backfill_failed_flag`.
+const index_backfill_failed_flag = "IndexBackfillFailed: an index this statement created or changed could not be built (its backfill failed; see the server log). The index is not in use until it is rebuilt: the next query that needs it rebuilds it, or run the statement again";
+
 fn rebuildPendingIndexes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
     pending_index_rebuilds: *std.StringHashMap(void),
+    warn_into: ?*execution.ExecutionResult,
 ) void {
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
@@ -479,6 +483,8 @@ fn rebuildPendingIndexes(
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
+            // SONNY-6607 (3): told to the client (the gRPC handler's flag).
+            if (warn_into) |r| appendFlagToResult(allocator, r, index_backfill_failed_flag) catch {};
             continue;
         };
         log.info("Advanced index backfill complete", &.{
@@ -8621,7 +8627,7 @@ fn handleClientMessage(
                         // reads the store, so it does not need the graph write lock.
                         // This prevents MERGE stalls under sustained ingest.
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
+                        rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds, null);
                     }
                 }
                 // The snapshot session is owned by this handler scope —
@@ -8747,7 +8753,7 @@ fn handleClientMessage(
                                 if (graph_lock_handle) |h| {
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
-                                    rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds, null);
                                 }
                                 lock_released = true;
                             }
@@ -8824,7 +8830,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                         lock_released = true;
                     }
@@ -8919,7 +8925,7 @@ fn handleClientMessage(
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
-                                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds, null);
                                         }
                                         lock_released = true;
                                     }
@@ -9086,7 +9092,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                         lock_released = true;
                     }

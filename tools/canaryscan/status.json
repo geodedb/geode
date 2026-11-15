@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:10:07.887637394Z",
+  "generated_at": "2026-11-15T18:37:20.135270447Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79055,6 +79055,120 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6594-AUTH-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_auth_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_auth_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6594-INDEX-BUILD-READ-FAILURE",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_index_build_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_index_build_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6594-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6594-TENANT-SCAN-READ-FAILURE",
+      "features": [
+        {
+          "feature": "PerTenantIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_tenant_scan_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_tenant_scan_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6594-UNDO-READ-FAILURE",
+      "features": [
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_undo_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_undo_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6594-WRITE-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_write_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_write_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6595-FAST-CREATE-DIM-GUARD",
       "features": [
         {
@@ -79722,6 +79836,162 @@
           ],
           "benches": [],
           "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ErrorReturningGetters",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_adjacency_property_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-GRPC-FRAME-SIZE",
+      "features": [
+        {
+          "feature": "GrpcTransport",
+          "aspect": "PerConnectionMaxFrameSize",
+          "status": "TESTED",
+          "files": [
+            "src/client/grpc_query_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "GrpcTransport",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-INDEX-BACKFILL-WARNING",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_index_backfill_warning.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_index_backfill_warning.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-TENANT-LIFECYCLE",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "DroppingTenantRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/tenancy.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-TENANT-ORPHAN-STARTUP",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_tenant_orphan_startup.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_orphan_startup.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-VOID-WRITE-ERRORS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_void_write_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_void_write_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2026-11-15"
         }
       ]
@@ -84970,7 +85240,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4211
+      "TESTED": 4226
     },
     "by_aspect": {
       "2PC": 3,
@@ -85899,6 +86169,7 @@
       "DropWaitsForHydration": 1,
       "DropWaitsForReaders": 1,
       "DroppedNameRefused": 1,
+      "DroppingTenantRefused": 1,
       "DryRunWrapper": 1,
       "DualListenerLifetime": 1,
       "DualTokenValidation": 1,
@@ -86031,6 +86302,7 @@
       "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
       "ErrorReporting": 1,
+      "ErrorReturningGetters": 1,
       "ErrorTesting": 1,
       "ErrorTypeReexport": 1,
       "ErrorsFailStatement": 1,
@@ -87340,6 +87612,7 @@
       "PeersList": 1,
       "PendingStatementFailure": 1,
       "PerActionWriteGate": 1,
+      "PerConnectionMaxFrameSize": 1,
       "PerConnectionRequestAssembly": 1,
       "PerConnectionRxWake": 1,
       "PerConnectionTxCreditWake": 1,
@@ -87790,7 +88063,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 372,
+      "Regression": 384,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

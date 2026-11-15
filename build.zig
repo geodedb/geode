@@ -10790,6 +10790,169 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6529_aq_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6529_aq_step = b.step("test-sonny6529-abort-quarantine", "Run SONNY-6529 regression in process (an engine abort graph-storage 0.4.16 cannot undo - a caller-imaged page - fails with AbortNotUndone and quarantines its graph: reads and writes refused with the 58000 operator message, other graphs serve, the shard refuses writes, storage_txn_aborts_not_undone_total counts it; a reopen serves the graph at its committed state without the aborted record; an undone abort is counted in storage_txn_aborts_undone_total and leaves the graph serving; LabelIdSpaceExhausted answers 54000)");
     sonny6529_aq_step.dependOn(&run_sonny6529_aq_tests.step);
+    // SONNY-6594 (1): a ROLLBACK (or a write's undo capture) that cannot read
+    // a body fails loudly instead of skipping the change. gRPC in process.
+    const sonny6594_undo_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_undo_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_undo_test_mod.link_libc = true;
+    sonny6594_undo_test_mod.addImport("geode", root_mod);
+    sonny6594_undo_test_mod.addImport("schema", schema_mod);
+    sonny6594_undo_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_undo_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_undo_test_mod.addImport("logging", logging_mod);
+    sonny6594_undo_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_undo_tests = b.addTest(.{ .root_module = sonny6594_undo_test_mod });
+    const run_sonny6594_undo_tests = b.addRunArtifact(sonny6594_undo_tests);
+    shardDep(test_step, &run_sonny6594_undo_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_undo_step = b.step("test-sonny6594-undo-read-failure", "Run SONNY-6594 item 1 regression (a durable store, gRPC in process, a body rebuild made to fail: ROLLBACK of a SET, REMOVE, label, edge SET or edge DELETE whose body cannot be read fails with 40003 or leaves the data as before the transaction, never reports success with the change in place; a write whose before-image cannot be read fails or is undone)");
+    sonny6594_undo_step.dependOn(&run_sonny6594_undo_tests.step);
+    // SONNY-6594 (2): an index build that cannot read a body fails and leaves
+    // no index without the row. Executor and gRPC in process.
+    const sonny6594_index_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_index_build_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_index_test_mod.link_libc = true;
+    sonny6594_index_test_mod.addImport("geode", root_mod);
+    sonny6594_index_test_mod.addImport("schema", schema_mod);
+    sonny6594_index_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_index_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_index_test_mod.addImport("logging", logging_mod);
+    sonny6594_index_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_index_tests = b.addTest(.{ .root_module = sonny6594_index_test_mod });
+    const run_sonny6594_index_tests = b.addRunArtifact(sonny6594_index_tests);
+    shardDep(test_step, &run_sonny6594_index_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_index_step = b.step("test-sonny6594-index-build-read-failure", "Run SONNY-6594 item 2 regression (a durable store, every body evicted and its rebuild made to fail: CREATE INDEX USING vector in process and over gRPC in process fails or leaves no index without the row; knn afterwards answers every row)");
+    sonny6594_index_step.dependOn(&run_sonny6594_index_tests.step);
+    // SONNY-6594 (3): a write that cannot read its target edge fails with the
+    // read's error; MERGE never creates a second edge beside an unreadable one.
+    const sonny6594_write_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_write_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_write_test_mod.link_libc = true;
+    sonny6594_write_test_mod.addImport("geode", root_mod);
+    sonny6594_write_test_mod.addImport("schema", schema_mod);
+    sonny6594_write_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_write_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_write_test_mod.addImport("logging", logging_mod);
+    sonny6594_write_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_write_tests = b.addTest(.{ .root_module = sonny6594_write_test_mod });
+    const run_sonny6594_write_tests = b.addRunArtifact(sonny6594_write_tests);
+    shardDep(test_step, &run_sonny6594_write_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_write_step = b.step("test-sonny6594-write-read-failure", "Run SONNY-6594 item 3 regression (a durable store, gRPC in process, every edge body evicted and its rebuild made to fail: MERGE of an existing edge, SET on an edge, DELETE of an edge and DETACH DELETE fail with the read's own error (53200) and change nothing, or have exactly the healthy effect; MERGE never creates a second edge)");
+    sonny6594_write_step.dependOn(&run_sonny6594_write_tests.step);
+    // SONNY-6594 (5): an auth decision that cannot read a security record
+    // fails with the read's error, never a silent deny or a tamper alarm.
+    const sonny6594_auth_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_auth_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_auth_test_mod.link_libc = true;
+    sonny6594_auth_test_mod.addImport("geode", root_mod);
+    sonny6594_auth_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6594_auth_tests = b.addTest(.{ .root_module = sonny6594_auth_test_mod });
+    const run_sonny6594_auth_tests = b.addRunArtifact(sonny6594_auth_tests);
+    shardDep(test_step, &run_sonny6594_auth_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_auth_step = b.step("test-sonny6594-auth-read-failure", "Run SONNY-6594 item 5 regression (a durable store, a real AuthGraphManager, every body evicted and its rebuild made to fail: canUserAccessGraph fails with the read's error instead of a silent deny, verifyChain reports the read error instead of MissingChainRoot, and loading the auth store fails instead of loading without the user)");
+    sonny6594_auth_step.dependOn(&run_sonny6594_auth_tests.step);
+    // SONNY-6594 (6): a tenant scan that cannot read a row's tenant tag or
+    // body fails; the row is never listed for the wrong tenant, nor dropped.
+    const sonny6594_tenant_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_tenant_scan_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_tenant_test_mod.link_libc = true;
+    sonny6594_tenant_test_mod.addImport("geode", root_mod);
+    const sonny6594_tenant_tests = b.addTest(.{ .root_module = sonny6594_tenant_test_mod });
+    const run_sonny6594_tenant_tests = b.addRunArtifact(sonny6594_tenant_tests);
+    shardDep(test_step, &run_sonny6594_tenant_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_tenant_step = b.step("test-sonny6594-tenant-scan-read-failure", "Run SONNY-6594 item 6 regression (a durable store with bounded caches: getAllNodesForTenant whose tenant-tag reads fail never lists another tenant's nodes as the default tenant's; getAllEdgesForTenant whose edge bodies cannot be read fails instead of dropping the edges)");
+    sonny6594_tenant_step.dependOn(&run_sonny6594_tenant_tests.step);
+    // SONNY-6607 (1): a traversal or MATCH fast path whose adjacency list or
+    // node property cannot be read fails. gRPC and executor in process.
+    const sonny6607_adj_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_adjacency_property_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6607_adj_test_mod.link_libc = true;
+    sonny6607_adj_test_mod.addImport("geode", root_mod);
+    sonny6607_adj_test_mod.addImport("schema", schema_mod);
+    sonny6607_adj_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_adj_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6607_adj_test_mod.addImport("logging", logging_mod);
+    sonny6607_adj_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_adj_tests = b.addTest(.{ .root_module = sonny6607_adj_test_mod });
+    const run_sonny6607_adj_tests = b.addRunArtifact(sonny6607_adj_tests);
+    shardDep(test_step, &run_sonny6607_adj_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_adj_step = b.step("test-sonny6607-adjacency-property-read-failure", "Run SONNY-6607 item 1 regression (a durable store, gRPC in process, every adjacency list evicted and its rebuild failing: one-hop, var-length, shortestPath, COUNT { }, BFS, DFS and centrality fail or answer exactly the healthy answer)");
+    sonny6607_adj_step.dependOn(&run_sonny6607_adj_tests.step);
+    // SONNY-6607 (2): a REMOVE whose target cannot be read fails with the
+    // read's error, never out of memory or a silent success. gRPC in process.
+    const sonny6607_vw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_void_write_errors.zig"), .target = target, .optimize = optimize });
+    sonny6607_vw_test_mod.link_libc = true;
+    sonny6607_vw_test_mod.addImport("geode", root_mod);
+    sonny6607_vw_test_mod.addImport("schema", schema_mod);
+    sonny6607_vw_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_vw_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6607_vw_test_mod.addImport("logging", logging_mod);
+    sonny6607_vw_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_vw_tests = b.addTest(.{ .root_module = sonny6607_vw_test_mod });
+    const run_sonny6607_vw_tests = b.addRunArtifact(sonny6607_vw_tests);
+    shardDep(test_step, &run_sonny6607_vw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_vw_step = b.step("test-sonny6607-void-write-errors", "Run SONNY-6607 item 2 regression (a durable store, gRPC in process, every body rebuild failing with an engine read error: REMOVE of a node or edge property fails, not with 53200, and leaves the property)");
+    sonny6607_vw_step.dependOn(&run_sonny6607_vw_tests.step);
+    // SONNY-6607 (3): a CREATE INDEX whose backfill fails tells the client
+    // (a flagger finding). gRPC in process.
+    const sonny6607_ibw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_index_backfill_warning.zig"), .target = target, .optimize = optimize });
+    sonny6607_ibw_test_mod.link_libc = true;
+    sonny6607_ibw_test_mod.addImport("geode", root_mod);
+    sonny6607_ibw_test_mod.addImport("schema", schema_mod);
+    sonny6607_ibw_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_ibw_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6607_ibw_test_mod.addImport("logging", logging_mod);
+    sonny6607_ibw_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_ibw_tests = b.addTest(.{ .root_module = sonny6607_ibw_test_mod });
+    const run_sonny6607_ibw_tests = b.addRunArtifact(sonny6607_ibw_tests);
+    shardDep(test_step, &run_sonny6607_ibw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_ibw_step = b.step("test-sonny6607-index-backfill-warning", "Run SONNY-6607 item 3 regression (a durable store, gRPC in process: CREATE INDEX USING vector whose backfill cannot read a body carries an IndexBackfillFailed flagger finding; a healthy one does not)");
+    sonny6607_ibw_step.dependOn(&run_sonny6607_ibw_tests.step);
+    // SONNY-6607 (4): a tenant create whose hierarchy add fails is undone; a
+    // statement of a tenant being dropped is refused.
+    const sonny6607_tl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_tenant_lifecycle.zig"), .target = target, .optimize = optimize });
+    sonny6607_tl_test_mod.link_libc = true;
+    sonny6607_tl_test_mod.addImport("geode", root_mod);
+    sonny6607_tl_test_mod.addImport("logging", logging_mod);
+    sonny6607_tl_test_mod.addImport("rls", rls_mod);
+    sonny6607_tl_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6607_tl_tests = b.addTest(.{ .root_module = sonny6607_tl_test_mod });
+    const run_sonny6607_tl_tests = b.addRunArtifact(sonny6607_tl_tests);
+    shardDep(test_step, &run_sonny6607_tl_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_tl_step = b.step("test-sonny6607-tenant-lifecycle", "Run SONNY-6607 item 4 regression (a durable tenant registry and a real RLS hierarchy on an allocator failing from each allocation on: a tenant create either succeeds in both or fails in neither; a statement whose session tenant is being dropped is refused with TenantDropping and writes nothing)");
+    sonny6607_tl_step.dependOn(&run_sonny6607_tl_tests.step);
+    // SONNY-6607 (4): a tenant registry with an orphan parent refuses
+    // startup (spawns the built geode).
+    const sonny6607_os_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_tenant_orphan_startup.zig"), .target = target, .optimize = optimize });
+    sonny6607_os_test_mod.link_libc = true;
+    sonny6607_os_test_mod.addImport("geode", root_mod);
+    sonny6607_os_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_os_test_mod.addImport("schema", schema_mod);
+    sonny6607_os_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_os_tests = b.addTest(.{ .root_module = sonny6607_os_test_mod });
+    const run_sonny6607_os_tests = b.addRunArtifact(sonny6607_os_tests);
+    spawnsBuiltGeode(sonny6607_os_tests);
+    shardDep(test_step, &run_sonny6607_os_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_os_step = b.step("test-sonny6607-tenant-orphan-startup", "Run SONNY-6607 item 4 regression (spawns geode serve on a data directory whose tenant registry holds a tenant with an unregistered parent: startup refuses, naming the tenant)");
+    sonny6607_os_step.dependOn(&run_sonny6607_os_tests.step);
+    // SONNY-6607 (5): the gRPC client's max frame size is per connection.
+    const sonny6607_fs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_grpc_frame_size.zig"), .target = target, .optimize = optimize });
+    sonny6607_fs_test_mod.link_libc = true;
+    sonny6607_fs_test_mod.addImport("geode", root_mod);
+    const sonny6607_fs_tests = b.addTest(.{ .root_module = sonny6607_fs_test_mod });
+    const run_sonny6607_fs_tests = b.addRunArtifact(sonny6607_fs_tests);
+    shardDep(test_step, &run_sonny6607_fs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_fs_step = b.step("test-sonny6607-grpc-frame-size", "Run SONNY-6607 item 5 regression (the real gRPC client functions over two socket pairs: after one connection learns a 64 KiB SETTINGS_MAX_FRAME_SIZE, a 40,000-byte request on the other, which negotiated nothing, arrives in DATA frames of at most 16384)");
+    sonny6607_fs_step.dependOn(&run_sonny6607_fs_tests.step);
+    // SONNY-6594 (4): a read that cannot read an edge body fails instead of
+    // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
+    // centrality). gRPC in process.
+    const sonny6594_read_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_read_test_mod.link_libc = true;
+    sonny6594_read_test_mod.addImport("geode", root_mod);
+    sonny6594_read_test_mod.addImport("schema", schema_mod);
+    sonny6594_read_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_read_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_read_test_mod.addImport("logging", logging_mod);
+    sonny6594_read_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_read_tests = b.addTest(.{ .root_module = sonny6594_read_test_mod });
+    const run_sonny6594_read_tests = b.addRunArtifact(sonny6594_read_tests);
+    shardDep(test_step, &run_sonny6594_read_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_read_step = b.step("test-sonny6594-read-failure", "Run SONNY-6594 item 4 regression (a durable store, gRPC in process, every edge body evicted and its rebuild made to fail: MATCH one- and two-hop patterns, path variables, variable-length patterns, COUNT { } and pattern comprehensions, shortestPath, BFS and centrality, top level and inside a transaction, fail or answer exactly the healthy answer)");
+    sonny6594_read_step.dependOn(&run_sonny6594_read_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

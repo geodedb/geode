@@ -93,21 +93,21 @@ test "canUserAccessGraph: superuser bypass, grantee scoped, others denied" {
     try mgr.grantUserGraphPermission(&HMAC_KEY, grantee_id, "hr", 'r');
 
     // Superuser sees every graph (coarse gate short-circuit).
-    try testing.expect(mgr.canUserAccessGraph("root", "hr"));
-    try testing.expect(mgr.canUserAccessGraph("root", "anything-else"));
+    try testing.expect(try mgr.canUserAccessGraph("root", "hr"));
+    try testing.expect(try mgr.canUserAccessGraph("root", "anything-else"));
 
     // Grantee sees exactly the granted graph.
-    try testing.expect(mgr.canUserAccessGraph("grantee", "hr"));
-    try testing.expect(!mgr.canUserAccessGraph("grantee", "finance"));
+    try testing.expect(try mgr.canUserAccessGraph("grantee", "hr"));
+    try testing.expect(!try mgr.canUserAccessGraph("grantee", "finance"));
 
     // A user with no grants sees nothing; unknown users see nothing.
-    try testing.expect(!mgr.canUserAccessGraph("bystander", "hr"));
-    try testing.expect(!mgr.canUserAccessGraph("ghost", "hr"));
+    try testing.expect(!try mgr.canUserAccessGraph("bystander", "hr"));
+    try testing.expect(!try mgr.canUserAccessGraph("ghost", "hr"));
 
     // Revoking the grant closes the gate again.
     const removed = try mgr.revokeUserGraphPermission(&HMAC_KEY, grantee_id, "hr", 'r');
     try testing.expect(removed);
-    try testing.expect(!mgr.canUserAccessGraph("grantee", "hr"));
+    try testing.expect(!try mgr.canUserAccessGraph("grantee", "hr"));
 }
 
 // ---- GAP-0514 Phase 6 P3: SecurityManager -> AuthGraphManager wiring ----

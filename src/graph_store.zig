@@ -21,6 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const fle_integration = @import("fle_integration.zig");
 // SONNY-3348 (round 18): the statement undo record the write methods fill.
 const statement_undo = @import("statement_undo.zig");
+const value_types = @import("value_types.zig");
 
 /// SONNY-6567 (6c): depth of `GraphStore.enterReplicatedApply` on this thread.
 threadlocal var t_replicated_apply_depth: u32 = 0;
@@ -8907,6 +8908,14 @@ pub const GraphStore = struct {
         return null;
     }
 
+    /// SONNY-6607 (1): `getNodeProperty` that tells "absent" (null) from "the
+    /// node could not be read" (the hydrate's error), which it returns as
+    /// null too. Same borrow lifetime.
+    pub fn getNodePropertyOrError(self: *GraphStore, node_id: u64, key: []const u8) !?PropertyValue {
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return null;
+        return node.properties.get(key);
+    }
+
     /// SONNY-6327: the node's property as the requesting principal may see
     /// it: a string through the shared FLE read policy
     /// (`fle_integration.readStoredString`, the one eval uses): decrypted
@@ -8952,10 +8961,12 @@ pub const GraphStore = struct {
         // resident-only gates below turn a REMOVE on a cold (post-warm-reopen)
         // node into a SILENT durable no-op. See setNodeProperty for the full
         // rationale and the write-lock safety argument.
-        _ = self.nodes.getOrHydratePtr(node_id) catch null;
+        // SONNY-6607 (2): a node that cannot be read fails the statement with
+        // the read's error (`undoRecordFailed`); it was the no-op above.
+        _ = self.nodes.getOrHydratePtr(node_id) catch |err| return undoRecordFailed(err);
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
-        self.undoRecordNodeProperty(node_id, key, true) catch return undoRecordFailed();
+        self.undoRecordNodeProperty(node_id, key, true) catch |err| return undoRecordFailed(err);
         // SONNY-6268: the map's shrunken slice is allocated before the
         // adapter write, so the in-memory removal after it cannot fail (it
         // could, and then compacted in place into a slice shorter than its
@@ -8963,7 +8974,7 @@ pub const GraphStore = struct {
         // A failure to allocate it, or of the adapter write, changes nothing
         // and fails the statement (out of memory) or is logged (the adapter).
         const node_meta = self.nodes.get(node_id) orelse return;
-        const reservation = node_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        const reservation = node_meta.properties.reserveRemove(key) catch |err| return undoRecordFailed(err);
         var reserved = reservation != null;
         defer if (reserved) node_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
@@ -9350,7 +9361,7 @@ pub const GraphStore = struct {
             defer allocator.free(uuids);
             for (uuids) |nuuid| {
                 const id = @as(u64, @truncate(nuuid));
-                if (@constCast(self).nodeMatchesTenant(graph_name, entry.map, id, tid)) {
+                if (try @constCast(self).nodeMatchesTenant(graph_name, entry.map, id, tid)) {
                     try result.append(allocator, id);
                 }
             }
@@ -9363,11 +9374,14 @@ pub const GraphStore = struct {
     /// Resident cache entry wins; otherwise read the persisted tenant property
     /// directly from the engine (absent ⇒ DEFAULT_TENANT_ID). The comparison is
     /// done inline so no tenant string needs to outlive the engine read.
-    fn nodeMatchesTenant(self: *GraphStore, graph_name: []const u8, id_map: *id_map_mod.IdMap, node_id: u64, tid: []const u8) bool {
+    /// SONNY-6594 (6): a tag read that FAILS is the read's error. It was taken
+    /// for an absent tag (the default tenant), so another tenant's node was
+    /// listed, and counted, as the default tenant's.
+    fn nodeMatchesTenant(self: *GraphStore, graph_name: []const u8, id_map: *id_map_mod.IdMap, node_id: u64, tid: []const u8) !bool {
         if (self.nodes.get(node_id)) |n| return std.mem.eql(u8, n.tenant_id, tid);
         const adapter = global_adapter orelse return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
         const slot = id_map.nodeSlot(@as(u128, node_id)) orelse return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
-        const tprop = (adapter.getNodeProperty(graph_name, slot, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null) orelse
+        const tprop = (try adapter.getNodeProperty(graph_name, slot, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator)) orelse
             return std.mem.eql(u8, DEFAULT_TENANT_ID, tid);
         defer switch (tprop) {
             .string => |s| self.allocator.free(s),
@@ -9429,7 +9443,9 @@ pub const GraphStore = struct {
             for (euuids) |euuid| {
                 const eid = @as(u64, @truncate(euuid));
                 if (tenant) |tid| {
-                    const edge = self.getEdgeHydrated(eid) orelse continue;
+                    // SONNY-6594 (6): an unreadable edge fails the listing; it
+                    // silently left the tenant's edges.
+                    const edge = (try self.getEdgeHydratedChecked(eid)) orelse continue;
                     if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
                 }
                 try result.append(allocator, eid);
@@ -9762,7 +9778,7 @@ pub const GraphStore = struct {
     fn retagEdgeTenant(self: *GraphStore, edge_id: u64, expected: []const u8, tenant: []const u8) !void {
         if (std.mem.eql(u8, tenant, DEFAULT_TENANT_ID)) return error.InvalidTenantTag;
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
-        const current = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+        const current = (try self.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
         if (!std.mem.eql(u8, current.tenant_id, expected)) return error.EdgeTenantChanged;
 
         // The engine addresses the edge by its endpoints' slots and its own.
@@ -9876,7 +9892,8 @@ pub const GraphStore = struct {
     // it runs a single O(N) scan over the node map without allocating any
     // bindings — strictly cheaper than the old iteration path which built a
     // MatchBinding per node then discarded them.
-    pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) usize {
+    /// SONNY-6594 (6): fails when a node's tenant tag cannot be read.
+    pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) !usize {
         // PHASE 1b chokepoint (H3): guard the deferred hydration so a count(n)
         // before hydration completes can't observe a partial IdMap node count
         // after a no-snapshot open (same bug class as countEdgesForGraph).
@@ -9930,11 +9947,11 @@ pub const GraphStore = struct {
             // mutex (`nodeMatchesTenant` locks the map again), not walked
             // unlocked while a bulk writer of the graph (which holds its lock
             // shared) grows the map.
-            const nuuids = @constCast(id_map).snapshotNodeUuids(std.heap.smp_allocator) catch return 0;
+            const nuuids = try @constCast(id_map).snapshotNodeUuids(std.heap.smp_allocator);
             defer std.heap.smp_allocator.free(nuuids);
             for (nuuids) |nuuid| {
                 const id = @as(u64, @truncate(nuuid));
-                if (@constCast(self).nodeMatchesTenant(graph_name, id_map, id, tid)) count += 1;
+                if (try @constCast(self).nodeMatchesTenant(graph_name, id_map, id, tid)) count += 1;
             }
             return count;
         }
@@ -10254,6 +10271,24 @@ pub const GraphStore = struct {
         return self.inAdjItems(node_id);
     }
 
+    // CANARY: REQ=REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE; FEATURE="StorageIntegrity"; ASPECT=ErrorReturningGetters; STATUS=TESTED; TEST=tests/test_sonny6607_adjacency_property_read_failure.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6607 (1): `getOutgoingEdgeIds` that tells "no adjacency" (null,
+    /// as before) from "could not be read" (the hydrate's error). The
+    /// unchecked getter returns null for both, so a traversal took a node
+    /// whose evicted list could not be rebuilt for a dead end.
+    pub fn getOutgoingEdgeIdsOrError(self: *const GraphStore, node_id: u64) !?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.outgoing_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
+        return adjItemsSnapshot(&p.list);
+    }
+
+    /// SONNY-6607 (1): `getIncomingEdgeIds`, as `getOutgoingEdgeIdsOrError`.
+    pub fn getIncomingEdgeIdsOrError(self: *const GraphStore, node_id: u64) !?[]const u64 {
+        const cache: *AdjCache = @constCast(&self.incoming_edges);
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
+        return adjItemsSnapshot(&p.list);
+    }
+
     /// ENG-3983: FAIL-CLOSED adjacency reads. `getOutgoingEdgeIds` /
     /// `getIncomingEdgeIds` launder a hydrate FAILURE ("the engine could not be
     /// read") into the same `null` a node with NO edges produces — indistinguishable
@@ -10280,7 +10315,7 @@ pub const GraphStore = struct {
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.*);
                 }
             }
@@ -10292,7 +10327,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(Edge) = .empty;
         if (self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.*);
                 }
             }
@@ -10305,7 +10340,7 @@ pub const GraphStore = struct {
         errdefer result.deinit(allocator);
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
             }
@@ -10317,7 +10352,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(u64) = .empty;
         if (self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.from_id);
                 }
             }
@@ -10329,7 +10364,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(u64) = .empty;
         if (self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.to_id);
                 }
             }
@@ -11045,7 +11080,7 @@ pub const GraphStore = struct {
         const effective_value = switch (value) {
             .String => |s| blk: {
                 if (fle_integration.hasEncryptedFields()) {
-                    const maybe_edge = self.getEdgeHydrated(edge_id);
+                    const maybe_edge = (try self.getEdgeHydratedChecked(edge_id));
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
@@ -11078,7 +11113,7 @@ pub const GraphStore = struct {
         // SONNY-6268: the value's copy and, for a new key, the map slot are
         // made before the adapter write, so the in-memory write after it
         // cannot fail (a failed key copy left a slot with an undefined key).
-        const edge_meta = self.getEdgeHydrated(edge_id);
+        const edge_meta = (try self.getEdgeHydratedChecked(edge_id));
         const prep: ?PreparedPropertyPut = if (edge_meta) |e| try self.preparePropertyPut(&e.properties, key, effective_value) else null;
         var committed = false;
         errdefer if (!committed) {
@@ -11145,7 +11180,7 @@ pub const GraphStore = struct {
     pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
         try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
-        const edge = self.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
         // SONNY-3348 (round 18): each entry's prior state.
         for (entries) |entry| try self.undoRecordEdgeProperty(edge_id, entry.key, entry.value == null);
 
@@ -11187,7 +11222,7 @@ pub const GraphStore = struct {
         }
 
         // --- In-memory store update (always, regardless of adapter) ---
-        if (self.getEdgePtrHydrated(edge_id)) |edge_ptr| {
+        if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge_ptr| {
             for (sealed) |entry| {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
@@ -11261,16 +11296,24 @@ pub const GraphStore = struct {
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
-        self.undoRecordEdgeProperty(edge_id, key, true) catch return undoRecordFailed();
+        self.undoRecordEdgeProperty(edge_id, key, true) catch |err| return undoRecordFailed(err);
         // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertyRemove; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
         // SONNY-6302: the map's shrunken slice is allocated before the engine
         // write, as in removeNodeProperty, so the in-memory removal after it
         // cannot fail. (It could: `fetchRemove` then kept the property in
         // memory after the engine had removed it.) A failure of that
         // allocation or of the engine write changes nothing and fails the
-        // statement (out of memory) or is logged (the engine).
-        const edge_meta = self.getEdgeHydrated(edge_id) orelse return;
-        const reservation = edge_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        // statement (out of memory) or is logged (the engine). SONNY-6594:
+        // so does an edge body that cannot be read (it was taken for an
+        // absent edge: the REMOVE did nothing and reported nothing).
+        const edge_meta = (self.getEdgeHydratedChecked(edge_id) catch |err| {
+            log.err("edge body read failed during removeEdgeProperty", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("edge_id", @intCast(edge_id)),
+            });
+            return undoRecordFailed(err);
+        }) orelse return;
+        const reservation = edge_meta.properties.reserveRemove(key) catch |err| return undoRecordFailed(err);
         var reserved = reservation != null;
         defer if (reserved) edge_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
@@ -11440,7 +11483,7 @@ pub const GraphStore = struct {
             if (tenant_id) |tid| {
                 var w: usize = start_len;
                 for (id_list.items[start_len..]) |eid| {
-                    const edge = self.getEdgePtrHydrated(eid) orelse continue;
+                    const edge = (try self.getEdgePtrHydratedChecked(eid)) orelse continue;
                     if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
                     id_list.items[w] = eid;
                     w += 1;
@@ -11466,7 +11509,7 @@ pub const GraphStore = struct {
             _ = typed_edge_node_walk_nodes_total.fetchAdd(1, .monotonic);
             const out_ids = self.getOutgoingEdgeIds(id_ptr.*) orelse continue;
             for (out_ids) |eid| {
-                const edge = self.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try self.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!std.mem.eql(u8, edge.label, edge_type)) continue;
                 if (tenant_id) |tid| {
                     if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
@@ -15239,9 +15282,10 @@ pub const GraphStore = struct {
                     const graph_name_copy = try self.allocator.dupe(u8, graph_name);
                     // GAP-0891 (RC-2): recover the persisted tenant tag. Absent
                     // (legacy / single-tenant data, or a default-tagged row we
-                    // intentionally never persisted) -> DEFAULT_TENANT_ID. A corrupt
-                    // tenant property is non-fatal: fall back to default rather than
-                    // quarantine the node.
+                    // intentionally never persisted) -> DEFAULT_TENANT_ID.
+                    // SONNY-6594 (6): a tag that cannot be READ fails the
+                    // hydration (the graph is quarantined): read as the default
+                    // tenant's, the node was visible to the wrong tenant.
                     const tenant_id_copy = blk_tenant: {
                         // Cold-open H1: read the tenant tag WITHOUT triggering the
                         // engine's full derived property-chain index build
@@ -15250,7 +15294,7 @@ pub const GraphStore = struct {
                         // directly. Using plain getNodeProperty here forced a
                         // one-time O(graph) refreshPropertyChainIndex build (~71% of
                         // loop1 CPU) on the FIRST node — pure waste for loop1.
-                        const maybe_t = adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                        const maybe_t = try adapter.getNodePropertyByHead(graph_name, slot_id, entry.rec.prop_head, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator);
                         if (maybe_t) |stored_prop| {
                             defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                             switch (stored_prop) {
@@ -15462,10 +15506,11 @@ pub const GraphStore = struct {
                         const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                         const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
                         // GAP-0891 (RC-2): recover the persisted edge tenant tag
-                        // (absent / corrupt -> DEFAULT_TENANT_ID). Mirrors the node
-                        // path and the edge-id read above (node slot + edge slot).
+                        // (absent -> DEFAULT_TENANT_ID; SONNY-6594 (6): a failed
+                        // read fails the hydration). Mirrors the node path and
+                        // the edge-id read above (node slot + edge slot).
                         const edge_tenant_id_copy = blk_edge_tenant: {
-                            const maybe_t = adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator) catch null;
+                            const maybe_t = try adapter.getEdgeProperty(graph_name, slot_id, edge_entry.edge_id, INTERNAL_TENANT_ID_PROPERTY_KEY, self.allocator);
                             if (maybe_t) |stored_prop| {
                                 defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                                 switch (stored_prop) {
@@ -15726,7 +15771,9 @@ pub const GraphStore = struct {
                 defer allocator.free(euuids);
                 for (euuids) |euuid| {
                     const id = @as(u64, @truncate(euuid));
-                    if (self.getEdgePtrHydrated(id)) |edge| {
+                    // SONNY-6594: an unreadable edge fails the snapshot; it was
+                    // left out of it.
+                    if (try self.getEdgePtrHydratedChecked(id)) |edge| {
                         try appendEdgeJson(&buf, allocator, id, edge);
                         try buf.append(allocator, '\n');
                     }
@@ -15999,15 +16046,19 @@ pub const GraphStore = struct {
     // through these same methods (capture and fence suspended).
 
     /// Does node `node_id` exist (hydrating it)? For the undo.
-    pub fn nodeExistsForUndo(self: *GraphStore, node_id: u64) bool {
+    /// SONNY-6594 (1): a body that cannot be read is the read's error, not
+    /// "absent": the undo skipped the change and ROLLBACK reported success
+    /// with the transaction's write still in place.
+    pub fn nodeExistsForUndo(self: *GraphStore, node_id: u64) !bool {
         self.ensureNodeGraphHydrated(node_id);
-        return self.getNodePtrHydrated(node_id) != null;
+        return (try self.getNodePtrHydratedChecked(node_id)) != null;
     }
 
-    /// Does edge `edge_id` exist (hydrating it)? For the undo.
-    pub fn edgeExistsForUndo(self: *GraphStore, edge_id: u64) bool {
+    /// Does edge `edge_id` exist (hydrating it)? For the undo (SONNY-6594:
+    /// as `nodeExistsForUndo`).
+    pub fn edgeExistsForUndo(self: *GraphStore, edge_id: u64) !bool {
         self.ensureEdgeGraphHydrated(edge_id);
-        return self.getEdgeHydrated(edge_id) != null;
+        return (try self.getEdgeHydratedChecked(edge_id)) != null;
     }
 
     /// SONNY-3348 (round 18): re-create a deleted edge under its own id,
@@ -16022,7 +16073,9 @@ pub const GraphStore = struct {
     fn undoRecordNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, removing: bool) !void {
         if (!statement_undo.capturing()) return;
         if (isInternalPersistedPropertyKey(key)) return;
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        // SONNY-6594 (1): an unreadable node fails the write; it recorded
+        // nothing, and ROLLBACK then had nothing to undo.
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return;
         const old = node.properties.get(key);
         try statement_undo.append(self, try undoPropertyEntry(node_id, key, old, removing, false) orelse return);
     }
@@ -16031,7 +16084,7 @@ pub const GraphStore = struct {
     fn undoRecordEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, removing: bool) !void {
         if (!statement_undo.capturing()) return;
         if (isInternalPersistedPropertyKey(key)) return;
-        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return;
         const old = edge.properties.get(key);
         try statement_undo.append(self, try undoPropertyEntry(edge_id, key, old, removing, true) orelse return);
     }
@@ -16065,7 +16118,7 @@ pub const GraphStore = struct {
     /// Adding a label the node has, or removing one it lacks, changes nothing.
     fn undoRecordNodeLabel(self: *GraphStore, node_id: u64, label: []const u8, adding: bool) !void {
         if (!statement_undo.capturing()) return;
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return;
         var has = false;
         for (node.labels) |l| {
             if (std.mem.eql(u8, l, label)) {
@@ -16154,7 +16207,7 @@ pub const GraphStore = struct {
     /// Edge `edge_id` before it is deleted.
     fn undoRecordDeleteEdge(self: *GraphStore, edge_id: u64) !void {
         if (!statement_undo.capturing()) return;
-        const edge = self.getEdgeHydrated(edge_id) orelse return;
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return;
         try statement_undo.append(self, try undoEdgeImage(edge));
     }
 
@@ -16185,19 +16238,25 @@ pub const GraphStore = struct {
         try statement_undo.append(self, try undoNodeImage(node));
     }
 
-    /// A void write method's record failed (out of memory): the write is not
-    /// made, and the statement fails with out of memory at its relay, which
-    /// undoes what was recorded.
-    fn undoRecordFailed() void {
-        @import("eval.zig").recordLimitError(error.OutOfMemory);
+    /// A void write method's record failed, or the body it writes could not
+    /// be read: the write is not made, and the statement fails at its relay,
+    /// which undoes what was recorded. SONNY-6607 (2): with the real error
+    /// (out of memory, or `StorageReadFailed` for a read error, its name
+    /// logged); it recorded out of memory whatever had happened.
+    fn undoRecordFailed(err: anyerror) void {
+        @import("eval.zig").recordLimitError(value_types.storageReadFailed(err));
     }
 
     /// SONNY-6268: a void write method failed part way (nothing changed): an
     /// out-of-memory fails the statement at its relay, as `undoRecordFailed`
-    /// does; any other error was logged by the caller. Either way the write
-    /// did not happen, and nothing is left half done.
+    /// does. SONNY-6607 (2): so does any other error inside a statement
+    /// (`StorageWriteFailed`; the caller logged it): the statement succeeded
+    /// without the write. Outside a statement (the undo replay, a Raft
+    /// apply) it is only logged, as before. Either way the write did not
+    /// happen, and nothing is left half done.
     fn voidWriteFailed(err: anyerror) void {
-        if (err == error.OutOfMemory) undoRecordFailed();
+        if (err == error.OutOfMemory or statement_undo.capturing())
+            @import("eval.zig").recordLimitError(value_types.storageWriteFailed(err));
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -16564,7 +16623,7 @@ pub const GraphStore = struct {
     /// Set an edge property without saving (used during rollback)
     pub fn setEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
-        if (self.getEdgePtrHydrated(edge_id)) |edge| {
+        if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
             const value_copy = try copyPropertyValue(self, value);
             errdefer freePropertyValue(self, value_copy);
 

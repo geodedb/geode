@@ -1579,6 +1579,7 @@ pub fn detachFromStatementScratch(allocator: std.mem.Allocator, scratch: *const 
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    try @import("execution/tenancy.zig").refuseDroppingTenant(context.tenant_id); // SONNY-6607 (4)
     var scratch: query_arena.StatementScratch = .{};
     scratch.open(allocator);
     defer scratch.close();
@@ -1838,6 +1839,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    try @import("execution/tenancy.zig").refuseDroppingTenant(context.tenant_id); // SONNY-6607 (4)
     // SONNY-6449: see `detachFromStatementScratch`.
     var scratch: query_arena.StatementScratch = .{};
     scratch.open(allocator);
@@ -3969,13 +3971,13 @@ pub const PathIterator = struct {
             // (`shouldSkipByPathMode`); the caps above bound the work.
 
             // Get edges based on direction (zero-copy: no allocation needed)
-            const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getOutgoingEdgeIds(last_node_id) else null;
-            const incoming_edge_ids = if (self.rel_direction == 'l' or self.rel_direction == 'u') self.store.getIncomingEdgeIds(last_node_id) else null;
+            const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') (try self.store.getOutgoingEdgeIdsOrError(last_node_id)) else null;
+            const incoming_edge_ids = if (self.rel_direction == 'l' or self.rel_direction == 'u') (try self.store.getIncomingEdgeIdsOrError(last_node_id)) else null;
 
             // Process outgoing edges (forward direction)
             if (outgoing_edge_ids) |ids| {
                 for (ids) |edge_id| {
-                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    const edge_ptr = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (self.rel_type) |rt| {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }
@@ -3988,7 +3990,7 @@ pub const PathIterator = struct {
             // Process incoming edges (reverse direction)
             if (incoming_edge_ids) |ids| {
                 for (ids) |edge_id| {
-                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    const edge_ptr = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (self.rel_type) |rt| {
                         if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
                     }

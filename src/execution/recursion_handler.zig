@@ -125,18 +125,18 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try q.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
         };
-        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
             for (out_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 // SONNY-1318: the edge AND both its endpoints must be visible —
                 // never traverse THROUGH an invisible node.
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.to_id, current_depth + 1);
             }
         }
-        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
             for (in_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try ExpandBFS.pushNeighbor(allocator, &queue, current_path, edge.from_id, current_depth + 1);
             }
@@ -228,17 +228,17 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
                 try stk.append(a, .{ .node_id = nid, .path = new_path, .depth = depth });
             }
         };
-        if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
             for (out_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 // SONNY-1318: edge + both endpoints must be visible.
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try PushDfs.push(allocator, &stack, current_path, edge.to_id, current_depth + 1);
             }
         }
-        if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
             for (in_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try PushDfs.push(allocator, &stack, current_path, edge.from_id, current_depth + 1);
             }
@@ -377,18 +377,18 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         {
             var nbrs: std.ArrayList(u64) = .empty;
             defer nbrs.deinit(allocator);
-            if (store.getOutgoingEdgeIds(current_id)) |out_ids| {
+            if ((try store.getOutgoingEdgeIdsOrError(current_id))) |out_ids| {
                 for (out_ids) |eid| {
-                    const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                     // SONNY-1318: never relax across an edge, or into a node,
                     // the session's tenant scope cannot see.
                     if (!scope.edgeTraversable(store, edge.*)) continue;
                     try nbrs.append(allocator, edge.to_id);
                 }
             }
-            if (store.getIncomingEdgeIds(current_id)) |in_ids| {
+            if ((try store.getIncomingEdgeIdsOrError(current_id))) |in_ids| {
                 for (in_ids) |eid| {
-                    const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                     if (!scope.edgeTraversable(store, edge.*)) continue;
                     try nbrs.append(allocator, edge.from_id);
                 }
@@ -396,7 +396,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 
             for (nbrs.items) |nid| {
                 // Get edge weight
-                const weight = getEdgeWeight(store, current_id, nid, weight_property, scope);
+                const weight = try getEdgeWeight(store, current_id, nid, weight_property, scope);
                 const new_distance = current_distance + weight;
 
                 // Check if this path is better
@@ -468,26 +468,26 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         // apply the same visibility rule as the main relaxation loop, or an
         // invisible two-hop path would leak through the back door.
         const maybeEdgeCost = struct {
-            fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8, filter: *AlgoScope) ?f64 {
-                if (gs.getOutgoingEdgeIds(a)) |out_ids| {
+            fn get(gs: *graph_store.GraphStore, a: u64, b: u64, weight_prop: []const u8, filter: *AlgoScope) !?f64 {
+                if ((try gs.getOutgoingEdgeIdsOrError(a))) |out_ids| {
                     for (out_ids) |eid| {
-                        const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        const e = (try gs.getEdgePtrHydratedChecked(eid)) orelse continue;
                         if (!filter.edgeTraversable(gs, e.*)) continue;
-                        if (e.to_id == b) return getEdgeWeight(gs, a, b, weight_prop, filter);
+                        if (e.to_id == b) return try getEdgeWeight(gs, a, b, weight_prop, filter);
                     }
                 }
-                if (gs.getIncomingEdgeIds(a)) |in_ids| {
+                if ((try gs.getIncomingEdgeIdsOrError(a))) |in_ids| {
                     for (in_ids) |eid| {
-                        const e = gs.getEdgePtrHydrated(eid) orelse continue;
+                        const e = (try gs.getEdgePtrHydratedChecked(eid)) orelse continue;
                         if (!filter.edgeTraversable(gs, e.*)) continue;
-                        if (e.from_id == b) return getEdgeWeight(gs, a, b, weight_prop, filter);
+                        if (e.from_id == b) return try getEdgeWeight(gs, a, b, weight_prop, filter);
                     }
                 }
                 return null;
             }
         }.get;
 
-        if (maybeEdgeCost(store, start_id, end_id, weight_property, scope)) |direct| {
+        if (try maybeEdgeCost(store, start_id, end_id, weight_property, scope)) |direct| {
             best_cost = direct;
             best_path = .{ start_id, end_id, 0 };
             best_len = 2;
@@ -498,23 +498,23 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         // of a full `store.edges` scan (bounded-cache-correct + O(degree)).
         var mids: std.ArrayList(u64) = .empty;
         defer mids.deinit(allocator);
-        if (store.getOutgoingEdgeIds(start_id)) |out_ids| {
+        if ((try store.getOutgoingEdgeIdsOrError(start_id))) |out_ids| {
             for (out_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try mids.append(allocator, edge.to_id);
             }
         }
-        if (store.getIncomingEdgeIds(start_id)) |in_ids| {
+        if ((try store.getIncomingEdgeIdsOrError(start_id))) |in_ids| {
             for (in_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!scope.edgeTraversable(store, edge.*)) continue;
                 try mids.append(allocator, edge.from_id);
             }
         }
         for (mids.items) |m| {
-            if (maybeEdgeCost(store, m, end_id, weight_property, scope)) |tail_cost| {
-                const head_cost = getEdgeWeight(store, start_id, m, weight_property, scope);
+            if (try maybeEdgeCost(store, m, end_id, weight_property, scope)) |tail_cost| {
+                const head_cost = try getEdgeWeight(store, start_id, m, weight_property, scope);
                 const total = head_cost + tail_cost;
                 if (best_cost == null or total < best_cost.?) {
                     best_cost = total;
@@ -565,7 +565,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
 ///
 /// Extracts the weight property from an edge, defaulting to 1.0 if not present.
 /// Supports both Int and Float property types.
-pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weight_prop: []const u8, scope: *AlgoScope) f64 {
+pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, weight_prop: []const u8, scope: *AlgoScope) !f64 {
     // PHASE 1 (edge-engine-direct): resolve the edge via from_id's ADJACENCY
     // (engine-backed, hydrate-on-miss) instead of a full `store.edges` scan
     // (O(all edges) AND incorrect under a bounded edge cache). Bidirectional:
@@ -586,16 +586,16 @@ pub fn getEdgeWeight(store: *graph_store.GraphStore, from_id: u64, to_id: u64, w
             return 1.0;
         }
     }.f;
-    if (store.getOutgoingEdgeIds(from_id)) |out_ids| {
+    if ((try store.getOutgoingEdgeIdsOrError(from_id))) |out_ids| {
         for (out_ids) |eid| {
-            const edge = store.getEdgePtrHydrated(eid) orelse continue;
+            const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
             if (edge.to_id != to_id or !scope.edgeTraversable(store, edge.*)) continue;
             return matchWeight(edge, weight_prop);
         }
     }
-    if (store.getIncomingEdgeIds(from_id)) |in_ids| {
+    if ((try store.getIncomingEdgeIdsOrError(from_id))) |in_ids| {
         for (in_ids) |eid| {
-            const edge = store.getEdgePtrHydrated(eid) orelse continue;
+            const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
             if (edge.from_id != to_id or !scope.edgeTraversable(store, edge.*)) continue;
             return matchWeight(edge, weight_prop);
         }
@@ -641,7 +641,7 @@ test "getEdgeWeight - default weight" {
 
     const scope = try AlgoScope.create(testing.allocator, graph_store.DEFAULT_GRAPH_NAME, null);
     defer scope.destroy();
-    const weight = getEdgeWeight(&store, 1, 2, "weight", scope);
+    const weight = try getEdgeWeight(&store, 1, 2, "weight", scope);
     try testing.expectEqual(@as(f64, 1.0), weight);
 }
 

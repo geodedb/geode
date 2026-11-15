@@ -119,7 +119,7 @@ fn makeStore(aa: std.mem.Allocator, tag: []const u8, change: Change) ![]const u8
     const kr = try AuthGraphManager.resolveHmacKey(pa, dir);
     _ = try mgr.bootstrapDefaultAdmin(&kr.key);
     try mgr.verifyChain(&kr.key);
-    try testing.expect(mgr.storage.loadChainRoot() != null);
+    try testing.expect((try mgr.storage.loadChainRoot()) != null);
     switch (change) {
         .remove_all_records => {
             var users: std.ArrayList(u64) = .empty;

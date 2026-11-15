@@ -5007,6 +5007,12 @@ REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,T
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,tests/test_sonny6591_fts_write_paths.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
+REQ-SONNY-6594-AUTH-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_auth_read_failure.zig,tests/test_sonny6594_auth_read_failure.zig,,security,2026-11-15
+REQ-SONNY-6594-INDEX-BUILD-READ-FAILURE,VectorIndex,Regression,TESTED,tests/test_sonny6594_index_build_read_failure.zig,tests/test_sonny6594_index_build_read_failure.zig,,index,2026-11-15
+REQ-SONNY-6594-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_read_failure.zig,tests/test_sonny6594_read_failure.zig,,execution,2026-11-15
+REQ-SONNY-6594-TENANT-SCAN-READ-FAILURE,PerTenantIsolation,Regression,TESTED,tests/test_sonny6594_tenant_scan_read_failure.zig,tests/test_sonny6594_tenant_scan_read_failure.zig,,storage,2026-11-15
+REQ-SONNY-6594-UNDO-READ-FAILURE,TransactionUndoLog,Regression,TESTED,tests/test_sonny6594_undo_read_failure.zig,tests/test_sonny6594_undo_read_failure.zig,,engine,2026-11-15
+REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_write_read_failure.zig,tests/test_sonny6594_write_read_failure.zig,,execution,2026-11-15
 REQ-SONNY-6595-FAST-CREATE-DIM-GUARD,VectorIndex,FastPathCreateDimensionGuard,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,IndexNamesCopied,TESTED,src/index/index_manager.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,FastPathNodeWriteMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
@@ -5051,6 +5057,15 @@ REQ-SONNY-6606-META-SCHEMA-SCOPE,GPS Metadata Isolation,SessionGraphOnly,TESTED,
 REQ-SONNY-6606-META-SCHEMA-SCOPE,GPS Metadata Isolation,SessionGraphOnly,TESTED,tests/test_sonny6606_meta_schema_scope.zig,,,security,2026-11-15
 REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS,CLI,ConnectAuthenticates,TESTED,src/client/repl/repl_dispatch.zig,tests/test_sonny6606_repl_connect_credentials.zig,,cli,2026-11-15
 REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS,CLI,ConnectAuthenticates,TESTED,tests/test_sonny6606_repl_connect_credentials.zig,,,cli,2026-11-15
+REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,ErrorReturningGetters,TESTED,src/graph_store.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,storage,2026-11-15
+REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_adjacency_property_read_failure.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,execution,2026-11-15
+REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,PerConnectionMaxFrameSize,TESTED,src/client/grpc_query_transport.zig,tests/test_sonny6607_grpc_frame_size.zig,,transport,2026-11-15
+REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,Regression,TESTED,tests/test_sonny6607_grpc_frame_size.zig,tests/test_sonny6607_grpc_frame_size.zig,,transport,2026-11-15
+REQ-SONNY-6607-INDEX-BACKFILL-WARNING,VectorIndex,Regression,TESTED,tests/test_sonny6607_index_backfill_warning.zig,tests/test_sonny6607_index_backfill_warning.zig,,index,2026-11-15
+REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,DroppingTenantRefused,TESTED,src/execution/tenancy.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15
+REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_lifecycle.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15
+REQ-SONNY-6607-TENANT-ORPHAN-STARTUP,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_orphan_startup.zig,tests/test_sonny6607_tenant_orphan_startup.zig,,security,2026-11-15
+REQ-SONNY-6607-VOID-WRITE-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_void_write_errors.zig,tests/test_sonny6607_void_write_errors.zig,,storage,2026-11-15
 REQ-SONNY-6608-MFA-CLI-ENROLL,MFA authentication,OfflineEnrollStored,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6608_mfa_restart.zig,,security,2026-11-15
 REQ-SONNY-6608-MFA-HYDRATION,MFA authentication,StartupLoadsEnrollments,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6608_mfa_persist.zig,,security,2026-11-15
 REQ-SONNY-6608-MFA-PERSIST,MFA authentication,Regression,TESTED,tests/test_sonny6608_mfa_persist.zig,tests/test_sonny6608_mfa_persist.zig,,security,2026-11-15

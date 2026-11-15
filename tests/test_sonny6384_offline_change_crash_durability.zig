@@ -76,7 +76,7 @@ test "SONNY-6384: a write after a checkpoint, a hard crash and a reopen survives
     {
         const store = try graph_store.initGlobalStore(ta, data_dir);
         defer graph_store.deinitGlobalStore();
-        const n = store.countNodesForGraph(graph, null);
+        const n = try store.countNodesForGraph(graph, null);
         if (n != 2) std.debug.print("after the second hard crash the graph holds {d} node(s), want 2\n", .{n});
         try testing.expectEqual(@as(usize, 2), n);
     }

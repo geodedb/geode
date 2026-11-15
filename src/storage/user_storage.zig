@@ -462,7 +462,7 @@ pub const UserStorageBackend = struct {
         // invocations against the same data dir leave multiple
         // AuthChainRoot nodes, and `verifyChain` on reload picks the
         // stale one and reports `ChainHashMismatch`.
-        _ = self.loadChainRoot();
+        _ = try self.loadChainRoot();
     }
 
     fn loadUsersFromGraph(self: *Self) !void {
@@ -470,13 +470,13 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const record = loadUserRecordFromNode(self.store, node_id) orelse continue;
+            const record = (try loadUserRecordFromNode(self.store, node_id)) orelse continue;
             try self.putCachedUser(record.id, record);
             try self.user_nodes.put(record.id, node_id);
         }
     }
 
-    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
+    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) !?UserRecord {
         // Gap 0034 discipline, extended (merge interaction with the loop2
         // warm-hydration path): a snapshot-served reopen restores the label
         // postings WITHOUT materializing resident node bodies (engine scan
@@ -485,8 +485,10 @@ pub const UserStorageBackend = struct {
         // security record became invisible after a clean-shutdown reopen
         // (admin login failed, bootstrap refused fail-closed). Read the body
         // HYDRATE-ON-MISS like loadChainRoot: null now really means the node
-        // is absent from cache AND engine.
-        const node = store.getNodePtrHydrated(node_id) orelse return null;
+        // is absent from cache AND engine. SONNY-6594 (5): and a body that
+        // cannot be read is the read's error: the user was left out of the
+        // store loaded at start (and did not exist for the rest of the run).
+        const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         const id_val = getIntProp(store, node_id, "id", -1);
@@ -700,9 +702,16 @@ pub const UserStorageBackend = struct {
     /// `error.Unauthenticated` upstream, which the per-IP limiter COUNTS.
     /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-29
     pub fn findUserByUsernameInGraphChecked(store: *graph_store.GraphStore, username: []const u8) !?UserRecord {
+        // SONNY-6594 (5): a body that cannot be read is not "no such user":
+        // the engine-direct fallback below may still find the user; if it
+        // does not, the read's error is the answer.
+        var read_error: ?anyerror = null;
         if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
             for (nodes) |node_id| {
-                const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                const record = (loadUserRecordFromNode(store, node_id) catch |err| {
+                    read_error = err;
+                    continue;
+                }) orelse continue;
                 if (std.mem.eql(u8, record.getUsername(), username)) {
                     return record;
                 }
@@ -716,7 +725,9 @@ pub const UserStorageBackend = struct {
         // enumeration, "no such user" is not a supportable answer. The verdict is
         // identical for every unresolvable principal, so this adds no
         // username-enumeration oracle (#829).
-        return try findUserByUsernameEngineDirect(store.allocator, username);
+        if (try findUserByUsernameEngineDirect(store.allocator, username)) |record| return record;
+        if (read_error) |err| return err;
+        return null;
     }
 
     /// Legacy option-returning lookup, kept for the non-auth callers (bootstrap,
@@ -733,7 +744,7 @@ pub const UserStorageBackend = struct {
                 var records = std.ArrayList(UserRecord).empty;
                 defer records.deinit(allocator);
                 for (nodes) |node_id| {
-                    const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                    const record = (try loadUserRecordFromNode(store, node_id)) orelse continue;
                     try records.append(allocator, record);
                 }
                 return records.toOwnedSlice(allocator);
@@ -1015,7 +1026,7 @@ pub const UserStorageBackend = struct {
     /// removal (policy, role, user, permission) goes through it.
     fn deleteNodeChecked(self: *Self, node_id: u64) !void {
         if (!takeDeleteFault()) self.store.deleteNode(node_id);
-        if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+        if (try self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
     }
 
     /// SONNY-6293: a test-only fault hook. While non-zero, each checked
@@ -1396,7 +1407,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1413,7 +1424,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1421,7 +1432,7 @@ pub const UserStorageBackend = struct {
                 if (edge.to_id == role_node_id) {
                     // SONNY-6293: checked, as a record's node delete.
                     if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
-                    if (self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
+                    if (try self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }
@@ -1434,7 +1445,7 @@ pub const UserStorageBackend = struct {
         var result = std.ArrayList(u64).empty;
         defer result.deinit(allocator);
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1573,7 +1584,7 @@ pub const UserStorageBackend = struct {
         node_id: ?u64, // graph store node ID, null if not yet created
     };
 
-    pub fn loadChainRoot(self: *Self) ?ChainRootRecord {
+    pub fn loadChainRoot(self: *Self) !?ChainRootRecord {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, AUTH_CHAIN_ROOT_LABEL);
         if (nodes_opt == null) return null;
         const nodes = nodes_opt.?;
@@ -1589,8 +1600,10 @@ pub const UserStorageBackend = struct {
         // perfectly healthy fresh store, every 5 minutes until restart.
         // Hydration rebuilds the body from the durable engine, so null here
         // now really means "no chain root exists" — the genuine tamper
-        // signal (root deleted/corrupted on disk) stays loud.
-        const node = self.store.getNodePtrHydrated(node_id) orelse return null;
+        // signal (root deleted/corrupted on disk) stays loud. SONNY-6594 (5):
+        // a root that cannot be READ is the read's error, not "no root" (which
+        // `verifyChain` reports as MissingChainRoot, "POSSIBLE TAMPERING").
+        const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         self.chain_root_node = node_id;
@@ -2344,7 +2357,7 @@ test "loadChainRoot returns null when no chain root exists" {
     var backend = try UserStorageBackend.init(testing.allocator, &store);
     defer backend.deinit();
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root == null);
 }
 
@@ -2360,7 +2373,7 @@ test "persistChainRoot creates and loadChainRoot retrieves" {
     try backend.persistChainRoot(chain_hash_hex, 5, "key-id-001");
 
     // Load and verify
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 5), r.record_count);
@@ -2383,7 +2396,7 @@ test "persistChainRoot updates existing chain root" {
     try backend.persistChainRoot(hash1, 3, "key-v1");
     try backend.persistChainRoot(hash2, 7, "key-v2");
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 7), r.record_count);

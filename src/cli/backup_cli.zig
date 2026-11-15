@@ -2602,7 +2602,7 @@ fn verifyRestoredAuthChain(allocator: std.mem.Allocator, dir: []const u8, key: *
     }
     var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
     defer mgr.deinit();
-    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) return;
+    if (mgr.countAuthRecords() == 0 and (try mgr.storage.loadChainRoot()) == null) return;
     mgr.verifyChain(key) catch |err| {
         std.debug.print("RESTORE: the __geode_security HMAC chain does not verify with the given key ({s})\n", .{@errorName(err)});
         return error.AuthChainVerificationFailed;

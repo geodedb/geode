@@ -3014,6 +3014,159 @@
   ran. Behaviour is unchanged. Regression:
   `zig build test-sonny6595-standalone-delete`.
 
+- **A traversal whose adjacency list cannot be read, and a MATCH fast path
+  whose property read fails, fail instead of answering short (SONNY-6607
+  item 1).** **BREAKING (behaviour):** `getOutgoingEdgeIds` /
+  `getIncomingEdgeIds` return null both for a node with no edges and for
+  one whose evicted adjacency list could not be rebuilt, so the MATCH
+  executor, var-length / `COUNT { }` / comprehension walks, `shortestPath`,
+  BFS / DFS / Dijkstra, the centrality procedures and `indegree()` /
+  `outdegree()` took an unreadable node for a dead end. They now use
+  `getOutgoingEdgeIdsOrError` / `getIncomingEdgeIdsOrError` (null still
+  means "no edges") and fail with the read's error. Degree centrality reads
+  every degree on the calling thread (a worker read them, reaching the
+  storage adapter and counting an unreadable list as 0). The aggregate,
+  count, group-by and top-k MATCH fast paths over a bounded cache dropped a
+  row whose engine property read failed (`catch continue`) and read a
+  failed tenant-tag read as the default tenant's; both now fail. The role
+  resolver fails closed (no global role) on an unreadable HAS_ROLE
+  adjacency or role node, and `canUserAccessGraph` reads grant properties
+  with `getNodePropertyOrError`. Regression: `zig build
+  test-sonny6607-adjacency-property-read-failure`.
+- **A void store write that fails reports its real error (SONNY-6607 item
+  2).** `GraphStore.removeNodeProperty` / `removeEdgeProperty` return
+  nothing; a failure inside them reached the statement as `OutOfMemory`
+  (53200) whatever had happened (`undoRecordFailed`), and an engine error
+  that was not out of memory reached it not at all (`voidWriteFailed`): the
+  statement succeeded without the write. A body that cannot be read now
+  fails the statement with `StorageReadFailed` (58000, the cause logged),
+  and a non-OOM engine write failure inside a statement with
+  `StorageWriteFailed` (58000). `removeNodeProperty` on a node whose body
+  cannot be read was a silent no-op; it now fails. Outside a statement (the
+  undo replay, a Raft apply) a non-OOM write failure is only logged, as
+  before. Regression: `zig build test-sonny6607-void-write-errors`.
+- **A CREATE INDEX whose backfill fails over QUIC or gRPC tells the client
+  (SONNY-6607 item 3).** The handlers run an advanced index's backfill after
+  the statement, once the graph lock is released, and only logged a failure:
+  the client saw a clean success while the index was dropped or empty. The
+  statement has committed its catalog row by then, so it is not failed; its
+  result now carries the flagger finding `IndexBackfillFailed: ...` (status
+  `flagger_findings`), and the log names the index and the error. A failed
+  `knn()` index rebuild is logged with its cause (the scan still answers)
+  instead of being swallowed. Regression: `zig build
+  test-sonny6607-index-backfill-warning`.
+- **Tenant lifecycle fails closed (SONNY-6607 item 4).** **BREAKING
+  (operator):**
+  - `geode.tenant.create` whose hierarchy add fails (out of memory) now
+    fails and removes the tenant from the registry again; it logged the
+    failure and reported success with a tenant the RLS hierarchy did not
+    know. `HierarchyManager.addTenant` is failure-atomic: a failed child
+    registration freed the key and path the map still held (a crash at
+    shutdown) and left the node without its parent's child entry.
+  - A statement whose session tenant is registered and marked as being
+    dropped (a DROP that failed part-way) is refused with `TenantDropping`
+    at statement entry; it went on reading and writing that tenant.
+  - Startup refuses a tenant registry holding a tenant whose parent is not
+    registered (`TenantRegistryOrphanParent`, naming each tenant on stderr
+    and in the log); it was a warning and the tenant ran outside the
+    hierarchy.
+  Regression: `zig build test-sonny6607-tenant-lifecycle`,
+  `test-sonny6607-tenant-orphan-startup`.
+- **The gRPC client's negotiated max frame size is per connection
+  (SONNY-6607 item 5).** It was a thread-local, so two connections used
+  from one thread shared it: once one learned a larger
+  SETTINGS_MAX_FRAME_SIZE, a request on the other went out in frames its
+  peer never allowed (FRAME_SIZE_ERROR, RFC 9113 4.2). It is now kept per
+  socket; a connection with no learned value uses the 16384 default every
+  peer accepts. Regression: `zig build test-sonny6607-grpc-frame-size`.
+- **ROLLBACK that cannot read a body it must undo fails instead of
+  reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
+  undo asked whether the node or edge a change was on still exists, and a
+  body that could not be READ (an engine read error, out of memory while
+  rebuilding an evicted body) answered "gone": the change was skipped and
+  ROLLBACK (and a failed statement's or transaction body's undo) reported
+  success with the transaction's write still in place. The existence check
+  now fails with the read's error, so the rollback continues past it and
+  ends with `RollbackIncomplete` / `StatementUndoIncomplete` (40003, "may
+  be partly applied"), as for any change it cannot undo. A write whose
+  "before" image cannot be read (the statement undo record) now fails
+  instead of recording nothing; the undo's index repair repairs every
+  index when it cannot read which ones a change touched. Regression: `zig
+  build test-sonny6594-undo-read-failure`.
+- **An advanced-index build that cannot read a body fails and leaves no
+  index without the row (SONNY-6594 item 2).** **BREAKING (behaviour):**
+  the vector / spatial / network / JSONB / ... index backfill
+  (`populateAdvancedIndex`, behind CREATE INDEX and every rebuild) and the
+  vector index's non-blocking shadow build (run by the QUIC and gRPC
+  handlers after CREATE INDEX, an undo's index repair and a REMOVE) skipped
+  a node or edge whose body could not be READ, registered the index without
+  it, and answered `knn()` (and every index-served lookup) without that row
+  until the next rebuild. The build now fails with the read's error, and the
+  runtime index is dropped instead of being left partial or stale: an
+  in-process / embedded CREATE INDEX fails with that error; over QUIC and
+  gRPC the backfill runs after the statement, so CREATE INDEX still succeeds,
+  the failure is logged ("Advanced index backfill failed"), and the next
+  `knn()` rebuilds the index from the catalog row (or scans). Exact and
+  ordered property indexes do not read bodies through these getters.
+  Regression: `zig build test-sonny6594-index-build-read-failure`.
+- **A write that cannot read its target edge fails with the read's own
+  error (SONNY-6594 item 3).** **BREAKING (behaviour):** the write paths
+  took an edge body that could not be READ (an engine read error, out of
+  memory while rebuilding an evicted body) for an absent edge. `SET` on a
+  relationship then succeeded without changing it; MERGE's edge probe
+  skipped it (and could create a second edge beside it); `DELETE r` and
+  `DETACH DELETE` failed with `EdgeBodyUnresolvable` /
+  `IncidentEdgeUnresolvable` (58000, the error's bare name) for what was out
+  of memory or an engine read error. Each now fails with the read's error
+  (out of memory: 53200) and changes nothing. Regression: `zig build
+  test-sonny6594-write-read-failure`.
+- **A read that cannot read an edge body fails instead of answering short
+  (SONNY-6594 item 4).** **BREAKING (behaviour):** a statement that used to
+  return rows (fewer of them) now fails. The MATCH executor, the
+  variable-length expansion, `COUNT { }` / `EXISTS { }` / pattern
+  comprehensions, `shortestPath`, `indegree()` / `outdegree()` under a
+  restricting scope, `algo.bfs` / `dfs` / `dijkstra` and the centrality
+  procedures skipped an edge whose body could not be read, so a count, a
+  path, a distance or a score silently left it out. Each now fails with the
+  read's error (out of memory: 53200; an engine read error inside an
+  expression: `StorageReadFailed`, 58000, the cause logged). An edge that is
+  absent (deleted), in another graph or tenant, or hidden by RLS is still
+  skipped. Regression: `zig build test-sonny6594-read-failure`.
+- **An auth decision that cannot read a security record reports the read
+  failure (SONNY-6594 item 5).** Fail closed as before, but no longer
+  misreported: `canUserAccessGraph` (schema / LSP visibility) skipped a
+  grant it could not read and answered "no access", a deny an operator
+  could not tell from a missing grant; it now fails with the read's error.
+  `verifyChain` (the periodic HMAC verify, `geode auth verify`, the offline
+  commands' verify-before-change, restore) took an unreadable chain root
+  for a missing one and raised `MissingChainRoot` ("POSSIBLE TAMPERING");
+  it now fails with the read's error. Loading the auth store at start
+  skipped a user whose record it could not read (the user then did not
+  exist for the run); it now fails. A username lookup still falls back to
+  the engine-direct read, and answers the read's error instead of "no such
+  user" when that finds nothing. `canUserAccessGraph` and
+  `UserStorageBackend.loadChainRoot` now return error unions. Regression:
+  `zig build test-sonny6594-auth-read-failure`.
+- **A tenant scan that cannot read a row's tenant tag or body fails
+  instead of listing the row for the wrong tenant or dropping it
+  (SONNY-6594 item 6).** **SECURITY / BREAKING (behaviour):** with a
+  bounded node cache, `getAllNodesForTenant` and the tenant-filtered
+  `count(n)` fast path (`countNodesForGraph`) resolve an evicted node's
+  tenant from its persisted tag, and a tag read that FAILED was taken for
+  an absent tag, the default tenant: another tenant's nodes were listed,
+  and counted, as the default tenant's. `getAllEdgesForTenant` and the
+  typed edge scan dropped an edge whose body could not be read (the DROP
+  TENANT cascade's input among others), and the snapshot writer
+  (`serializeSnapshot`) left it out. Each now fails with the read's error.
+  At graph hydration (cold open) a node or edge tenant tag that cannot be
+  read now fails the hydration, so the graph is quarantined (58000) instead
+  of the row loading as the default tenant's; an absent tag still means the
+  default tenant. `countNodesForGraph` now returns an error union. The edge
+  write methods (`setEdgeProperty`, `setEdgePropertiesBatch`,
+  `removeEdgeProperty`, the `*NoSave` setter) and the adjacency helpers
+  (`getOutgoingEdges`, `getNeighbors`, ...) fail on an unreadable edge body
+  instead of skipping it. Regression: `zig build
+  test-sonny6594-tenant-scan-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,
@@ -3294,6 +3447,7 @@
   `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
   22G03 for a NULL argument: each now answers NULL. Regression: `zig build
   test-sonny6555-null-arguments`.
+
 - **Startup refuses to run with part of its auth state; per-graph grants
   load under the right graph (SONNY-6567 item 5).** **BREAKING (operator):**
   a server whose stored custom roles, per-graph grants, FLE role grants, GPS
