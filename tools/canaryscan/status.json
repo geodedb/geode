@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T17:51:31.841518854Z",
+  "generated_at": "2026-11-15T17:55:05.695192549Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78608,6 +78608,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6607-TENANT-LIFECYCLE",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6607-TENANT-ORPHAN-STARTUP",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_tenant_orphan_startup.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_orphan_startup.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6607-VOID-WRITE-ERRORS",
       "features": [
         {
@@ -83717,7 +83755,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4158
+      "TESTED": 4160
     },
     "by_aspect": {
       "2PC": 3,
@@ -86492,7 +86530,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 375,
+      "Regression": 377,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

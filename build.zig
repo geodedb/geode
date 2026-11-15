@@ -10810,6 +10810,33 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6607_ibw_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6607_ibw_step = b.step("test-sonny6607-index-backfill-warning", "Run SONNY-6607 item 3 regression (a durable store, gRPC in process: CREATE INDEX USING vector whose backfill cannot read a body carries an IndexBackfillFailed flagger finding; a healthy one does not)");
     sonny6607_ibw_step.dependOn(&run_sonny6607_ibw_tests.step);
+    // SONNY-6607 (4): a tenant create whose hierarchy add fails is undone; a
+    // statement of a tenant being dropped is refused.
+    const sonny6607_tl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_tenant_lifecycle.zig"), .target = target, .optimize = optimize });
+    sonny6607_tl_test_mod.link_libc = true;
+    sonny6607_tl_test_mod.addImport("geode", root_mod);
+    sonny6607_tl_test_mod.addImport("logging", logging_mod);
+    sonny6607_tl_test_mod.addImport("rls", rls_mod);
+    sonny6607_tl_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6607_tl_tests = b.addTest(.{ .root_module = sonny6607_tl_test_mod });
+    const run_sonny6607_tl_tests = b.addRunArtifact(sonny6607_tl_tests);
+    shardDep(test_step, &run_sonny6607_tl_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_tl_step = b.step("test-sonny6607-tenant-lifecycle", "Run SONNY-6607 item 4 regression (a durable tenant registry and a real RLS hierarchy on an allocator failing from each allocation on: a tenant create either succeeds in both or fails in neither; a statement whose session tenant is being dropped is refused with TenantDropping and writes nothing)");
+    sonny6607_tl_step.dependOn(&run_sonny6607_tl_tests.step);
+    // SONNY-6607 (4): a tenant registry with an orphan parent refuses
+    // startup (spawns the built geode).
+    const sonny6607_os_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_tenant_orphan_startup.zig"), .target = target, .optimize = optimize });
+    sonny6607_os_test_mod.link_libc = true;
+    sonny6607_os_test_mod.addImport("geode", root_mod);
+    sonny6607_os_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6607_os_test_mod.addImport("schema", schema_mod);
+    sonny6607_os_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6607_os_tests = b.addTest(.{ .root_module = sonny6607_os_test_mod });
+    const run_sonny6607_os_tests = b.addRunArtifact(sonny6607_os_tests);
+    spawnsBuiltGeode(sonny6607_os_tests);
+    shardDep(test_step, &run_sonny6607_os_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_os_step = b.step("test-sonny6607-tenant-orphan-startup", "Run SONNY-6607 item 4 regression (spawns geode serve on a data directory whose tenant registry holds a tenant with an unregistered parent: startup refuses, naming the tenant)");
+    sonny6607_os_step.dependOn(&run_sonny6607_os_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.
