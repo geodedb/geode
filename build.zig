@@ -18704,6 +18704,34 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6614: the SecurityManager load frees everything on failure; DROP
+    // USER clears the user's MFA state from SecurityManager; the offline
+    // mfa-verify keeps a sealed attempt record with the online limit;
+    // ServerHandle.stopGracefully. The offline regression spawns the CLI and
+    // a server.
+    const sonny6614_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6614_auth_residuals.zig", .step = "test-sonny6614-auth-residuals", .desc = "Run the SONNY-6614 regression (the SecurityManager load at startup frees everything under every allocation failure; DROP USER clears the user's MFA secret, recovery codes and flag from SecurityManager)", .spawns = false },
+        .{ .file = "tests/test_sonny6614_offline_verify.zig", .step = "test-sonny6614-offline-verify", .desc = "Run the SONNY-6614 regression (offline geode user mfa-verify keeps a sealed MfaAttempts record: five failures across runs lock it out for five minutes and the lockout refuses a right code, a right code resets the count; ServerHandle.stopGracefully lets a server shut itself down; spawns the CLI and a server)", .spawns = true },
+    };
+    for (sonny6614_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.
