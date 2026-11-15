@@ -32,6 +32,7 @@ test "SONNY-6612 (3): storage and tenant errors carry their SQLSTATE and an oper
         .{ .err = error.StorageReadFailed, .code = "58000", .hint = "server log" },
         .{ .err = error.StorageWriteFailed, .code = "58000", .hint = "server log" },
         .{ .err = error.TenantDropping, .code = "42501", .hint = "tenant" },
+        .{ .err = error.TenantNotRegistered, .code = "42501", .hint = "geode.tenant.create" },
         .{ .err = error.TenantRegistryOrphanParent, .code = "58000", .hint = "registry" },
     };
     var failures: usize = 0;

@@ -2542,6 +2542,16 @@
 
 ### Fixed
 
+- **Unregistered tenants are refused once tenants are administered; the
+  QUIC fast paths check the tenant too (SONNY-6612 item 2).** **BREAKING
+  (security / operator):** when the durable tenant registry holds a tenant
+  other than the default, a session scoped to a tenant it does not know is
+  refused with `TenantNotRegistered` (42501); it read and wrote under any
+  tenant id a client asserted. With no registry or an empty one nothing
+  changes. The QUIC handler now checks a dropping or unregistered tenant
+  before its fast paths (bulk MERGE, the count fast paths), which bypass
+  the executor's statement-entry check. Regression: `zig build
+  test-sonny6612-tenant-refusal`.
 - **Storage and tenant errors carry a SQLSTATE and an operator message
   (SONNY-6612 item 3).** `StorageReadFailed` and `StorageWriteFailed` map to
   58000, `TenantDropping` to 42501 (access rule violation, as
