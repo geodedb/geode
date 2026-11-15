@@ -2616,6 +2616,19 @@
 
 ### Fixed
 
+- **A statement may begin with LET or UNWIND (SONNY-6613).** ISO/IEC
+  39075:2024 14.4 / 14.7: a `<let statement>` is a `<primitive query
+  statement>`, so `LET x = 4 RETURN x` and `LET v = 4 MATCH (n) WHERE n.k = v
+  RETURN n` are queries; Geode refused them (it took only its `LET $p = ...`
+  parameter form at the start, which keeps working). A leading LET is read
+  over the unit table as the projection `WITH 4 AS x`; its definitions do not
+  see each other yet (`LET a = 1, b = a + 1` refers to an outer `a`), and a
+  leading LET followed by WITH or another LET is refused 0A000. A leading
+  `UNWIND <list> AS x` (a Geode extension; ISO iterates with FOR) was a
+  syntax error; it is read as `FOR x IN <list>`, so `UNWIND [3, 4] AS u
+  RETURN sum(u)` aggregates every row. Regression:
+  `zig build test-sonny6613-leading-let-unwind`.
+
 - **A single-quoted sequence is no alias (SONNY-6613).** `RETURN 1 AS 'x'`
   named the column x; ISO/IEC 39075:2024 14.11 takes an `<identifier>` after
   AS, and a single-quoted sequence is only a character string literal
