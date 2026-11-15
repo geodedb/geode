@@ -5305,6 +5305,7 @@ REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,,,engi
 REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,,,engine,2026-11-15,tests/test_sonny6587_for_write_after_with.zig,19
 REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,RangeArguments,TESTED,,,eval,2026-11-15,src/eval/call_handlers.zig,1710
 REQ-SONNY-6587-LIST-FUNCTION-ARGS,ListFunctions,WrongTypeRefused,TESTED,,,eval,2026-11-15,tests/test_sonny6587_list_functions.zig,16
+REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK,PROFILE,PointWriteIndexName,TESTED,,,engine,2026-11-15,tests/test_sonny6587_profile_point_write_seek.zig,16
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,,,fts,2026-11-15,src/server/quic_connection_handler.zig,695
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,,,fts,2026-11-15,src/execution/fts_index_ops.zig,667
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,,,fts,2026-11-15,tests/test_sonny6591_fts_write_paths.zig,37
