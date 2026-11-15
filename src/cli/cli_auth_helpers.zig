@@ -2,7 +2,6 @@
 //! Shared helpers for CLI commands that need offline access to auth data.
 //!
 //! Provides:
-//! - `resolveStatePath` — resolve a state file path (for non-auth state files like authn, session, apikey, mtls)
 //! - `isPasswordStrong` — password strength validation
 //! - `initCliAuthManager` — initialise AuthGraphManager for offline CLI operations
 //! - `generateSecurePassword` — generate a cryptographically secure random password
@@ -20,21 +19,11 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 
-// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
-fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
-    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
-    defer allocator.free(name_z);
-    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
-    return allocator.dupe(u8, std.mem.span(ptr));
-}
-
 const builtin = @import("builtin");
 const geode = @import("geode");
 pub const graph_store = geode.graph_store;
 const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
-/// SONNY-6544: the CLI's one HOME rule (absolute only).
-const home_dir = @import("security/home_dir.zig");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 // CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=CliRlsPolicyCreate; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
@@ -143,77 +132,6 @@ pub fn assignBuiltinRole(allocator: std.mem.Allocator, mgr: *AuthGraphManager, u
     try requireRoleTakesEffect(mgr, username, name);
     const key = try changeKey(allocator);
     try mgr.setBuiltinRoleWriteThrough(&key, username, name, &builtin_role_names);
-}
-
-// -- State Path Resolution (for non-auth flat files) --
-
-const STATE_DIR_ENV = "GEODE_STATE_DIR";
-
-fn secureChmod(path: []const u8, mode: std.Io.File.Permissions) void {
-    if (builtin.os.tag == .windows) return;
-    const io_sc = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.openFileAbsolute(io_sc, path, .{})) |file| {
-        defer file.close(io_sc);
-        file.setPermissions(io_sc, mode) catch {};
-        return;
-    } else |_| {}
-
-    if (std.Io.Dir.openDirAbsolute(io_sc, path, .{ .iterate = true })) |opened_dir| {
-        var dir = opened_dir;
-        defer dir.close(io_sc);
-        dir.setPermissions(io_sc, mode) catch {};
-    } else |_| {}
-}
-
-fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
-    if (getEnvVarOwned(allocator, STATE_DIR_ENV)) |raw| {
-        defer allocator.free(raw);
-        if (std.fs.path.isAbsolute(raw)) return allocator.dupe(u8, raw);
-
-        const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), allocator);
-        defer allocator.free(cwd);
-        return std.fs.path.join(allocator, &.{ cwd, raw });
-    } else |_| {}
-
-    // SONNY-6544: a relative XDG_STATE_HOME is ignored (XDG Base Directory
-    // specification), and a relative or empty HOME is refused: the state
-    // dir was created relative to the working directory and its files then
-    // opened with `*Absolute` (an assert; a Debug panic).
-    if (home_dir.xdgDir("XDG_STATE_HOME")) |xdg_state_home| {
-        return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
-    }
-
-    if (home_dir.homeDirAlloc(allocator)) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
-    } else |err| switch (err) {
-        error.HomeNotSet => {},
-        error.HomeNotAbsolute => {
-            home_dir.printError(err);
-            return err;
-        },
-        error.OutOfMemory => return err,
-    }
-
-    if (builtin.os.tag != .windows) {
-        // SONNY-6325: `<TMPDIR or /tmp>/geode-<uid>`, created 0700 and
-        // refused when it is not a directory of ours with mode 0700.
-        return geode.graph_store.privateUserTmpDir(allocator);
-    }
-    return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
-}
-
-/// Resolve the full filesystem path for a state file.
-/// Used by authn_cli, session_cli, apikey_cli, and mtls_cli for their own
-/// flat-file state (NOT user credentials, which live in the graph store).
-pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
-    const state_dir = try resolveStateDir(allocator);
-    defer allocator.free(state_dir);
-
-    try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), state_dir);
-    secureChmod(state_dir, std.Io.File.Permissions.fromMode(0o700));
-
-    return std.fs.path.join(allocator, &.{ state_dir, filename });
 }
 
 // -- Password Strength Validation --

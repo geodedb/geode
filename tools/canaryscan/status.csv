@@ -173,7 +173,7 @@ REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,tests/test_aud
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,TESTED,src/cli/main.zig,TestCANARY_REQ_AUTH_001_RealLogin,,cli,2025-09-30
 REQ-AUTH-001,UserManagement,Authentication,TESTED,src/security/user_management.zig,tests/test_user_management_comprehensive.zig,,security,2026-11-14
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,TESTED,src/cli/main.zig,TestCANARY_REQ_AUTH_002_RealLogout,,cli,2025-09-30
-REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,TESTED,src/cli/apikey_cli.zig,geodetestlab/specs/api_key_auth.yml,,cli,2026-02-04
+REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,RefusedAsUnsupported,TESTED,src/cli/apikey_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-AUTH-CLI-HELLO-DECODE-001,CLI QUIC Authentication,HelloResponseOwnership,TESTED,src/client/hello_decode.zig,tests/test_bug731_cli_hello_leak.zig,,cli,2026-07-31
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,src/security/geode_auth_lib.zig,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30
 REQ-AUTH-CONFIG-001,AuthConfig,PasswordPolicy,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
@@ -304,7 +304,7 @@ REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,src/security/user_managemen
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
-REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6554_cli_honesty.zig,,security,2026-11-15
 REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
 REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
 REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
@@ -444,7 +444,7 @@ REQ-CIRC-DEP-004,CircularDependencyResolution,TypeSystemIsolation,IMPL,tests/tes
 REQ-CIRC-DEP-005,CircularDependencyResolution,StorageIsolation,IMPL,tests/test_gap_0193_priority_categories.zig,,,engine,2026-11-14
 REQ-CIRCULAR-DEP-001,Circular Dependency Resolution,ModuleImports,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,build,2026-01-15
 REQ-CLI-AUTH-HELPERS-001,CLI Auth Helpers,Offline,IMPL,src/cli/cli_auth_helpers.zig,,,cli,2026-02-24
-REQ-CLI-AUTHN-001,CLIAuthn,ProviderConfig,TESTED,src/cli/authn_cli.zig,geodetestlab/specs/authn_provider.yml,,cli,2026-02-04
+REQ-CLI-AUTHN-001,CLIAuthn,RefusedAsUnsupported,TESTED,src/cli/authn_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,tests/cli_gql_autodetection_basic_test.sh,TestCANARY_REQ_CLI_AUTO_002_BasicGqlAutoDetection,,cli,2025-10-04
 REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,src/cli/backup_cli.zig,tests/test_sonny6289_backup_cleanup_info.zig,,cli,2026-11-11
 REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,tests/test_sonny6289_backup_cleanup_info.zig,,,cli,2026-11-11
@@ -511,8 +511,7 @@ REQ-CLI-PORTABLE-ARGV-001,PortableProcessArgv,CrossPlatform,TESTED,tests/test_pr
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TESTED,src/cli/main.zig,geodetestlab/specs/cli_flags_comprehensive.yml,,cli,2026-06-10
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,src/security/user_manager.zig,tests/test_user_management_comprehensive.zig,,security,2026-11-14
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,tests/query_option_autorouting_regression_test.sh,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04
-REQ-CLI-SESSION-001,CLISession,Management,TESTED,src/cli/session_cli.zig,geodetestlab/specs/authn_provider.yml,,cli,2026-02-04
-REQ-CLI-SESSION-001,CLISession,Security,TESTED,src/cli/session_cli.zig,tests/test_sec_sess_log.zig,,cli,2026-06-10
+REQ-CLI-SESSION-001,CLISession,Management,TESTED,src/cli/session_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-CLI-SHARED-QUERY-001,ShellQuerySharedPath,ParityTesting,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml,,cli,2026-11-14
 REQ-CLI-SHARED-QUERY-002,ShellQuerySharedPath,GraphScopingParity,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml,,cli,2026-11-14
 REQ-CLI-SHARED-QUERY-003,ShellQuerySharedPath,LargeOrderedStreamingParity,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml,,cli,2026-11-14
@@ -2500,7 +2499,6 @@ REQ-KMS-TLS-SAFETY-001,KMS TLS Production Guard,Security,TESTED,src/security/ext
 REQ-LABEL-TAXONOMY-001,GitLab Label Setup,Core,IMPL,tools/setup_gitlab_labels.sh,,,ci,2026-01-14
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,src/cli/cli_dispatcher.zig,,,core,2026-01-24
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,TESTED,src/cli/cli_dispatcher.zig,test_completion_scripts_use_external_cli_library,,cli,2026-04-01
-REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,EXEMPT,src/client/repl/repl_config.zig,,,client,2026-01-25
 REQ-LIB-MIGRATION-CONFIG-001,External Library Migration,ConfigManagement,EXEMPT,src/server/cli_args.zig,,,core,2026-01-24
 REQ-LIB-MIGRATION-CONFIG-TEST-001,External Library Migration,ConfigTesting,TESTED,tests/test_config_integration.zig,,,test,2026-01-24
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,EXEMPT,src/security/audit.zig,,,core,2026-01-24
@@ -4916,6 +4914,9 @@ REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6554-CLI-HONESTY,CLI session honesty,UnsupportedRefused,TESTED,tests/test_sonny6554_cli_honesty.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
+REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,src/client/dsn_params.zig,tests/test_sonny6554_dsn_params.zig,,cli,2026-11-15
+REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,tests/test_sonny6554_dsn_params.zig,,,cli,2026-11-15
 REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/query_execution.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
 REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/statement_handlers.zig,,,engine,2026-11-14
 REQ-SONNY-6555-FOR-CHAIN-STAGE,ChainedWithAggregation,ForAndSubqueryStages,TESTED,tests/test_sonny6555_for_chain_stage.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
@@ -4946,6 +4947,7 @@ REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,GrpcRefusalStatus,TESTED,src/t
 REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,tests/test_sonny6563_vote_persist_before_send.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
+REQ-SONNY-6569-HOST-NO-USERINFO,Shared host:port parser,NoCredentialInHost,TESTED,tests/test_sonny6569_host_credentials.zig,tests/test_sonny6569_host_credentials.zig,,transport,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15

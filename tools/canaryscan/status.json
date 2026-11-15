@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:56:13.01797075Z",
+  "generated_at": "2026-11-15T13:15:43.731247645Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -2875,17 +2875,17 @@
       "features": [
         {
           "feature": "ApiKeyCLI",
-          "aspect": "CLI",
+          "aspect": "RefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/apikey_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/api_key_auth.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -5096,11 +5096,11 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/test_sonny6551_saved_session.zig"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-14"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7528,17 +7528,17 @@
       "features": [
         {
           "feature": "CLIAuthn",
-          "aspect": "ProviderConfig",
+          "aspect": "RefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/authn_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/authn_provider.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -8675,25 +8675,11 @@
             "src/cli/session_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/authn_provider.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
-        },
-        {
-          "feature": "CLISession",
-          "aspect": "Security",
-          "status": "TESTED",
-          "files": [
-            "src/cli/session_cli.zig"
-          ],
-          "tests": [
-            "tests/test_sec_sess_log.zig"
-          ],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-06-10"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -38416,18 +38402,6 @@
     {
       "id": "REQ-LIB-MIGRATION-CONFIG-001",
       "features": [
-        {
-          "feature": "Config Library Migration",
-          "aspect": "ReplConfigXdg",
-          "status": "EXEMPT",
-          "files": [
-            "src/client/repl/repl_config.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "client",
-          "updated": "2026-01-25"
-        },
         {
           "feature": "External Library Migration",
           "aspect": "ConfigManagement",
@@ -77585,6 +77559,45 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6554-CLI-HONESTY",
+      "features": [
+        {
+          "feature": "CLI session honesty",
+          "aspect": "UnsupportedRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6554_cli_honesty.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6554_cli_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6554-DSN-PARAMS",
+      "features": [
+        {
+          "feature": "DSN parameters",
+          "aspect": "OneStrictParser",
+          "status": "TESTED",
+          "files": [
+            "src/client/dsn_params.zig",
+            "tests/test_sonny6554_dsn_params.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6554_dsn_params.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6555-FOR-CHAIN-STAGE",
       "features": [
         {
@@ -78077,6 +78090,25 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6569-HOST-NO-USERINFO",
+      "features": [
+        {
+          "feature": "Shared host:port parser",
+          "aspect": "NoCredentialInHost",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6569_host_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6569_host_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -83216,9 +83248,9 @@
     "by_status": {
       "BENCHED": 126,
       "COMPLETE": 2,
-      "EXEMPT": 210,
+      "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4128
+      "TESTED": 4130
     },
     "by_aspect": {
       "2PC": 3,
@@ -83537,7 +83569,7 @@
       "CDCWatermarkAdvanceVarianceEnvelope": 1,
       "CENTRALITY_ALGORITHMS": 1,
       "CI": 3,
-      "CLI": 4,
+      "CLI": 3,
       "CLIConfig": 1,
       "CLIFlag": 3,
       "CLIFramework": 1,
@@ -85240,6 +85272,7 @@
       "NoAutoCreate": 1,
       "NoBorrowedReads": 1,
       "NoCatalog": 1,
+      "NoCredentialInHost": 1,
       "NoCredentialsInHistory": 1,
       "NoCredentialsNoUnsafePath": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
@@ -85388,6 +85421,7 @@
       "OneRowPerPath": 1,
       "OneScanPerBatch": 1,
       "OneSetPath": 1,
+      "OneStrictParser": 1,
       "OneWriterOneReaderSafeFile": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
@@ -85780,7 +85814,6 @@
       "ProtocolHandler": 1,
       "ProtocolHandling": 1,
       "ProtocolTests": 1,
-      "ProviderConfig": 1,
       "ProviderFallback": 1,
       "ProximityProc": 1,
       "ProximityRowFilter": 1,
@@ -85978,6 +86011,7 @@
       "RefuseInternal": 1,
       "RefuseReserved": 1,
       "RefuseWhatIsNotSupported": 1,
+      "RefusedAsUnsupported": 2,
       "RefusedCommitOnQuicWire": 1,
       "RefusedDropFailsApply": 1,
       "RegistryHeaderSkipsLostEntry": 1,
@@ -86025,7 +86059,6 @@
       "RepairThroughputBench": 1,
       "RepairsDerivableOldEnvelopeDamage": 1,
       "RepeatedTarget": 1,
-      "ReplConfigXdg": 1,
       "ReplDispatchRegression": 1,
       "ReplLoopError": 1,
       "ReplParseDelegation": 1,
@@ -86202,7 +86235,7 @@
       "SecondsPrecisionDeclaration": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
-      "Security": 47,
+      "Security": 46,
       "SecurityAudit": 3,
       "SecurityBatch2": 1,
       "SecurityBoundaries": 1,
@@ -86755,6 +86788,7 @@
       "UnsupportedAlgorithm": 2,
       "UnsupportedFormatRefused": 1,
       "UnsupportedImageRemoved": 1,
+      "UnsupportedRefused": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,
       "UnwindEach": 1,

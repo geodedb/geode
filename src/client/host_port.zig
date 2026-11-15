@@ -15,6 +15,11 @@
 //! `::1`) is refused: splitting it on the last colon read `::1` as host `:`
 //! port 1. A port is 1-5 ASCII digits in 0..65535; anything else (empty,
 //! `+80`, `3_141`, `http`, 70000) is refused, never replaced by a default.
+//! SONNY-6569: an unbracketed host is a host name or IPv4 address: ASCII
+//! letters, digits, `-`, `.`, `_` and `~` only. An `@` (a credential:
+//! `--server pw@host:3141` dialled a host named `pw@host`), a path, a query,
+//! whitespace, control bytes and anything else are refused, so none of it
+//! reaches the resolver or the TLS server name.
 //! The module depends only on std so every build module can compile it.
 
 const std = @import("std");
@@ -30,7 +35,8 @@ pub const HostPort = struct {
 
 pub const Error = error{
     /// Empty input, unterminated or misplaced brackets, a bracketed host that
-    /// is not an IPv6 literal, or a bare IPv6 literal.
+    /// is not an IPv6 literal, a bare IPv6 literal, or an unbracketed host
+    /// with a byte a host name cannot hold (`isHostName`).
     InvalidAddress,
     /// The port is missing, not 1-5 digits, or above 65535.
     InvalidPort,
@@ -55,11 +61,23 @@ pub fn split(addr: []const u8, default_port: ?u16) Error!HostPort {
     }
     if (std.mem.indexOfScalar(u8, addr, ']') != null) return error.InvalidAddress;
     const colon = std.mem.indexOfScalar(u8, addr, ':') orelse {
+        if (!isHostName(addr)) return error.InvalidAddress;
         return .{ .host = addr, .port = default_port orelse return error.InvalidPort, .host_literal = addr };
     };
     if (std.mem.indexOfScalarPos(u8, addr, colon + 1, ':') != null) return error.InvalidAddress;
     const host = addr[0..colon];
+    if (!isHostName(host)) return error.InvalidAddress;
     return .{ .host = host, .port = try parsePort(addr[colon + 1 ..]), .host_literal = host };
+}
+
+/// SONNY-6569: an unbracketed host (a name or an IPv4 address, or empty
+/// for `:port`): ASCII letters, digits, `-`, `.`, `_` and `~` (RFC 3986
+/// unreserved characters).
+pub fn isHostName(host: []const u8) bool {
+    for (host) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~')) return false;
+    }
+    return true;
 }
 
 /// A port: 1-5 ASCII digits whose value fits in u16. `std.fmt.parseInt`

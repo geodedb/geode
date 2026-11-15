@@ -24,7 +24,6 @@
 //! allocates the result at its exact size, so no resized copy of a
 //! credential is freed unzeroed.
 
-const std = @import("std");
 const redact = @import("geode_client_zig").config.redact;
 
 pub const Error = redact.Error;
@@ -38,49 +37,3 @@ pub const redacted_marker = redact.redacted_marker;
 pub const Redacted = redact.Redacted;
 pub const redacted = redact.redacted;
 pub const isSecretKey = redact.isSecretKey;
-
-/// SONNY-6551: the credentials of a DSN's query parameters (docs/DSN.md,
-/// "Query Parameter Credentials"): `username` or `user`, `password` or
-/// `pass`, percent-decoded like the userinfo (`+` is a literal plus). The
-/// last occurrence of a key wins. `deinit` zeroes them before freeing.
-pub const QueryCredentials = struct {
-    username: ?[]u8 = null,
-    password: ?[]u8 = null,
-
-    pub fn deinit(self: *QueryCredentials, allocator: std.mem.Allocator) void {
-        freeSecret(allocator, self.username);
-        freeSecret(allocator, self.password);
-        self.* = .{};
-    }
-};
-
-fn freeSecret(allocator: std.mem.Allocator, value: ?[]u8) void {
-    if (value) |v| {
-        std.crypto.secureZero(u8, v);
-        allocator.free(v);
-    }
-}
-
-/// Read the credential parameters of `rest` (`Authority.rest`: empty, or
-/// starting with `/`, `?` or `#`); other parameters are skipped.
-pub fn decodeQueryCredentials(allocator: std.mem.Allocator, rest: []const u8) Error!QueryCredentials {
-    var out: QueryCredentials = .{};
-    errdefer out.deinit(allocator);
-    const q = std.mem.indexOfScalar(u8, rest, '?') orelse return out;
-    const end = std.mem.indexOfScalarPos(u8, rest, q, '#') orelse rest.len;
-    var params = std.mem.splitScalar(u8, rest[q + 1 .. end], '&');
-    while (params.next()) |param| {
-        const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
-        const key = param[0..eq];
-        const slot: *?[]u8 = if (std.mem.eql(u8, key, "username") or std.mem.eql(u8, key, "user"))
-            &out.username
-        else if (std.mem.eql(u8, key, "password") or std.mem.eql(u8, key, "pass"))
-            &out.password
-        else
-            continue;
-        const value = try percentDecode(allocator, param[eq + 1 ..]);
-        freeSecret(allocator, slot.*);
-        slot.* = value;
-    }
-    return out;
-}

@@ -8142,7 +8142,7 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info/rotate, authn config and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory; a relative XDG_STATE_HOME is ignored and the state dir goes under HOME)").dependOn(&run_tests.step);
+        b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory)").dependOn(&run_tests.step);
     }
     // SONNY-6551: the saved session file, REPL history, the server's default
     // data directory and DSN query-parameter credentials (real binaries).
@@ -8180,6 +8180,27 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6550-dsn-rules", "Run SONNY-6550 regression (geode.dsn_credentials is geode-client-zig's config.redact and decodes a credential into one exact-size allocation; a client Config built in code with port 0 is refused by connect; endpointErrorMessage names an out-of-range timeout and a DSN fragment; geode query --dsn percent-decodes the graph path against a real server)").dependOn(&run_tests.step);
+    }
+    // SONNY-6554 / SONNY-6569: no success line for a security operation that
+    // did not happen; one strict DSN parser for --dsn and the MCP endpoint;
+    // no credential in a --server host (real binaries, real server).
+    for ([_][3][]const u8{
+        .{ "tests/test_sonny6554_cli_honesty.zig", "test-sonny6554-cli-honesty", "Run SONNY-6554 items 1-4 regression (geode session invalidate-all/rotate/validate/check-idle, auth validate, authn and apikey create/list/revoke/revoke-all/check-scope exit 1 'not supported by this server' instead of printing success, and write no state file; rotate leaves the saved session untouched; query --token and auth logout --token exit 2; auth login, session info and auth logout say the saved session is a local file; help marks the unsupported commands)" },
+        .{ "tests/test_sonny6554_dsn_params.zig", "test-sonny6554-dsn-params", "Run SONNY-6554 item 5 / SONNY-6569 items 5-6 regression (geode query honours DSN insecure=true like --insecure-tls-skip-verify - same warning, refused under production posture - and ca=; an unknown parameter, a parameter without =, a bad boolean and a malformed or out-of-range page_size or timeout are refused with what is wrong by geode query and by the MCP endpoint, which parses strictly; tenant, server_name and tls=false are refused by the CLI, which cannot apply them; every documented DSN form still parses)" },
+        .{ "tests/test_sonny6569_host_credentials.zig", "test-sonny6569-host-credentials", "Run SONNY-6569 item 4 regression (host_port.split refuses a host with userinfo, a path, whitespace or control bytes and still takes names, IPv4, bracketed IPv6 and listener forms; parseHostPort names an @ as UnencodedCredentialDelimiter; geode query, shell, auth login, backup create and restore refuse --server pw@host without dialling or printing it)" },
+    }) |spec| {
+        const mod = b.createModule(.{ .root_source_file = b.path(spec[0]), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(spec[1], spec[2]).dependOn(&run_tests.step);
     }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig.
     // SONNY-6550: the file re-exports geode-client-zig's config.redact, so
@@ -8647,22 +8668,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0885_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0885_step = b.step("test-gap0885-lsp", "GAP-0885b: LSP/MCP hardening (URI percent-encoding, bind policy, .none-auth loopback assert)");
     gap0885_step.dependOn(&run_gap0885_tests.step);
-
-    // SEC-SESS-LOG-01: `session rotate` must never write the session token to
-    // stderr/stdout. All user-facing rotate output flows through
-    // session_cli.writeRotateResult, pinned token-free by tests/test_sec_sess_log.zig.
-    const sec_sess_log_cli_mod = b.createModule(.{ .root_source_file = b.path("src/cli/session_cli.zig"), .target = target, .optimize = optimize });
-    sec_sess_log_cli_mod.addImport("geode", root_mod);
-    sec_sess_log_cli_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
-    sec_sess_log_cli_mod.link_libc = true;
-    const sec_sess_log_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_sess_log.zig"), .target = target, .optimize = optimize });
-    sec_sess_log_test_mod.addImport("session_cli", sec_sess_log_cli_mod);
-    sec_sess_log_test_mod.link_libc = true;
-    const sec_sess_log_tests = b.addTest(.{ .root_module = sec_sess_log_test_mod });
-    const run_sec_sess_log_tests = b.addRunArtifact(sec_sess_log_tests);
-    shardDep(test_step, &run_sec_sess_log_tests.step, 1, test_shard_loads, test_shard_index);
-    const sec_sess_log_step = b.step("test-sec-sess-log", "SEC-SESS-LOG-01: session rotate must not print the token to stderr");
-    sec_sess_log_step.dependOn(&run_sec_sess_log_tests.step);
 
     // GAP-0885d: SEC-S3-SIGV2-01 + SEC-CLI-01. AWS SigV4 known-answer tests
     // against the published AWS documentation vectors (replacing the legacy

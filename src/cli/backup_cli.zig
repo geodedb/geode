@@ -2375,13 +2375,13 @@ fn executeRemoteRestore(
     password: ?[]const u8,
     timeout_s: u32,
 ) !void {
-    std.debug.print("RESTORE: Connecting to server {f} for remote restore...\n", .{geode.dsn_credentials.redacted(server)});
-
     // SONNY-6531: say what is wrong with --server, as the MCP path does.
+    // SONNY-6569: before the address is printed (a refused one is not).
     const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
         zig_quic_bridge.printEndpointError(err);
         return error.InvalidServerAddress;
     };
+    std.debug.print("RESTORE: Connecting to server {f} for remote restore...\n", .{geode.dsn_credentials.redacted(server)});
 
     var client = zig_quic_bridge.initClientStrictTls(
         allocator,

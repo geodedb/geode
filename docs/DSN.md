@@ -1,8 +1,8 @@
 # Geode DSN (Data Source Name) Specification
 
-**Version**: 1.2.0
+**Version**: 1.2.1
 **Status**: Official Specification
-**Last Updated**: 2026-11-14
+**Last Updated**: 2026-11-15
 
 This document defines the official DSN (Data Source Name) format for Geode client libraries. All client implementations MUST conform to this specification.
 
@@ -83,6 +83,13 @@ Refused with `InvalidAddress`, never reinterpreted:
 - an unterminated bracket (`[::1`), anything but `:port` after the
   bracket (`[::1]3141`), or brackets around anything but an IPv6 address
   (`[127.0.0.1]`, `[]`);
+- an unbracketed host holding anything but ASCII letters, digits, `-`,
+  `.`, `_` and `~` (SONNY-6569): whitespace, control bytes, `/`, `?`, `#`,
+  `%` and the like. A client address (`--server`, the REPL's `\connect`)
+  holding an `@` is refused with `UnencodedCredentialDelimiter`:
+  `--server pw@host:3141` used to dial a host named `pw@host`, sending the
+  credential to the resolver and the TLS server name. Use `-U` with
+  `--password`, or `--dsn`;
 - a port that is not 1-5 digits or is above 65535 (empty, `http`, `+80`,
   `3_141`, `70000`). No parser replaces a bad port with a default any more
   (`--listen` used to fall back to 3141, `--audit-syslog` to 514,
@@ -125,7 +132,12 @@ call answers `Error: <message>` (`isError: true`) and a resource read
 | `InvalidPercentEncoding` | a `%` not followed by two hex digits in the user name, password, graph path or a query value (SONNY-6544, SONNY-6550) | `Invalid Geode endpoint DSN: a % must start a %XX escape ...` |
 | `UnencodedCredentialDelimiter` | an `@` after the host: a password with a raw `/`, `?` or `#`, or an `@` in the graph path or a query value (SONNY-6544, SONNY-6550) | `Invalid Geode endpoint DSN: an @ follows the host ...` |
 | `DsnFragment` | a fragment (`#...`); geode-client-zig reports it as `InvalidDSN`, geode names it (SONNY-6550) | `Invalid Geode endpoint DSN: a fragment (#...) is not allowed ...` |
-| `TimeoutOutOfRange` | `parseDSNStrict` only: a `connect_timeout` / `timeout_ms` outside its range (SONNY-6550; no geode path parses strictly today) | `Invalid Geode endpoint DSN: the timeout is out of range ...` |
+| `TimeoutOutOfRange` | a `connect_timeout` / `timeout` / `timeout_ms` outside its range (SONNY-6550, SONNY-6569) | `Invalid Geode endpoint DSN: the timeout is out of range ...` |
+| `InvalidTimeout` | a timeout that is not a whole number (SONNY-6569) | `Invalid Geode endpoint DSN: a timeout must be a whole number ...` |
+| `InvalidPageSize`, `PageSizeOutOfRange` | a `page_size` that is not a whole number 1-100000 (`50%`, `0`, `abc`; SONNY-6569) | `Invalid Geode endpoint DSN: page_size takes a whole number 1-100000` |
+| `UnknownDsnParameter` | a query parameter not in "Query Parameters" below (SONNY-6554) | `Invalid Geode endpoint DSN: unknown query parameter; the parameters are ...` |
+| `MalformedDsnParameter` | a query parameter without `=`, or with an empty name (SONNY-6554) | `Invalid Geode endpoint DSN: a query parameter must be name=value ...` |
+| `InvalidDsnBoolean` | a boolean parameter whose value is not one of the spellings under "Boolean Parameter Values" (SONNY-6554) | `Invalid Geode endpoint DSN: a boolean parameter ...` |
 
 Any other failure (the server cannot be reached, TLS, authentication)
 keeps the generic `Failed to initialize client` / `Failed to connect to
@@ -265,12 +277,12 @@ user name from the userinfo and the password from the query (an empty
 userinfo user name counts as absent). geode's CLI (`geode query` /
 `geode shell` `--dsn`) reads them (SONNY-6551; it read only the userinfo
 before, so the harness form `localhost:3141?insecure=true&user=geode&pass=...`
-sent no credentials). Of the other query parameters the CLI reads none.
-The `geode mcp --endpoint` DSN follows the same precedence (SONNY-6550):
-geode-client-zig's `parseDSN` (v0.3.17) lets the query parameter overwrite
-the userinfo, so geode puts the userinfo's values back after parsing
-(`src/mcp/client.zig`). Another program that parses a DSN with
-geode-client-zig directly gets the query parameter's value.
+sent no credentials). The `geode mcp --endpoint` DSN follows the same
+precedence (SONNY-6550): geode-client-zig's `parseDSN` (v0.3.17) lets the
+query parameter overwrite the userinfo, so geode's parser
+(`src/client/dsn_params.zig`) puts the userinfo's values back. Another
+program that parses a DSN with geode-client-zig directly gets the query
+parameter's value.
 
 ## Query Parameters
 
@@ -278,11 +290,13 @@ geode-client-zig directly gets the query parameter's value.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `page_size` | integer | 1000 | Results page size (1-100,000) |
+| `page_size` (alias `pageSize`) | integer | 1000 | Results page size (1-100,000) |
 | `hello_name` | string | varies | Client name sent in HELLO handshake |
 | `hello_ver` | string | varies | Client version sent in HELLO handshake |
 | `conformance` | string | "min" | GQL conformance level ("min", "full") |
-| `graph` | string | - | Graph name (alternative to path-based specification). Reserved for future use; path format is primary. |
+| `graph` | string | - | Graph name, an alternative to the path; when both are given, `graph=` wins (geode-client-zig) |
+| `tenant` (alias `tenant_id`) | string | - | Tenant sent in HELLO (the MCP endpoint; the CLI refuses it, see below) |
+| `role` | string | - | Role sent in HELLO (FLE role; `geode query` applies it like `--role`) |
 
 ### Authentication Parameters
 
@@ -296,7 +310,7 @@ geode-client-zig directly gets the query parameter's value.
 | Parameter | Aliases | Type | Default | Description |
 |-----------|---------|------|---------|-------------|
 | `tls` | - | boolean | true | Enable/disable TLS (gRPC only, QUIC always uses TLS) |
-| `insecure_tls_skip_verify` | - | boolean | false | Skip TLS certificate verification (testing only) |
+| `insecure_tls_skip_verify` | `insecure`, `skip_verify` | boolean | false | Skip TLS certificate verification (testing only). Same rule as `--insecure-tls-skip-verify`: refused under production posture (release build or `GEODE_ENV=production`) unless `GEODE_ALLOW_INSECURE_TLS=1` |
 | `ca` | `ca_cert` | string | - | Path to CA certificate file |
 | `cert` | `client_cert` | string | - | Path to client certificate file (for mTLS) |
 | `key` | `client_key` | string | - | Path to client private key file (for mTLS) |
@@ -306,7 +320,7 @@ geode-client-zig directly gets the query parameter's value.
 
 | Parameter | Aliases | Type | Default | Description |
 |-----------|---------|------|---------|-------------|
-| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds |
+| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds (geode-client-zig v0.3.17 reads `timeout` as milliseconds, SONNY-6569; geode validates it with the library's rule until the library is fixed) |
 | `timeout_ms` | - | integer | 30000 | Connection timeout in milliseconds |
 
 **Note**: When both `connect_timeout` (seconds) and `timeout_ms` (milliseconds) are specified, `timeout_ms` takes precedence.
@@ -317,8 +331,10 @@ refuses a value outside it with `TimeoutOutOfRange`, including
 `connect_timeout` seconds whose milliseconds overflow a 32-bit integer
 (e.g. `5000000`, which panicked the parser before v0.3.17); its lenient
 `parseDSN` keeps the default timeout for an overflowing `connect_timeout`.
-The `geode mcp --endpoint` DSN is parsed leniently; the CLI's `--dsn` reads
-no timeout parameter (use `--timeout`).
+geode parses the `geode mcp --endpoint` DSN and the CLI's `--dsn` strictly
+(SONNY-6569; the MCP endpoint was parsed leniently, so an out-of-range
+value silently became the default). Neither applies a timeout parameter
+yet: the CLI says so (`Warning: ... has no effect`; use `--timeout`).
 
 ### Boolean Parameter Values
 
@@ -469,6 +485,31 @@ Implementations MAY provide a strict parsing mode that additionally returns erro
 - Unknown/unrecognized parameters
 - Invalid boolean values
 
+geode parses every DSN this way (SONNY-6554, SONNY-6569): the CLI's
+`--dsn` and the `geode mcp --endpoint` DSN go through one parser,
+`geode.dsn_params.parse` (`src/client/dsn_params.zig`): geode-client-zig's
+`parseDSNStrict` plus the known-parameter and boolean checks.
+
+### Parameters the CLI applies
+
+`geode query` and `geode shell --dsn` never drop a parameter silently
+(SONNY-6554):
+
+| Parameter | `geode query` | `geode shell` |
+|-----------|---------------|---------------|
+| credentials, graph (path or `graph=`) | applied | applied |
+| `insecure_tls_skip_verify` / `insecure` / `skip_verify` | applied as `--insecure-tls-skip-verify` (same warning, same production-posture refusal) | same |
+| `ca`, `cert`, `key` | applied as `--ca-cert`, `--client-cert`, `--client-key` | same |
+| `page_size` | applied as `--page-size` | warning: no effect |
+| `role` | applied as `--role` | refused (exit 2) |
+| `tenant`, `server_name`, `tls=false` | refused (exit 2): the CLI cannot apply them | same |
+| `tls=true` | accepted (the CLI always uses TLS) | same |
+| `hello_name`, `hello_ver`, `conformance`, `connect_timeout`, `timeout_ms` | warning: no effect | same |
+
+A DSN value takes the place of the matching flag. Before SONNY-6554 the
+CLI read only the credentials and the graph, so a harness DSN's
+`insecure=true` had no effect.
+
 ### Validation
 
 Implementations SHOULD validate:
@@ -524,6 +565,7 @@ The error messages for a malformed DSN never include the DSN.
 | 1.0.0 | 2026-02-05 | Initial specification |
 | 1.1.0 | 2026-03-25 | Add graph path support, graph-bound sessions, auto-create semantics |
 | 1.2.0 | 2026-11-14 | Userinfo ends at the last `@` of the authority; strict percent-decoding of credentials, graph path and query values (`+` literal); fragments, an `@` after the authority and port 0 refused; userinfo takes precedence over query credentials; timeout range |
+| 1.2.1 | 2026-11-15 | geode: one strict parser for the CLI and the MCP endpoint (unknown parameter, parameter without `=`, bad boolean, malformed number refused); the CLI applies `insecure`, `ca`/`cert`/`key`, `page_size`, `role` and refuses `tenant`, `server_name`, `tls=false`; `tenant`, `role`, `pageSize`, `insecure`, `skip_verify` documented; an `@` or other non-host byte in a client host refused |
 
 ## License
 
