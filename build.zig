@@ -6839,6 +6839,13 @@ pub fn build(b: *std.Build) void {
     grant_migration_mod.addImport("policy_persistence", policy_persistence_mod);
     geode_exe.root_module.addImport("grant_migration", grant_migration_mod);
 
+    // SONNY-6567 (5): the startup loads of the stored auth state (per-graph
+    // grants, FLE role grants), a named module so the regression drives them.
+    const auth_startup_hydration_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_startup_hydration.zig"), .target = target, .optimize = optimize });
+    auth_startup_hydration_mod.addImport("geode", root_mod);
+    auth_startup_hydration_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    geode_exe.root_module.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+
     // Auth graph manager unit tests
     const auth_graph_manager_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -10810,6 +10817,7 @@ pub fn build(b: *std.Build) void {
     sonny6567_ah_test_mod.link_libc = true;
     sonny6567_ah_test_mod.addImport("geode", root_mod);
     sonny6567_ah_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6567_ah_test_mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
     const sonny6567_ah_tests = b.addTest(.{ .root_module = sonny6567_ah_test_mod });
     const run_sonny6567_ah_tests = b.addRunArtifact(sonny6567_ah_tests);
     shardDep(test_step, &run_sonny6567_ah_tests.step, 1, test_shard_loads, test_shard_index);

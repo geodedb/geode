@@ -5028,6 +5028,9 @@ REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,CustomRoleHydrationFailsClosed,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
+REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,StartupHydrationFailsClosed,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
+REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,StartupRefusesPartialAuthState,TESTED,src/server/server_init.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
 REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,Regression,TESTED,tests/test_sonny6567_auth_hydration.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
 REQ-SONNY-6567-FTS-UNREADABLE-HIT,FullText,UnreadableHitFailsSearch,TESTED,src/execution/fts_dispatch.zig,tests/test_sonny6567_fts_unreadable_hit.zig,,fts,2026-11-15
 REQ-SONNY-6567-FTS-UNREADABLE-HIT,FullText,Regression,TESTED,tests/test_sonny6567_fts_unreadable_hit.zig,tests/test_sonny6567_fts_unreadable_hit.zig,,fts,2026-11-14

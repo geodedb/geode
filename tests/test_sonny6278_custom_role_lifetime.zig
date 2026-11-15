@@ -195,7 +195,7 @@ test "SONNY-6278: a custom role created, assigned and hydrated in one request is
     // yet), with the server's allocator, as server_init does.
     auth_dispatch.setRolePersistCallbacks(.{ .list_fn = &roleList });
     g_stored_roles = &.{};
-    auth_dispatch.hydrateCustomRolesFromGraph(testing.allocator);
+    try auth_dispatch.hydrateCustomRolesFromGraph(testing.allocator);
 
     // CREATE ROLE in one request; the request ends.
     freeNames(try w.request("CREATE ROLE auditors6278 SET DESCRIPTION 'reads the audit log'"));
@@ -218,7 +218,7 @@ test "SONNY-6278: a custom role created, assigned and hydrated in one request is
     g_stored_roles = &.{.{ .id = 7, .name = "ops6278", .description = "operators" }};
     {
         const r = try w.newRequest();
-        auth_dispatch.hydrateCustomRolesFromGraph(r.allocator());
+        try auth_dispatch.hydrateCustomRolesFromGraph(r.allocator());
         r.end();
     }
     {

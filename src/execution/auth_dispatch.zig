@@ -1829,20 +1829,26 @@ pub fn callAuthProcedure(
 }
 
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-024; FEATURE="AuthDDLPersistence"; ASPECT=CustomRoleHydration; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+// CANARY: REQ=REQ-SONNY-6567-AUTH-HYDRATION; FEATURE="AuthDDLPersistence"; ASPECT=CustomRoleHydrationFailsClosed; STATUS=TESTED; TEST=tests/test_sonny6567_auth_hydration.zig; OWNER=security; UPDATED=2026-11-15
 /// Called once at server startup (from server_init) after the AGM is ready
 /// and role persistence callbacks are installed.
 /// Loads custom (non-built-in) Role node names from __geode_security into
 /// g_custom_roles so that the in-memory role store is consistent with what was
 /// persisted in a prior run. `allocator` is for the listing only; the store
 /// owns what it keeps (SONNY-6278, `g_role_store_alloc`).
-pub fn hydrateCustomRolesFromGraph(allocator: std.mem.Allocator) void {
+///
+/// SONNY-6567 (5): every stored role is loaded, or the error is returned and
+/// startup fails. A failed listing loaded nothing and a role whose copy could
+/// not be made was skipped (`catch continue`), each with at most a warning,
+/// and the server ran with part of its roles.
+pub fn hydrateCustomRolesFromGraph(allocator: std.mem.Allocator) !void {
     const list_f = g_role_persist.list_fn orelse return;
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit();
     const entries = list_f(g_role_persist.ctx, allocator) catch |e| {
-        log.warn("hydrateCustomRolesFromGraph: listRoles failed", &.{Attr.string("error", @errorName(e))});
-        return;
+        log.err("hydrateCustomRolesFromGraph: the stored roles could not be listed", &.{Attr.string("error", @errorName(e))});
+        return e;
     };
     defer allocator.free(entries);
     const store_alloc = g_role_store_alloc;
@@ -1852,15 +1858,11 @@ pub fn hydrateCustomRolesFromGraph(allocator: std.mem.Allocator) void {
         // replaced, so nothing leaks).
         if (g_custom_roles.contains(entry.name)) continue;
         // dupe the name and description so g_custom_roles owns its keys/values
-        const key = store_alloc.dupe(u8, entry.name) catch continue;
-        const val = store_alloc.dupe(u8, entry.description) catch {
-            store_alloc.free(key);
-            continue;
-        };
-        g_custom_roles.put(key, val) catch {
-            store_alloc.free(key);
-            store_alloc.free(val);
-        };
+        const key = try store_alloc.dupe(u8, entry.name);
+        errdefer store_alloc.free(key);
+        const val = try store_alloc.dupe(u8, entry.description);
+        errdefer store_alloc.free(val);
+        try g_custom_roles.put(key, val);
     }
 }
 

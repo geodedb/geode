@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:00:34.561222273Z",
+  "generated_at": "2026-11-15T13:13:22.00743836Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79291,6 +79291,48 @@
       "features": [
         {
           "feature": "AuthDDLPersistence",
+          "aspect": "CustomRoleHydrationFailsClosed",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "StartupHydrationFailsClosed",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_startup_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "StartupRefusesPartialAuthState",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -84587,7 +84629,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4195
+      "TESTED": 4198
     },
     "by_aspect": {
       "2PC": 3,
@@ -85293,6 +85335,7 @@
       "CurrentUserEquality": 1,
       "CustomRoleGrantRefused": 1,
       "CustomRoleHydration": 1,
+      "CustomRoleHydrationFailsClosed": 1,
       "CustomRoleStoreOwnsMemory": 1,
       "DDL": 2,
       "DEDUP": 1,
@@ -87850,9 +87893,11 @@
       "Startup": 6,
       "StartupGuard": 1,
       "StartupHydration": 2,
+      "StartupHydrationFailsClosed": 1,
       "StartupLoad": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupRefusesPartialAuthState": 1,
       "StartupReport": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,

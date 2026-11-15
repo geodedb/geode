@@ -245,6 +245,7 @@ const query_plan_cache = geode.query_plan_cache;
 const geode_auth = @import("geode_auth");
 // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-004; FEATURE="AuthGraphManager Integration"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 const auth_graph_manager = @import("auth_graph_manager");
+const auth_startup_hydration = @import("auth_startup_hydration");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-014; FEATURE="Structured Logging"; ASPECT=ServerInit; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -1140,28 +1141,6 @@ fn fleRoleRevokePersist(ctx: ?*anyopaque, username: []const u8, role: []const u8
     return agm.revokeUserFleRole(&agm.hmac_key, uid, role);
 }
 
-/// SONNY-6341: the stored FLE role grants, loaded into memory. A grant whose
-/// user is gone is not loaded; a listing that fails loads none (no session
-/// acts under any FLE role: fail closed), logged.
-fn hydrateFleRoleGrants(agm: *auth_graph_manager.AuthGraphManager, allocator: std.mem.Allocator) void {
-    const fle_role_grants = geode.security.fle_role_grants;
-    const list = agm.listFleRoleGrants(allocator) catch |e| {
-        log.err("Auth DDL startup: FLE role grants could not be listed; no session acts under an FLE role", &.{Attr.string("error", @errorName(e))});
-        return;
-    };
-    defer allocator.free(list);
-    var loaded: usize = 0;
-    for (list) |g| {
-        const user = agm.storage.getUser(g.user_id) orelse continue;
-        fle_role_grants.load(user.getUsername(), g.role) catch |e| {
-            log.err("Auth DDL startup: an FLE role grant could not be loaded", &.{Attr.string("error", @errorName(e))});
-            continue;
-        };
-        loaded += 1;
-    }
-    if (loaded > 0) log.info("Auth DDL startup: hydrated FLE role grants", &.{Attr.int("count", @intCast(loaded))});
-}
-
 fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     try agm.updatePasswordWriteThrough(&agm.hmac_key, username, new_password_hash);
@@ -1280,9 +1259,10 @@ fn graphGrantCheck(username: []const u8, graph_name: []const u8, action: u8) boo
 
 /// Wire all auth-DDL persistence callbacks and hydrate in-memory state from
 /// __geode_security.  Called from fixupSelfPointers() once the AuthGraphManager
-/// is at its final address.  Every step is best-effort: failures log a warning
-/// and startup continues.
-pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator: std.mem.Allocator) void {
+/// is at its final address.  SONNY-6567 (5): a stored record that cannot be
+/// loaded fails startup (every step was best-effort: a warning, and the
+/// server ran with part of its auth state).
+pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator: std.mem.Allocator) !void {
     // 1. Publish the global AGM pointer (used by graphGrantCheck).
     auth_graph_manager.AuthGraphManager.setGlobal(agm);
 
@@ -1321,7 +1301,12 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .grant_fn = &fleRoleGrantPersist,
         .revoke_fn = &fleRoleRevokePersist,
     });
-    hydrateFleRoleGrants(agm, allocator);
+    // SONNY-6567 (5): every stored FLE role grant, or startup fails.
+    const fle_loaded = auth_startup_hydration.hydrateFleRoleGrants(allocator, agm) catch |err| {
+        log.err("Auth DDL startup: the FLE role grants could not be loaded; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+    if (fle_loaded > 0) log.info("Auth DDL startup: hydrated FLE role grants", &.{Attr.int("count", @intCast(fle_loaded))});
 
     // 5. Per-graph grant check function for execution.zig fallback path.
     geode.execution.graph_grant_check_fn = &graphGrantCheck;
@@ -1330,41 +1315,34 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
     // authorization is actually enforced. Without this the policy is null and
     // every grant check fails open (the BOLA). Process-lifetime singleton.
     const policy = allocator.create(multi_graph_security.GraphRBACPolicy) catch |err| {
-        log.err("Auth DDL startup: failed to allocate GraphRBACPolicy", &.{Attr.string("error", @errorName(err))});
-        return;
+        log.err("Auth DDL startup: failed to allocate GraphRBACPolicy; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     policy.* = multi_graph_security.GraphRBACPolicy.init(allocator);
     multi_graph_security.setGlobalPolicy(policy);
-
-    // 6. Hydrate custom roles (best-effort).
-    auth_dispatch.hydrateCustomRolesFromGraph(allocator);
-
-    // 7. Hydrate in-memory GraphRBACPolicy from persisted grants (best-effort).
-    if (agm.listGraphGrants(allocator)) |grants| {
-        defer allocator.free(grants);
-        if (grants.len > 0) {
-            if (multi_graph_security.getGlobalPolicy()) |pol| {
-                const entries = allocator.alloc(multi_graph_security.GraphGrantLoadEntry, grants.len) catch |e| {
-                    log.warn("Auth DDL startup: OOM allocating grant load entries", &.{Attr.string("error", @errorName(e))});
-                    return;
-                };
-                defer allocator.free(entries);
-                for (grants, 0..) |g, i| {
-                    entries[i] = .{ .user_id = g.user_id, .graph_name = g.getGraphName(), .action = g.action };
-                }
-                pol.loadGraphGrants(entries) catch |e| {
-                    log.warn("Auth DDL startup: loadGraphGrants failed", &.{Attr.string("error", @errorName(e))});
-                };
-                log.info("Auth DDL startup: hydrated graph grants", &.{Attr.int("count", @intCast(grants.len))});
-            } else {
-                log.warn("Auth DDL startup: no global GraphRBACPolicy, skipping grant hydration", &.{});
-            }
-        }
-    } else |e| {
-        log.warn("Auth DDL startup: listGraphGrants failed, skipping grant hydration", &.{
-            Attr.string("error", @errorName(e)),
-        });
+    // A startup that fails below lets go of it (`releaseAuthDDLPolicy` is
+    // registered only once this returns).
+    errdefer {
+        multi_graph_security.setGlobalPolicy(null);
+        policy.deinit();
+        allocator.destroy(policy);
     }
+
+    // CANARY: REQ=REQ-SONNY-6567-AUTH-HYDRATION; FEATURE="AuthDDLPersistence"; ASPECT=StartupRefusesPartialAuthState; STATUS=TESTED; TEST=tests/test_sonny6567_auth_hydration.zig; OWNER=security; UPDATED=2026-11-15
+    // 6. Hydrate custom roles. SONNY-6567 (5): every one, or startup fails
+    // (each of these steps was best-effort: a warning, and the server ran
+    // with part of its roles or grants).
+    auth_dispatch.hydrateCustomRolesFromGraph(allocator) catch |err| {
+        log.err("Auth DDL startup: the custom roles could not be loaded; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+
+    // 7. Hydrate the in-memory GraphRBACPolicy from the stored grants.
+    const grants_loaded = auth_startup_hydration.hydrateGraphGrants(allocator, agm, policy) catch |err| {
+        log.err("Auth DDL startup: the per-graph grants could not be loaded; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+    if (grants_loaded > 0) log.info("Auth DDL startup: hydrated graph grants", &.{Attr.int("count", @intCast(grants_loaded))});
 
     log.info("Auth DDL persistence callbacks installed", &.{});
 }
@@ -1391,15 +1369,19 @@ pub fn wireGpsPolicyHooks(
     allocator: std.mem.Allocator,
     agm: *auth_graph_manager.AuthGraphManager,
     catalog: *geode.security.policy_catalog.PolicyCatalog,
-) void {
+) !void {
     const policy_persistence = @import("policy_persistence");
     const policy_catalog_mod = geode.security.policy_catalog;
 
-    // 1. Hydrate the catalog from persisted :Policy nodes.
+    // 1. Hydrate the catalog from persisted :Policy nodes. SONNY-6567 (5): a
+    // catalog that cannot be loaded fails startup. It was a warning, and the
+    // server ran without the stored policies: a deny policy that was not
+    // loaded hides nothing.
     policy_persistence.hydrateCatalog(allocator, agm, catalog) catch |err| {
-        log.warn("GPS policy hydration from __geode_security failed — in-memory catalog may be empty", &.{
+        log.err("GPS policy hydration from __geode_security failed; refusing to start", &.{
             Attr.string("error", @errorName(err)),
         });
+        return err;
     };
 
     // 2. Install write-through hooks.  The AGM pointer is stashed in a
