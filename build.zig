@@ -18758,6 +18758,31 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6623: mfa_enable under the attempt limiter; session removal
+    // cannot fail; offline mfa enable counts malformed codes.
+    const sonny6623_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6623_mfa_enable_limit.zig", .step = "test-sonny6623-mfa-enable-limit", .desc = "Run the SONNY-6623 regression (geode.auth.mfa_enable shares mfa_verify's attempt count, lockout and stored lockout; a malformed code from an enrolled user counts, still 22023; SecurityManager.removeUserByName removes the user's sessions with no allocation)", .spawns = false },
+        .{ .file = "tests/test_sonny6623_offline.zig", .step = "test-sonny6623-offline", .desc = "Run the SONNY-6623 regression (malformed codes through offline geode user mfa enable count toward the MfaAttempts lockout; spawns the CLI)", .spawns = true },
+    };
+    for (sonny6623_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.
