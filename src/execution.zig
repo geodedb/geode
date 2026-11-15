@@ -933,6 +933,24 @@ pub const OwnedGraphEntities = struct {
     /// its own allocator. Nothing is allocated, so nothing fails: for rows
     /// copied by reference from a result that is then freed (a UNION's arm,
     /// a WITH's input), whose tracker must outlive it.
+    // CANARY: REQ=REQ-SONNY-6613-ENTITY-ADOPT; FEATURE="ExecutionResultOwnership"; ASPECT=MismatchedTrackerLinked; STATUS=TESTED; TEST=tests/test_sonny6613_entity_adopt.zig; OWNER=execution; UPDATED=2026-11-15
+    /// SONNY-3046 / SONNY-6613: `dst` (a result's tracker, or none) takes over
+    /// `src` (a part's), which is consumed: absorbed when the two free their
+    /// entities the same way (`canAbsorb`), else linked, so each is freed its
+    /// own way with `dst`. It was dropped, leaking it and every node it held.
+    /// On an error `src` is left whole.
+    pub fn adopt(dst: *?*OwnedGraphEntities, src: ?*OwnedGraphEntities) !void {
+        const s = src orelse return;
+        const d = dst.* orelse {
+            dst.* = s;
+            return;
+        };
+        var cur: ?*OwnedGraphEntities = d;
+        while (cur) |t| : (cur = t.next) if (t == s) return;
+        if (d.canAbsorb(s)) return d.absorb(s);
+        d.link(s);
+    }
+
     pub fn link(self: *OwnedGraphEntities, other: *OwnedGraphEntities) void {
         var tail = other;
         while (tail.next) |n| tail = n;

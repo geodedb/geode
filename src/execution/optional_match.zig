@@ -76,15 +76,8 @@ fn boundElement(param_names: []const []const u8, param_values: []const Value, na
 /// that free their entities differently are left unmerged (every executor
 /// tracker frees the struct only).
 fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGraphEntities) !void {
-    const s = src orelse return;
-    const d = dst.* orelse {
-        dst.* = s;
-        return;
-    };
-    if (d == s) return;
-    if (!d.canAbsorb(s)) return;
-    // SONNY-6613: the path arrays `src` keeps move too.
-    try d.absorb(s);
+    // SONNY-6613: as `query_execution.adoptEntities`.
+    return execution.OwnedGraphEntities.adopt(dst, src);
 }
 
 /// Free a clause's rows once their values (nodes and relationships, which

@@ -197,17 +197,11 @@ pub fn runReadForBody(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, 
 /// (left unfreed rather than freed the wrong way; every executor tracker frees
 /// the struct only).
 fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGraphEntities) !void {
-    const s = src orelse return;
-    const d = dst.* orelse {
-        dst.* = s;
-        return;
-    };
-    if (d == s) return;
-    if (!d.canAbsorb(s)) return;
     // SONNY-6498: every list grows first; a failure leaves `src` whole (it
     // was half copied, then freed by both trackers). SONNY-6613: the path
-    // arrays `src` keeps move too.
-    try d.absorb(s);
+    // arrays `src` keeps move too, and a tracker that frees differently is
+    // linked (it was dropped).
+    return execution.OwnedGraphEntities.adopt(dst, src);
 }
 
 // CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ChainParts; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
