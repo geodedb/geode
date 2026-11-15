@@ -2616,6 +2616,12 @@
 
 ### Fixed
 
+- **head() and last() of a value that is no list are 22G03 (SONNY-6587).**
+  They answered NULL for `head(1)`, `last('ab')` or `head({a: 1})`; tail()
+  raised 22G03 since SONNY-6555. NULL in is still NULL out, and an empty
+  list still gives NULL. **BREAKING** for a query that relied on the NULL.
+  Regression: `zig build test-sonny6587-list-functions`.
+
 - **A procedure call's RETURN takes GROUP BY and HAVING; the graph
   algorithm guide's examples parse (SONNY-6596).** ISO/IEC 39075:2024 14.11
   puts the `<group by clause>` in the `<return statement body>`, so `CALL

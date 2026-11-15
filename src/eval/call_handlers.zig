@@ -1620,7 +1620,10 @@ pub fn evalCollectionFunction(
                 if (l.len == 0) return Value{ .Null = {} };
                 return l[0];
             },
-            else => return Value{ .Null = {} },
+            // SONNY-6587 item 3: NULL in is NULL out, and a value that is no
+            // list is 22G03, as tail's (SONNY-6555 item 4); it was NULL.
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
@@ -1655,7 +1658,10 @@ pub fn evalCollectionFunction(
                 if (l.len == 0) return Value{ .Null = {} };
                 return l[l.len - 1];
             },
-            else => return Value{ .Null = {} },
+            // SONNY-6587 item 3: NULL in is NULL out, and a value that is no
+            // list is 22G03, as tail's (SONNY-6555 item 4); it was NULL.
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
