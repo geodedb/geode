@@ -14041,6 +14041,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_fcs_tests = b.addRunArtifact(sonny6555_fcs_tests);
     shardDep(test_step, &run_sonny6555_fcs_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-for-chain-stage", "Run SONNY-6555 item 7 regression (ISO/IEC 39075 14.3 / 14.8 / 14.11: a FOR whose body reads runs it over the FOR's whole table, at the start of a statement or after a part, so its aggregate, DISTINCT, ORDER BY and LIMIT read every element; a chain's last RETURN DISTINCT reads every row: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6555_fcs_tests.step);
+    // SONNY-6587 item 5: a FOR body that writes after a WITH runs for every row. See tests/test_sonny6587_for_write_after_with.zig.
+    const sonny6587_fww_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6587_for_write_after_with.zig"), .target = target, .optimize = optimize });
+    sonny6587_fww_mod.addImport("geode", root_mod);
+    sonny6587_fww_mod.addImport("logging", logging_mod);
+    sonny6587_fww_mod.addImport("rls_types", rls_types_mod);
+    const sonny6587_fww_tests = b.addTest(.{ .root_module = sonny6587_fww_mod });
+    const run_sonny6587_fww_tests = b.addRunArtifact(sonny6587_fww_tests);
+    shardDep(test_step, &run_sonny6587_fww_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6587-for-write-after-with", "Run SONNY-6587 item 5 regression (ISO/IEC 39075 14.8: a FOR whose body writes - CREATE, MATCH ... SET - after a WITH runs for every row of the WITH, not the first only: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6587_fww_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
