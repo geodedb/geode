@@ -3757,6 +3757,11 @@ pub fn orderedScanFastPath(
         // ORDER BY on this key — and the next reopen (gs reloads the persisted
         // snapshot) — are index-served. Fall back to the heap for THIS query
         // (correct, slower). Deduped, so this is not a per-query cost.
+        // SONNY-6555 item 3: a column the index could never serve (mixed
+        // classes, a non-canonical string, a value of no ordered class; the
+        // `orderedIndexColumn` decline below) is declined before the build
+        // starts; it was built, and persisted, for nothing.
+        if (!adapter.probeOrderedColumnClass(filter_graph, label, ret_key)) return null;
         adapter.spawnOrderedIndexBuildAsync(filter_graph, label, ret_key);
         return null;
     }

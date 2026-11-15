@@ -2438,6 +2438,19 @@
 
 ### Fixed
 
+- **An ORDER BY on a column the ordered index cannot serve no longer starts
+  its build (SONNY-6555 item 3, SONNY-6518 item 6).** `orderedScanFastPath`
+  started the value-ordered index's background build (and its persisting
+  checkpoint) for a `(label, key)` before anything knew the column's class,
+  then declined that index forever when the column mixed order classes
+  (INTEGER, DOUBLE, STRING), held a string that is not its own NFC form, or
+  a value of no ordered class (SONNY-6499). The new
+  `StorageAdapter.probeOrderedColumnClass` reads the column's values first
+  (stopping at the first one that breaks it) and such a column is declined
+  before the build starts. A single-class canonical column still builds; the
+  probe reads the label's values once on the query path before that build
+  (the heap fallback serving the same query reads them too). Regression:
+  `zig build test-sonny6555-ordered-build-probe`.
 - **The statements after a FOR read its whole table, and a chain's last
   RETURN DISTINCT reads every row (SONNY-6555 item 7, BREAKING: results
   change).** ISO/IEC 39075:2024 14.8: a FOR extends the working table, a

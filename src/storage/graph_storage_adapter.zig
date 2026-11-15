@@ -8131,6 +8131,39 @@ pub const StorageAdapter = struct {
         return canonical_string.isCanonical(decoded.value.string);
     }
 
+    // CANARY: REQ=REQ-SONNY-6555-ORDERED-BUILD-PROBE; FEATURE="OrderedIndex"; ASPECT=ColumnClassProbe; STATUS=TESTED; TEST=tests/test_sonny6555_ordered_build_probe.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6555 item 3: whether the value-ordered index could serve the
+    /// (label, key) column, decided from the stored values before its build
+    /// is started (`orderedIndexColumn` decides it from a built index, too
+    /// late to spare the build). True when every node that carries the key
+    /// holds a value of one order class (INTEGER, DOUBLE or STRING) and every
+    /// string is its own NFC form; false at the first value that breaks it
+    /// (a second class, a non-canonical string, a value of no ordered class)
+    /// or when a read fails. Reads through `getNodesByLabel` /
+    /// `getNodeProperty`, which take their own locks.
+    pub fn probeOrderedColumnClass(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8) bool {
+        const ids = self.getNodesByLabel(graph_name, label, self.allocator) catch return false;
+        defer self.allocator.free(ids);
+        const Class = enum { integer, double, string };
+        var class: ?Class = null;
+        for (ids) |id| {
+            const pv = (self.getNodeProperty(graph_name, id, key, self.allocator) catch return false) orelse continue;
+            defer freeOwnedStorageProperty(self.allocator, pv);
+            const c: Class = switch (pv) {
+                .int => .integer,
+                .float => .double,
+                .string => |str| blk: {
+                    if (!canonical_string.isCanonical(str)) return false;
+                    break :blk .string;
+                },
+                else => return false,
+            };
+            if (class) |seen| if (seen != c) return false;
+            class = c;
+        }
+        return true;
+    }
+
     // ========================================================================
     // GAP-0064 FIX C: AUTO-BUILD the value-ordered index on a FRESH store.
     //
