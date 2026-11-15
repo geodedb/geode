@@ -206,9 +206,11 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
         const edge_ids = try store.allEdgeIds(allocator);
         defer allocator.free(edge_ids);
         for (edge_ids) |edge_id| {
-            const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+            // SONNY-6567 (2): an edge that cannot be read fails the listing
+            // (it was skipped, as if absent).
+            const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
             if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
-            if (!edgeVisible(store, p, edge)) continue;
+            if (!try edgeVisible(store, p, edge)) continue;
             for (types, reached) |t, *r| {
                 if (std.mem.eql(u8, t, edge.label)) r.* = true;
             }
@@ -293,7 +295,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         const node_ids = try store.getAllNodesForTenant(allocator, null);
         defer allocator.free(node_ids);
         for (node_ids) |node_id| {
-            const node = store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
             if (nodeDenied(&policies.?, node.labels)) continue;
             var prop_iter = node.properties.iterator();
@@ -345,7 +347,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     const edge_ids_for_keys = try store.allEdgeIds(allocator);
     defer allocator.free(edge_ids_for_keys);
     for (edge_ids_for_keys) |__eid| {
-        const edge = store.getEdgePtrHydrated(__eid) orelse continue;
+        const edge = (try store.getEdgePtrHydratedChecked(__eid)) orelse continue;
         // Honour tenant filter; null means admin sees everything. SONNY-6344:
         // the edge's own tag by the MATCH rule (a parent sees its
         // descendants' edges), not the exact tag.
@@ -353,7 +355,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         // SONNY-6437 item 5: an edge of a denied type is hidden.
         // SONNY-6460 item 5: and so is one with an endpoint the policy
         // hides (`edgeVisible`), as a MATCH does not reach it.
-        if (denies) if (!edgeVisible(store, &policies.?, edge)) continue;
+        if (denies) if (!try edgeVisible(store, &policies.?, edge)) continue;
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;
@@ -390,12 +392,13 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 // CANARY: REQ=REQ-SONNY-6460-META-ENDPOINT-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=EdgeEndpointVisibility; STATUS=TESTED; TEST=tests/test_sonny6460_meta_rls.zig; OWNER=security; UPDATED=2026-11-13
 /// SONNY-6460 item 5: whether a session under the label policies `policies`
 /// reaches `edge`, as a MATCH does (SONNY-2679): its type is not denied and
-/// neither endpoint is hidden (`nodeDenied`). An endpoint that cannot be read
-/// counts as hidden (fail closed).
-fn edgeVisible(store: *graph_store.GraphStore, policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, edge: anytype) bool {
+/// neither endpoint is hidden (`nodeDenied`). An endpoint that is absent
+/// counts as hidden (fail closed); one that cannot be read fails the listing
+/// (SONNY-6567 (2)).
+fn edgeVisible(store: *graph_store.GraphStore, policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, edge: anytype) !bool {
     if (policies.entries(edge.label).denied) return false;
     for ([_]u64{ edge.from_id, edge.to_id }) |node_id| {
-        const node = store.getNodePtrHydrated(node_id) orelse return false;
+        const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return false;
         if (nodeDenied(policies, node.labels)) return false;
     }
     return true;

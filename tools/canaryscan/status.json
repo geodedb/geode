@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:08:53.792812377Z",
+  "generated_at": "2026-11-15T12:45:33.79228697Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79291,6 +79291,20 @@
       "features": [
         {
           "feature": "FullText",
+          "aspect": "UnreadableHitFailsSearch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "FullText",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -79341,6 +79355,34 @@
     {
       "id": "REQ-SONNY-6567-HYDRATED-GETTER-ERRORS",
       "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "SnapshotCopiesEvictedEdges",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "CheckedHydratedGetters",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
         {
           "feature": "StorageIntegrity",
           "aspect": "Regression",
@@ -84479,7 +84521,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4188
+      "TESTED": 4191
     },
     "by_aspect": {
       "2PC": 3,
@@ -84911,6 +84953,7 @@
       "CheckRefused": 1,
       "CheckedFloatAndDecimalToInt": 1,
       "CheckedFloatToDecimal": 2,
+      "CheckedHydratedGetters": 1,
       "CheckedNarrowing": 1,
       "CheckedRecordRemoval": 1,
       "CheckedResult": 1,
@@ -87691,6 +87734,7 @@
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,
       "SnapshotCleanup": 1,
       "SnapshotCompactionVarianceEnvelope": 1,
+      "SnapshotCopiesEvictedEdges": 1,
       "SnapshotCreate": 1,
       "SnapshotCreation": 1,
       "SnapshotEncryption": 1,
@@ -88049,6 +88093,7 @@
       "UnknownPropertyDiagnostic": 1,
       "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
+      "UnreadableHitFailsSearch": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,
       "UnsavedRestrictions": 1,

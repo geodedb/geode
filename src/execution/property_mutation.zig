@@ -524,7 +524,7 @@ pub fn setEdgePropertyFromValue(
 ) !void {
     // SONNY-3245: a null value makes the property absent, as on a node.
     if (value == .Null) {
-        const edge = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
+        const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
         if (edge.properties.contains(key)) removeEdgeProperty(store, edge, key);
         return;
     }
@@ -534,7 +534,9 @@ pub fn setEdgePropertyFromValue(
     const prop_value = switch (value) {
         .Str => |s| blk: {
             // SONNY-6347: the record's stored tenant is the encryption identity's.
-            const record_tenant = if (store.getEdgePtrHydrated(edge_id)) |e| e.tenant_id else fle_integration.tenantPreferringActiveContext();
+            // SONNY-6567 (2): an edge that cannot be read fails the write; it
+            // was encrypted under the session's tenant instead of its own.
+            const record_tenant = if (try store.getEdgePtrHydratedChecked(edge_id)) |e| e.tenant_id else fle_integration.tenantPreferringActiveContext();
             const encrypted_or_plain = try fle_hooks.encryptEdgePropertyIfNeeded(
                 allocator,
                 edge_graph,

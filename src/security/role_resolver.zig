@@ -89,7 +89,10 @@ pub fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_s
     var best_role: ?geode.user_management.Role = null;
     var best_eid: u64 = 0;
     for (edge_ids) |eid| {
-        const edge = store.getEdgePtr(eid) orelse continue;
+        // SONNY-6567 (2): a HAS_ROLE edge that cannot be read may be the
+        // newest one (a demotion): resolving from the others could grant an
+        // older, higher role. Fail closed: no global role.
+        const edge = (store.getEdgePtrHydratedChecked(eid) catch return .None) orelse continue;
         if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH)) continue;
         if (!std.mem.eql(u8, edge.label, HAS_ROLE)) continue;
 

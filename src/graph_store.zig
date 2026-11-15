@@ -3810,7 +3810,48 @@ pub const GraphStore = struct {
             }
         };
         var edge_copier: EdgeCopy = .{ .dst = self, .scope = scope };
-        try source.edges.forEachResident(&edge_copier, EdgeCopy.visit);
+        if (source.edges.effectiveCap() == 0) {
+            // Unbounded source: the resident map is the full set.
+            try source.edges.forEachResident(&edge_copier, EdgeCopy.visit);
+        } else {
+            // CANARY: REQ=REQ-SONNY-6567-HYDRATED-GETTER-ERRORS; FEATURE="StorageIntegrity"; ASPECT=SnapshotCopiesEvictedEdges; STATUS=TESTED; TEST=tests/test_sonny6567_hydrated_getter_errors.zig; OWNER=storage; UPDATED=2026-11-15
+            // SONNY-6567 (2): bounded source (the default: 1,000,000
+            // entries): the resident map is INCOMPLETE. The snapshot copied
+            // only the resident edges, so every read it served (a CALL
+            // db.propertyKeys(), db.relationshipTypes(), a MATCH through a
+            // read snapshot) silently lacked every evicted edge. As for the
+            // nodes above: every public edge id from the source's IdMaps,
+            // the resident copy if there is one, else rebuilt from the
+            // engine (not inserted into the source cache); an edge that
+            // cannot be read fails the snapshot.
+            const refs = try @constCast(source).idMapsSnapshot(self.allocator);
+            defer @constCast(source).releaseIdMaps(self.allocator, refs);
+            for (refs) |im_entry| {
+                if (!inSnapshotScope(scope, im_entry.graph_name)) continue;
+                const euuids = try im_entry.map.snapshotEdgeUuids(self.allocator);
+                defer self.allocator.free(euuids);
+                for (euuids) |euuid| {
+                    const id = @as(u64, @truncate(euuid));
+                    const src_edges = &@constCast(source).edges;
+                    src_edges.lockShardShared(id);
+                    const copied = blk: {
+                        defer src_edges.unlockShardShared(id);
+                        const resident = src_edges.getPtrUnlocked(id) orelse break :blk false;
+                        try EdgeCopy.visit(&edge_copier, id, resident);
+                        break :blk true;
+                    };
+                    if (copied) continue;
+                    var built = (hydrateEdgeCb(@ptrCast(@constCast(source)), self.allocator, id) catch |err| switch (err) {
+                        // The graph was dropped after its IdMap was listed
+                        // (as for the nodes above).
+                        error.GraphNotFound => break,
+                        else => return err,
+                    }) orelse continue;
+                    defer freeEdgeValue(self.allocator, &built);
+                    try EdgeCopy.visit(&edge_copier, id, &built);
+                }
+            }
+        }
     }
 
     /// SONNY-3312: is `graph_name` one of the graphs a snapshot copies
@@ -3973,7 +4014,17 @@ pub const GraphStore = struct {
 
         // Tenant id: persisted as an internal property; absent ⇒ default.
         // getNodeProperty returns the ENGINE storage PropertyValue (`.string`).
-        if (adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null) |tprop| {
+        // SONNY-6567 (2): a read that FAILS is an error, not "absent": it
+        // was `catch null`, so a node whose tenant tag could not be read was
+        // rebuilt as the default tenant's (fail open across tenants).
+        const tenant_prop = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+            error.NodeNotFound => {
+                freeNodeValue(allocator, &node);
+                return null;
+            },
+            else => return err,
+        };
+        if (tenant_prop) |tprop| {
             defer switch (tprop) {
                 .string => |s| allocator.free(s),
                 else => {},
@@ -4488,24 +4539,43 @@ pub const GraphStore = struct {
             error.GraphNotFound, error.NodeNotFound => return null,
             else => return err,
         }) orelse return null;
-        // `rec.label` is owned by us from here; free it on any error path.
-        errdefer allocator.free(rec.label);
+        // `rec.label` is owned by us from here; free it on any error path
+        // until `edge` owns it (SONNY-6567 (2): from then on
+        // `freeEdgeValue` frees it, and the parts' own errdefers freed it
+        // a second time: a double free on any error after the edge was built).
+        var parts_owned_here = true;
+        errdefer if (parts_owned_here) allocator.free(rec.label);
 
         // SONNY-3314: the map resolved (and pinned) above, not a second
         // lookup by name.
         const id_map = egs.map;
         // Map engine endpoint slots back to PUBLIC node ids. A missing mapping
         // (mid-load / mid-delete) means the edge isn't safely reconstructable.
-        const from_id = @as(u64, @truncate(id_map.nodeUuid(rec.from_slot) orelse return null));
-        const to_id = @as(u64, @truncate(id_map.nodeUuid(rec.to_slot) orelse return null));
+        const from_uuid = id_map.nodeUuid(rec.from_slot);
+        const to_uuid = id_map.nodeUuid(rec.to_slot);
+        if (from_uuid == null or to_uuid == null) {
+            allocator.free(rec.label);
+            return null;
+        }
+        const from_id = @as(u64, @truncate(from_uuid.?));
+        const to_id = @as(u64, @truncate(to_uuid.?));
 
         const graph_copy = try allocator.dupe(u8, egs.graph_name);
-        errdefer allocator.free(graph_copy);
+        errdefer if (parts_owned_here) allocator.free(graph_copy);
 
-        // Recover the persisted edge tenant tag (absent/corrupt -> default),
+        // Recover the persisted edge tenant tag (absent -> default),
         // mirroring the load path (graph_store.zig edge-load tenant recovery).
+        // SONNY-6567 (2): a read that FAILS is an error, not "absent" (it was
+        // `catch null`: the edge was rebuilt as the default tenant's).
         const tenant_copy = blk: {
-            const maybe_t = adapter.getEdgeProperty(egs.graph_name, rec.from_slot, egs.edge_slot, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+            const maybe_t = adapter.getEdgeProperty(egs.graph_name, rec.from_slot, egs.edge_slot, INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+                error.GraphNotFound, error.NodeNotFound => {
+                    allocator.free(graph_copy);
+                    allocator.free(rec.label);
+                    return null;
+                },
+                else => return err,
+            };
             if (maybe_t) |stored| {
                 defer graph_storage_adapter.freeOwnedStorageProperty(allocator, stored);
                 switch (stored) {
@@ -4515,7 +4585,7 @@ pub const GraphStore = struct {
             }
             break :blk try allocator.dupe(u8, DEFAULT_TENANT_ID);
         };
-        errdefer allocator.free(tenant_copy);
+        errdefer if (parts_owned_here) allocator.free(tenant_copy);
 
         var edge = Edge{
             .id = edge_id,
@@ -4526,6 +4596,7 @@ pub const GraphStore = struct {
             .graph_name = graph_copy,
             .tenant_id = tenant_copy,
         };
+        parts_owned_here = false;
         errdefer freeEdgeValue(allocator, &edge);
 
         if (rec.prop_head != 0) {
@@ -4545,9 +4616,18 @@ pub const GraphStore = struct {
                 // C3 (review-0023): skip the `.null` REMOVE tombstone (same
                 // convention as node properties — see materializeNodeFromEngine).
                 if (e.value_ptr.* == .null) continue;
+                // SONNY-6567 (2): the key and value are freed if they do not
+                // reach the map (they leaked).
                 const key_copy = try allocator.dupe(u8, e.key_ptr.*);
-                const pv = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
-                try edge.properties.put(key_copy, pv);
+                const pv = graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*) catch |err| {
+                    allocator.free(key_copy);
+                    return err;
+                };
+                edge.properties.put(key_copy, pv) catch |err| {
+                    allocator.free(key_copy);
+                    freePropertyValueWithAllocator(allocator, pv);
+                    return err;
+                };
             }
         }
 
@@ -4581,6 +4661,24 @@ pub const GraphStore = struct {
     pub fn getEdgePtrHydrated(self: *const GraphStore, edge_id: u64) ?*Edge {
         const cache: *EdgeCache = @constCast(&self.edges);
         return (cache.getOrHydratePtr(edge_id) catch return null) orelse return null;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6567-HYDRATED-GETTER-ERRORS; FEATURE="StorageIntegrity"; ASPECT=CheckedHydratedGetters; STATUS=TESTED; TEST=tests/test_sonny6567_hydrated_getter_errors.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6567 (2): `getEdgePtrHydrated` that tells "absent" (null) from
+    /// "could not be read" (the rebuild's error: out of memory, an engine
+    /// read error). The unchecked getter returns null for both, so a caller
+    /// that skips an absent edge also skipped an unreadable one. Use this
+    /// wherever a missing row would change an answer or a security decision.
+    pub fn getEdgePtrHydratedChecked(self: *const GraphStore, edge_id: u64) !?*Edge {
+        const cache: *EdgeCache = @constCast(&self.edges);
+        return cache.getOrHydratePtr(edge_id);
+    }
+
+    /// SONNY-6567 (2): `getEdgeHydrated` that tells "absent" from "could not
+    /// be read" (see `getEdgePtrHydratedChecked`).
+    pub fn getEdgeHydratedChecked(self: *const GraphStore, edge_id: u64) !?Edge {
+        const cache: *EdgeCache = @constCast(&self.edges);
+        return cache.getOrHydrate(edge_id);
     }
 
     /// By-value variant of `getEdgePtrHydrated`. Returns a COPY of the edge body
@@ -9973,6 +10071,13 @@ pub const GraphStore = struct {
     pub fn getNodePtrHydrated(self: *const GraphStore, node_id: u64) ?*const Node {
         const cache: *NodeCache = @constCast(&self.nodes);
         return (cache.getOrHydratePtr(node_id) catch return null) orelse null;
+    }
+
+    /// SONNY-6567 (2): `getNodePtrHydrated` that tells "absent" (null) from
+    /// "could not be read" (the rebuild's error). Same locking contract.
+    pub fn getNodePtrHydratedChecked(self: *const GraphStore, node_id: u64) !?*const Node {
+        const cache: *NodeCache = @constCast(&self.nodes);
+        return cache.getOrHydratePtr(node_id);
     }
 
     pub fn getEdgePtr(self: *const GraphStore, edge_id: u64) ?*const Edge {
@@ -15900,11 +16005,14 @@ pub const GraphStore = struct {
         for (try self.getIncomingEdgeIdsChecked(node_id)) |eid| {
             if (std.mem.indexOfScalar(u64, edge_ids.items, eid) == null) try edge_ids.append(a, eid);
         }
+        // SONNY-6567 (2): an edge or node body that cannot be read refuses
+        // the delete; it was recorded without it, and the undo did not
+        // restore it.
         for (edge_ids.items) |eid| {
-            const edge = self.getEdgeHydrated(eid) orelse continue;
+            const edge = (try self.getEdgeHydratedChecked(eid)) orelse continue;
             try statement_undo.append(self, try undoEdgeImage(edge));
         }
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return;
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return;
         try statement_undo.append(self, try undoNodeImage(node));
     }
 
