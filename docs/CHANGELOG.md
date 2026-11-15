@@ -2556,6 +2556,22 @@
   instead of recording nothing; the undo's index repair repairs every
   index when it cannot read which ones a change touched. Regression: `zig
   build test-sonny6594-undo-read-failure`.
+- **An advanced-index build that cannot read a body fails and leaves no
+  index without the row (SONNY-6594 item 2).** **BREAKING (behaviour):**
+  the vector / spatial / network / JSONB / ... index backfill
+  (`populateAdvancedIndex`, behind CREATE INDEX and every rebuild) and the
+  vector index's non-blocking shadow build (run by the QUIC and gRPC
+  handlers after CREATE INDEX, an undo's index repair and a REMOVE) skipped
+  a node or edge whose body could not be READ, registered the index without
+  it, and answered `knn()` (and every index-served lookup) without that row
+  until the next rebuild. The build now fails with the read's error, and the
+  runtime index is dropped instead of being left partial or stale: an
+  in-process / embedded CREATE INDEX fails with that error; over QUIC and
+  gRPC the backfill runs after the statement, so CREATE INDEX still succeeds,
+  the failure is logged ("Advanced index backfill failed"), and the next
+  `knn()` rebuilds the index from the catalog row (or scans). Exact and
+  ordered property indexes do not read bodies through these getters.
+  Regression: `zig build test-sonny6594-index-build-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,

@@ -863,7 +863,7 @@ REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimGraphDrop,TESTED,,,index,2
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLazySeed,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1649
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLifecycleRelease,TESTED,,,index,2026-08-30,tests/test_eng3922_dim_guard.zig,466
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,85
-REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2824
+REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2839
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimStatementPrePass,TESTED,,,index,2026-08-29,src/execution/write_precheck.zig,172
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,2026-08-29,src/execution/property_mutation.zig,403
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1577
@@ -1253,7 +1253,7 @@ REQ-GEODE-875-KNN-SCAN-CANCELLABLE,VectorKnn,ReadBudgetPoll,TESTED,,,eval,2026-0
 REQ-GEODE-875-KNN-SCAN-CANCELLABLE,VectorKnn,ReadBudgetPoll,TESTED,,,execution,2026-08-29,src/execution/query_execution.zig,1517
 REQ-GEODE-875-KNN-SCAN-CANCELLABLE,VectorKnn,ReadBudgetPoll,TESTED,,,eval,2026-08-29,tests/test_vector_knn_silent_failures.zig,95
 REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,ConcurrentWriteQueued,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2190
-REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,IndexQueryableDuringRebuild,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2371
+REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,IndexQueryableDuringRebuild,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2378
 REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,IndexQueryableDuringRebuild,TESTED,,,index,2026-09-01,tests/test_geode875_nonblocking_backfill.zig,52
 REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,RebuildWindowApi,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2172
 REQ-GEODE-875-NONBLOCKING-BACKFILL,VectorIndex,RebuildWindowApi,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2230
@@ -1267,7 +1267,7 @@ REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,
 REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,,,engine,2026-08-29,src/graph_store.zig,5014
 REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,,,eval,2026-08-29,tests/test_vector_knn_silent_failures.zig,91
 REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,eval,2026-08-29,src/eval.zig,2700
-REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2867
+REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2882
 REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,eval,2026-08-29,tests/test_vector_knn_silent_failures.zig,92
 REQ-GEODE-877-KNN-UNKNOWN-PROPERTY,VectorKnn,UnknownPropertyDiagnostic,TESTED,,,eval,2026-08-29,src/eval.zig,3389
 REQ-GEODE-877-KNN-UNKNOWN-PROPERTY,VectorKnn,UnknownPropertyDiagnostic,TESTED,,,eval,2026-08-29,src/server/proto_util.zig,539
@@ -5567,9 +5567,9 @@ REQ-VECTOR-INDEX-READER-QUIESCENCE-001,VectorIndex,ReaderHandleApi,TESTED,,,inde
 REQ-VECTOR-INDEX-READER-QUIESCENCE-001,VectorIndex,ReaderHandleApi,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,73
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,138
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,1261
-REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2583
+REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2597
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,74
-REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2492
+REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2506
 REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,75
 REQ-VECTOR-INDEX-READER-QUIESCENCE-004,VectorIndex,EntryStatisticsNoDrift,TESTED,,,index,2026-09-01,src/index/index_manager.zig,1299
 REQ-VECTOR-INDEX-READER-QUIESCENCE-004,VectorIndex,EntryStatisticsNoDrift,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,76
