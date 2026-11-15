@@ -5311,6 +5311,7 @@ REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,T
 REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,,,fts,2026-11-15,tests/test_sonny6595_fts_snapshot_restart.zig,18
 REQ-SONNY-6595-STANDALONE-DELETE,DeleteStatement,UnboundDeleteDeletesNothing,TESTED,,,engine,2026-11-15,tests/test_sonny6595_standalone_delete.zig,21
 REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,,,index,2026-11-15,tests/test_sonny6595_vector_write_paths.zig,44
+REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,,,parser,2026-11-15,tests/test_sonny6596_approximate_literal.zig,11
 REQ-SONNY-6598-AUTH-ERROR-AUDIT,AuthOutcomeClassification,LoginRefusalAudit,TESTED,,,security,2026-11-15,src/security/audit.zig,253
 REQ-SONNY-6598-AUTH-VERIFY-ERRORS,AuthOutcomeClassification,AuthenticateVerifyErrors,TESTED,,,security,2026-11-15,src/security/user_management.zig,1119
 REQ-SONNY-6598-CHAIN-VERIFY-ERRORS,AuthOutcomeClassification,ChainTamperVerdict,TESTED,,,security,2026-11-15,src/security/auth_graph_manager.zig,534
