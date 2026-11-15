@@ -1161,7 +1161,13 @@ The server reads none of `GEODE_PAGE_SIZE`, `GEODE_DISK_ENCRYPTION`,
   else turns it off. A tick that cannot checkpoint is counted
   (`adapter_checkpoint_failures_total` in the runtime metrics) and logged at
   ERROR once per distinct cause, again at most every 10 minutes while the
-  same cause repeats, and once when checkpoints succeed again.
+  same cause repeats, and once when checkpoints succeed again. A checkpoint
+  runs only on a shard with something to write, so after a crash restart a
+  shard nothing has made dirty keeps the WAL that recovery replayed, through
+  every tick and the clean shutdown, until its next checkpoint runs. Its
+  records lie below the checkpoint frontier recovery advanced (the data is in
+  the flushed pages) and the next recovery skips them: disk use, not lost
+  data (graph-storage; SONNY-6595 item 5, docs/KNOWN_TEST_ISSUES.md).
 - `GEODE_CHECKPOINT_OPS` (default 50000) and `GEODE_CHECKPOINT_INTERVAL_MS`
   (default 60000): extra triggers for bulk ingest (the fast paths and group
   commit), which a tick may not keep up with: a light checkpoint as soon as

@@ -21,12 +21,13 @@
 // The leftover is harmless for durability: every record in it is at or below
 // the manifest's `last_checkpoint_lsn`, so the next recovery skips it, and the
 // data is in the flushed pages. It is bounded (one crash's tail per shard,
-// truncated by that shard's next checkpoint that runs), not growth. This test pins what a real server does: the data survives every
-// restart (passes), the tail survives 5 s of light checkpoints (the observed
-// symptom, passes), a hydrated and written graph drains at the clean shutdown
-// (passes), and a clean shutdown with nothing done since the restart leaves
-// no WAL bytes (FAILS until graph-storage truncates the WAL at the end of
-// recovery).
+// truncated by that shard's next checkpoint that runs), not growth. This
+// test pins what a real server does, with and without TDE: the data survives
+// every restart (passes), the tail survives 5 s of light checkpoints (the
+// observed symptom, passes), a read and a write drain every shard at the
+// clean shutdown (passes), and a clean shutdown with nothing done since the
+// restart leaves no WAL bytes (FAILS until graph-storage truncates the WAL at
+// the end of recovery).
 //
 // Intentionally red (docs/KNOWN_TEST_ISSUES.md): out of the aggregate
 // `zig build test`, compiled by `test-compile`.
@@ -44,13 +45,14 @@ const Server = struct {
     handle: util.ServerHandle,
     addr: []u8,
 
-    fn start(allocator: std.mem.Allocator, data_dir: []const u8, persist_interval_s: u32, log_path: []const u8) !Server {
+    fn start(allocator: std.mem.Allocator, data_dir: []const u8, tde: bool, persist_interval_ms: u64, log_path: []const u8) !Server {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        const cmd = try std.fmt.allocPrint(allocator, "exec '{s}' serve --listen {s} --data-dir '{s}' --persist-interval {d} 2>>'{s}'", .{ geode_test_bin.geode_exe, addr, data_dir, persist_interval_s, log_path });
+        const cmd = try std.fmt.allocPrint(allocator, "exec '{s}' serve --listen {s} --data-dir '{s}' --persist-interval {d} 2>>'{s}'", .{ geode_test_bin.geode_exe, addr, data_dir, persist_interval_ms, log_path });
         defer allocator.free(cmd);
-        var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, util.TestEnv.standard());
+        const env: []const []const u8 = if (tde) &.{"GEODE_TDE_KEY=" ++ tde_key_hex} else util.TestEnv.standard();
+        var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, env);
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .addr = addr };
@@ -137,7 +139,7 @@ fn shardWalBytes(allocator: std.mem.Allocator, data_dir: []const u8) !std.ArrayL
     return out;
 }
 
-fn report(allocator: std.mem.Allocator, data_dir: []const u8, when: []const u8) !u64 {
+fn report(allocator: std.mem.Allocator, data_dir: []const u8, tde: bool, when: []const u8) !u64 {
     var shards = try shardWalBytes(allocator, data_dir);
     defer shards.deinit(allocator);
     var total: u64 = 0;
@@ -146,16 +148,20 @@ fn report(allocator: std.mem.Allocator, data_dir: []const u8, when: []const u8) 
         total += b;
         if (b != 0) non_empty += 1;
     }
-    std.debug.print("SONNY-6595 item 5 | {s:<46} | {d:>8} WAL bytes in {d:>2} of {d} shard(s): {any}\n", .{ when, total, non_empty, shards.items.len, shards.items });
+    std.debug.print("SONNY-6595 item 5 | TDE {s:<3} | {s:<46} | {d:>8} WAL bytes in {d:>2} of {d} shard(s): {any}\n", .{ if (tde) "on" else "off", when, total, non_empty, shards.items.len, shards.items });
     return total;
 }
 
 const node_count = 64;
 
-test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL bytes in any shard" {
-    const allocator = testing.allocator;
+const tde_key_hex = "6595" ** 16;
+
+/// A persistence tick no test phase reaches: no periodic checkpoint.
+const no_tick_ms: u64 = 3_600_000;
+
+fn runConfig(allocator: std.mem.Allocator, tde: bool) !void {
     const port = try util.getRandomPort();
-    const data_dir = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6595-wal-{d}", .{port});
+    const data_dir = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6595-wal-{s}-{d}", .{ if (tde) "tde" else "plain", port });
     defer allocator.free(data_dir);
     const log_path = try std.fmt.allocPrint(allocator, "{s}.server.log", .{data_dir});
     defer allocator.free(log_path);
@@ -163,9 +169,9 @@ test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL by
     defer std.Io.Dir.cwd().deleteTree(io(), data_dir) catch {};
     defer std.Io.Dir.cwd().deleteFile(io(), log_path) catch {};
 
-    // 1. Writes on every shard, no checkpoint (persist interval 300 s), SIGKILL.
+    // 1. Writes, no checkpoint (a one-hour persistence tick), SIGKILL.
     {
-        var server = try Server.start(allocator, data_dir, 300, log_path);
+        var server = try Server.start(allocator, data_dir, tde, no_tick_ms, log_path);
         defer server.kill(allocator);
         var c = try server.client(allocator);
         defer c.deinit();
@@ -175,7 +181,7 @@ test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL by
             _ = try rows(&c, allocator, try std.fmt.bufPrint(&qb, "CREATE (n:W {{i: {d}}}) RETURN n.i AS i", .{i}));
         }
     }
-    const tail = try report(allocator, data_dir, "SIGKILL with no checkpoint since the writes");
+    const tail = try report(allocator, data_dir, tde, "SIGKILL with no checkpoint since the writes");
 
     // 2. Restart with a light checkpoint every second; no statement (a write
     //    dirties the shard it lands on, a new label every shard, and a read
@@ -186,13 +192,13 @@ test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL by
     var after_idle: u64 = 0;
     var after_sigterm: u64 = 0;
     {
-        var server = try Server.start(allocator, data_dir, 1, log_path);
+        var server = try Server.start(allocator, data_dir, tde, 1000, log_path);
         defer server.kill(allocator);
-        after_restart = try report(allocator, data_dir, "restart (recovery replayed the tail)");
+        after_restart = try report(allocator, data_dir, tde, "restart (recovery replayed the tail)");
         io().sleep(.fromMilliseconds(5000), .awake) catch {};
-        after_idle = try report(allocator, data_dir, "5 s of light checkpoints");
+        after_idle = try report(allocator, data_dir, tde, "5 s of light checkpoints");
         try server.stop();
-        after_sigterm = try report(allocator, data_dir, "SIGTERM (clean shutdown, full checkpoint)");
+        after_sigterm = try report(allocator, data_dir, tde, "SIGTERM (clean shutdown, full checkpoint)");
     }
 
     // 3. Restart: everything written is there (the leftover lies below the
@@ -201,21 +207,21 @@ test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL by
     var seen_w: usize = 0;
     var after_second_sigterm: u64 = 0;
     {
-        var server = try Server.start(allocator, data_dir, 300, log_path);
+        var server = try Server.start(allocator, data_dir, tde, no_tick_ms, log_path);
         defer server.kill(allocator);
         var c = try server.client(allocator);
         defer c.deinit();
-        _ = try report(allocator, data_dir, "restart after the clean shutdown");
+        _ = try report(allocator, data_dir, tde, "restart after the clean shutdown");
         seen_w = try rows(&c, allocator, "MATCH (n:W) RETURN n.i AS i");
         _ = try rows(&c, allocator, "CREATE (n:W {i: 1000}) RETURN n.i AS i");
         try server.stop();
-        after_second_sigterm = try report(allocator, data_dir, "read :W, one write, SIGTERM");
+        after_second_sigterm = try report(allocator, data_dir, tde, "read :W, one write, SIGTERM");
     }
 
     // A last restart: every node is there.
     var seen_final: usize = 0;
     {
-        var server = try Server.start(allocator, data_dir, 300, log_path);
+        var server = try Server.start(allocator, data_dir, tde, no_tick_ms, log_path);
         defer server.kill(allocator);
         var c = try server.client(allocator);
         defer c.deinit();
@@ -234,4 +240,15 @@ test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL by
     try testing.expectEqual(@as(u64, 0), after_second_sigterm);
     // The contract that fails: a clean shutdown leaves no WAL bytes.
     try testing.expectEqual(@as(u64, 0), after_sigterm);
+}
+
+test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL bytes in any shard, with and without TDE" {
+    var failed: usize = 0;
+    for ([_]bool{ false, true }) |tde| {
+        runConfig(testing.allocator, tde) catch |err| {
+            std.debug.print("SONNY-6595 item 5 | TDE {s}: {s}\n", .{ if (tde) "on" else "off", @errorName(err) });
+            failed += 1;
+        };
+    }
+    try testing.expectEqual(@as(usize, 0), failed);
 }
