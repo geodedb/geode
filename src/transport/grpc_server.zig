@@ -1174,6 +1174,9 @@ pub const GeodeGrpcServer = struct {
     session_store: *SessionStore,
     /// GAP-0518: Heap-allocated random session key (freed in deinit).
     grpc_session_key: ?[]u8 = null,
+    /// SONNY-6605 (3): `stopAccepting` ran; the accept loop's error is the
+    /// stop, not a failure.
+    accept_stopped: std.atomic.Value(bool) = .init(false),
 
     /// SONNY-1336: `bind_address` is the IPv4 address to listen on
     /// (`cli_args.resolveGrpcBind`); it is passed to grpc-zig's
@@ -1279,7 +1282,28 @@ pub const GeodeGrpcServer = struct {
         self.session_store.startReaper() catch |err| {
             log.err("gRPC session reaper failed to start: idle sessions and transactions are not closed", &.{Attr.string("error", @errorName(err))});
         };
-        try self.server.start();
+        self.server.start() catch |err| {
+            // SONNY-6605 (3): the shutdown stopped the accept loop.
+            if (self.accept_stopped.load(.acquire)) return;
+            return err;
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6605-GRPC-ACCEPT-STOP; FEATURE="GrpcServerLifecycle"; ASPECT=AcceptLoopStops; STATUS=TESTED; TEST=tests/test_sonny6605_grpc_shutdown.zig; OWNER=transport; UPDATED=2026-11-15
+    /// SONNY-6605 (3): make `start` return. grpc-zig's accept loop is a
+    /// `while (true)` around a blocking accept with no stop of its own; with
+    /// `--listen` and `--listen-grpc` it runs as the one task of a pool
+    /// whose deinit waited 2 s for it, then joined a worker that never
+    /// returned, until the teardown watchdog forced the exit 30 s later.
+    /// Shutting the listening socket down wakes the blocked accept with an
+    /// error (Linux), which ends the loop. The socket stays open (`deinit`
+    /// closes it); connections already accepted are not touched. Elsewhere
+    /// this does nothing and the pool's join waits as before.
+    pub fn stopAccepting(self: *GeodeGrpcServer) void {
+        self.accept_stopped.store(true, .release);
+        if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.shutdown(self.server.server.socket.handle, std.os.linux.SHUT.RDWR);
+        }
     }
 
     /// Fully-qualified gRPC method paths served by `handlePacket`.

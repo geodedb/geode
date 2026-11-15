@@ -753,7 +753,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6605-grpc-shutdown", .reason = "intentionally red TDD reproduction (SONNY-6605 item 3): SIGTERM leaves the gRPC accept loop running, so its pool join times out and the teardown watchdog forces the exit; compiled by test-compile; registered through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10900,7 +10899,7 @@ pub fn build(b: *std.Build) void {
     const sonny6605_grpc_tests = b.addTest(.{ .root_module = sonny6605_grpc_test_mod });
     const run_sonny6605_grpc_tests = b.addRunArtifact(sonny6605_grpc_tests);
     spawnsBuiltGeode(sonny6605_grpc_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6605_grpc_tests.step);
+    shardDep(test_step, &run_sonny6605_grpc_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6605_grpc_step = b.step("test-sonny6605-grpc-shutdown", "Run SONNY-6605 item 3 regression (a real geode serve with --listen and --listen-grpc, both answering, exits 0 within 20 s of SIGTERM with no thread-pool deinit timeout and no teardown watchdog exit: the shutdown tail stops the gRPC accept loop)");
     sonny6605_grpc_step.dependOn(&run_sonny6605_grpc_tests.step);
 

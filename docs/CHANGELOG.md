@@ -2822,6 +2822,17 @@
   counted twice; a statement fails with 53200 and the next one answers; a
   store whose node pages are zeroed stays quarantined and is not scanned
   again).
+- **`geode serve --listen ... --listen-grpc ...` no longer waits for the
+  teardown watchdog to exit (SONNY-6605).** The gRPC listener's accept loop
+  (a `while (true)` around a blocking accept in grpc-zig) runs as the one
+  task of a pool, and nothing stopped it: at shutdown the pool's deinit
+  logged `thread-pool deinit timed out after 2000ms with 1 active tasks`,
+  then joined a worker that never returned, and the teardown watchdog forced
+  the exit 30 s later. The shutdown tail now shuts the listening socket down
+  (Linux), the accept fails, the loop returns and the pool joins. Regression:
+  `zig build test-sonny6605-grpc-shutdown` (a real server answering on both
+  listeners exits 0 within 20 s of SIGTERM, with no pool deinit timeout and
+  no watchdog exit in its log).
 - **A graph's first-read hydration no longer quarantines a healthy graph,
   or hydrates stale data, when a checkpoint runs at the same time
   (SONNY-6597).** The hydration scan (`hydration_scan.scanShard`) reads
