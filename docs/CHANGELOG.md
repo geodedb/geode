@@ -2600,6 +2600,29 @@
 
 ### Fixed
 
+- **The SONNY-6589 follow-ups (SONNY-6606).** **BREAKING (security):**
+  `CALL db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()` and
+  `SHOW TABLES` list the schema of the session's graph only; they listed
+  every graph's, the internal `__geode_security` graph's `User`, `Role`,
+  `AuthChainRoot`, `HAS_ROLE`, `password_hash` and `hmac` included, to every
+  session, a readonly user granted one graph too. The batch property writes
+  (`setNodePropertiesBatch`, and the write fast path's `CREATE (n:L {k: v})`
+  through `setNodePropertiesBatchInMemoryOnly`) count the keys they write
+  in the label-property index, so `listPropertiesForLabel` and the LSP's
+  `n.` completion list them (they listed none). A graph whose manifest
+  cannot be read is reported once per boot, not at every registry save and
+  full checkpoint. `geode backup create` and `geode restore --server` give
+  up on a server that does not answer the QUIC handshake within
+  `--timeout` (it took geode-client-zig's fixed 30 s). `geode shell`'s
+  `\connect` authenticates with the credentials the shell logged in with
+  (its HELLO carried none, so an authenticating server refused it). An LSP
+  principal a token verifier reports with no role is None, not ReadOnly.
+  The uncalled `RaftNode.startElection` (it started no election) is
+  removed with its test. Regressions: `zig build
+  test-sonny6606-meta-schema-scope`, `-batch-property-counters`,
+  `-broken-graph-logs`, `-backup-handshake-timeout`,
+  `-repl-connect-credentials`, `-lsp-role-default`,
+  `test-sonny6589-lsp-auth`.
 - **CLI, MCP and storage residuals (SONNY-6589).** **BREAKING:** a
   `geode mcp` endpoint DSN carrying `connect_timeout` (`timeout`) or
   `timeout_ms` is refused ("Invalid Geode endpoint DSN: geode mcp cannot

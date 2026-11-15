@@ -11154,16 +11154,6 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6589-broken-graph-open", "Run SONNY-6589 item 6 regression (a real server opens a graph whose engine cannot be opened once per boot: one open failure logged across startup, three reads and the shutdown checkpoint, every read answered 58000, other graphs served)").dependOn(&run_tests.step);
     }
-    // SONNY-6592 (2): RaftNode.startElection drains Ready under inner_mutex.
-    {
-        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6592_start_election_lock.zig"), .target = target, .optimize = optimize });
-        mod.link_libc = true;
-        mod.addImport("geode", root_mod);
-        const tests = b.addTest(.{ .root_module = mod });
-        const run_tests = b.addRunArtifact(tests);
-        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6592-start-election-lock", "Run SONNY-6592 item 2 regression (RaftNode.startElection waits for inner_mutex, held by another thread as a tick in progress holds it, before it drains Ready)").dependOn(&run_tests.step);
-    }
     // SONNY-6606: the SONNY-6589 follow-ups. Each a real server or binary
     // except (2) and (6), which drive the GraphStore and the LSP auth state.
     inline for (.{

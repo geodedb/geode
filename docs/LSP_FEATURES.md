@@ -128,7 +128,8 @@ and read: the checks a HELLO naming the graph and a MATCH on it pass
 (`session_graph.mayBind`, `gps.graphReadPermitted`: the user's role, live
 `GRANT ... ON GRAPH` grants and policies; an Admin sees every graph). Labels
 an RLS label policy denies the user are dropped (issue #817). A user with no
-stored role sees only the graphs a grant gives them. Pinned by
+stored role sees only the graphs a grant gives them, and so does a principal
+a token verifier reports with no role (SONNY-6606). Pinned by
 `zig build test-sonny6589-lsp-auth` (two users of different roles on a real
 server).
 
@@ -252,11 +253,13 @@ Without a notifier the TTL alone bounds staleness to ≤5 seconds.
   `initializationOptions.geode`. The listener stops on SIGTERM: it closes
   open sessions and waits up to 5 s for them before it frees the provider
   (SONNY-6374).
-- **Property completion is empty for nodes written since boot through the
-  write fast paths.** The schema index the LSP reads (the primary store's
-  label-property counters) is not maintained by `executeBulkSimpleCreate`
-  and the other storage-adapter fast paths, so `n.` offers no keys for such
-  nodes (labels are listed). Reported with SONNY-6589.
+- **Property keys written before SONNY-6606.** The batch property writes
+  (the write fast path's `CREATE (n:L {k: v})`, `setNodePropertiesBatch`)
+  did not count the keys they wrote in the label-property index the LSP
+  reads, so `n.` offered none of them; they are counted now. A data
+  directory whose hydration counters snapshot was written before the fix
+  may keep the old (missing) keys until those nodes are written again or the
+  snapshot is rebuilt.
 - **Property catalog is a live scan.** `listPropertiesForLabel` walks every
   node carrying the requested label in the requested tenant on every call
   (cached for the TTL window). This is O(n) in matching nodes; a persistent

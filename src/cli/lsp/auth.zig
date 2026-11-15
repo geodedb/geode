@@ -252,13 +252,14 @@ pub const AuthState = struct {
                     if (ok.role) |r| fa.free(r);
                 };
                 self.user = try allocator.dupe(u8, ok.username);
-                if (ok.role) |role_name| {
-                    // SONNY-6589 (3): a role this build does not assign
-                    // ("none": a user with no stored role, which
-                    // `fromString` refuses on purpose) is no role, not the
-                    // `.ReadOnly` default.
-                    self.role = user_management.Role.fromString(role_name) orelse .None;
-                }
+                // SONNY-6589 (3): a role this build does not assign
+                // ("none": a user with no stored role, which `fromString`
+                // refuses on purpose) is no role, not the `.ReadOnly`
+                // default. SONNY-6606 (6): and so is no role at all (an API
+                // key with no scopes): it kept `.ReadOnly`, a read grant on
+                // every graph nobody gave.
+                // CANARY: REQ=REQ-SONNY-6606-LSP-ROLE-DEFAULT; FEATURE="Embedded LSP"; ASPECT=NoRoleIsNone; STATUS=TESTED; TEST=tests/test_sonny6606_lsp_role_default.zig; OWNER=lsp; UPDATED=2026-11-15
+                self.role = if (ok.role) |role_name| user_management.Role.fromString(role_name) orelse .None else .None;
                 self.verified = true;
             },
         }

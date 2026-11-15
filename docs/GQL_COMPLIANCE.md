@@ -466,6 +466,13 @@ FILTER label <> 'Internal'
 RETURN label ORDER BY label
 ```
 
+`db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()` and
+`SHOW TABLES` list the schema of the graph the session is on (its HELLO
+graph, or the last `USE GRAPH`), in its tenant scope, without the labels or
+types an RLS policy denies it; never another graph's, and never the
+internal `__geode_security` graph's (SONNY-6606: they listed every graph's,
+`User`, `Role` and `password_hash` included, to every session).
+
 #### Inline procedure calls (`CALL { }`, 15.2)
 
 | Form | Status |

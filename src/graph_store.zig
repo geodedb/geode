@@ -8759,6 +8759,22 @@ pub const GraphStore = struct {
                         // SONNY-6268: the merge entries first (undone on a
                         // failure), then the failure-atomic map write.
                         const old_value = node.properties.get(entry.key);
+                        // CANARY: REQ=REQ-SONNY-6606-BATCH-PROPERTY-COUNTERS; FEATURE="LspIntrospectionIndex"; ASPECT=BatchWritesCountKeys; STATUS=TESTED; TEST=tests/test_sonny6606_batch_property_counters.zig; OWNER=perf; UPDATED=2026-11-15
+                        // SONNY-6606 (2): a new key is counted for each of the
+                        // node's labels (PERF-C), as `setNodeProperty` counts
+                        // it. This batch path (`setNodePropertiesBatch`, and
+                        // the write fast path's `bulkInsertNode*` through
+                        // `setNodePropertiesBatchInMemoryOnly`) counted none,
+                        // so `listPropertiesForLabel` and the LSP's `n.`
+                        // completion never listed a key written here.
+                        var labels_counted: usize = 0;
+                        errdefer for (node.labels[0..labels_counted]) |label| self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, entry.key);
+                        if (old_value == null) {
+                            for (node.labels) |label| {
+                                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, entry.key);
+                                labels_counted += 1;
+                            }
+                        }
                         try self.addToMergePropertyIndexAtomic(node.graph_name, node.labels, entry.key, value_copy, node_id, old_value);
                         errdefer self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id, old_value);
                         if (try node.properties.putValue(self.allocator, entry.key, value_copy)) |old| {
@@ -8772,6 +8788,8 @@ pub const GraphStore = struct {
                     defer self.nodes.unlockShardExclusive(node_id);
                     if (try node.properties.fetchRemoveChecked(entry.key)) |kv| {
                         self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
+                        // SONNY-6606 (2): the key's count goes with it.
+                        for (node.labels) |label| self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, kv.key);
                         self.allocator.free(kv.key);
                         freePropertyValue(self, kv.value);
                     }

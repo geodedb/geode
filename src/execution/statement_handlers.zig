@@ -6,6 +6,8 @@ const graph_store = @import("../graph_store.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
 const tenant_visibility = @import("tenant_visibility.zig");
+/// SONNY-6606 (1): SHOW TABLES lists the session graph's labels, as db.labels.
+const meta_dispatch = @import("meta_dispatch.zig");
 const value_types = @import("../value_types.zig");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
@@ -260,7 +262,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SONNY-6541-SHOW-TABLES-ERRORS; FEATURE="SHOW TABLES"; ASPECT=ListingErrorPropagates; STATUS=TESTED; TEST=tests/test_sonny6541_show_tables_errors.zig; OWNER=execution; UPDATED=2026-11-14
             // SONNY-6541 (4): a listing that fails fails the statement; it
             // answered no rows (out of memory, a quarantined graph).
-            const labels = try tenant_visibility.listNodeLabelsVisible(allocator, read_store, session_tenant);
+            // SONNY-6606 (1): of the session's graph only (it listed every
+            // graph's, __geode_security's included).
+            const labels = try meta_dispatch.sessionGraphLabels(allocator, read_store, context, session_tenant);
             defer {
                 for (labels) |label| {
                     allocator.free(label);

@@ -2358,14 +2358,33 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             // error name, with the working session already torn down.
             const current_transport = state.session.transport orelse return error.NoTransport;
             var next = try ClientSession.init(state.allocator, args, current_transport);
+            // CANARY: REQ=REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS; FEATURE="CLI"; ASPECT=ConnectAuthenticates; STATUS=TESTED; TEST=tests/test_sonny6606_repl_connect_credentials.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6606 (5): the HELLO carries the credentials the shell
+            // logged in with, as its automatic reconnect does; it carried
+            // none, so a server with authentication on (the default) refused
+            // every \connect ("AuthenticationRequired").
+            var refusal: ?[]const u8 = null;
+            defer if (refusal) |r| state.allocator.free(r);
             const connected: ?anyerror = blk: {
                 next.connect() catch |err| break :blk err;
-                next.hello() catch |err| break :blk err;
+                const user = state.session.cached_username orelse {
+                    next.hello() catch |err| break :blk err;
+                    break :blk null;
+                };
+                const password = state.session.cached_password orelse "";
+                const auth = next.helloWithAuth(user, password) catch |err| break :blk err;
+                if (auth.session_token) |t| state.allocator.free(t);
+                if (!auth.success) {
+                    refusal = auth.error_message;
+                    break :blk error.AuthenticationFailed;
+                }
+                if (auth.error_message) |m| state.allocator.free(m);
+                next.cacheCredentials(user, password) catch |err| break :blk err;
                 break :blk null;
             };
             if (connected) |err| {
                 next.deinit();
-                const why = zig_quic_bridge.endpointErrorMessage(err) orelse @errorName(err);
+                const why = refusal orelse zig_quic_bridge.endpointErrorMessage(err) orelse @errorName(err);
                 const stderr = platform.getStderrHandle();
                 const msg = try std.fmt.allocPrint(state.allocator, "Error [GEODE-E2002]: \\connect failed: {s}; still connected to the previous server\r\n", .{why});
                 defer state.allocator.free(msg);
