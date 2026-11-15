@@ -4972,6 +4972,7 @@ REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,T
 REQ-SONNY-6594-AUTH-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_auth_read_failure.zig,tests/test_sonny6594_auth_read_failure.zig,,security,2026-11-15
 REQ-SONNY-6594-INDEX-BUILD-READ-FAILURE,VectorIndex,Regression,TESTED,tests/test_sonny6594_index_build_read_failure.zig,tests/test_sonny6594_index_build_read_failure.zig,,index,2026-11-15
 REQ-SONNY-6594-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_read_failure.zig,tests/test_sonny6594_read_failure.zig,,execution,2026-11-15
+REQ-SONNY-6594-TENANT-SCAN-READ-FAILURE,PerTenantIsolation,Regression,TESTED,tests/test_sonny6594_tenant_scan_read_failure.zig,tests/test_sonny6594_tenant_scan_read_failure.zig,,storage,2026-11-15
 REQ-SONNY-6594-UNDO-READ-FAILURE,TransactionUndoLog,Regression,TESTED,tests/test_sonny6594_undo_read_failure.zig,tests/test_sonny6594_undo_read_failure.zig,,engine,2026-11-15
 REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_write_read_failure.zig,tests/test_sonny6594_write_read_failure.zig,,execution,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

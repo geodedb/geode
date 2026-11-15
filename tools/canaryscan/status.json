@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T14:36:13.776568814Z",
+  "generated_at": "2026-11-15T14:36:58.709925185Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78499,6 +78499,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6594-TENANT-SCAN-READ-FAILURE",
+      "features": [
+        {
+          "feature": "PerTenantIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6594_tenant_scan_read_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6594_tenant_scan_read_failure.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6594-UNDO-READ-FAILURE",
       "features": [
         {
@@ -83627,7 +83646,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4153
+      "TESTED": 4154
     },
     "by_aspect": {
       "2PC": 3,
@@ -86401,7 +86420,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 371,
+      "Regression": 372,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
