@@ -3346,8 +3346,16 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // here is NOT fatal: the scan below is a correct (if O(n)) answer, which is
     // exactly the behaviour that shipped before, so a rebuild that cannot
     // allocate must not turn a working query into an error.
+    // SONNY-6607 (3): not silently: an index that cannot be rebuilt is logged
+    // with its cause (the scan below still answers).
     @import("execution/statement_dispatcher.zig")
-        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch {};
+        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch |err| {
+        const logging = @import("logging");
+        logging.scoped("eval").warn("knn: the vector index for the property could not be rebuilt; answering by a scan", &.{
+            logging.Attr.string("property", property_name),
+            logging.Attr.string("error", @errorName(err)),
+        });
+    };
 
     // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
     // geode#877 (b): this used to COMMIT to any index registered for the

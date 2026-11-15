@@ -229,10 +229,18 @@ fn throttleInvalidSessionProbe() void {
     std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 }
 
+/// SONNY-6607 (3): the flagger finding a statement's result carries when an
+/// index backfill run after it failed. The statement has committed (its
+/// catalog row is written) before the backfill runs, so it is not failed;
+/// the client is told instead. A literal, so a result that does not own its
+/// flags can carry it.
+pub const index_backfill_failed_flag = "IndexBackfillFailed: an index this statement created or changed could not be built (its backfill failed; see the server log). The index is not in use until it is rebuilt: the next query that needs it rebuilds it, or run the statement again";
+
 fn rebuildPendingIndexes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
     pending_index_rebuilds: *std.StringHashMap(void),
+    warn_into: ?*execution.ExecutionResult,
 ) void {
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
@@ -249,6 +257,7 @@ fn rebuildPendingIndexes(
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
+            if (warn_into) |r| appendFlagToResult(allocator, r, index_backfill_failed_flag) catch {};
             continue;
         };
         log.info("Advanced index backfill complete", &.{
@@ -3566,7 +3575,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     if (graph_lock_handle) |h| {
                         // GAP-0511: Release lock before index rebuild
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                     }
                 }
                 // GAP-0753: Always pop the active-store thread-local and
@@ -3696,7 +3705,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
                                     lock_released = true;
-                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &owned_planned.result);
                                 }
                             }
 
@@ -3764,7 +3773,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 
@@ -3841,7 +3850,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
                                             lock_released = true;
-                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                                         }
                                     }
 
@@ -3926,7 +3935,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 

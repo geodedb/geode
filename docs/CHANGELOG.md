@@ -2573,6 +2573,16 @@
   cannot be read was a silent no-op; it now fails. Outside a statement (the
   undo replay, a Raft apply) a non-OOM write failure is only logged, as
   before. Regression: `zig build test-sonny6607-void-write-errors`.
+- **A CREATE INDEX whose backfill fails over QUIC or gRPC tells the client
+  (SONNY-6607 item 3).** The handlers run an advanced index's backfill after
+  the statement, once the graph lock is released, and only logged a failure:
+  the client saw a clean success while the index was dropped or empty. The
+  statement has committed its catalog row by then, so it is not failed; its
+  result now carries the flagger finding `IndexBackfillFailed: ...` (status
+  `flagger_findings`), and the log names the index and the error. A failed
+  `knn()` index rebuild is logged with its cause (the scan still answers)
+  instead of being swallowed. Regression: `zig build
+  test-sonny6607-index-backfill-warning`.
 - **ROLLBACK that cannot read a body it must undo fails instead of
   reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
   undo asked whether the node or edge a change was on still exists, and a
