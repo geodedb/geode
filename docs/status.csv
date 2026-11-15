@@ -3005,9 +3005,6 @@ REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2026-0
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig,8
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Regression,TESTED,,,ml,2026-06-11,tests/test_ml_graph_embeddings_integration.zig,29
 REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,,,ml,2026-06-11,src/ml/graph_embeddings.zig,9
-REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,IMPL,,,ml,2026-11-14,tests/test_ml_graph_embeddings.zig,1
-REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,IMPL,,,ml,2026-11-14,tests/test_ml_graph_embeddings.zig,2
-REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,IMPL,,,ml,2026-11-14,tests/test_ml_graph_embeddings.zig,3
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,,,engine,2025-12-22,src/graph_store.zig,1353
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,11
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2025-12-22,src/graph_store.zig,1239

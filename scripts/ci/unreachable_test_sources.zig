@@ -259,7 +259,6 @@ pub const entries = [_]Entry{
     .{ .path = "tests/test_hnsw_index_optimizer_enhancement.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'time' has no member named 'timestamp'" },
     .{ .path = "tests/test_hnsw_index_optimizer_integration.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: missing struct field: items" },
     .{ .path = "tests/test_mfa_enforcement_comprehensive.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: no module named 'mfa' available within module 'root'" },
-    .{ .path = "tests/test_ml_graph_embeddings.zig", .reason = "TODO(SONNY-6542): imports ../src/lib.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/test_performance_integration_simple.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'time' has no member named 'Timer'" },
     .{ .path = "tests/test_property_persistence_regression.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: root source file struct 'fmt' has no member named 'format'" },
     .{ .path = "tests/test_protocol_client_shared_path.zig", .reason = "TODO(SONNY-6542): does not compile under Zig 0.16: no field or member function named 'writer' in 'array_list.Aligned(u8,null)'" },

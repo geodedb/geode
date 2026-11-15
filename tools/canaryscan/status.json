@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T19:28:47.522734291Z",
+  "generated_at": "2026-11-15T19:30:24.929185275Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -43023,63 +43023,6 @@
       ]
     },
     {
-      "id": "REQ-ML-EMBEDDINGS-TEST-001",
-      "features": [
-        {
-          "feature": "ML Embeddings Unit Tests",
-          "aspect": "CoreFunctionality",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_001"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-EMBEDDINGS-TEST-002",
-      "features": [
-        {
-          "feature": "Node2Vec Algorithm Tests",
-          "aspect": "Training",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_002"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-EMBEDDINGS-TEST-003",
-      "features": [
-        {
-          "feature": "GraphSAGE Algorithm Tests",
-          "aspect": "NeighborAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_003"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
       "id": "REQ-MULTI-GRAPH-003",
       "features": [
         {
@@ -83878,7 +83821,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4167
+      "TESTED": 4164
     },
     "by_aspect": {
       "2PC": 3,
@@ -84497,7 +84440,7 @@
       "CoordinatorPhaseMetrics": 1,
       "Core": 21,
       "CoreEngine": 1,
-      "CoreFunctionality": 2,
+      "CoreFunctionality": 1,
       "CoreImplementation": 1,
       "CoreInterface": 1,
       "CoreSystem": 1,
@@ -85882,7 +85825,6 @@
       "NeedsRowFlag": 1,
       "Negated": 1,
       "NegativeAuthMatrix": 1,
-      "NeighborAggregation": 1,
       "NestedAggregateAnywhere": 1,
       "NestedAggregateReject": 1,
       "NestedAggregates": 1,
@@ -87316,7 +87258,6 @@
       "TopKHeapSharesFullSortOrder": 1,
       "TopLevelAgg": 1,
       "Topology": 1,
-      "Training": 1,
       "Transaction": 1,
       "TransactionBodyProjection": 1,
       "TransactionCoordination": 1,
