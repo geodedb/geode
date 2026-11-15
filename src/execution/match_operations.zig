@@ -3916,9 +3916,17 @@ pub fn handleShortestPathAssignment(
                     // Execute shortestPath
                     const pattern = q.match;
                     const path_result = try findShortestPath(allocator, pattern, false, env);
+                    // SONNY-6613: an error before the row keeps the path
+                    // frees its arrays, the columns and the row.
+                    var path_live = path_result == .Path;
+                    errdefer if (path_live) {
+                        allocator.free(path_result.Path.nodes);
+                        allocator.free(path_result.Path.edges);
+                    };
 
                     // Create result with path bound to path_variable
                     const columns = try generateUniqueColumnNames(allocator, q.ret.items);
+                    errdefer freeColumnNames(allocator, columns);
 
                     // Build environment with path variable.
                     // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-003): frame owns these
@@ -3926,11 +3934,9 @@ pub fn handleShortestPathAssignment(
                     // from double-freeing them via `withBinding` (same reasoning
                     // as pointWriteFastPath above and the legacy loop at ~:11046).
                     var path_env_names = try allocator.alloc([]const u8, param_names.len + 1);
+                    defer allocator.free(path_env_names);
                     var path_env_values = try allocator.alloc(Value, param_values.len + 1);
-                    defer {
-                        allocator.free(path_env_names);
-                        allocator.free(path_env_values);
-                    }
+                    defer allocator.free(path_env_values);
                     for (param_names, 0..) |name, i| {
                         path_env_names[i] = name;
                         path_env_values[i] = param_values[i];
@@ -3947,28 +3953,23 @@ pub fn handleShortestPathAssignment(
 
                     // Evaluate RETURN expressions with path in environment
                     var row = try allocator.alloc(Value, q.ret.items.len);
+                    errdefer allocator.free(row);
                     for (q.ret.items, 0..) |item, i| {
                         row[i] = try eval.evalExpr(allocator, item.expr, path_env);
                     }
 
                     // OWNERSHIP: `findShortestPath` heap-allocated the node/edge
                     // slices inside `path_result`. When a RETURN expression
-                    // aliases that Path into the row (e.g. `RETURN p`) the row now
-                    // owns those slices and must not be freed underneath it. When
-                    // nothing aliased it (e.g. `RETURN 1`) nobody downstream will
-                    // ever free it, so release it here rather than leak it.
-                    if (path_result == .Path) {
-                        var escaped = false;
-                        for (row) |val| {
-                            if (val == .Path and val.Path.nodes.ptr == path_result.Path.nodes.ptr) {
-                                escaped = true;
-                                break;
-                            }
-                        }
-                        if (!escaped) {
-                            allocator.free(path_result.Path.nodes);
-                            allocator.free(path_result.Path.edges);
-                        }
+                    // aliases that Path into the row (e.g. `RETURN p`, also
+                    // nested, `RETURN [p]`) the result's entity tracker keeps
+                    // them (SONNY-6613: nothing freed them). When nothing
+                    // aliased it (e.g. `RETURN 1`) nobody downstream will ever
+                    // free it, so release it here rather than leak it.
+                    var row_entities: ?*execution.OwnedGraphEntities = null;
+                    errdefer if (row_entities) |entities| entities.deinit();
+                    if (path_live) {
+                        path_live = false;
+                        try releaseEnvBuffers(allocator, &row_entities, row, &.{path_result});
                     }
 
                     var rows = try allocator.alloc([]Value, 1);
@@ -3978,6 +3979,7 @@ pub fn handleShortestPathAssignment(
                         .columns = columns,
                         .rows = rows,
                         .flags = std.ArrayList([]const u8).empty,
+                        .owned_graph_entities = row_entities,
                     };
                 }
             }
@@ -5460,14 +5462,25 @@ fn bindPath(alloc: std.mem.Allocator, nodes_by_id: *NodeCache, chain: ast.Chain,
 }
 
 /// A copy of each path `value` holds (in a list or a map too) whose arrays
-/// `allocator` owns: the row keeps it past the binding's scratch.
-fn keepPaths(allocator: std.mem.Allocator, value: *Value) !void {
+/// `allocator` owns: the row keeps it past the binding's scratch. SONNY-6613:
+/// the rows' entity tracker owns the copies (`keepRowPath`); nothing freed
+/// them. On an error the row may still hold the binding's arrays: the caller
+/// drops it.
+fn keepPaths(allocator: std.mem.Allocator, row_entities: *?*execution.OwnedGraphEntities, value: *Value) !void {
     switch (value.*) {
-        .Path => |path| value.* = .{ .Path = .{ .nodes = try allocator.dupe(*const graph_store.Node, path.nodes), .edges = try allocator.dupe(*const graph_store.Edge, path.edges) } },
-        .List => |items| for (items) |*item| try keepPaths(allocator, item),
+        .Path => |path| {
+            const nodes = try allocator.dupe(*const graph_store.Node, path.nodes);
+            const edges = allocator.dupe(*const graph_store.Edge, path.edges) catch |err| {
+                allocator.free(nodes);
+                return err;
+            };
+            try keepRowPath(allocator, row_entities, nodes, edges);
+            value.* = .{ .Path = .{ .nodes = nodes, .edges = edges } };
+        },
+        .List => |items| for (items) |*item| try keepPaths(allocator, row_entities, item),
         .Map => |map| {
             var it = map.valueIterator();
-            while (it.next()) |item| try keepPaths(allocator, item);
+            while (it.next()) |item| try keepPaths(allocator, row_entities, item);
         },
         else => {},
     }
@@ -6823,10 +6836,15 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Evaluate expressions for each binding
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
-    errdefer {
+    // SONNY-6613: the path copies the rows keep (`keepPaths`), until the
+    // result takes the tracker over.
+    var row_entities: ?*execution.OwnedGraphEntities = null;
+    var rows_owned = true;
+    errdefer if (rows_owned) {
         for (rows.items) |row| allocator.free(row);
         rows.deinit(allocator);
-    }
+        if (row_entities) |entities| entities.deinit();
+    };
     // A path variable's arrays, per binding: a row that returns the path
     // keeps a copy (`keepPaths`), as the single-chain traversals keep theirs
     // (SONNY-3148); the rest are released with the binding.
@@ -6932,7 +6950,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         errdefer allocator.free(row);
         for (eval_items, 0..) |item, i| {
             row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
-            if (path_specs.items.len > 0) try keepPaths(allocator, &row[i]);
+            if (path_specs.items.len > 0) try keepPaths(allocator, &row_entities, &row[i]);
         }
         rows.appendAssumeCapacity(row);
     }
@@ -6940,10 +6958,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Build intermediate result
     const result_rows = try rows.toOwnedSlice(allocator);
     columns_owned = false;
+    rows_owned = false;
     var result = ExecutionResult{
         .columns = eval_columns,
         .rows = result_rows,
         .flags = std.ArrayList([]const u8).empty,
+        .owned_graph_entities = row_entities,
     };
     errdefer result.deinit(allocator);
 
@@ -7105,6 +7125,7 @@ fn executeVariableLengthPathTraversal(
     scope: *HopScope,
     left_node: *graph_store.Node,
     rows: *std.ArrayList([]Value),
+    row_entities: *?*execution.OwnedGraphEntities,
     var_len_min: ?u32,
     var_len_max: ?u32,
     rel_type: ?[]const u8,
@@ -7248,6 +7269,11 @@ fn executeVariableLengthPathTraversal(
         if (layout.right_idx) |slot| {
             stack_env_values[slot] = Value{ .Node = right_node_ptr };
         }
+        // SONNY-6613: the edge list and the path's arrays bound below are
+        // this path's until they are released (a rejected path frees them,
+        // a built row's `releaseEnvBuffers` frees or keeps them); a
+        // statement that fails before then frees them.
+        var env_buffers_live = true;
         if (layout.rel_idx) |slot| {
             // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
             // For variable-length paths, bind rel_var to the list of all edges
@@ -7262,30 +7288,41 @@ fn executeVariableLengthPathTraversal(
             }
             stack_env_values[slot] = Value{ .List = edge_values };
         }
+        errdefer if (env_buffers_live) if (layout.rel_idx) |slot| allocator.free(stack_env_values[slot].List);
         if (layout.path_idx) |slot| {
             // Build the path value from the PathInfo
             // Use dynamic arrays to handle missing nodes/edges gracefully
             // GAP-0220 FIX: Use try for proper error propagation
             var path_nodes_list = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
+            defer path_nodes_list.deinit(allocator);
             // GAP-0220 FIX: Use try for proper error propagation
             var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
+            defer path_edges_list.deinit(allocator);
 
             for (path.nodes.items) |node_id| {
                 if (store.getNodePtrForScan(node_id)) |node_ptr| {
-                    path_nodes_list.append(allocator, node_ptr) catch {};
+                    path_nodes_list.appendAssumeCapacity(node_ptr);
                 }
             }
             for (path.edges.items) |edge_id| {
                 if (store.getEdgePtrHydrated(edge_id)) |path_edge_ptr| {
-                    path_edges_list.append(allocator, path_edge_ptr) catch {};
+                    path_edges_list.appendAssumeCapacity(path_edge_ptr);
                 }
             }
 
+            // SONNY-6613: an array that cannot be made is an error; it was
+            // an empty path (and the list's memory leaked).
+            const path_nodes = try path_nodes_list.toOwnedSlice(allocator);
+            errdefer allocator.free(path_nodes);
             stack_env_values[slot] = Value{ .Path = .{
-                .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
-                .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
+                .nodes = path_nodes,
+                .edges = try path_edges_list.toOwnedSlice(allocator),
             } };
         }
+        errdefer if (env_buffers_live) if (layout.path_idx) |slot| {
+            allocator.free(stack_env_values[slot].Path.nodes);
+            allocator.free(stack_env_values[slot].Path.edges);
+        };
 
         const env = Env{
             .names = stack_env_names[0..env_idx],
@@ -7389,7 +7426,11 @@ fn executeVariableLengthPathTraversal(
         // -- once per result row). SONNY-3148: a WITH's row (the has_with
         // branch, a write step's bindings) and a DELETE's targets hold them
         // too; see `releaseEnvBuffers`.
-        releaseEnvBuffers(allocator, row, stack_env_values[0..env_idx]);
+        env_buffers_live = false;
+        releaseEnvBuffers(allocator, row_entities, row, stack_env_values[0..env_idx]) catch |err| {
+            allocator.free(row);
+            return err;
+        };
 
         // SONNY-6498: the row, when the list cannot take it.
         rows.append(allocator, row) catch |err| {
@@ -7412,12 +7453,15 @@ fn executeVariableLengthPathTraversal(
 /// they never freed it: an edge list moves to the query's scratch arena,
 /// which the transports install per request and release after the result is
 /// sent (GAP-0755), and the row is repointed at the copy. A list is copied in
-/// full by every holder that outlives the request (`duplicateValue`). A path
-/// is not (`duplicateValue` and `duplicateResult` copy its arrays by
-/// reference, and the gRPC server keeps a duplicated result past the
-/// request), so a path the row holds stays with the row, unfreed, as before;
-/// so does a list when no scratch arena is installed.
-fn releaseEnvBuffers(allocator: std.mem.Allocator, row: []Value, bound_values: []const Value) void {
+/// full by every holder that outlives the request (`duplicateValue`); a list
+/// stays with the row, unfreed, when no scratch arena is installed.
+/// SONNY-6613: a path the row holds goes to `row_entities`, the rows' entity
+/// tracker, which the result built from them frees (`keepRowPath`); it stayed
+/// with the row, unfreed. Every holder that outlives the result copies its
+/// arrays (`duplicateValue`). On an error every buffer has been freed or
+/// kept, and the caller must drop the row (a path it holds may be freed).
+fn releaseEnvBuffers(allocator: std.mem.Allocator, row_entities: *?*execution.OwnedGraphEntities, row: []Value, bound_values: []const Value) !void {
+    var failed: ?anyerror = null;
     for (bound_values) |bound| {
         switch (bound) {
             .List => |list| {
@@ -7433,10 +7477,33 @@ fn releaseEnvBuffers(allocator: std.mem.Allocator, row: []Value, bound_values: [
             .Path => |p| if (!rowReferencesEnvBuffer(row, bound)) {
                 allocator.free(p.nodes);
                 allocator.free(p.edges);
+            } else {
+                keepRowPath(allocator, row_entities, p.nodes, p.edges) catch |err| {
+                    failed = err;
+                };
             },
             else => {},
         }
     }
+    if (failed) |err| return err;
+}
+
+// CANARY: REQ=REQ-SONNY-6613-PATH-OWNERSHIP; FEATURE="PathValues"; ASPECT=ResultOwnsPathArrays; STATUS=TESTED; TEST=tests/test_sonny6613_path_ownership.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6613: hand a path's arrays, allocated on `allocator` and held by a
+/// row, to the rows' entity tracker (made on first use; the result built
+/// from the rows takes it over), which frees them with the result. On an
+/// error the arrays are freed: the caller must drop the row.
+fn keepRowPath(allocator: std.mem.Allocator, row_entities: *?*execution.OwnedGraphEntities, nodes: []const *const graph_store.Node, edges: []const *const graph_store.Edge) !void {
+    const entities = row_entities.* orelse made: {
+        const made = execution.OwnedGraphEntities.init(allocator) catch |err| {
+            allocator.free(nodes);
+            allocator.free(edges);
+            return err;
+        };
+        row_entities.* = made;
+        break :made made;
+    };
+    try entities.adoptPath(nodes, edges);
 }
 
 /// SONNY-3148: point every list in `value` (walked through its lists and
@@ -7616,6 +7683,7 @@ fn executeSingleHopEdgeTraversal(
     scope: *const HopScope,
     left_node: *graph_store.Node,
     rows: *std.ArrayList([]Value),
+    row_entities: *?*execution.OwnedGraphEntities,
     rel_direction: u8,
     rel_type: ?[]const u8,
     rel_props_filter: ?[]ast.Property,
@@ -7757,7 +7825,11 @@ fn executeSingleHopEdgeTraversal(
             // with 2 nodes and 1 edge so length(p) returns 1, not 0.
             if (layout.path_idx) |slot| {
                 path_nodes_buf = try allocator.alloc(*const graph_store.Node, 2);
-                path_edges_buf = try allocator.alloc(*const graph_store.Edge, 1);
+                // SONNY-6613: the node array, when the edge array cannot be made.
+                path_edges_buf = allocator.alloc(*const graph_store.Edge, 1) catch |err| {
+                    allocator.free(path_nodes_buf);
+                    return err;
+                };
                 path_nodes_buf[0] = left_node;
                 path_nodes_buf[1] = right_node_ptr;
                 path_edges_buf[0] = edge;
@@ -7767,6 +7839,12 @@ fn executeSingleHopEdgeTraversal(
                     .edges = path_edges_buf,
                 } };
             }
+            // SONNY-6613: a statement that fails before the row is built
+            // frees the path's arrays.
+            errdefer if (path_alive) {
+                allocator.free(path_nodes_buf);
+                allocator.free(path_edges_buf);
+            };
 
             const env = Env{
                 .names = stack_env_names[0..env_idx],
@@ -7929,7 +8007,13 @@ fn executeSingleHopEdgeTraversal(
             // length(p)`, a SET). Released as the variable-length
             // traversal's are (`releaseEnvBuffers`): a row that holds the
             // path (`RETURN p`, a WITH row) keeps them.
-            if (path_alive) releaseEnvBuffers(allocator, row, &.{Value{ .Path = .{ .nodes = path_nodes_buf, .edges = path_edges_buf } }});
+            if (path_alive) {
+                path_alive = false;
+                releaseEnvBuffers(allocator, row_entities, row, &.{Value{ .Path = .{ .nodes = path_nodes_buf, .edges = path_edges_buf } }}) catch |err| {
+                    allocator.free(row);
+                    return err;
+                };
+            }
 
             // SONNY-6498: the row, when the list cannot take it.
             rows.append(allocator, row) catch |err| {
@@ -10202,11 +10286,15 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // item that fails to evaluate, a budget refusal) frees the rows read
         // so far and the column names. Both leaked.
         var rows_owned = true;
+        // SONNY-6613: the path arrays the rows keep (`keepRowPath`); the
+        // result takes the tracker over with the rows.
+        var row_entities: ?*execution.OwnedGraphEntities = null;
         errdefer if (rows_owned) {
             for (rows.items) |r| allocator.free(r);
             rows.deinit(allocator);
             for (columns) |col| allocator.free(col);
             allocator.free(columns);
+            if (row_entities) |entities| entities.deinit();
         };
 
         if (has_relationship) {
@@ -10335,10 +10423,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
                     else
                         null;
-                    try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items, limit_hint, effectivePathMode(q));
+                    try executeVariableLengthPathTraversal(allocator, store, &hop_scope, left_node, &rows, &row_entities, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items, limit_hint, effectivePathMode(q));
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
-                    try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items);
+                    try executeSingleHopEdgeTraversal(allocator, store, &hop_scope, left_node, &rows, &row_entities, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, traversal_where, q.filter_clause, q.set_clauses, q.remove_clauses, has_with, items);
                 }
             }
         } else {
@@ -10838,6 +10926,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
+            .owned_graph_entities = row_entities,
         };
         rows_owned = false;
 
@@ -10857,6 +10946,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // SONNY-6351 item 1: and an error after it frees its rows, until
             // `result` holds them (nothing below can fail after that).
             errdefer with_result.deinit(allocator);
+            // SONNY-6613: the WITH's rows hold the paths `result`'s rows
+            // kept; its tracker goes with them.
+            with_result.takeOwnedGraphEntities(&result);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {
@@ -10968,6 +11060,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .columns = return_columns,
                     .rows = return_rows,
                     .flags = with_result.flags,
+                    .owned_graph_entities = with_result.owned_graph_entities,
                 };
             }
         }

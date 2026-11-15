@@ -538,15 +538,10 @@ const ForBodyAccumulator = struct {
                 // accumulator's `destroy_node`, so both trackers must free
                 // their nodes the same way. Every executor tracker has the
                 // default (struct only); only a node-scan page frees in full.
-                std.debug.assert(acc_entities.destroy_node == entities.destroy_node);
-                try acc_entities.nodes.ensureUnusedCapacity(acc_entities.allocator, entities.nodes.items.len);
-                try acc_entities.edges.ensureUnusedCapacity(acc_entities.allocator, entities.edges.items.len);
-                acc_entities.nodes.appendSliceAssumeCapacity(entities.nodes.items);
-                acc_entities.edges.appendSliceAssumeCapacity(entities.edges.items);
-                // Ownership of the pointers moved to the accumulator.
-                entities.nodes.clearRetainingCapacity();
-                entities.edges.clearRetainingCapacity();
-                entities.deinit(); // also frees the tracker (SONNY-2394)
+                // SONNY-6613: `absorb` moves the path arrays it keeps too
+                // (they were freed here, under the rows that hold them), and
+                // frees the tracker (SONNY-2394).
+                try acc_entities.absorb(entities);
             } else {
                 self.entities = entities;
             }

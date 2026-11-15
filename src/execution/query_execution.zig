@@ -177,17 +177,11 @@ fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGra
         return;
     };
     if (d == s) return;
-    if (d.destroy_node != s.destroy_node or d.destroy_edge != s.destroy_edge or
-        d.allocator.ptr != s.allocator.ptr or d.allocator.vtable != s.allocator.vtable) return;
-    // SONNY-6498: both lists grow first; a failure leaves `src` whole (it
-    // was half copied, then freed by both trackers).
-    try d.nodes.ensureUnusedCapacity(d.allocator, s.nodes.items.len);
-    try d.edges.ensureUnusedCapacity(d.allocator, s.edges.items.len);
-    d.nodes.appendSliceAssumeCapacity(s.nodes.items);
-    d.edges.appendSliceAssumeCapacity(s.edges.items);
-    s.nodes.deinit(s.allocator);
-    s.edges.deinit(s.allocator);
-    s.allocator.destroy(s);
+    if (!d.canAbsorb(s)) return;
+    // SONNY-6498: every list grows first; a failure leaves `src` whole (it
+    // was half copied, then freed by both trackers). SONNY-6613: the path
+    // arrays `src` keeps move too.
+    try d.absorb(s);
 }
 
 // CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ChainParts; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
@@ -1724,7 +1718,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q_in: ast.Query, co
 /// caught). Audited capture sites: ExecutionResult.owned_graph_entities and
 /// ExecutionResult.variable_bindings; every other field is unmanaged.
 fn repointResultAllocators(result: *ExecutionResult, allocator: std.mem.Allocator) void {
-    if (result.owned_graph_entities) |entities| entities.allocator = allocator;
+    if (result.owned_graph_entities) |entities| entities.setAllocator(allocator);
     if (result.variable_bindings) |bindings| bindings.allocator = allocator;
     // A `Value.Map` in a result row is a managed std.StringHashMap that stored
     // the (stack-local, pass-through) metered allocator; its deinit would call

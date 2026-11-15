@@ -82,13 +82,9 @@ fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGra
         return;
     };
     if (d == s) return;
-    if (d.destroy_node != s.destroy_node or d.destroy_edge != s.destroy_edge or
-        d.allocator.ptr != s.allocator.ptr or d.allocator.vtable != s.allocator.vtable) return;
-    try d.nodes.appendSlice(d.allocator, s.nodes.items);
-    try d.edges.appendSlice(d.allocator, s.edges.items);
-    s.nodes.deinit(s.allocator);
-    s.edges.deinit(s.allocator);
-    s.allocator.destroy(s);
+    if (!d.canAbsorb(s)) return;
+    // SONNY-6613: the path arrays `src` keeps move too.
+    try d.absorb(s);
 }
 
 /// Free a clause's rows once their values (nodes and relationships, which
