@@ -4977,6 +4977,7 @@ REQ-SONNY-6594-UNDO-READ-FAILURE,TransactionUndoLog,Regression,TESTED,tests/test
 REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_write_read_failure.zig,tests/test_sonny6594_write_read_failure.zig,,execution,2026-11-15
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,ErrorReturningGetters,TESTED,src/graph_store.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,storage,2026-11-15
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_adjacency_property_read_failure.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,execution,2026-11-15
+REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,PerConnectionMaxFrameSize,TESTED,src/client/grpc_query_transport.zig,tests/test_sonny6607_grpc_frame_size.zig,,transport,2026-11-15
 REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,Regression,TESTED,tests/test_sonny6607_grpc_frame_size.zig,tests/test_sonny6607_grpc_frame_size.zig,,transport,2026-11-15
 REQ-SONNY-6607-INDEX-BACKFILL-WARNING,VectorIndex,Regression,TESTED,tests/test_sonny6607_index_backfill_warning.zig,tests/test_sonny6607_index_backfill_warning.zig,,index,2026-11-15
 REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,DroppingTenantRefused,TESTED,src/execution/tenancy.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15

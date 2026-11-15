@@ -797,7 +797,7 @@ REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TES
 REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TESTED,,,index,2026-08-24,src/server/proto_util.zig,349
 REQ-ENG-3906-INDEX-WITH-PARAM-VALIDATION,VectorIndex,WithParameterValidation,TESTED,,,index,2026-08-24,tests/test_eng3906_index_with_params.zig,54
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,CliPlaintextDiagnostic,TESTED,,,transport,2026-08-24,src/cli/main.zig,1862
-REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,,,transport,2026-08-24,src/client/grpc_query_transport.zig,229
+REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,,,transport,2026-08-24,src/client/grpc_query_transport.zig,258
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,DualListenerLifetime,TESTED,,,transport,2026-08-24,src/server/main.zig,2506
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawIoUnitWiring,TESTED,,,transport,2026-08-25,build.zig,5450
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawReadCoalescedFrames,TESTED,,,transport,2026-08-25,src/transport/grpc_tls.zig,469
@@ -5270,7 +5270,7 @@ REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,StartupRefusesPartialAuthState,
 REQ-SONNY-6567-FTS-UNREADABLE-HIT,FullText,Regression,TESTED,,,fts,2026-11-14,tests/test_sonny6567_fts_unreadable_hit.zig,22
 REQ-SONNY-6567-FTS-UNREADABLE-HIT,FullText,UnreadableHitFailsSearch,TESTED,,,fts,2026-11-15,src/execution/fts_dispatch.zig,463
 REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,Regression,TESTED,,,transport,2026-11-14,tests/test_sonny6567_grpc_stream_ids.zig,21
-REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,StreamIdAllocation,TESTED,,,transport,2026-11-14,src/client/grpc_query_transport.zig,49
+REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,StreamIdAllocation,TESTED,,,transport,2026-11-14,src/client/grpc_query_transport.zig,78
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,CheckedHydratedGetters,TESTED,,,storage,2026-11-15,src/graph_store.zig,4670
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,Regression,TESTED,,,storage,2026-11-14,tests/test_sonny6567_hydrated_getter_errors.zig,26
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,SnapshotCopiesEvictedEdges,TESTED,,,storage,2026-11-15,src/graph_store.zig,3821
@@ -5293,6 +5293,7 @@ REQ-SONNY-6594-UNDO-READ-FAILURE,TransactionUndoLog,Regression,TESTED,,,engine,2
 REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,,,execution,2026-11-15,tests/test_sonny6594_write_read_failure.zig,20
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,ErrorReturningGetters,TESTED,,,storage,2026-11-15,src/graph_store.zig,10166
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,Regression,TESTED,,,execution,2026-11-15,tests/test_sonny6607_adjacency_property_read_failure.zig,19
+REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,PerConnectionMaxFrameSize,TESTED,,,transport,2026-11-15,src/client/grpc_query_transport.zig,43
 REQ-SONNY-6607-GRPC-FRAME-SIZE,GrpcTransport,Regression,TESTED,,,transport,2026-11-15,tests/test_sonny6607_grpc_frame_size.zig,14
 REQ-SONNY-6607-INDEX-BACKFILL-WARNING,VectorIndex,Regression,TESTED,,,index,2026-11-15,tests/test_sonny6607_index_backfill_warning.zig,16
 REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,DroppingTenantRefused,TESTED,,,security,2026-11-15,src/execution/tenancy.zig,170

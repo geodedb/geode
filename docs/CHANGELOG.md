@@ -2600,6 +2600,13 @@
     hierarchy.
   Regression: `zig build test-sonny6607-tenant-lifecycle`,
   `test-sonny6607-tenant-orphan-startup`.
+- **The gRPC client's negotiated max frame size is per connection
+  (SONNY-6607 item 5).** It was a thread-local, so two connections used
+  from one thread shared it: once one learned a larger
+  SETTINGS_MAX_FRAME_SIZE, a request on the other went out in frames its
+  peer never allowed (FRAME_SIZE_ERROR, RFC 9113 4.2). It is now kept per
+  socket; a connection with no learned value uses the 16384 default every
+  peer accepts. Regression: `zig build test-sonny6607-grpc-frame-size`.
 - **ROLLBACK that cannot read a body it must undo fails instead of
   reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
   undo asked whether the node or edge a change was on still exists, and a

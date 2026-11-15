@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:02:30.316528885Z",
+  "generated_at": "2026-11-15T18:05:41.795160791Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78593,6 +78593,20 @@
       "features": [
         {
           "feature": "GrpcTransport",
+          "aspect": "PerConnectionMaxFrameSize",
+          "status": "TESTED",
+          "files": [
+            "src/client/grpc_query_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "GrpcTransport",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -83788,7 +83802,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4162
+      "TESTED": 4163
     },
     "by_aspect": {
       "2PC": 3,
@@ -86124,6 +86138,7 @@
       "PeersList": 1,
       "PendingStatementFailure": 1,
       "PerActionWriteGate": 1,
+      "PerConnectionMaxFrameSize": 1,
       "PerConnectionRequestAssembly": 1,
       "PerConnectionRxWake": 1,
       "PerConnectionTxCreditWake": 1,
