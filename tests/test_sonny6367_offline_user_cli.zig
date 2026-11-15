@@ -356,11 +356,12 @@ test "SONNY-6367: user_management.verifyPassword accepts the legacy BLAKE2b form
     var upper: [64]u8 = undefined;
     _ = std.ascii.upperString(&upper, &hex);
     try testing.expect(try user_mgmt.verifyPassword(legacy_pw, &upper));
-    // 63 hex digits, a non-hex digit: no hash format, refused.
-    try testing.expect(!try user_mgmt.verifyPassword(legacy_pw, hex[0..63]));
+    // 63 hex digits, a non-hex digit: no hash format, refused (SONNY-6598:
+    // as an unusable stored hash, an error, not a mismatch).
+    try testing.expectError(error.InvalidHashFormat, user_mgmt.verifyPassword(legacy_pw, hex[0..63]));
     var bad = hex;
     bad[10] = 'z';
-    try testing.expect(!try user_mgmt.verifyPassword(legacy_pw, &bad));
+    try testing.expectError(error.InvalidHashFormat, user_mgmt.verifyPassword(legacy_pw, &bad));
 }
 
 // ---------------------------------------------------------------------------

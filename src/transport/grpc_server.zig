@@ -2506,10 +2506,13 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
                     limiter.recordFailureForPrincipal(peer_ip, req.username);
                 }
             }
+            // SONNY-6598 (QUIC parity): audited as a failed login or as an
+            // auth-system error; answered "failed" only when checked.
+            audit_mod.logLoginRefusal(allocator, req.username, auth_err);
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
-                .error_message = if (checked) "Authentication failed" else "Authentication temporarily unavailable",
+                .error_message = auth_rate_limiter_mod.helloRefusalMessage(auth_err),
                 .capabilities = caps,
             };
             return encodeMessage(allocator, resp);

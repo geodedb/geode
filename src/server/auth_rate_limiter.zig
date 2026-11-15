@@ -455,6 +455,25 @@ pub fn shouldCountFailedAttempt(err: anyerror) bool {
     return err == error.Unauthenticated;
 }
 
+// CANARY: REQ=REQ-SONNY-6598-HELLO-AUTH-ERROR-ANSWER; FEATURE="AuthOutcomeClassification"; ASPECT=HelloRefusalMessage; STATUS=TESTED; TEST=tests/test_sonny6598_kdf_error_hello.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: the HELLO error message for a failed `authenticate()`, the
+/// same on both transports. Only a checked-and-rejected credential
+/// (`error.Unauthenticated`, the one outcome `shouldCountFailedAttempt`
+/// counts) is "Authentication failed". A stored hash the server cannot use
+/// (`error.AuthCredentialInvalid`) is a server-side error on that account,
+/// which a retry does not cure. Everything else (the store or the password
+/// KDF could not run, e.g. out of memory under load) is the retryable
+/// "temporarily unavailable".
+pub const hello_failed_message = "Authentication failed";
+pub const hello_unavailable_message = "Authentication temporarily unavailable";
+pub const hello_credential_invalid_message = "Authentication unavailable: the stored credential of this account cannot be used (server-side error; contact the administrator)";
+
+pub fn helloRefusalMessage(err: anyerror) []const u8 {
+    if (err == error.Unauthenticated) return hello_failed_message;
+    if (err == error.AuthCredentialInvalid) return hello_credential_invalid_message;
+    return hello_unavailable_message;
+}
+
 /// Whether a HELLO carries both credential halves and is therefore eligible for
 /// a credential check at all.
 ///
@@ -1281,4 +1300,15 @@ test "auth_rate_limiter: an operator can see and clear a lockout (ENG-3954 RC-3)
         try std.testing.expect(limiter.clearLockout(spray_ip, ""));
         try std.testing.expect(!limiter.isLockedForPrincipal(spray_ip, "innocent"));
     }
+}
+
+test "SONNY-6598: only a rejected credential is answered 'Authentication failed' and counted" {
+    try std.testing.expectEqualStrings(hello_failed_message, helloRefusalMessage(error.Unauthenticated));
+    try std.testing.expect(shouldCountFailedAttempt(error.Unauthenticated));
+    for ([_]anyerror{ error.AuthUnavailable, error.OutOfMemory, error.FipsUnsupported }) |err| {
+        try std.testing.expectEqualStrings(hello_unavailable_message, helloRefusalMessage(err));
+        try std.testing.expect(!shouldCountFailedAttempt(err));
+    }
+    try std.testing.expectEqualStrings(hello_credential_invalid_message, helloRefusalMessage(error.AuthCredentialInvalid));
+    try std.testing.expect(!shouldCountFailedAttempt(error.AuthCredentialInvalid));
 }

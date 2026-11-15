@@ -2156,7 +2156,9 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
         log.err("Argon2id hashing failed", &.{
             Attr.string("error", @errorName(err)),
         });
-        return error.HashingFailed;
+        // SONNY-6598: out of memory stays OutOfMemory (a transient fault the
+        // caller may retry); anything else is HashingFailed.
+        return if (err == error.OutOfMemory) error.OutOfMemory else error.HashingFailed;
     };
 
     // Encode as PHC string format: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
@@ -2238,6 +2240,14 @@ pub fn verifyPasswordBlake2bLegacy(password: []const u8, stored_hash: []const u8
 /// Supports Argon2id PHC strings with parameters other than the OWASP ones
 /// Geode writes, enabling verification of hashes created with different
 /// parameter sets during migration, within the bounds below.
+///
+/// SONNY-6598: three outcomes. `true` (match), `false` (mismatch), or an
+/// error: `error.InvalidHashFormat` for a stored string it cannot use (not
+/// an Argon2id v=19 PHC string, unparseable or out-of-bounds parameters, a
+/// salt or hash that is not hex of the right length), and the KDF's own
+/// error (`error.OutOfMemory`, ...) when the server could not run it. Both
+/// used to be `false`, so a server-side fault read as a wrong password.
+// CANARY: REQ=REQ-SONNY-6598-VERIFY-THREE-OUTCOMES; FEATURE="AuthOutcomeClassification"; ASPECT=Argon2idVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
 pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_string: []const u8) !bool {
     // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
     if (build_options.fips) {
@@ -2248,13 +2258,13 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
     var parts = std.mem.splitScalar(u8, phc_string, '$');
 
     _ = parts.next(); // Empty before first $
-    const alg = parts.next() orelse return false;
-    if (!std.mem.eql(u8, alg, "argon2id")) return false;
+    const alg = parts.next() orelse return error.InvalidHashFormat;
+    if (!std.mem.eql(u8, alg, "argon2id")) return error.InvalidHashFormat;
 
-    const version = parts.next() orelse return false;
-    if (!std.mem.eql(u8, version, "v=19")) return false;
+    const version = parts.next() orelse return error.InvalidHashFormat;
+    if (!std.mem.eql(u8, version, "v=19")) return error.InvalidHashFormat;
 
-    const params_str = parts.next() orelse return false;
+    const params_str = parts.next() orelse return error.InvalidHashFormat;
     // Parse params: m=19456,t=2,p=1
     // SONNY-6374: a stored hash is untrusted input. An unparseable or
     // out-of-range parameter refuses the hash (it used to fall back to the
@@ -2271,38 +2281,38 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         const value = kv.next() orelse continue;
 
         if (std.mem.eql(u8, key, "m")) {
-            m = std.fmt.parseInt(u32, value, 10) catch return false;
+            m = std.fmt.parseInt(u32, value, 10) catch return error.InvalidHashFormat;
         } else if (std.mem.eql(u8, key, "t")) {
-            t = std.fmt.parseInt(u32, value, 10) catch return false;
+            t = std.fmt.parseInt(u32, value, 10) catch return error.InvalidHashFormat;
         } else if (std.mem.eql(u8, key, "p")) {
-            p = std.fmt.parseInt(u24, value, 10) catch return false;
+            p = std.fmt.parseInt(u24, value, 10) catch return error.InvalidHashFormat;
         }
     }
 
     // SONNY-6378: refuse out-of-bounds parameters before running Argon2.
     // Argon2 needs at least 8 KiB of memory per lane.
-    if (t < 1 or t > argon2_max_t) return false;
-    if (p < 1 or p > argon2_max_p) return false;
-    if (m > argon2_max_m_kib or m < 8 * @as(u32, p)) return false;
+    if (t < 1 or t > argon2_max_t) return error.InvalidHashFormat;
+    if (p < 1 or p > argon2_max_p) return error.InvalidHashFormat;
+    if (m > argon2_max_m_kib or m < 8 * @as(u32, p)) return error.InvalidHashFormat;
 
-    const salt_hex = parts.next() orelse return false;
-    const hash_hex = parts.next() orelse return false;
+    const salt_hex = parts.next() orelse return error.InvalidHashFormat;
+    const hash_hex = parts.next() orelse return error.InvalidHashFormat;
 
     // Decode salt from hex
-    if (salt_hex.len != 32) return false; // 16 bytes = 32 hex chars
+    if (salt_hex.len != 32) return error.InvalidHashFormat; // 16 bytes = 32 hex chars
     var salt: [16]u8 = undefined;
     for (0..16) |i| {
-        const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return false;
-        const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return false;
+        const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return error.InvalidHashFormat;
+        const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return error.InvalidHashFormat;
         salt[i] = @as(u8, hi) * 16 + @as(u8, lo);
     }
 
     // Decode expected hash from hex
-    if (hash_hex.len != 64) return false; // 32 bytes = 64 hex chars
+    if (hash_hex.len != 64) return error.InvalidHashFormat; // 32 bytes = 64 hex chars
     var expected_hash: [32]u8 = undefined;
     for (0..32) |i| {
-        const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return false;
-        const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return false;
+        const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return error.InvalidHashFormat;
+        const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return error.InvalidHashFormat;
         expected_hash[i] = @as(u8, hi) * 16 + @as(u8, lo);
     }
 
@@ -2322,7 +2332,13 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         argon2_params,
         .argon2id,
         std.Io.Threaded.global_single_threaded.io(),
-    ) catch return false;
+    ) catch |err| return switch (err) {
+        // Parameters Argon2 refuses come from the stored hash.
+        error.WeakParameters, error.OutputTooLong => error.InvalidHashFormat,
+        // The server could not run the KDF (out of memory, a thread or I/O
+        // error): no verdict.
+        else => err,
+    };
 
     // Constant-time comparison to prevent timing attacks
     return crypto_backend.timingSafeEql(&computed_hash, &expected_hash);

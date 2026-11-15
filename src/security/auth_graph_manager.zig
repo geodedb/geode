@@ -374,7 +374,12 @@ pub const AuthGraphManager = struct {
         const verify_result = self.verifyChain(&self.hmac_key);
         graph_store.releaseStoreWriteLock();
         verify_result catch |err| {
-            log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+            // SONNY-6598: only a mismatch is a tampering signal.
+            if (isChainTamperVerdict(err)) {
+                log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+            } else {
+                log.err("Periodic HMAC chain verification could not run this round (not a tampering verdict; retrying next interval)", &.{Attr.string("error", @errorName(err))});
+            }
             return;
         };
         log.debug("Periodic HMAC chain verification passed", &.{});
@@ -525,6 +530,19 @@ pub const AuthGraphManager = struct {
     }
 
     // -- Chain Verification --
+
+    // CANARY: REQ=REQ-SONNY-6598-CHAIN-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=ChainTamperVerdict; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6598: whether a `verifyChain` error is the chain's verdict (a
+    /// record or the seal does not match: tampering, or a key the chain was
+    /// not sealed with) rather than a verification that could not run (out of
+    /// memory, a store read error). The callers reported every error as
+    /// tampering.
+    pub fn isChainTamperVerdict(err: anyerror) bool {
+        return switch (err) {
+            error.MissingChainRoot, error.RecordCountMismatch, error.RecordHmacMismatch, error.ChainHashMismatch => true,
+            else => false,
+        };
+    }
 
     /// Verify the integrity of the entire auth chain.
     ///

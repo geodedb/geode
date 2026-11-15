@@ -302,3 +302,14 @@ test "SONNY-6598: an MFA check the server cannot run is an error, not an invalid
     flags.mfa.enableForTests();
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6598', '000000')", "28000");
 }
+
+test "SONNY-6598: only a mismatch of the __geode_security chain is a tampering verdict" {
+    for ([_]anyerror{ error.MissingChainRoot, error.RecordCountMismatch, error.RecordHmacMismatch, error.ChainHashMismatch }) |err| {
+        try testing.expect(AuthGraphManager.isChainTamperVerdict(err));
+    }
+    // A verification that could not run: no verdict (startup refuses with
+    // AuthChainUnverifiable, the CLI says so, the periodic check retries).
+    for ([_]anyerror{ error.OutOfMemory, error.InputOutput, error.SecurityGraphUnavailable }) |err| {
+        try testing.expect(!AuthGraphManager.isChainTamperVerdict(err));
+    }
+}

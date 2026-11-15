@@ -83,7 +83,8 @@ test "SONNY-6320: verify refuses a malformed or foreign PHC string instead of ma
         h[0 .. h.len - 2], // truncated hash
         h[0 .. phc_prefix.len + 30], // truncated salt
     };
-    for (cases) |bad| try testing.expect(!try auth.verifyPasswordArgon2id(a, "pw", bad));
+    // SONNY-6598: a string it cannot use is an error, not a mismatch.
+    for (cases) |bad| try testing.expectError(error.InvalidHashFormat, auth.verifyPasswordArgon2id(a, "pw", bad));
 
     // A flipped hash digit no longer verifies.
     const flipped = try a.dupe(u8, h);

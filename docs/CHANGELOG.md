@@ -4,6 +4,42 @@
 
 ### Security
 
+- **A server-side failure while checking a password is no longer a wrong
+  password (SONNY-6598).** `verifyPasswordArgon2id` turned every Argon2
+  key-derivation error (`catch return false`) and every malformed stored PHC
+  string into "the password does not match", and the login verifier did the
+  same with every error: a correct password whose Argon2id work could not
+  allocate its memory on a loaded server was answered "Authentication
+  failed" and counted toward the per-principal lockout, so server load could
+  lock a user out and the operator saw a brute-force signal that was not
+  one. A credential check now has three outcomes. Only a mismatch is
+  "Authentication failed" and counted; a key derivation that could not run
+  is "Authentication temporarily unavailable" (retryable), a malformed stored
+  hash "Authentication unavailable: the stored credential of this account
+  cannot be used (server-side error; contact the administrator)"; neither
+  counts, both are logged at ERROR with the user name, on QUIC and gRPC
+  alike, and an error never authenticates. The auth single-flight hands a
+  waiter the owner's error instead of a rejection. With the process audit
+  log on, every refused HELLO is audited: a failed login as
+  `authentication_failure`/`LOGIN`/`failure`, a check that could not run as
+  `system_event`/`AUTH_ERROR`/`error_` (refused HELLOs were not audited at
+  all). The same rule now holds for `geode.auth.mfa_verify` / `mfa_enable`
+  (a TOTP check the server cannot run is that error, e.g. 0A000, not 28000,
+  and is not counted toward the MFA lockout), `SecurityManager.authenticate`
+  (an unusable stored hash counts no failed attempt), the offline
+  `geode user change-password --old-password`, and `__geode_security` chain
+  verification (a check that could not run is `AuthChainUnverifiable` at
+  startup and "could not be verified" in the CLI and the periodic check,
+  not tampering). **Behaviour change:** `geode_auth.verifyPasswordArgon2id`
+  and `user_management.verifyPassword` return `error.InvalidHashFormat` for
+  a stored hash they cannot use (they returned `false`), and
+  `hashPasswordArgon2id` returns `error.OutOfMemory` (not `HashingFailed`)
+  when Argon2id cannot allocate. Regressions: `zig build
+  test-sonny6598-verify-outcomes` (allocation-failure sweeps with
+  `std.testing.checkAllAllocationFailures`), `test-sonny6598-kdf-error-hello`
+  (a real Debug server, QUIC and gRPC, with a test-only KDF fault hook that
+  exists only in test and Debug builds). See docs/USER_AUTH.md, "What a
+  client sees when a login is refused".
 - **Cluster mode: the Raft log and snapshots are encrypted under TDE
   (SONNY-6571).** With `GEODE_TDE_KEY` set, the storage engine encrypted its
   pages and WAL, but every cluster node's Raft log

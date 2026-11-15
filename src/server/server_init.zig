@@ -682,6 +682,19 @@ pub fn initialize(
 
                 // Verify HMAC chain integrity
                 agm.verifyChain(&kr.key) catch |err| {
+                    // SONNY-6598: a verification that could not run (out of
+                    // memory, a store read error) is no tampering verdict: the
+                    // start is refused (fail closed) as unverifiable, and the
+                    // reseal override does not apply to it.
+                    if (!auth_graph_manager.AuthGraphManager.isChainTamperVerdict(err)) {
+                        log.err("auth chain could not be verified (not a tampering verdict); refusing to start", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.string("key_source", kr.key_id),
+                        });
+                        std.debug.print("[startup] the __geode_security HMAC chain could not be verified ({s}); this is not a tampering verdict. Refusing to start; retry once the cause is fixed.\n", .{@errorName(err)});
+                        agm.deinit();
+                        return error.AuthChainUnverifiable;
+                    }
                     // Operator escape hatch: GEODE_AUTH_RESEAL_CHAIN=1 forces a
                     // re-seal of the chain from the currently-loaded records.
                     // Use this after offline maintenance (e.g. an out-of-band
