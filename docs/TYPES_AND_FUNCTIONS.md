@@ -573,7 +573,7 @@ SONNY-6587. More than 10,000,000 elements is refused (`RangeTooLarge`). `FOR i I
 
 ### Haversine Distance
 
-```gql
+```text
 distance_haversine(point1, point2)
 ```
 

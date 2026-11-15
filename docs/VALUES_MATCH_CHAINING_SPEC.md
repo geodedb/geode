@@ -13,9 +13,13 @@ Enable GQL queries to chain VALUES clauses with MATCH clauses, allowing bindings
 
 ## Syntax Examples
 
+The examples in this spec are the proposed syntax. Geode does not accept
+it (`VALUES (1 AS x) MATCH ...` is a syntax error), so they are shown as
+text.
+
 ### Basic Chaining
 
-```gql
+```text
 VALUES (1 AS x, 'test' AS name)
 MATCH (n:Person {id: x})
 RETURN n, x, name
@@ -23,7 +27,7 @@ RETURN n, x, name
 
 ### Multiple Rows
 
-```gql
+```text
 VALUES
   (1 AS id, 'Alice' AS name),
   (2 AS id, 'Bob' AS name)
@@ -33,7 +37,7 @@ RETURN n.name, name
 
 ### Complex Expressions
 
-```gql
+```text
 VALUES (10 AS threshold)
 MATCH (n:Product)
 WHERE n.price > threshold
@@ -300,7 +304,7 @@ The existing `evalExpr()` function already supports environment lookup for ident
 
 For multiple rows in VALUES with MATCH, we need cartesian product:
 
-```gql
+```text
 VALUES
   (1 AS x),
   (2 AS x)
@@ -548,21 +552,21 @@ Section covering VALUES in query composition:
 
 1. **VALUES with CREATE**
 
-   ```gql
+   ```text
    VALUES (1 AS id, 'Alice' AS name)
    CREATE (p:Person {id: id, name: name})
    ```
 
 2. **Nested VALUES in Subqueries**
 
-   ```gql
+   ```text
    MATCH (n)
    WHERE n.id IN (VALUES (1), (2), (3))
    ```
 
 3. **VALUES in UNION**
 
-   ```gql
+   ```text
    VALUES (1 AS x) MATCH (n {id: x})
    UNION
    VALUES (2 AS x) MATCH (n {id: x})

@@ -267,9 +267,9 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ```gql
 -- Create nodes and relationships
-CREATE (alice:Person {name: 'Alice', age: 30})
-CREATE (bob:Person {name: 'Bob', age: 25})
-CREATE (alice)-[:KNOWS]->(bob)
+CREATE (alice:Person {name: 'Alice', age: 30});
+CREATE (bob:Person {name: 'Bob', age: 25});
+CREATE (alice)-[:KNOWS]->(bob);
 
 -- Vector similarity search
 MATCH (doc:Document)
@@ -278,7 +278,7 @@ RETURN doc.title ORDER BY similarity DESC
 
 -- Real-time analytics
 MATCH (user:User)-[:PERFORMED]->(action:Action)
-WHERE action.timestamp > now() - duration('PT1H')
+WHERE action.timestamp > current_timestamp() - duration('PT1H')
 RETURN user.id, count(action) AS recent_actions
 ```
 

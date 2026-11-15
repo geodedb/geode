@@ -21,11 +21,11 @@ START TRANSACTION
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (p:Person {name: 'Alice'})
-CREATE (c:Company {name: 'Acme'})
-CREATE (p)-[:WORKS_FOR]->(c)
-COMMIT
+START TRANSACTION;
+CREATE (p:Person {name: 'Alice'});
+CREATE (c:Company {name: 'Acme'});
+CREATE (p)-[:WORKS_FOR]->(c);
+COMMIT;
 ```
 
 **Behavior:**
@@ -48,9 +48,9 @@ COMMIT
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (n:Node {value: 123})
-COMMIT
+START TRANSACTION;
+CREATE (n:Node {value: 123});
+COMMIT;
 ```
 
 **Behavior:**
@@ -72,10 +72,10 @@ ROLLBACK
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (n:TempNode {data: 'temporary'})
+START TRANSACTION;
+CREATE (n:TempNode {data: 'temporary'});
 -- Decide to discard
-ROLLBACK
+ROLLBACK;
 ```
 
 **Behavior:**
@@ -119,9 +119,9 @@ transaction.
 Returned when attempting to start a transaction while one is already active.
 
 ```gql
-START TRANSACTION
+START TRANSACTION;
 -- ERROR: Transaction already active
-START TRANSACTION
+START TRANSACTION;
 ```
 
 **Status Class**: `0A000` (Feature Not Supported)
@@ -145,8 +145,8 @@ Transactions can include multiple graph operations:
 START TRANSACTION
 
 -- Create nodes
-CREATE (p:Person {name: 'Bob', age: 30})
-CREATE (c:Company {name: 'TechCorp'})
+CREATE (p:Person {name: 'Bob', age: 30});
+CREATE (c:Company {name: 'TechCorp'});
 
 -- Create relationship
 MATCH (p:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})

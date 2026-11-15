@@ -56,7 +56,12 @@ The Enhanced RLS system provides fine-grained access control at the row level wi
 
 ### Usage Example
 
-```gql
+Not supported as written: this is SQL (`ON employees`, `FOR SELECT`,
+`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`); Geode has no tables, no
+`current_user_department()`, and its own policy DDL (see
+docs/GQL_AUTH_DDL.md).
+
+```text
 -- Create an RLS policy
 CREATE POLICY employee_access ON employees
   FOR SELECT

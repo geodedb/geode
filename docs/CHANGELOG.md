@@ -2616,6 +2616,54 @@
 
 ### Fixed
 
+- **Every GQL example under docs/ parses, and none shows a feature Geode
+  does not have (SONNY-6613).** `zig build test-sonny6596-doc-examples-parse`
+  now reads every Markdown doc under `docs/` (it read one), and the examples
+  that did not parse are fixed: one-line statements that ran together end in
+  `;`, and syntax templates (`[...]`, `<...>`, signature listings such as
+  docs/TYPE_QUICK_REFERENCE.md's) are ```text blocks. Examples of features
+  Geode does not have are marked so in the prose and kept as ```text, or
+  rewritten to the supported form: GQL `BACKUP`/`RESTORE`, `ANALYZE INDEX`,
+  `REBUILD INDEX`, `SAVEPOINT`/`ROLLBACK TO`, `db.info()`/`db.stats()`,
+  `score()`, `point()`/`within()`/`bbox()`/`intersects()` (the spatial
+  functions are `st_*`), `CREATE MATERIALIZED VIEW`, `CREATE`/`ALTER NODE TYPE`
+  with FLE annotations, `PLAINTEXT()`/`CIPHERTEXT()`, a SQL RLS example,
+  `vector.search`, the ML design sketch, the VALUES-then-MATCH chaining spec,
+  `USE GRAPH $param`, `MATCH ... INSERT` (written as `MATCH ... CREATE`), and
+  the ISO path search prefixes `SHORTEST` / `ANY SHORTEST`, which
+  docs/GQL_COMPLIANCE.md claimed were parsed and executed (they are syntax
+  errors; use `shortestPath(...)`). `now()` is `current_timestamp()`,
+  `db.indexes()`/`db.constraints()` are procedures (`CALL`), `pageRank(n)` is
+  `CALL algo.pageRank.stream(...)`, `db.schema.nodeTypeProperties()` is
+  `db.propertyKeys()`, `SET SESSION GRAPH = ...` is `SESSION SET GRAPH ...`,
+  and aliases named with the reserved words `start` and `end` are renamed.
+
+- **The function catalogue lists `st_point`, `ipaddr` and `url_host`
+  (SONNY-6613).** They are evaluated but were missing from
+  `src/gql/language_metadata.zig`, which SHOW FUNCTIONS, the LSP and the MCP
+  server read (no completion, hover or signature help for them). `url_host`
+  takes a URL value (`url_host(url('https://example.com/a'))`; a string is
+  refused 22G03). The `nullIf` entry's example now binds the
+  variable it reads. Regression: `zig build test-sonny6613-function-catalogue`.
+
+- **A result keeps a part's entity tracker that frees differently
+  (SONNY-6613).** Adopting a chained or OPTIONAL MATCH part's tracker into
+  the result's dropped it when the two free their nodes differently (a
+  node-scan page's tracker frees them in full), leaking the tracker and its
+  nodes. `OwnedGraphEntities.adopt`, used by both adopters, links such a
+  tracker instead. Regression: `zig build test-sonny6613-entity-adopt`.
+
+- **A DISTINCT or grouping key that cannot be allocated is OutOfMemory
+  (SONNY-6613).** The keys are built in an allocating writer, which reports
+  its allocator's failure as `WriteFailed`; `RETURN DISTINCT`, `WITH
+  DISTINCT`, a WITH's grouping and its GROUP BY, and the group-by fast
+  paths passed that on, so the client got 58000 instead of 53200
+  (`distinct_set.appendGroupKeyPart` now maps it). On a persisted graph
+  the group-by fast paths also leaked their key strings when an allocation
+  after them failed; their results now own the strings they copied.
+  Regression: `zig build test-sonny6613-group-key-oom` (every allocation
+  failed in turn, every session kind).
+
 - **`MATCH ... WITH ... FOR x IN <list>` may write (SONNY-6613).** ISO/IEC
   39075:2024 14.8: a FOR extends the working table before it, and a
   data-modifying statement may follow it. `MATCH (z:L) WITH z FOR x IN z.l

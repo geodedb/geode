@@ -414,7 +414,7 @@ RETURN p.name, COUNT { MATCH (p)-[:CHILD*1..3]->(d:TreeNode) WHERE d.level = 2 }
 **Section**: 13.3
 
 **Query**:
-```gql
+```text
 MATCH (n:NumericTest) RETURN n.label,
   CASE WHEN n.value >= 0 THEN 'non-negative' ... END AS sign_category
 ORDER BY n.value;
@@ -669,9 +669,12 @@ LIMIT 2;
 **Query**:
 ```gql
 MATCH (n:TreeNode {id: 'root'})-[:CHILD*0..2]->(m:TreeNode)
-RETURN n.name AS start, m.name AS reached
+RETURN n.name AS origin, m.name AS reached
 ORDER BY m.level, m.name;
 ```
+
+(The query aliased `n.name` as `start`, a reserved word (ISO/IEC 39075
+21.3), which is now a syntax error.)
 
 **Expected**: Should include `Root|Root` (0-length path matches node to itself)
 
@@ -864,7 +867,7 @@ All tests executed successfully with zero errors. Key verified results:
 #### A17: Short-Circuit Evaluation for AND/OR - CRITICAL FIX
 
 **Issue**: Division by zero error in queries like:
-```gql
+```text
 WHERE n.value <> 0 AND 100 / n.value > 1
 ```
 
@@ -1938,8 +1941,8 @@ ORDER BY total_spent DESC;
 
 **Query**:
 ```gql
-MATCH (start:Location {name: 'HQ'})-[:CONNECTED_TO*1..3]->(end:Location)
-RETURN start.name AS origin, end.name AS destination;
+MATCH (hq:Location {name: 'HQ'})-[:CONNECTED_TO*1..3]->(dest:Location)
+RETURN hq.name AS origin, dest.name AS destination;
 ```
 
 **Output**:

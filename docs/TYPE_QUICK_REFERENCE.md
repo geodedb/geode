@@ -1,8 +1,14 @@
 # Geode Type System Quick Reference
 
+> The blocks below are signature listings, not statements: an argument such
+> as `geom1` stands for a value you supply, and an expression runs inside a
+> statement (`RETURN upper('a')`). This page lists the names; it does not
+> check that each one is implemented (see `docs/API_REFERENCE_GENERATED.md`
+> for the function catalogue).
+
 ## Type Constructor Examples
 
-```gql
+```text
 -- Numeric Types
 SmallInt(42)                           -- i16
 Int(1000000)                           -- i32
@@ -71,7 +77,7 @@ Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
 
 ### Numeric Operations
 
-```gql
+```text
 decimal_add(Decimal("10.50", 2), Decimal("5.25", 2))  -- 15.75
 decimal_mul(a, b)                                      -- Multiplication
 decimal_div(a, b)                                      -- Division (banker's rounding)
@@ -79,7 +85,7 @@ decimal_div(a, b)                                      -- Division (banker's rou
 
 ### String Functions
 
-```gql
+```text
 length_chars(text)                     -- Character count (Unicode)
 trim(text)                            -- Remove whitespace
 lower(text) / upper(text)             -- Case conversion
@@ -87,7 +93,7 @@ lower(text) / upper(text)             -- Case conversion
 
 ### Temporal Functions
 
-```gql
+```text
 now()                                  -- Current timestamp
 current_date / current_time           -- Current date/time
 date_add(date, interval)              -- Add interval
@@ -98,7 +104,7 @@ date_part("year", timestamp)         -- Extract component
 
 ### Network Predicates
 
-```gql
+```text
 ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))     -- true
 ip_overlaps(subnet1, subnet2)                              -- Check overlap
 ip_is_private(ip)                                          -- RFC private ranges
@@ -107,7 +113,7 @@ ip_family(ip)                                              -- Returns 4 or 6
 
 ### MAC Address Functions
 
-```gql
+```text
 mac_is_local(mac)                     -- Check local admin bit
 mac_is_multicast(mac)                 -- Check multicast bit
 oui(mac)                              -- Extract OUI (vendor ID)
@@ -115,14 +121,14 @@ oui(mac)                              -- Extract OUI (vendor ID)
 
 ### Hash Operations
 
-```gql
+```text
 hash_equals(hash1, hash2)             -- Constant-time comparison
 hash_alg(hash)                        -- Get algorithm name
 ```
 
 ### Currency/Language Functions
 
-```gql
+```text
 minor_units(Currency("USD"))         -- Returns 2 (cents)
 minor_units(Currency("JPY"))         -- Returns 0 (no subunit)
 lang_canonicalize("EN-us")           -- Returns "en-US"
@@ -131,7 +137,7 @@ lang_match(["fr-CA", "fr"], "fr-FR") -- Returns true
 
 ### Geographic Functions
 
-```gql
+```text
 distance_haversine(p1, p2)           -- Distance in meters
 latitude(point) / longitude(point)    -- Extract coordinates
 altitude(point) / alt_ref(point)      -- Extract altitude info
@@ -139,7 +145,7 @@ altitude(point) / alt_ref(point)      -- Extract altitude info
 
 ### Geometry Functions (OGC-style)
 
-```gql
+```text
 st_asText(geometry)                   -- Convert to WKT
 st_asGeoJSON(geometry)               -- Convert to GeoJSON
 st_contains(geom1, geom2)            -- Spatial containment
@@ -149,7 +155,7 @@ st_within(geom1, geom2)              -- Spatial within test
 
 ### JSON/JSONB Functions
 
-```gql
+```text
 jsonb_get(doc, "$.path.to.value")    -- Extract by path
 jsonb_exists(doc, "key")             -- Check key existence
 jsonb_typeof(value)                  -- Get JSON type
@@ -158,7 +164,7 @@ jsonb_set(doc, path, new_value)      -- Update value
 
 ### URL/Domain Functions
 
-```gql
+```text
 url_host(url)                        -- Extract host
 url_scheme(url)                      -- Extract scheme (http/https)
 url_path(url)                        -- Extract path
@@ -169,7 +175,7 @@ domain_labels(domain)                -- Split into labels
 
 ### UUID Functions
 
-```gql
+```text
 uuid_v4()                            -- Generate version 4 UUID
 uuid_v7()                            -- Generate version 7 UUID
 uuid_equal(uuid1, uuid2)             -- Bytewise comparison
@@ -177,7 +183,7 @@ uuid_equal(uuid1, uuid2)             -- Bytewise comparison
 
 ### Array Functions
 
-```gql
+```text
 array_length(arr)                    -- Get array length
 array_contains(arr, value)           -- Check membership
 array_get(arr, index)               -- Get element by index
@@ -185,7 +191,7 @@ array_get(arr, index)               -- Get element by index
 
 ### Bit String Functions
 
-```gql
+```text
 bit_and(bits1, bits2)               -- Bitwise AND
 bit_or(bits1, bits2)                -- Bitwise OR
 bit_xor(bits1, bits2)               -- Bitwise XOR
@@ -196,7 +202,7 @@ bit_set(bits, position, value)     -- Set bit value
 
 ### Range Functions
 
-```gql
+```text
 range_contains(range, value)        -- Check if value in range
 range_overlaps(range1, range2)     -- Check range overlap
 lower(range)                        -- Get lower bound
@@ -206,7 +212,7 @@ bounds(range)                       -- Get bounds type ("[)", "[]", etc.)
 
 ### Vector Operations (ML/AI)
 
-```gql
+```text
 vector_dot(vec1, vec2)              -- Dot product
 vector_l2(vec1, vec2)               -- Euclidean distance
 vector_cosine(vec1, vec2)           -- Cosine similarity (NULL if zero-norm)
@@ -217,7 +223,7 @@ vector_knn(property, query_vec, 5, "cosine")  -- K-nearest neighbors
 
 ### Automatic Index Selection
 
-```gql
+```text
 -- Patricia trie automatically used for:
 WHERE ip_contains(subnet_column, '192.168.1.5'::IpAddr)
 
@@ -240,7 +246,7 @@ WHERE domain_suffix_match(domain_column, 'example.com')
 
 ### Implicit Conversions
 
-```gql
+```text
 SmallInt → Int → BigInt              -- Numeric widening
 Real → Double                         -- Float widening
 Int → Decimal (scale 0)              -- Int to decimal
@@ -249,7 +255,7 @@ Char → Varchar → Text                -- String widening
 
 ### Explicit Casts
 
-```gql
+```text
 CAST(value AS TypeName)              -- Standard SQL cast
 value::TypeName                      -- PostgreSQL-style cast
 ```

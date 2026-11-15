@@ -17,7 +17,7 @@ The EXPLAIN command displays the execution plan for a query without actually run
 
 ### Syntax
 
-```gql
+```text
 EXPLAIN <statement>
 ```
 
@@ -171,7 +171,7 @@ The PROFILE command executes a query and returns execution statistics. Unlike EX
 
 ### Syntax
 
-```gql
+```text
 PROFILE <statement>
 ```
 

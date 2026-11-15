@@ -13,11 +13,11 @@ Returns the type name of any value as a string.
 **Examples:**
 
 ```gql
-RETURN type(123)         -- Returns "INTEGER"
-RETURN type('hello')     -- Returns "STRING"
-RETURN type(123.45)      -- Returns "DECIMAL"
-RETURN type(true)        -- Returns "BOOLEAN"
-RETURN type(null)        -- Returns "NULL"
+RETURN type(123);        -- Returns "INTEGER"
+RETURN type('hello');    -- Returns "STRING"
+RETURN type(123.45);     -- Returns "DECIMAL"
+RETURN type(true);       -- Returns "BOOLEAN"
+RETURN type(null);       -- Returns "NULL"
 ```
 
 ### `toString(value)`
@@ -27,9 +27,9 @@ Converts any value to its string representation.
 **Examples:**
 
 ```gql
-RETURN toString(123)     -- Returns "123"
-RETURN toString(true)    -- Returns "true"
-RETURN toString(null)    -- Returns "null"
+RETURN toString(123);    -- Returns "123"
+RETURN toString(true);   -- Returns "true"
+RETURN toString(null);   -- Returns "null"
 ```
 
 ### `toInteger(value)`
@@ -39,9 +39,9 @@ Converts strings and numeric values to integers with overflow protection.
 **Examples:**
 
 ```gql
-RETURN toInteger('456')  -- Returns 456
-RETURN toInteger(123.7)  -- Returns 123 (truncated)
-RETURN toInteger('abc')  -- Returns null (invalid format)
+RETURN toInteger('456'); -- Returns 456
+RETURN toInteger(123.7); -- Returns 123 (truncated)
+RETURN toInteger('abc'); -- Returns null (invalid format)
 ```
 
 ### `toReal(value)`
@@ -51,9 +51,9 @@ Converts values to floating-point numbers (returned as DECIMAL type).
 **Examples:**
 
 ```gql
-RETURN toReal(123)       -- Returns 123.000000
-RETURN toReal('123.45')  -- Returns 123.450000
-RETURN toReal('abc')     -- Returns null (invalid format)
+RETURN toReal(123);      -- Returns 123.000000
+RETURN toReal('123.45'); -- Returns 123.450000
+RETURN toReal('abc');    -- Returns null (invalid format)
 ```
 
 ## Implementation Details

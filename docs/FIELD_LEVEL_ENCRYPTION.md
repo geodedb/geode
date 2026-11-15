@@ -200,7 +200,12 @@ was meant to become a BI token lookup.
 
 ### DDL Annotations
 
-```gql
+Not supported: Geode has no `CREATE NODE TYPE` statement and no field
+annotations (both are syntax errors). Declare an encrypted field with
+`CALL geode.fle.configureField` (below). The block sketches the intended
+schema form.
+
+```text
 CREATE NODE TYPE Person (
   id UUID PRIMARY KEY,
   name STRING,
@@ -232,7 +237,9 @@ CREATE NODE TYPE Person (
 
 ### Query Helpers
 
-```gql
+Not supported: there is no `PLAINTEXT()` or `CIPHERTEXT()` function.
+
+```text
 -- Force plaintext projection (requires privilege)
 RETURN PLAINTEXT(p.ssn)
 
@@ -870,9 +877,10 @@ Run: `python3 extended_test_runner.py`
 
 ### Process
 
-1. **ALTER schema** to add `@encrypted` annotation:
+1. **ALTER schema** to add `@encrypted` annotation (not supported as GQL:
+   there is no `ALTER NODE TYPE`; use `CALL geode.fle.configureField`):
 
-   ```gql
+   ```text
    ALTER NODE TYPE Person ALTER PROPERTY ssn
      SET @encrypted(alg:"AES-256-GCM") @classify(tags:["PII"]);
    ```
