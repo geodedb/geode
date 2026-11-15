@@ -80,7 +80,6 @@ REQUIRED_FILE_PATTERNS = {
     "src/types/url.zig": ['@import("advanced_types_lib")'],
     "src/keys/manager.zig": ['@import("fle_lib")'],
     "src/distributed/raft_consensus.zig": ['@import("raft")'],
-    "src/distributed/raft_persistent.zig": ['@import("raft")'],
 }
 
 

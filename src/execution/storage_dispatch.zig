@@ -60,6 +60,7 @@ const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 const fle_integration = @import("../fle_integration.zig");
 const cluster_mod = @import("../distributed/cluster.zig");
+const schema = @import("schema");
 
 // ---------------------------------------------------------------------------
 // Cluster fail-closed gating (mutating CDC/FLE procedures only).
@@ -127,18 +128,95 @@ const cdc_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "cdc.cleanup_expired_events", {} },
 });
 
-// CDC globals
+// CDC globals. The engine is process-global, so it lives in the process
+// allocator, whichever request (or GEODE_CDC_ENABLE at startup) started it.
 pub var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
 pub var global_cdc_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
-/// Public accessor for the global CDC engine (used by gRPC transport).
-pub fn getGlobalCdcEngine() ?*cdc_mod.CDCEngine {
-    return global_cdc_engine;
+fn cdcEngineAllocator() std.mem.Allocator {
+    return graph_store.global_allocator();
 }
 
-/// Public accessor for the CDC mutex.
-pub fn getCdcMutex() *std.Io.Mutex {
-    return &global_cdc_mutex;
+/// Start the process's CDC engine unless it runs (`CALL cdc.enable()` and
+/// GEODE_CDC_ENABLE at startup).
+pub fn enableCdc() !void {
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (global_cdc_engine != null) return;
+    global_cdc_engine = cdc_mod.startCDC(cdcEngineAllocator(), .{
+        .enabled = true,
+        .batch_size = 100,
+        .flush_interval_ms = 1000,
+    }) catch return error.CdcStartupFailed;
+}
+
+// CANARY: REQ=REQ-SONNY-6561-CDC-WIRE-PARITY; FEATURE="CDCControlProtocol"; ASPECT=SharedAnswers; STATUS=TESTED; TEST=tests/test_sonny6561_cdc_transport_parity.zig; OWNER=cdc; UPDATED=2026-11-14
+/// SONNY-6561: why a CDC_DIAGNOSTICS or CDC_CONTROL frame is refused, the
+/// same on QUIC (an error frame) and gRPC (a grpc-status trailer whose
+/// message starts with the SQLSTATE).
+pub const CdcRefusal = enum {
+    unauthenticated,
+    not_admin,
+
+    pub fn sqlstate(self: CdcRefusal) []const u8 {
+        return switch (self) {
+            .unauthenticated => "28000",
+            .not_admin => "42501",
+        };
+    }
+
+    pub fn message(self: CdcRefusal) []const u8 {
+        return switch (self) {
+            .unauthenticated => "Authentication required",
+            .not_admin => "Permission denied: Admin role required for CDC diagnostics and control",
+        };
+    }
+};
+
+/// SONNY-6561: the CDC_DIAGNOSTICS answer for an authorized caller, the one
+/// both transports send (the QUIC handler read a `ServerState` field nothing
+/// assigned, so it never saw the running engine).
+pub fn cdcDiagnosticsAnswer(allocator: std.mem.Allocator) !schema.CdcDiagnosticsResponse {
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (global_cdc_engine) |engine| return engine.exportDiagnostics(allocator);
+    return .{
+        .config = .{ .enabled = false },
+        .engine = .{ .is_running = false },
+        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
+        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
+        .version = try allocator.dupe(u8, @import("build_options").version),
+        .timestamp_ms = compat_milliTimestamp(),
+    };
+}
+
+/// SONNY-6561: the CDC_CONTROL answer for an authorized caller, the one both
+/// transports send. RESET_GUARDRAILS is the one action. In cluster mode the
+/// frame is refused as `CALL cdc.reset_guardrails()` is (the engine is
+/// node-local, `gateUnreplicatedWrite`).
+pub fn cdcControlAnswer(allocator: std.mem.Allocator, action: []const u8) !schema.CdcControlResponse {
+    cluster_mod.gateUnreplicatedWrite() catch |err| return .{
+        .success = false,
+        .status = try allocator.dupe(u8, switch (err) {
+            error.ClusterNotLeader => "CLUSTER_NOT_LEADER",
+            error.ClusterWriteNotReplicable => "CLUSTER_WRITE_NOT_REPLICABLE",
+        }),
+        .guardrail_epoch = 0,
+    };
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const engine = global_cdc_engine orelse return .{
+        .success = false,
+        .status = try allocator.dupe(u8, "NO_ENGINE"),
+        .guardrail_epoch = 0,
+    };
+    const reset = std.ascii.eqlIgnoreCase(action, "RESET_GUARDRAILS");
+    if (reset) engine.resetGuardrailState();
+    return .{
+        .success = reset,
+        .status = try allocator.dupe(u8, if (reset) "OK" else "UNSUPPORTED"),
+        .guardrail_epoch = engine.guardrail_epoch,
+    };
 }
 
 /// Execute a TDE procedure. Returns null if not recognized.
@@ -789,28 +867,12 @@ pub fn executeCdc(
 
 fn handleCdcEnable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=TESTED; TEST=geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    var status_str: []const u8 = "enabled";
-
-    if (global_cdc_engine == null) {
-        const config = cdc_mod.CDCConfig{
-            .enabled = true,
-            .batch_size = 100,
-            .flush_interval_ms = 1000,
-        };
-        global_cdc_engine = cdc_mod.startCDC(allocator, config) catch {
-            status_str = "error";
-            global_cdc_engine = null;
-            return error.CdcStartupFailed;
-        };
-    }
+    try enableCdc();
 
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = status_str };
+    row[0] = Value{ .Str = "enabled" };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -826,8 +888,8 @@ fn handleCdcDisable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror
 
     if (global_cdc_engine) |engine| {
         final_count = @intCast(engine.total_events);
-        cdc_mod.stopCDC(engine);
-        allocator.destroy(engine);
+        engine.deinit();
+        cdcEngineAllocator().destroy(engine);
         global_cdc_engine = null;
     }
 

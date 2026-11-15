@@ -46,7 +46,6 @@ test {
     _ = @import("e2e_protocol_union_profile.zig");
     _ = @import("e2e_protocol_union_profile_alloc.zig");
     _ = @import("e2e_quic_basic.zig");
-    _ = @import("e2e_raft_persist_snapshot_membership.zig");
     _ = @import("eval_predicate_expansion.zig");
     _ = @import("gql_compliance_regression_test.zig");
     _ = @import("gql_keyword_regression_test.zig");

@@ -72,7 +72,6 @@ const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
 
-const raft_log = @import("raft_log_storage.zig");
 const cluster_auth = @import("cluster_auth.zig");
 
 const logging = @import("logging");
@@ -2082,139 +2081,6 @@ fn connectWithTLS(qc: *quic.QuicClient, host: []const u8, port: u16) !void {
     try qc.waitForHandshake(1);
 }
 
-// ---- Persistent storage (file-backed term & votedFor) ----
-// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Consensus Persistence"; ASPECT=TermVotedFor; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-05
-
-pub const PersistentStorage = struct {
-    allocator: Allocator,
-    data_dir: []const u8,
-    log_storage: ?raft_log.LogStorage,
-
-    pub fn init(allocator: Allocator, data_dir: []const u8) !PersistentStorage {
-        // Build path: {data_dir}/raft_log.bin
-        const log_path = try std.fmt.allocPrint(allocator, "{s}/raft_log.bin", .{data_dir});
-        const ls = raft_log.LogStorage.init(allocator, log_path) catch |err| {
-            allocator.free(log_path);
-            return err;
-        };
-        return PersistentStorage{
-            .allocator = allocator,
-            .data_dir = data_dir,
-            .log_storage = ls,
-        };
-    }
-
-    pub fn close(self: *PersistentStorage) void {
-        if (self.log_storage) |*ls| {
-            // Free the path we allocated in init()
-            self.allocator.free(ls.file_path);
-            ls.deinit();
-            self.log_storage = null;
-        }
-    }
-
-    /// Read current_term from {data_dir}/current_term. Returns null if file does not exist.
-    pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
-        return readU64File(self.data_dir, "current_term");
-    }
-
-    /// Atomically write current_term to {data_dir}/current_term.
-    pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
-        try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        var buf: [32]u8 = undefined;
-        const str = std.fmt.bufPrint(&buf, "{d}", .{term}) catch unreachable;
-        try atomicWriteFile(dir, "current_term", str);
-    }
-
-    /// Read voted_for from {data_dir}/voted_for. Returns null if file does not exist.
-    pub fn getVotedFor(self: *PersistentStorage) !?u64 {
-        return readU64File(self.data_dir, "voted_for");
-    }
-
-    /// Atomically write voted_for to {data_dir}/voted_for, or delete the file if null.
-    pub fn saveVotedFor(self: *PersistentStorage, voter: ?u64) !void {
-        try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        if (voter) |v| {
-            var buf: [32]u8 = undefined;
-            const str = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
-            try atomicWriteFile(dir, "voted_for", str);
-        } else {
-            dir.deleteFile(std.Io.Threaded.global_single_threaded.io(), "voted_for") catch |err| {
-                if (err != error.FileNotFound) return err;
-            };
-        }
-    }
-
-    /// Read all persisted log entries, or null if the log is empty.
-    pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) !?[]LogEntry {
-        if (self.log_storage) |*ls| {
-            const entries = try ls.readAllEntries(allocator);
-            if (entries.len == 0) {
-                allocator.free(entries);
-                return null;
-            }
-            return entries;
-        }
-        return null;
-    }
-
-    /// Append a single entry to the persistent log.
-    pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
-        if (self.log_storage) |*ls| try ls.appendEntry(entry);
-    }
-
-    // ---- Internal helpers ----
-
-    fn ensureDir(path: []const u8) !void {
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-    }
-
-    fn readU64File(dir_path: []const u8, file_name: []const u8) !?u64 {
-        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), dir_path, .{}) catch |err| {
-            if (err == error.FileNotFound) return null;
-            return err;
-        };
-        defer dir.close(std.Io.Threaded.global_single_threaded.io());
-        const f = dir.openFile(std.Io.Threaded.global_single_threaded.io(), file_name, .{}) catch |err| {
-            if (err == error.FileNotFound) return null;
-            return err;
-        };
-        defer f.close(std.Io.Threaded.global_single_threaded.io());
-        var buf: [32]u8 = undefined;
-        const n = try f.readPositionalAll(std.Io.Threaded.global_single_threaded.io(), &buf, 0);
-        if (n == 0) return null;
-        const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
-        return std.fmt.parseInt(u64, trimmed, 10) catch null;
-    }
-
-    // CANARY: REQ=REQ-SEC-RAFT-ATOMIC-001; FEATURE="Atomic Raft State Persistence"; ASPECT=TOCTOU; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
-    /// Write data to file_name atomically via write-to-temp-then-rename.
-    /// SEC-D011: Crash-safe persistence -- writes to a .tmp file, fsyncs, then renames
-    /// so that a crash mid-write never corrupts the final file.
-    fn atomicWriteFile(dir: std.Io.Dir, name: []const u8, data: []const u8) !void {
-        const io_fs = std.Io.Threaded.global_single_threaded.io();
-        var tmp_buf: [256]u8 = undefined;
-        const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
-
-        const f = try dir.createFile(io_fs, tmp_name, .{});
-        errdefer {
-            f.close(io_fs);
-            dir.deleteFile(io_fs, tmp_name) catch {};
-        }
-        try f.writeStreamingAll(io_fs, data);
-        try f.sync(io_fs);
-        f.close(io_fs);
-
-        try dir.rename(tmp_name, dir, name, io_fs);
-    }
-};
-
 // ---- Message types ----
 
 pub const Message = union(enum) {
@@ -3073,6 +2939,16 @@ pub const RaftNode = struct {
     txn_coordinator: ?*TxnCoordinator,
     pending_responses: std.StringHashMap(ClientResponse),
 
+    // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=HeldUntilPersisted; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6563: what the inner library sent through the bridge during
+    /// `step` / `tick` / `propose`, held (under `inner_mutex`) until
+    /// `drainReady`'s `advance()` has made the hard state and entries they
+    /// announce durable. The library sends a RequestVote grant from inside
+    /// `step()`, before `advance()` fsyncs the vote; queued at once, the
+    /// outbox thread could put it on the wire first, and a crash then lost
+    /// the vote (the node could grant the term again after restart).
+    held_outbound: std.ArrayList(OutboundEntry) = .empty,
+
     pub fn init(
         allocator: Allocator,
         id: u64,
@@ -3241,6 +3117,47 @@ pub const RaftNode = struct {
             },
         }
         self.pending_responses.deinit();
+        self.dropHeldOutbound();
+        self.held_outbound.deinit(self.allocator);
+    }
+
+    /// SONNY-6563: hand what `step` / `tick` / `propose` sent to the network,
+    /// now that `advance()` has persisted the state it announces. The
+    /// network is the peer's outbox (its thread sends without
+    /// `inner_mutex`), or a test's `send_override`, called in place.
+    fn releaseHeldOutbound(self: *RaftNode) void {
+        defer self.held_outbound.clearRetainingCapacity();
+        const transport = self.transport orelse {
+            for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
+            return;
+        };
+        for (self.held_outbound.items) |held| {
+            if (transport.send_override != null) {
+                transport.send(held.peer, held.from, held.term, held.msg) catch |err| {
+                    log.warn("raft bridge: synchronous send failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("to", held.peer.id),
+                    });
+                };
+                freeOutboundMessage(self.allocator, held.msg);
+                continue;
+            }
+            transport.enqueueOutbound(held.peer, held.from, held.term, held.msg) catch |err| {
+                log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("to", held.peer.id),
+                });
+                freeOutboundMessage(self.allocator, held.msg);
+            };
+        }
+    }
+
+    /// SONNY-6563: the state these messages announce is not durable (ready()
+    /// or advance() failed): they are not sent. Raft resends what matters
+    /// (a candidate asks again, a leader re-replicates).
+    fn dropHeldOutbound(self: *RaftNode) void {
+        for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
+        self.held_outbound.clearRetainingCapacity();
     }
 
     /// Wire the wrapper's geode-level `Transport` (typically QUIC+TLS in
@@ -3294,10 +3211,6 @@ pub const RaftNode = struct {
         defer self.inner_mutex.unlock(io);
         try self.inner.step(from, msg);
         self.drainReady();
-    }
-
-    pub fn setStorage(_: *RaftNode, _: *PersistentStorage) !void {
-        // External library manages its own storage
     }
 
     pub fn tick(self: *RaftNode) !void {
@@ -3536,6 +3449,7 @@ pub const RaftNode = struct {
         // error in the log so we don't silently drop committed entries.
         const rd = self.inner.ready() catch |err| {
             log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
+            self.dropHeldOutbound();
             return;
         };
 
@@ -3616,7 +3530,13 @@ pub const RaftNode = struct {
         // skipped the call.
         self.inner.advance() catch |err| {
             log.warn("raft advance error", &.{Attr.string("error", @errorName(err))});
+            // SONNY-6563: nothing that announces unpersisted state is sent.
+            self.dropHeldOutbound();
+            return;
         };
+        // SONNY-6563: the hard state and entries are durable; what the inner
+        // library sent during this step / tick / propose may now leave.
+        self.releaseHeldOutbound();
     }
 
     /// Look up a peer by id.  Returns null if the id isn't in `self.peers`.
@@ -3695,10 +3615,10 @@ const RaftLibTransportBridge = struct {
         // do the cheap part inline (raft_lib -> geode conversion,
         // peer lookup) and hand the actual `send` off to the
         // Transport's dispatch thread.
-        const transport = node.transport orelse {
+        if (node.transport == null) {
             log.debug("raft bridge: no transport set", &.{Attr.uint("to", to)});
             return;
-        };
+        }
         const peer = node.findPeerById(to) orelse {
             log.debug("raft bridge: unknown destination peer", &.{Attr.uint("to", to)});
             return;
@@ -3710,23 +3630,12 @@ const RaftLibTransportBridge = struct {
             });
             return;
         };
-        // Synchronous dispatch path is preserved for tests that wire a
-        // `send_override` — those callers want immediate capture and
-        // don't care about latency.  When no override is set, route
-        // through the outbox so the QUIC I/O happens off the raft
-        // critical path.
-        if (transport.send_override != null) {
-            transport.send(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
-                log.warn("raft bridge: synchronous send failed", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("to", to),
-                });
-            };
-            freeOutboundMessage(node.allocator, geode_msg);
-            return;
-        }
-        transport.enqueueOutbound(peer, node.id, node.inner.current_term, geode_msg) catch |err| {
-            log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
+        // SONNY-6563: held until `drainReady` has persisted the state this
+        // message announces (a vote grant is sent from inside `step()`,
+        // before `advance()` fsyncs the vote). `releaseHeldOutbound` then
+        // queues it on the outbox (or calls a test's `send_override`).
+        node.held_outbound.append(node.allocator, .{ .peer = peer, .from = node.id, .term = node.inner.current_term, .msg = geode_msg }) catch |err| {
+            log.warn("raft bridge: cannot hold outbound message; dropping it", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("to", to),
             });
@@ -4155,55 +4064,6 @@ test "encodeRaftFrame includes auth_token and decodeRaftFrame exposes it" {
     try std.testing.expectEqual(@as(u64, 1), decoded.term);
     // Without GEODE_CLUSTER_TOKEN set, auth_token should be empty
     try std.testing.expectEqualStrings("", decoded.auth_token);
-}
-
-test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
-    // SEC-D011: Verify atomic write pattern (write-to-temp, fsync, rename) persists correctly.
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try std.fmt.allocPrint(
-        allocator,
-        ".zig-cache/tmp/{s}",
-        .{&tmp.sub_path},
-    );
-    defer allocator.free(dir_path);
-
-    var storage = PersistentStorage.init(allocator, dir_path) catch unreachable;
-    defer storage.close();
-
-    // saveCurrentTerm round-trip
-    try storage.saveCurrentTerm(42);
-    const term = try storage.getCurrentTerm();
-    try std.testing.expectEqual(@as(?u64, 42), term);
-
-    // Overwrite with different value
-    try storage.saveCurrentTerm(99);
-    const term2 = try storage.getCurrentTerm();
-    try std.testing.expectEqual(@as(?u64, 99), term2);
-
-    // saveVotedFor round-trip
-    try storage.saveVotedFor(7);
-    const voted = try storage.getVotedFor();
-    try std.testing.expectEqual(@as(?u64, 7), voted);
-
-    // saveVotedFor(null) deletes the file
-    try storage.saveVotedFor(null);
-    const voted_null = try storage.getVotedFor();
-    try std.testing.expectEqual(@as(?u64, null), voted_null);
-
-    // Verify .tmp file does not persist (atomic rename should have cleaned up)
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
-    defer dir.close(io);
-    const tmp_exists = dir.openFile(io, "current_term.tmp", .{});
-    if (tmp_exists) |f| {
-        f.close(io);
-        return error.TmpFileNotCleaned;
-    } else |err| {
-        try std.testing.expectEqual(error.FileNotFound, err);
-    }
 }
 
 // k8s root cause #5 (2026-06-08): transient stream-credit backpressure must NOT

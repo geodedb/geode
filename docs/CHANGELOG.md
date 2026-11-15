@@ -2467,6 +2467,49 @@
 
 ### Fixed
 
+- **A cluster node's vote is on disk before its grant can leave the node
+  (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
+  its transport from inside `step()` and writes the hard state (term,
+  voted_for; fsync) only in `advance()`, which `RaftNode.drainReady` calls
+  after `step()` returns. Geode's bridge queued the grant on the peer's
+  outbox at once and the outbox thread sends without the raft mutex, so a
+  node could tell a candidate "granted", crash before the fsync, restart
+  with no vote for that term and grant it to another candidate: two
+  leaders in one term. The bridge now holds everything the library sends
+  during `step` / `tick` / `propose` until `advance()` has succeeded, then
+  queues it; if `ready()` or `advance()` fails the held messages are
+  dropped (raft resends). Leader AppendEntries now leave after the
+  leader's own append is durable (one fsync later than before). The vote
+  already survived a clean restart (the library stores term and vote
+  together); `test-raft-hardstate-durability` now asserts it and that the
+  restarted node refuses a second candidate in the same term. Regression:
+  `zig build test-sonny6563-vote-persist-before-send` (the grant reached
+  the network while the disk held term 0, voted_for null).
+
+- **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
+  (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
+  nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC
+  answered `NO_ENGINE` to every CDC_CONTROL action and reported CDC
+  disabled, while gRPC read the running engine. Both transports now answer
+  through one implementation (`storage_dispatch.cdcDiagnosticsAnswer` /
+  `cdcControlAnswer`) and the field is deleted. **Changed refusals (both
+  frames, both transports):** an unauthenticated caller is refused `28000`
+  and a caller that is not an administrator `42501` (QUIC: an error frame;
+  gRPC: grpc-status 16 / 7 with a grpc-message starting with the SQLSTATE).
+  QUIC refused a non-admin's diagnostics `42000` (the 18 other privilege
+  refusals answer `42501`) and answered its CDC_CONTROL `PERMISSION_DENIED`;
+  gRPC answered a non-admin's or an unauthenticated caller's diagnostics
+  with an empty "CDC disabled" payload and its CDC_CONTROL
+  `AUTH_REQUIRED`. In cluster mode CDC_CONTROL is refused
+  (`CLUSTER_NOT_LEADER` / `CLUSTER_WRITE_NOT_REPLICABLE`) as `CALL
+  cdc.reset_guardrails()` is. `GEODE_CDC_ENABLE=1`, which
+  docs/QUICK_REFERENCE.md documents and nothing read, starts the engine at
+  startup through the path `CALL cdc.enable()` takes; the engine lives in
+  the process allocator and `CALL cdc.disable()` now frees it
+  (`CDCEngine.deinit`). Regression: `zig build
+  test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
+  40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
+
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
@@ -6817,6 +6860,29 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **Distributed modules the server never reached (SONNY-6563, SONNY-6567
+  item 7).** Each had no reference chain from the server root (`lib.zig`
+  exported some as unreferenced `distributed.*` decls; the rest were
+  imported only by their own test roots or by each other) and no symbol in
+  the Debug `geode` binary: `src/distributed/raft_persistent.zig` (it
+  persisted the term and not the vote, so a reopened node forgot its vote;
+  the cluster uses the raft library's FileStorage, which keeps both),
+  `raft_log_storage.zig` with `raft_consensus.PersistentStorage` and the
+  no-op `RaftNode.setStorage`, `twophase.zig` (a 2PC transport) and
+  `value_convert.zig`, `query_planner.zig` (`DistributedQueryPlanner`,
+  `FederationManager`) and the never-assigned
+  `ServerState.distributed_query_planner`, `network_transport.zig`,
+  `enhanced_query_transport.zig`, `node_registry.zig` and its test,
+  `sharding.zig`, `consistent_hash.zig`, `federation_flag.zig`; with their
+  tests, benchmarks and steps (`test-dist-query-planner`, `test-sharding`,
+  `test-gap0889`, `test-sonny6487-federation-flag-inline`, the red
+  `test-sonny6548-raft-persistent-voted-for`; `test-gap0870` keeps its Raft
+  command half, `test-sonny6453-cluster-peer-tls` its raft / coordinator
+  dial). `src/distributed/README.md` lists what remains, all of it reached
+  by the server. docs/TDE_FILE_LEVEL_ENCRYPTION.md named
+  `raft_persistent.zig` as the encrypted Raft state: the Raft hard state,
+  log and snapshots are written in plaintext by the library's FileStorage.
 
 - **Product code no build reached, which no longer compiled (SONNY-6548 item
   3).** Zig analyzes lazily, so these compiled only because nothing in the

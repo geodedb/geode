@@ -16,9 +16,10 @@
 //     tests of src/distributed/raft_consensus.zig, cluster.zig and
 //     cluster_auth.zig are collected only by the unfiltered src/-rooted
 //     roots of test-graph-store and test-gap0866, which did not compile
-//     from 300eb9a94 until 12879e5d1; twophase.zig's 23 are collected by no
-//     root at all. `zig build test-sonny6459-distributed-inline` runs the
-//     four files' inline tests through a dedicated src/-rooted module.
+//     from 300eb9a94 until 12879e5d1. `zig build
+//     test-sonny6459-distributed-inline` runs their inline tests through a
+//     dedicated src/-rooted module (twophase.zig's 23 ran there too until
+//     the file, which the server never reached, was removed: SONNY-6563).
 //   * Item 8: nothing in production fills `cluster_state.shards`, so shard
 //     forwarding, replica promotion and the replication-factor repair are
 //     reachable only from tests; the docs that presented node join/leave
@@ -74,7 +75,7 @@ test "SONNY-6459 (7) the distributed modules' inline tests have a step" {
     try testing.expect(std.mem.indexOf(u8, build, "b.step(\"test-sonny6459-distributed-inline\"") != null);
     const root = try readRepoFile(allocator, "src/distributed_inline_test_root.zig");
     defer allocator.free(root);
-    for ([_][]const u8{ "distributed/raft_consensus.zig", "distributed/cluster.zig", "distributed/twophase.zig", "distributed/cluster_auth.zig" }) |file| {
+    for ([_][]const u8{ "distributed/raft_consensus.zig", "distributed/cluster.zig", "distributed/cluster_auth.zig" }) |file| {
         if (std.mem.indexOf(u8, root, file) == null) {
             std.debug.print("SONNY-6459 (7): the inline-test root does not import {s}\n", .{file});
             return error.InlineTestsNotRooted;

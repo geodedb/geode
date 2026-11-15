@@ -35,8 +35,8 @@ and `mod.zig`) was never compiled into any executable or test: no file in
 When `GEODE_CLUSTER_TOKEN` is set, `geode serve` runs the cluster path in
 `src/distributed/`:
 
-- Raft consensus with durable hard state, log and snapshots
-  (`raft_consensus.zig`, `raft_log_storage.zig`, `raft_persistent.zig`,
+- Raft consensus with durable hard state (term and vote), log and snapshots
+  (`raft_consensus.zig` over the raft library's FileStorage,
   `raft_snapshot_manager.zig`, `raft_apply.zig`).
 - `ClusterCoordinator` (`cluster.zig`): node membership, leader tracking,
   health checks (`cluster_health.zig`), cluster-token authentication
@@ -49,5 +49,11 @@ When `GEODE_CLUSTER_TOKEN` is set, `geode serve` runs the cluster path in
   `CLAUDE.md` and `tests/test_cluster_replicable_mutations.zig`
   (`zig build test-cluster-replicable-mutations`).
 
-`src/distributed/README.md` lists every remaining file and whether a build
-artifact compiles it.
+`src/distributed/README.md` lists every remaining file; each is reached from
+the server binary. The partition-aware planner (`query_planner.zig`), the
+sharding and consistent-hash ring (`sharding.zig`, `consistent_hash.zig`),
+the inter-node transports (`network_transport.zig`,
+`enhanced_query_transport.zig`, `node_registry.zig`), the federation
+mismatch flag (`federation_flag.zig`) and the 2PC transport (`twophase.zig`)
+were compiled only by their own tests and were removed on 2026-11-14
+(SONNY-6563).

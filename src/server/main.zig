@@ -2038,6 +2038,15 @@ pub fn main() !void {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6561-CDC-ENABLE-ENV; FEATURE="CDCProcedures"; ASPECT=StartupEnable; STATUS=TESTED; TEST=tests/test_sonny6561_cdc_transport_parity.zig; OWNER=cdc; UPDATED=2026-11-14
+    // SONNY-6561: GEODE_CDC_ENABLE=1 (docs/QUICK_REFERENCE.md) starts the CDC
+    // engine as `CALL cdc.enable()` does; nothing read it. A server told to
+    // run CDC that cannot start it does not start.
+    if (envBool(gpa, "GEODE_CDC_ENABLE", false)) {
+        try geode.storage_dispatch.enableCdc();
+        log.info("CDC engine started via GEODE_CDC_ENABLE", &.{});
+    }
+
     // CANARY: REQ=REQ-OTEL-METRICS-002; FEATURE="OTel Instrumentation"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     //
     // Initialise the OTel MeterProvider BEFORE the legacy Prometheus

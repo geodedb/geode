@@ -89,12 +89,9 @@ REQ-0009,Performance Budget Enforcement,CI,TESTED,.gitlab-ci.yml,test-performanc
 REQ-0009,Performance Targets,Benchmark,BENCHED,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified_Run,ops-team,2026-01-15
 REQ-2PC-001,2PC,PreparePhase,IMPL,tests/test_gap_0193_final_batch.zig,,,distributed,2026-11-14
 REQ-2PC-002,2PC,CommitPhase,IMPL,tests/test_gap_0193_final_batch.zig,,,distributed,2026-11-14
-REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-2PC-TLS-001,2PC TLS,Security,TESTED,src/distributed/twophase.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
 REQ-2PC-TLS-001,2PC,TLSSecurity,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
-REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
 REQ-2PC-TLS-002,2PC,TLSOneShot,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
-REQ-2PC-TLS-003,2PC TLS,ClusterCa,TESTED,tests/test_sonny6453_cluster_peer_tls.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
+REQ-2PC-TLS-003,Cluster peer TLS,ClusterCa,TESTED,tests/test_sonny6453_cluster_peer_tls.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-14
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerInit,IMPL,src/server/server_init.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerIntegration,IMPL,src/server/server_state.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-002,ABAC Enforcement,SecurityManager,IMPL,src/server/server_state.zig,,,security,2026-11-12
@@ -611,16 +608,6 @@ REQ-DELETE-COLD-STORE-EDGES-001,RelationshipDelete,ColdStoreResolution,TESTED,te
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,MatchSetResolution,TESTED,src/execution/crud_operations.zig,tests/test_eng3913_where_delete.zig,,crud_operations,2026-08-25
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,Regression,TESTED,tests/test_eng3913_where_delete.zig,tests/test_eng3913_where_delete.zig:1,,crud_operations,2026-08-25
 REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,src/execution/crud_operations.zig,tests/test_eng3913_where_delete.zig,,crud_operations,2026-08-25
-REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
-REQ-DIST-2PC-UNDO-001,2PC Undo Pre-Image Storage,AtomicRollback,TESTED,src/distributed/twophase.zig,,,distributed,2026-04-06
-REQ-DIST-2PC-UNDO-002,2PC Undo Pre-Image Capture,NodeCapture,TESTED,src/distributed/twophase.zig,,,distributed,2026-04-06
-REQ-DIST-2PC-UNDO-003,2PC Undo Pre-Image Capture,EdgeCapture,TESTED,src/distributed/twophase.zig,,,distributed,2026-04-06
-REQ-DIST-2PC-UNDO-004,2PC Undo Apply,AtomicRollback,TESTED,src/distributed/twophase.zig,,,distributed,2026-04-06
-REQ-DIST-2PC-UNDO-005,2PC Undo Pre-Image Tests,TestCoverage,TESTED,src/distributed/twophase.zig,,,distributed,2026-04-06
 REQ-DIST-CLI-001,DistributedClusterCLI,ServerConfig,TESTED,src/server/cli_args.zig,tests/test_cli_args_cluster.zig,,core,2026-05-25
 REQ-DIST-CLI-001,DistributedClusterCLI,ClusterPort,TESTED,src/server/cli_args.zig,tests/test_cli_args_cluster.zig,,core,2026-05-25
 REQ-DIST-CLI-001,DistributedClusterCLI,PeersList,TESTED,src/server/cli_args.zig,tests/test_cli_args_cluster.zig,,core,2026-05-25
@@ -719,33 +706,7 @@ REQ-DIST-CLUSTER-WRITE-OUTCOME-SQLSTATE,DistributedCluster,ClusterErrorSqlstateM
 REQ-DIST-CLUSTER-WRITE-OUTCOME-SQLSTATE,DistributedCluster,ClusterErrorSqlstateMapping,TESTED,tests/test_proto_util_cluster_error_mapping.zig,,,transport,2026-06-12
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,src/protocol.zig,geodetestlab/specs/gql_distributed_queries.yml,,protocol,2026-02-03
 REQ-DIST-EDGE-DURABILITY-CHURN,DistributedCluster,EdgeReApplyIdempotency,TESTED,tests/test_edge_durability_churn_repro.zig,test_edge_durability_churn_repro,,distributed,2026-06-12
-REQ-DIST-FRAG-001,Fragment Serialization,Core,TESTED,src/distributed/enhanced_query_transport.zig,"""serializeFragment produces protobuf payload""",,distributed,2026-06-11
-REQ-DIST-FRAG-002,Fragment Deserialization,Core,TESTED,src/distributed/enhanced_query_transport.zig,"""deserializeFragment recovers fragment data""",,distributed,2026-06-11
-REQ-DIST-FRAG-003,Fragment Serialization Tests,Testing,TESTED,src/distributed/enhanced_query_transport.zig,"""serializeFragment round-trip preserves data""",,distributed,2026-06-11
-REQ-DIST-GEO-SHARD-001,Geo-Distributed Sharding,LocalityAware,TESTED,src/distributed/sharding.zig,"""getGeoShardId: region prefix routes consistently (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-GRAPH-SHARD-001,Graph-Aware Sharding,EdgeCutMinimization,TESTED,src/distributed/sharding.zig,"""getGraphAwareShardId: community prefix routes consistently (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-LB-001,Load Balancing,ShardSelection,TESTED,src/distributed/enhanced_query_transport.zig,"""selectShardForQuery: load balancing strategies (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-MIGRATE-002,Shard Data Migration,PartialMigration,TESTED,src/distributed/sharding.zig,"""migrateData: splits statistics proportionally at the split point (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-MIGRATE-003,Shard Data Migration,FullMigration,TESTED,src/distributed/sharding.zig,"""migrateAllData: moves every statistic and clears the source (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-MIGRATION-001,Shard Data Migration,Migration,TESTED,src/distributed/sharding.zig,"""executeMigration: direct path drains source statistics into target (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-MIGRATION-002,Migration State,ProgressTracking,TESTED,src/distributed/sharding.zig,"""executeMigration: transport path batches through the network callback (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,TESTED,src/distributed/query_planner.zig,"""planDistributedQuery: end-to-end orchestration produces a complete plan""",,distributed,2026-06-11
-REQ-DIST-PLAN-002,ShardRowEstimation,CBO,TESTED,src/distributed/query_planner.zig,"""estimateShardRows: returns default 1000 without stats""",,distributed,2026-04-10
-REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,TESTED,src/distributed/query_planner.zig,"""generateShardQuery: caps unlimited label query with shard row estimate""",,distributed,2026-06-11
-REQ-DIST-PLAN-004,ShardPruning,QueryRouting,TESTED,src/distributed/query_planner.zig,"""selectParticipatingShards: returns defaults when registry is empty""",,distributed,2026-04-10
-REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,TESTED,src/distributed/query_planner.zig,"""optimizeShardLocalPlan: derives operations from query structure""",,distributed,2026-06-11
-REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,TESTED,src/distributed/query_planner.zig,"""planDistributedJoin: strategy follows shard count""",,distributed,2026-06-11
-REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,TESTED,src/distributed/query_planner.zig,"""planDistributedAggregation: phases by shard count and HAVING""",,distributed,2026-06-11
-REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,TESTED,src/distributed/query_planner.zig,"""planDistributedSort: strategy follows total estimated rows""",,distributed,2026-06-11
-REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,TESTED,src/distributed/query_planner.zig,"""planDistributedUnion: strategy follows distinct and shard count""",,distributed,2026-06-11
-REQ-DIST-PLAN-010,DataFlowAnalysis,TransferEstimation,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
-REQ-DIST-PLAN-011,ExecutionPhases,PhasePlanning,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
-REQ-DIST-PLAN-012,PropertyFilterTracking,ShardRouting,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
-REQ-DIST-PLAN-013,EdgePatternTracking,ShardRouting,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
-REQ-DIST-PLAN-014,FilterConditionExtraction,ShardRouting,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
-REQ-DIST-PLAN-015,FunctionFilterExtraction,ShardRouting,TESTED,src/distributed/query_planner.zig,tests/test_distributed_query_planner.zig,,distributed,2026-06-11
 REQ-DIST-QUERY-COORD-TEST-001,DistQueryCoord,CoordinationTests,IMPL,tests/test_gap_0193_batch2_testing.zig,,,dist,2026-11-12
-REQ-DIST-QUERY-MSG-DISPATCH,Enhanced Query Transport,MessageDispatch,TESTED,src/distributed/enhanced_query_transport.zig,tests/test_gap0870_raft_command_variants.zig,,distributed,2026-06-11
 REQ-DIST-RAFT-A1-NO-EVICT-BACKPRESSURE,Raft transport backpressure,SendErrorClassify,TESTED,src/distributed/raft_consensus.zig,,,distributed,2026-06-08
 REQ-DIST-RAFT-A2-PER-PEER-DRAIN,Raft per-peer non-blocking outbox drain,PeerIsolation,TESTED,tests/test_raft_per_peer_drain.zig,tests/test_raft_per_peer_drain.zig,,distributed,2026-06-08
 REQ-DIST-RAFT-A6E-OUTBOX-DISPATCH,Raft Outbox Async Dispatch,Send,TESTED,src/distributed/raft_consensus.zig,,,distributed,2026-05-26
@@ -765,11 +726,6 @@ REQ-DIST-RAFT-REBUILD-PROBATION,Raft Rebuild Probation,Backoff,TESTED,src/distri
 REQ-DIST-RAFT-RESTART-IDEMPOTENT,DistributedCluster,RestartApplyIdempotency,TESTED,tests/test_raft_apply_restart_idempotent.zig,test_raft_apply_restart_idempotent,,distributed,2026-06-09
 REQ-DIST-RAFT-STALL-LIVENESS,Raft transport stalled-stream liveness,StallEvictDecision,TESTED,src/distributed/raft_consensus.zig,tests/test_raft_stall_detector.zig,,distributed,2026-06-11
 REQ-DIST-RAFT-STALL-LIVENESS,Raft transport stalled-stream liveness,StallEvictDecision,TESTED,tests/test_raft_stall_detector.zig,,,distributed,2026-06-11
-REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,TESTED,src/distributed/sharding.zig,"""rangeOverlaps: lexicographic overlap and null handling (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,TESTED,src/distributed/sharding.zig,"""getRangeShardId: returns shard whose key range contains the key (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,TESTED,src/distributed/node_registry.zig,TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD,,distributed,2026-06-11
-REQ-DIST-REGISTRY-001,Node Registry,NodeLookup,TESTED,src/distributed/test_query_transport_node_registry.zig,TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD,,distributed,2026-04-06
-REQ-DIST-REGISTRY-001,Node Registry,MultiNode,TESTED,src/distributed/test_query_transport_node_registry.zig,TestCANARY_REQ_DIST_REGISTRY_001_MultipleNodes,,distributed,2026-04-06
 REQ-DIST-ROW-CMP-001,Distributed Row Comparison,Distributed,TESTED,src/protocol.zig,geodetestlab/specs/gql_distributed_queries.yml,,protocol,2026-02-03
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,GlobalCoordinatorHandle,TESTED,src/distributed/cluster.zig,tests/test_show_cluster_status.zig,,distributed,2026-05-26
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ExecuteHandler,TESTED,src/execution/admin_ddl.zig,tests/test_show_cluster_status.zig,,distributed,2026-05-26
@@ -777,29 +733,6 @@ REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowDispatch,TESTED,src/executi
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowTypeClusterStatus,TESTED,src/gql/ast.zig,tests/test_show_cluster_status.zig,,distributed,2026-05-26
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ParserDispatch,TESTED,src/gql/parser.zig,tests/test_show_cluster_status.zig,,distributed,2026-05-26
 REQ-DIST-SHOW-CLUSTER-STATUS,SHOW CLUSTER STATUS,ShowClusterStatusTest,TESTED,tests/test_show_cluster_status.zig,tests/test_show_cluster_status.zig,,distributed,2026-05-26
-REQ-DIST-SPLIT-001,Shard Split Point,SplitPoint,TESTED,src/distributed/sharding.zig,"""findSplitPoint: lexicographic midpoint of the shard key range (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-TRACKER-001,Query Tracker Storage,Query,TESTED,src/distributed/enhanced_query_transport.zig,"""query tracker lifecycle: track",,distributed,2026-06-11
-REQ-DIST-TRACKER-001,Query Tracker Storage,Query,TESTED,,lookup,,distributed,2026-06-11
-REQ-DIST-TRACKER-001,Query Tracker Storage,Query,TESTED,,"remove (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-TRACKER-002,Query Tracking,Query,TESTED,src/distributed/enhanced_query_transport.zig,"""query tracker lifecycle: track",,distributed,2026-06-11
-REQ-DIST-TRACKER-002,Query Tracking,Query,TESTED,,lookup,,distributed,2026-06-11
-REQ-DIST-TRACKER-002,Query Tracking,Query,TESTED,,"remove (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-TRACKER-003,Query Tracker Lookup,Query,TESTED,src/distributed/enhanced_query_transport.zig,"""query tracker lifecycle: track",,distributed,2026-06-11
-REQ-DIST-TRACKER-003,Query Tracker Lookup,Query,TESTED,,lookup,,distributed,2026-06-11
-REQ-DIST-TRACKER-003,Query Tracker Lookup,Query,TESTED,,"remove (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-TRACKER-004,Query Tracker Cleanup,Query,TESTED,src/distributed/enhanced_query_transport.zig,"""query tracker lifecycle: track",,distributed,2026-06-11
-REQ-DIST-TRACKER-004,Query Tracker Cleanup,Query,TESTED,,lookup,,distributed,2026-06-11
-REQ-DIST-TRACKER-004,Query Tracker Cleanup,Query,TESTED,,"remove (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DIST-TRANSPORT-001,Migration Transport,NetworkCallback,TESTED,src/distributed/sharding.zig,"""executeMigration: transport path batches through the network callback (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DISTRIBUTED-INTEGRATION-001,Distributed Query Integration,ServerIntegration,TESTED,tests/integration_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_INTEGRATION_001_ServerIntegration,,distributed,2026-11-14
-REQ-DISTRIBUTED-INTEGRATION-002,Distributed Query Integration,QueryPlanningFlow,TESTED,tests/integration_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_INTEGRATION_002_QueryPlanningFlow,,distributed,2026-11-14
-REQ-DISTRIBUTED-INTEGRATION-003,Distributed Query Integration,FederatedOptimization,TESTED,tests/integration_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_INTEGRATION_003_FederatedOptimization,,distributed,2026-11-14
-REQ-DISTRIBUTED-QUERY-004,Enhanced Query Transport Integration,NetworkTransport,IMPL,src/distributed/enhanced_query_transport.zig,,,distributed,2026-06-11
-REQ-DISTRIBUTED-QUERY-005,Cross-Shard Query Coordination,QueryCoordination,TESTED,src/distributed/enhanced_query_transport.zig,"""dispatch: FRAGMENT_RESULT routes to handleQueryResult (GAP-0870)""",,distributed,2026-06-11
-REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,src/distributed/enhanced_query_transport.zig,"""selectShardForQuery: load balancing strategies (GAP-0514 P3)""",,distributed,2026-06-11
-REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration,,distributed,2026-04-05
-REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration,,distributed,2026-04-05
-REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,tests/test_distributed_query_planner.zig,TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization,,distributed,2026-04-05
 REQ-DOCS-001,Docs,Documentation,IMPL,tests/test_gap_0193_final_batch.zig,,,docs,2026-11-14
 REQ-DOCUMENTATION-STRUCTURE-001,Documentation Structure Tests,UnitTests,EXEMPT,tests/test_documentation_structure.zig,TestCANARY_REQ_DOCUMENTATION_STRUCTURE_001,,claude,2025-10-05
 REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,IMPL,tests/test_gap_0193_batch2_testing.zig,,,claude,2026-11-12
@@ -1139,15 +1072,9 @@ REQ-GAP-0509-TENANT-ISOLATION,TenantIsolationCoverage,Regression,TESTED,tests/te
 REQ-GAP-0510-RLS-EXPR-WIRING,RLSExpressionEngineWiring,Regression,TESTED,tests/test_rls_expr_engine_wiring.zig,tests/test_rls_expr_engine_wiring.zig:1,,security,2026-04-11
 REQ-GAP-0511-AUDIT-TENANT,AuditTenantEnrichment,Regression,TESTED,tests/test_audit_tenant_enrichment.zig,tests/test_audit_tenant_enrichment.zig:1,,security,2026-04-11
 REQ-GAP-0512-GRAPH-ISOLATION,GraphIsolationEdgeIteration,Regression,TESTED,tests/test_graph_isolation_edge_iteration.zig,tests/test_graph_isolation_edge_iteration.zig:1,,engine,2026-04-11
-REQ-GAP-0513-DIST-HASH-001,ConsistentHash,RingOperations,TESTED,src/distributed/consistent_hash.zig,,,distributed,2026-04-06
 REQ-GAP-0513-DIST-HEALTH-001,ClusterHealth,evaluateNodeHealth,TESTED,src/distributed/cluster_health.zig,,,distributed,2026-04-06
 REQ-GAP-0513-DIST-HEALTH-002,ClusterHealth,updateHealthStatus,TESTED,src/distributed/cluster_health.zig,,,distributed,2026-04-06
 REQ-GAP-0513-DIST-HEALTH-003,ClusterHealth,estimateReplicationLag,TESTED,src/distributed/cluster_health.zig,,,distributed,2026-04-06
-REQ-GAP-0513-DIST-SHARD-001,ShardManager,UnitTests,TESTED,src/distributed/sharding.zig,,,distributed,2026-04-06
-REQ-GAP-0513-DIST-SHARD-002,ShardManager,AddShard,TESTED,src/distributed/sharding.zig,,,distributed,2026-04-06
-REQ-GAP-0513-DIST-SHARD-003,ShardManager,MergeError,TESTED,src/distributed/sharding.zig,,,distributed,2026-04-06
-REQ-GAP-0513-DIST-SHARD-004,ShardManager,TransportCallback,TESTED,src/distributed/sharding.zig,,,distributed,2026-04-06
-REQ-GAP-0513-DIST-SHARD-005,ShardManager,GetShardForKey,TESTED,src/distributed/sharding.zig,,,distributed,2026-04-06
 REQ-GAP-0514-QUIC-HANDLER,CanaryReconciliation,QuicHandlerRegression,TESTED,tests/test_gap0514_quic_handler.zig,tests/test_gap0514_quic_handler.zig,,server,2026-06-11
 REQ-GAP-0514-REPL-DISPATCH,CanaryReconciliation,ReplDispatchRegression,TESTED,tests/test_gap0514_repl_dispatch.zig,tests/test_gap0514_repl_dispatch.zig,,cli,2026-06-11
 REQ-GAP-0723-RLS-VM-BOUNDS,RLSBytecodeVMBounds,MemorySafety,TESTED,tests/test_rls_vm_bounds.zig,tests/test_rls_vm_bounds.zig,,security,2026-04-16
@@ -1737,15 +1664,12 @@ REQ-GQL-021,Query Planner,QueryPlanCacheEvictVarianceEnvelope,BENCHED,tests/benc
 REQ-GQL-021,Bench Variance Infra,VarianceConfigStats,TESTED,tests/test_variance_config.zig,tests/test_variance_config.zig,,tooling,2026-11-14
 REQ-GQL-022,Storage Snapshot Load,GraphStoreLoadOptimizationDeltaVarianceEnvelope,BENCHED,tests/benchmark_redo_optimization_delta.zig,TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness,BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope,storage,2026-02-04
 REQ-GQL-022,GraphStore Snapshot Load,LoadCorrectnessAndVariance,BENCHED,tests/canary_physiological_redo.zig,TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness,BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope,storage,2026-02-04
-REQ-GQL-022,DistributedQueryPlanning,FederationAwareOptimization,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_022_FederationAwareOptimization,,distributed,2026-11-14
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-26
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2025-09-26
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/range_tracker.zig,,,txn,2025-09-26
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,tests/canary_txn_phantom_anomaly.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-21
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,tests/canary_txn_phantom_range.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,,txn,2025-09-22
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2026-11-12
-REQ-GQL-023,DistributedQueryPlanning,ShardAffinityAnalysis,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_023_ShardAffinityAnalysis,,distributed,2026-11-14
-REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,src/distributed/federation_flag.zig,"""federation mismatch flag consumption""",,federation,2026-04-05
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,src/planner/cost_calibration.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibration,,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,src/planner/cost_calibration.zig,,BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,BENCHED,src/planner/cost_model.zig,TestCANARY_REQ_GQL_024_PlanCostModelFactors,BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope,planner,2026-11-14
@@ -1763,17 +1687,11 @@ REQ-GQL-024,Cost Based Optimizer,PlanSelectionIntegration,BENCHED,tests/canary_p
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,tests/canary_planner_plan_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationCostPrune,BENCHED,tests/canary_planner_prune.zig,TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationCostPruneVarianceEnvelope,BENCHED,tests/canary_planner_prune.zig,TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope,planner,2025-09-22
-REQ-GQL-024,FederationMismatchFlag,MismatchFalsePositiveGuard,BENCHED,tests/debug/benchmark_federation_mismatch_frequency.zig,,BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard,federation,2025-09-23
-REQ-GQL-024,FederationMismatchFlag,LatencyVarianceEnvelope,BENCHED,tests/debug/benchmark_federation_mismatch_latency.zig,,BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope,federation,2025-09-26
-REQ-GQL-024,DistributedQueryPlanning,InterShardCommunication,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_024_InterShardCommunication,,distributed,2026-11-14
-REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,tests/e2e_federation_mismatch_flag.zig,TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol,,federation,2025-09-23
 REQ-GQL-024,Nulls-Last Ordering Parity,ProtocolE2E,TESTED,tests/e2e_protocol_transport_parity_nulls_order.zig,TestCANARY_REQ_GQL_024_TransportParity_NullsLastOrder,,engine,2025-09-24
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-26
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,BENCHED,tests/canary_txn_write_skew.zig,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-21
-REQ-GQL-025,DistributedQueryPlanning,CoordinatorOperations,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_025_CoordinatorOperations,,distributed,2026-11-14
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,src/conformance.zig,TestCANARY_REQ_GQL_026_FlaggerCompleteness,,conformance,2026-11-13
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,TestCANARY_REQ_GQL_026_FlaggerNegativeMissing,,conformance,2026-11-13
-REQ-GQL-026,DistributedQueryPlanning,ExecutionPhasing,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_026_ExecutionPhasing,,distributed,2026-11-14
 REQ-GQL-028,Snapshot Compaction,Storage,BENCHED,src/canary.zig,TestCANARY_REQ_GQL_028_RecoveryAfterCompaction,BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact,storage,2026-02-04
 REQ-GQL-028,Snapshot Compaction,Storage,BENCHED,,,BenchmarkCANARY_REQ_GQL_028_SnapshotFragmentation,storage,2026-02-04
 REQ-GQL-028,Snapshot Adaptive Policy,Storage,BENCHED,src/canary.zig,,BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicy,storage,2026-02-04
@@ -1805,8 +1723,6 @@ REQ-GQL-032-COMPOSITE,Constraints,Composite,IMPL,tests/test_gap_0193_batch2_engi
 REQ-GQL-032-PATTERN,Constraints,PatternRefused,TESTED,tests/test_gap_0193_batch2_engine.zig,,,schema,2026-11-12
 REQ-GQL-032-RANGE,Constraints,RangeRefused,TESTED,tests/test_gap_0193_batch2_engine.zig,,,schema,2026-11-12
 REQ-GQL-032-UNIQUE,Constraints,Unique,IMPL,tests/test_gap_0193_batch2_engine.zig,,,schema,2026-11-12
-REQ-GQL-041,Cluster Networking,InterNodeMessaging,IMPL,src/distributed/network_transport.zig,,,distributed,2026-04-05
-REQ-GQL-041,Cluster Networking,NetworkTransportTests,TESTED,src/distributed/network_transport.zig,"""ClusterMessageType and ClusterMessage are re-exported correctly""",,distributed,2026-04-10
 REQ-GQL-042,CDC Resume Token,API,TESTED,src/canary.zig,TestCANARY_REQ_GQL_042_CDC_ResumeToken,,streaming,2026-11-14
 REQ-GQL-042,CDC Resume Token,API,TESTED,tests/canary_cdc_resume_token.zig,,,streaming,2026-11-14
 REQ-GQL-042,CDC Backfill Latency,API,BENCHED,src/canary.zig,,BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency,streaming,2025-09-20
@@ -2411,15 +2327,7 @@ REQ-GQL-PROPERTIES-001,GQLProperties,PropertyAccess,TESTED,tests/test_shell_requ
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,tests/test_property_persistence_regression.zig,TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement,,engine,2026-11-14
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,CommandRouting,TESTED,src/distributed/raft_apply.zig,"""applyCommand: noop returns empty slice""",,distributed,2026-04-10
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,IntegrationTest,TESTED,tests/test_raft_apply.zig,test_raft_apply,,distributed,2026-04-09
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,FileFormat,TESTED,src/distributed/raft_log_storage.zig,,,distributed,2026-04-09
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,RoundTripTest,TESTED,tests/test_raft_log_storage.zig,log_storage_roundtrip,,distributed,2026-04-09
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,PersistentStorageWiring,TESTED,tests/test_raft_persistent_log_wiring.zig,persistent_log_wiring,,distributed,2026-04-09
-REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,TermVotedFor,TESTED,src/distributed/raft_consensus.zig,,,distributed,2026-04-05
-REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,src/distributed/raft_persistent.zig,,,distributed,2026-04-09
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,HardStateDurabilityAcrossRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-06-09
-REQ-GQL-RAFT-PERSIST,Raft Persistence,LifecycleIntegration,TESTED,tests/test_raft_integration.zig,raft_lifecycle_integration,,distributed,2026-04-09
-REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,RoundTripTest,TESTED,tests/test_raft_persistent_storage.zig,persistent_storage_roundtrip,,distributed,2026-04-05
-REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,CreateSnapshot,TESTED,src/distributed/raft_persistent.zig,,,distributed,2026-04-09
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,src/distributed/raft_snapshot_manager.zig,,,distributed,2026-04-09
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotInstallation,TESTED,src/distributed/raft_snapshot_manager.zig,,,distributed,2026-04-09
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,IntegrationTest,TESTED,tests/test_raft_snapshot_manager.zig,test_raft_snapshot_manager,,distributed,2026-04-09
@@ -3591,7 +3499,6 @@ REQ-RLS-SECURITY-003,RLS,PolicyCompilation,IMPL,tests/test_gap_0193_batch2_secur
 REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,src/security/rls_core.zig,,,security,2026-04-16
 REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,src/security/rls_core.zig,,,security,2026-01-30
 REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,src/security/rls_core.zig,,,security,2026-01-30
-REQ-SEC-ATOMIC-WRITE-001,Atomic Raft File Write,Persistence,TESTED,src/distributed/raft_persistent.zig,"""raft_persistent: atomic write creates file with correct content""",,security,2026-04-10
 REQ-SEC-AUTH-ROLE-LIVE-STORE-001,AuthOutcomeClassification,ResolverIgnoresReadSnapshot,TESTED,tests/test_auth_unavailable_classification.zig,tests/test_auth_unavailable_classification.zig,,security,2026-10-11
 REQ-SEC-AUTH-UNAVAILABLE-001,AuthOutcomeClassification,Regression,TESTED,tests/test_auth_unavailable_classification.zig,tests/test_auth_unavailable_classification.zig,,security,2026-08-28
 REQ-SEC-AUTH-UNAVAILABLE-002,AuthOutcomeClassification,StorageLookupResidual,TESTED,tests/test_auth_unavailable_classification.zig,tests/test_auth_unavailable_classification.zig,,security,2026-08-29
@@ -3629,7 +3536,6 @@ REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,RetireMigratedGrantPolicies,TESTED,tests
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,QuicWriteGate,TESTED,src/server/quic_connection_handler.zig,tests/test_per_graph_grants.zig,,security,2026-10-11
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GrpcWriteGate,TESTED,src/transport/grpc_server.zig,tests/test_per_graph_grants.zig,,security,2026-10-11
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,Regression,TESTED,tests/test_per_graph_grants.zig,tests/test_per_graph_grants.zig,,security,2026-10-11
-REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-05
 REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,TESTED,src/server/quic_connection_handler.zig,geodetestlab/specs/authn_rate_limiter.yml,,security,2026-06-11
 REQ-SEC-RATE-LIMIT-005,AuthRateLimiting,PeerIPExtraction,TESTED,src/server/quic_connection_handler.zig,geodetestlab/specs/authn_rate_limiter.yml,,security,2026-06-11
 REQ-SEC-RATE-LIMIT-006,AuthRateLimiting,HelloCheck,TESTED,src/server/quic_connection_handler.zig,geodetestlab/specs/authn_rate_limiter.yml,,security,2026-06-11
@@ -3949,7 +3855,6 @@ REQ-SONNY-2726-REPLICATED-TENANT,DistributedCluster,TenantEnvelope,TESTED,src/di
 REQ-SONNY-2726-REPLICATED-TENANT,DistributedCluster,ApplyUnderTenant,TESTED,src/distributed/raft_apply.zig,tests/test_sonny2726_replicated_tenant.zig,,distributed,2026-11-12
 REQ-SONNY-2726-REPLICATED-TENANT,DistributedCluster,ProposeWithTenant,TESTED,src/distributed/statement_proposals.zig,tests/test_sonny2726_replicated_tenant.zig,,distributed,2026-11-12
 REQ-SONNY-2726-REPLICATED-TENANT,DistributedCluster,Regression,TESTED,tests/test_sonny2726_replicated_tenant.zig,tests/test_sonny2726_replicated_tenant.zig,,distributed,2026-11-12
-REQ-SONNY-2727-PARAM-DECODER-NARROWING,WireParameters,PeerDecimal,TESTED,src/distributed/value_convert.zig,tests/test_sonny2727_param_decoder_narrowing.zig,,distributed,2026-09-26
 REQ-SONNY-2727-PARAM-DECODER-NARROWING,WireParameters,CheckedNarrowing,TESTED,src/server/proto_util.zig,tests/test_sonny2727_param_decoder_narrowing.zig,,security,2026-09-26
 REQ-SONNY-2727-PARAM-DECODER-NARROWING,WireParameters,CheckedNarrowing,TESTED,tests/test_sonny2727_param_decoder_narrowing.zig,,,security,2026-09-26
 REQ-SONNY-2728-MERGE-REFUSAL-AUDIT,MergeRowVisibility,RefusalAudit,TESTED,src/execution/crud_operations.zig,tests/test_sonny2686_merge_rls.zig,,security,2026-09-26
@@ -5029,6 +4934,12 @@ REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6561-CDC-ENABLE-ENV,CDCProcedures,StartupEnable,TESTED,src/server/main.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
+REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,SharedAnswers,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
+REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,GrpcRefusalStatus,TESTED,src/transport/grpc_server.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
+REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
+REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
+REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,tests/test_sonny6563_vote_persist_before_send.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
@@ -5132,7 +5043,6 @@ REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,src/security/test_tde_e
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,BENCHED,src/security/test_tde_enforcement.zig,,tests/test_sonny6435_tde_overhead.zig,security,2026-11-12
 REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,build.zig,,,security,2026-01-28
-REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,src/distributed/raft_persistent.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,src/index/hnsw_persist.zig,,,security,2026-04-01
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,src/schema/catalog.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,src/schema/fle_catalog.zig,,,security,2026-01-28

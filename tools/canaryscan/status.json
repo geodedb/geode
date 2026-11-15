@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T09:36:44.570134936Z",
+  "generated_at": "2026-11-15T12:01:48.62681769Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1461,39 +1461,8 @@
       ]
     },
     {
-      "id": "REQ-2PC-TIMEOUT-001",
-      "features": [
-        {
-          "feature": "2PCTimeout",
-          "aspect": "Transport",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-2PC-TLS-001",
       "features": [
-        {
-          "feature": "2PC TLS",
-          "aspect": "Security",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6453_cluster_peer_tls.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-13"
-        },
         {
           "feature": "2PC",
           "aspect": "TLSSecurity",
@@ -1512,18 +1481,6 @@
       "id": "REQ-2PC-TLS-002",
       "features": [
         {
-          "feature": "2PC TLS One-shot",
-          "aspect": "Security",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        },
-        {
           "feature": "2PC",
           "aspect": "TLSOneShot",
           "status": "IMPL",
@@ -1541,7 +1498,7 @@
       "id": "REQ-2PC-TLS-003",
       "features": [
         {
-          "feature": "2PC TLS",
+          "feature": "Cluster peer TLS",
           "aspect": "ClusterCa",
           "status": "TESTED",
           "files": [
@@ -1552,7 +1509,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-13"
+          "updated": "2026-11-14"
         }
       ]
     },
@@ -10342,176 +10299,6 @@
       ]
     },
     {
-      "id": "REQ-DIST-2PC-001",
-      "features": [
-        {
-          "feature": "Two-Phase Commit Messaging",
-          "aspect": "Prepare",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-002",
-      "features": [
-        {
-          "feature": "Two-Phase Commit Messaging",
-          "aspect": "Commit",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-003",
-      "features": [
-        {
-          "feature": "Two-Phase Commit Messaging",
-          "aspect": "Abort",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-MSG-001",
-      "features": [
-        {
-          "feature": "Two-Phase Commit Message Format",
-          "aspect": "Protocol",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-TRANSPORT-001",
-      "features": [
-        {
-          "feature": "Two-Phase Commit Network Transport",
-          "aspect": "QUICMessaging",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-UNDO-001",
-      "features": [
-        {
-          "feature": "2PC Undo Pre-Image Storage",
-          "aspect": "AtomicRollback",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-UNDO-002",
-      "features": [
-        {
-          "feature": "2PC Undo Pre-Image Capture",
-          "aspect": "NodeCapture",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-UNDO-003",
-      "features": [
-        {
-          "feature": "2PC Undo Pre-Image Capture",
-          "aspect": "EdgeCapture",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-UNDO-004",
-      "features": [
-        {
-          "feature": "2PC Undo Apply",
-          "aspect": "AtomicRollback",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-2PC-UNDO-005",
-      "features": [
-        {
-          "feature": "2PC Undo Pre-Image Tests",
-          "aspect": "TestCoverage",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
       "id": "REQ-DIST-CLI-001",
       "features": [
         {
@@ -11967,481 +11754,6 @@
       ]
     },
     {
-      "id": "REQ-DIST-FRAG-001",
-      "features": [
-        {
-          "feature": "Fragment Serialization",
-          "aspect": "Core",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"serializeFragment produces protobuf payload\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-FRAG-002",
-      "features": [
-        {
-          "feature": "Fragment Deserialization",
-          "aspect": "Core",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"deserializeFragment recovers fragment data\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-FRAG-003",
-      "features": [
-        {
-          "feature": "Fragment Serialization Tests",
-          "aspect": "Testing",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"serializeFragment round-trip preserves data\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-GEO-SHARD-001",
-      "features": [
-        {
-          "feature": "Geo-Distributed Sharding",
-          "aspect": "LocalityAware",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"getGeoShardId: region prefix routes consistently (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-GRAPH-SHARD-001",
-      "features": [
-        {
-          "feature": "Graph-Aware Sharding",
-          "aspect": "EdgeCutMinimization",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"getGraphAwareShardId: community prefix routes consistently (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-LB-001",
-      "features": [
-        {
-          "feature": "Load Balancing",
-          "aspect": "ShardSelection",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"selectShardForQuery: load balancing strategies (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-MIGRATE-002",
-      "features": [
-        {
-          "feature": "Shard Data Migration",
-          "aspect": "PartialMigration",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"migrateData: splits statistics proportionally at the split point (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-MIGRATE-003",
-      "features": [
-        {
-          "feature": "Shard Data Migration",
-          "aspect": "FullMigration",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"migrateAllData: moves every statistic and clears the source (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-MIGRATION-001",
-      "features": [
-        {
-          "feature": "Shard Data Migration",
-          "aspect": "Migration",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"executeMigration: direct path drains source statistics into target (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-MIGRATION-002",
-      "features": [
-        {
-          "feature": "Migration State",
-          "aspect": "ProgressTracking",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"executeMigration: transport path batches through the network callback (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-001",
-      "features": [
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "Orchestration",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"planDistributedQuery: end-to-end orchestration produces a complete plan\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-002",
-      "features": [
-        {
-          "feature": "ShardRowEstimation",
-          "aspect": "CBO",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"estimateShardRows: returns default 1000 without stats\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-003",
-      "features": [
-        {
-          "feature": "ShardQueryGeneration",
-          "aspect": "QueryRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"generateShardQuery: caps unlimited label query with shard row estimate\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-004",
-      "features": [
-        {
-          "feature": "ShardPruning",
-          "aspect": "QueryRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"selectParticipatingShards: returns defaults when registry is empty\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-005",
-      "features": [
-        {
-          "feature": "ShardLocalOptimization",
-          "aspect": "QueryPlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"optimizeShardLocalPlan: derives operations from query structure\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-006",
-      "features": [
-        {
-          "feature": "DistributedJoin",
-          "aspect": "QueryPlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"planDistributedJoin: strategy follows shard count\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-007",
-      "features": [
-        {
-          "feature": "DistributedAggregation",
-          "aspect": "QueryPlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"planDistributedAggregation: phases by shard count and HAVING\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-008",
-      "features": [
-        {
-          "feature": "DistributedSort",
-          "aspect": "QueryPlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"planDistributedSort: strategy follows total estimated rows\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-009",
-      "features": [
-        {
-          "feature": "DistributedUnion",
-          "aspect": "QueryPlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "\"planDistributedUnion: strategy follows distinct and shard count\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-010",
-      "features": [
-        {
-          "feature": "DataFlowAnalysis",
-          "aspect": "TransferEstimation",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-011",
-      "features": [
-        {
-          "feature": "ExecutionPhases",
-          "aspect": "PhasePlanning",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-012",
-      "features": [
-        {
-          "feature": "PropertyFilterTracking",
-          "aspect": "ShardRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-013",
-      "features": [
-        {
-          "feature": "EdgePatternTracking",
-          "aspect": "ShardRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-014",
-      "features": [
-        {
-          "feature": "FilterConditionExtraction",
-          "aspect": "ShardRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-PLAN-015",
-      "features": [
-        {
-          "feature": "FunctionFilterExtraction",
-          "aspect": "ShardRouting",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/query_planner.zig"
-          ],
-          "tests": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
       "id": "REQ-DIST-QUERY-COORD-TEST-001",
       "features": [
         {
@@ -12455,25 +11767,6 @@
           "benches": [],
           "owner": "dist",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-QUERY-MSG-DISPATCH",
-      "features": [
-        {
-          "feature": "Enhanced Query Transport",
-          "aspect": "MessageDispatch",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "tests/test_gap0870_raft_command_variants.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
         }
       ]
     },
@@ -12777,91 +12070,6 @@
       ]
     },
     {
-      "id": "REQ-DIST-RANGE-001",
-      "features": [
-        {
-          "feature": "Key Range Operations",
-          "aspect": "RangeOverlap",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"rangeOverlaps: lexicographic overlap and null handling (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-RANGE-SHARD-001",
-      "features": [
-        {
-          "feature": "Range-Based Sharding",
-          "aspect": "ShardLookup",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"getRangeShardId: returns shard whose key range contains the key (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-REGISTRY-001",
-      "features": [
-        {
-          "feature": "Node Registry",
-          "aspect": "NodeLookup",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/node_registry.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        },
-        {
-          "feature": "Node Registry",
-          "aspect": "NodeLookup",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/test_query_transport_node_registry.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        },
-        {
-          "feature": "Node Registry",
-          "aspect": "MultiNode",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/test_query_transport_node_registry.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DIST_REGISTRY_001_MultipleNodes"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
       "id": "REQ-DIST-ROW-CMP-001",
       "features": [
         {
@@ -12966,297 +12174,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-05-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-SPLIT-001",
-      "features": [
-        {
-          "feature": "Shard Split Point",
-          "aspect": "SplitPoint",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"findSplitPoint: lexicographic midpoint of the shard key range (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-TRACKER-001",
-      "features": [
-        {
-          "feature": "Query Tracker Storage",
-          "aspect": "Query",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"query tracker lifecycle: track",
-            "lookup",
-            "remove (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-TRACKER-002",
-      "features": [
-        {
-          "feature": "Query Tracking",
-          "aspect": "Query",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"query tracker lifecycle: track",
-            "lookup",
-            "remove (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-TRACKER-003",
-      "features": [
-        {
-          "feature": "Query Tracker Lookup",
-          "aspect": "Query",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"query tracker lifecycle: track",
-            "lookup",
-            "remove (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-TRACKER-004",
-      "features": [
-        {
-          "feature": "Query Tracker Cleanup",
-          "aspect": "Query",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"query tracker lifecycle: track",
-            "lookup",
-            "remove (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-TRANSPORT-001",
-      "features": [
-        {
-          "feature": "Migration Transport",
-          "aspect": "NetworkCallback",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [
-            "\"executeMigration: transport path batches through the network callback (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INTEGRATION-001",
-      "features": [
-        {
-          "feature": "Distributed Query Integration",
-          "aspect": "ServerIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/integration_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INTEGRATION_001_ServerIntegration"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INTEGRATION-002",
-      "features": [
-        {
-          "feature": "Distributed Query Integration",
-          "aspect": "QueryPlanningFlow",
-          "status": "TESTED",
-          "files": [
-            "tests/integration_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INTEGRATION_002_QueryPlanningFlow"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-INTEGRATION-003",
-      "features": [
-        {
-          "feature": "Distributed Query Integration",
-          "aspect": "FederatedOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/integration_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_INTEGRATION_003_FederatedOptimization"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-004",
-      "features": [
-        {
-          "feature": "Enhanced Query Transport Integration",
-          "aspect": "NetworkTransport",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-005",
-      "features": [
-        {
-          "feature": "Cross-Shard Query Coordination",
-          "aspect": "QueryCoordination",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"dispatch: FRAGMENT_RESULT routes to handleQueryResult (GAP-0870)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-006",
-      "features": [
-        {
-          "feature": "Shard-Aware Query Execution",
-          "aspect": "ShardOptimization",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/enhanced_query_transport.zig"
-          ],
-          "tests": [
-            "\"selectShardForQuery: load balancing strategies (GAP-0514 P3)\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-PLANNER-001",
-      "features": [
-        {
-          "feature": "Distributed Query Planning",
-          "aspect": "BasicPlanGeneration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-PLANNER-002",
-      "features": [
-        {
-          "feature": "Distributed Query Planning",
-          "aspect": "FederationIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DISTRIBUTED-QUERY-PLANNER-003",
-      "features": [
-        {
-          "feature": "Distributed Query Planning",
-          "aspect": "CostOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/test_distributed_query_planner.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
         }
       ]
     },
@@ -18442,23 +17359,6 @@
       ]
     },
     {
-      "id": "REQ-GAP-0513-DIST-HASH-001",
-      "features": [
-        {
-          "feature": "ConsistentHash",
-          "aspect": "RingOperations",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/consistent_hash.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
       "id": "REQ-GAP-0513-DIST-HEALTH-001",
       "features": [
         {
@@ -18501,91 +17401,6 @@
           "status": "TESTED",
           "files": [
             "src/distributed/cluster_health.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0513-DIST-SHARD-001",
-      "features": [
-        {
-          "feature": "ShardManager",
-          "aspect": "UnitTests",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0513-DIST-SHARD-002",
-      "features": [
-        {
-          "feature": "ShardManager",
-          "aspect": "AddShard",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0513-DIST-SHARD-003",
-      "features": [
-        {
-          "feature": "ShardManager",
-          "aspect": "MergeError",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0513-DIST-SHARD-004",
-      "features": [
-        {
-          "feature": "ShardManager",
-          "aspect": "TransportCallback",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GAP-0513-DIST-SHARD-005",
-      "features": [
-        {
-          "feature": "ShardManager",
-          "aspect": "GetShardForKey",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/sharding.zig"
           ],
           "tests": [],
           "benches": [],
@@ -26412,20 +25227,6 @@
           ],
           "owner": "storage",
           "updated": "2026-02-04"
-        },
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "FederationAwareOptimization",
-          "status": "TESTED",
-          "files": [
-            "tests/distributed_query_planner_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_022_FederationAwareOptimization"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
         }
       ]
     },
@@ -26508,40 +25309,12 @@
           ],
           "owner": "txn",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "ShardAffinityAnalysis",
-          "status": "TESTED",
-          "files": [
-            "tests/distributed_query_planner_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_ShardAffinityAnalysis"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
         }
       ]
     },
     {
       "id": "REQ-GQL-024",
       "features": [
-        {
-          "feature": "FederationMismatchFlag",
-          "aspect": "Federation",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/federation_flag.zig"
-          ],
-          "tests": [
-            "\"federation mismatch flag consumption\""
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
         {
           "feature": "Cost Based Optimizer",
           "aspect": "PlanCostModelCalibration",
@@ -26773,62 +25546,6 @@
           "updated": "2025-09-22"
         },
         {
-          "feature": "FederationMismatchFlag",
-          "aspect": "MismatchFalsePositiveGuard",
-          "status": "BENCHED",
-          "files": [
-            "tests/debug/benchmark_federation_mismatch_frequency.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard"
-          ],
-          "owner": "federation",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "FederationMismatchFlag",
-          "aspect": "LatencyVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/debug/benchmark_federation_mismatch_latency.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope"
-          ],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "InterShardCommunication",
-          "status": "TESTED",
-          "files": [
-            "tests/distributed_query_planner_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_InterShardCommunication"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "FederationMismatchFlag",
-          "aspect": "Federation",
-          "status": "TESTED",
-          "files": [
-            "tests/e2e_federation_mismatch_flag.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-23"
-        },
-        {
           "feature": "Nulls-Last Ordering Parity",
           "aspect": "ProtocolE2E",
           "status": "TESTED",
@@ -26878,20 +25595,6 @@
           ],
           "owner": "txn",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "CoordinatorOperations",
-          "status": "TESTED",
-          "files": [
-            "tests/distributed_query_planner_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_025_CoordinatorOperations"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
         }
       ]
     },
@@ -26912,20 +25615,6 @@
           "benches": [],
           "owner": "conformance",
           "updated": "2026-11-13"
-        },
-        {
-          "feature": "DistributedQueryPlanning",
-          "aspect": "ExecutionPhasing",
-          "status": "TESTED",
-          "files": [
-            "tests/distributed_query_planner_test.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_026_ExecutionPhasing"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-14"
         }
       ]
     },
@@ -27338,37 +26027,6 @@
           "benches": [],
           "owner": "schema",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-041",
-      "features": [
-        {
-          "feature": "Cluster Networking",
-          "aspect": "InterNodeMessaging",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/network_transport.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "Cluster Networking",
-          "aspect": "NetworkTransportTests",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/network_transport.zig"
-          ],
-          "tests": [
-            "\"ClusterMessageType and ClusterMessage are re-exported correctly\""
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -36777,77 +35435,8 @@
       ]
     },
     {
-      "id": "REQ-GQL-RAFT-LOG-PERSIST",
-      "features": [
-        {
-          "feature": "Raft Log Persistence",
-          "aspect": "FileFormat",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_log_storage.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
-        {
-          "feature": "Raft Log Persistence",
-          "aspect": "RoundTripTest",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_log_storage.zig"
-          ],
-          "tests": [
-            "log_storage_roundtrip"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
-        {
-          "feature": "Raft Log Persistence",
-          "aspect": "PersistentStorageWiring",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_persistent_log_wiring.zig"
-          ],
-          "tests": [
-            "persistent_log_wiring"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-RAFT-PERSIST",
       "features": [
-        {
-          "feature": "Raft Consensus Persistence",
-          "aspect": "TermVotedFor",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_consensus.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "Raft Persistence",
-          "aspect": "CorePersistence",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_persistent.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
         {
           "feature": "Raft Consensus Persistence",
           "aspect": "HardStateDurabilityAcrossRestart",
@@ -36861,52 +35450,12 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-06-09"
-        },
-        {
-          "feature": "Raft Persistence",
-          "aspect": "LifecycleIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_integration.zig"
-          ],
-          "tests": [
-            "raft_lifecycle_integration"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
-        {
-          "feature": "Raft Consensus Persistence",
-          "aspect": "RoundTripTest",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_persistent_storage.zig"
-          ],
-          "tests": [
-            "persistent_storage_roundtrip"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
         }
       ]
     },
     {
       "id": "REQ-GQL-RAFT-SNAPSHOT",
       "features": [
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "CreateSnapshot",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_persistent.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
         {
           "feature": "Raft Snapshot Persistence",
           "aspect": "SnapshotCreation",
@@ -56150,25 +54699,6 @@
       ]
     },
     {
-      "id": "REQ-SEC-ATOMIC-WRITE-001",
-      "features": [
-        {
-          "feature": "Atomic Raft File Write",
-          "aspect": "Persistence",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_persistent.zig"
-          ],
-          "tests": [
-            "\"raft_persistent: atomic write creates file with correct content\""
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-SEC-AUTH-ROLE-LIVE-STORE-001",
       "features": [
         {
@@ -56719,23 +55249,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-10-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SEC-RAFT-ATOMIC-001",
-      "features": [
-        {
-          "feature": "Atomic Raft State Persistence",
-          "aspect": "TOCTOU",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_consensus.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-04-05"
         }
       ]
     },
@@ -61978,20 +60491,6 @@
     {
       "id": "REQ-SONNY-2727-PARAM-DECODER-NARROWING",
       "features": [
-        {
-          "feature": "WireParameters",
-          "aspect": "PeerDecimal",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/value_convert.zig"
-          ],
-          "tests": [
-            "tests/test_sonny2727_param_decoder_narrowing.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-09-26"
-        },
         {
           "feature": "WireParameters",
           "aspect": "CheckedNarrowing",
@@ -79306,6 +77805,110 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6561-CDC-ENABLE-ENV",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "StartupEnable",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6561_cdc_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6561-CDC-WIRE-PARITY",
+      "features": [
+        {
+          "feature": "CDCControlProtocol",
+          "aspect": "SharedAnswers",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6561_cdc_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "CDCControlProtocol",
+          "aspect": "GrpcRefusalStatus",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6561_cdc_transport_parity.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6563-VOTE-DURABLE",
+      "features": [
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "VoteSurvivesRestart",
+          "status": "TESTED",
+          "files": [
+            "tests/test_raft_hardstate_durability.zig"
+          ],
+          "tests": [
+            "tests/test_raft_hardstate_durability.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND",
+      "features": [
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "HeldUntilPersisted",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6563_vote_persist_before_send.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "VoteDurableBeforeReply",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6563_vote_persist_before_send.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6563_vote_persist_before_send.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -81117,18 +79720,6 @@
     {
       "id": "REQ-TDE-FILELEVEL-001",
       "features": [
-        {
-          "feature": "TDEFileLevelEncryption",
-          "aspect": "RaftState",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_persistent.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-28"
-        },
         {
           "feature": "TDEFileLevelEncryption",
           "aspect": "HNSWIndex",
@@ -84404,11 +82995,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 132,
+      "BENCHED": 130,
       "COMPLETE": 2,
       "EXEMPT": 210,
-      "IMPL": 543,
-      "TESTED": 4184
+      "IMPL": 534,
+      "TESTED": 4113
     },
     "by_aspect": {
       "2PC": 3,
@@ -84429,7 +83020,6 @@
       "ASTVariant": 1,
       "ATAN": 1,
       "ATAN2": 1,
-      "Abort": 1,
       "AbortedHolderReleases": 1,
       "AbortedTxnGate": 1,
       "AbsoluteHistoryPathOnly": 1,
@@ -84469,7 +83059,6 @@
       "AdaptiveStressHarness": 1,
       "AddConcatenation": 1,
       "AddGraph": 1,
-      "AddShard": 1,
       "Addition": 2,
       "AddressGrammar": 1,
       "AdminAllowed": 4,
@@ -84562,7 +83151,6 @@
       "AtomicLoad": 1,
       "AtomicNodeIdReservation": 1,
       "AtomicReadWrite": 1,
-      "AtomicRollback": 2,
       "AtomicUpdatePolicy": 1,
       "AttributeEvaluation": 1,
       "AttributePolicyIdentifiers": 1,
@@ -84633,7 +83221,6 @@
       "BareSetOnRelationship": 1,
       "Basic": 5,
       "BasicEncryption": 1,
-      "BasicPlanGeneration": 1,
       "BatchErrorExtraction": 1,
       "BatchExecution": 1,
       "BatchFileSourceParity": 1,
@@ -84725,7 +83312,6 @@
       "CATALOG": 2,
       "CATALOG_LOCK": 1,
       "CATALOG_SINGLETON": 1,
-      "CBO": 1,
       "CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope": 1,
       "CDCApplyBatchLatencyVarianceEnvelope": 1,
       "CDCControlProtocol": 1,
@@ -84911,7 +83497,7 @@
       "CommaSeparatedMergeChains": 1,
       "CommandDispatch": 2,
       "CommandRouting": 1,
-      "Commit": 4,
+      "Commit": 3,
       "CommitAdvancementVarianceEnvelope": 1,
       "CommitAwarePostProposeWait": 1,
       "CommitBeforeRelease": 1,
@@ -85026,14 +83612,12 @@
       "Coordinator": 1,
       "CoordinatorActiveShardTuning": 1,
       "CoordinatorMetricsHotPath": 1,
-      "CoordinatorOperations": 1,
       "CoordinatorPhaseMetrics": 1,
-      "Core": 24,
+      "Core": 22,
       "CoreEngine": 1,
       "CoreFunctionality": 2,
       "CoreImplementation": 1,
       "CoreInterface": 1,
-      "CorePersistence": 1,
       "CoreSystem": 1,
       "CoreTests": 1,
       "CoreType": 1,
@@ -85046,7 +83630,6 @@
       "CosineOnVectors": 1,
       "CostBasedOptimizer": 1,
       "CostEstimation": 1,
-      "CostOptimization": 1,
       "CountAgg": 1,
       "CountDistinct": 1,
       "CountFiltering": 1,
@@ -85087,7 +83670,6 @@
       "CreateRoleFailureReported": 1,
       "CreateSavepoint": 1,
       "CreateSetPrePass": 1,
-      "CreateSnapshot": 1,
       "CreateThenSet": 1,
       "CreateUserFailureReported": 1,
       "CreateUserPolicy": 1,
@@ -85365,12 +83947,10 @@
       "EdgeBinding": 1,
       "EdgeCandidateEndpoints": 1,
       "EdgeCandidateRls": 1,
-      "EdgeCapture": 1,
       "EdgeCollection": 1,
       "EdgeCreateAutoTenant": 1,
       "EdgeCreateInMemory": 1,
       "EdgeCreation": 1,
-      "EdgeCutMinimization": 1,
       "EdgeEndpointVisibility": 1,
       "EdgeGraphNameLoad": 1,
       "EdgeGraphNamePersistence": 1,
@@ -85530,7 +84110,6 @@
       "ExecutionInterrupt": 1,
       "ExecutionIsolation": 1,
       "ExecutionMutation": 1,
-      "ExecutionPhasing": 1,
       "ExecutionPool": 1,
       "ExecutionPropagation": 1,
       "ExecutorFunction": 1,
@@ -85623,17 +84202,13 @@
       "FastPathsReturnFullSortPrefix": 1,
       "FeatureFlag": 2,
       "FeatureFlags": 1,
-      "FederatedOptimization": 1,
-      "Federation": 3,
-      "FederationAwareOptimization": 1,
-      "FederationIntegration": 1,
+      "Federation": 1,
       "FieldAllowlist": 1,
       "FieldRequiresEncryptionCheck": 1,
       "FieldsBefore1970": 1,
       "FileAccessAPI": 1,
       "FileCreation": 1,
       "FileEncryption": 1,
-      "FileFormat": 1,
       "FileHashCache": 1,
       "FileHashCacheCleanup": 1,
       "FileIO": 1,
@@ -85692,7 +84267,6 @@
       "FtsApplySymmetry": 1,
       "FtsSnapshotRebuild": 1,
       "FtsStrictTenancyFailClosed": 1,
-      "FullMigration": 1,
       "FullRecordEventHash": 1,
       "FulltextDropInDefault": 1,
       "FulltextOptimization": 1,
@@ -85747,7 +84321,6 @@
       "GetPendingEvents": 1,
       "GetPerformanceAlerts": 1,
       "GetPolicyByName": 1,
-      "GetShardForKey": 1,
       "GetTelemetryMetrics": 1,
       "GetWatermark": 1,
       "GlobalAccessor": 1,
@@ -85863,6 +84436,7 @@
       "GrpcProfileTxn": 1,
       "GrpcProgramGate": 1,
       "GrpcReadGate": 1,
+      "GrpcRefusalStatus": 1,
       "GrpcRollbackTo": 1,
       "GrpcSavepoint": 1,
       "GrpcServerValidation": 1,
@@ -85910,6 +84484,7 @@
       "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,
+      "HeldUntilPersisted": 1,
       "HelloAuthCheck": 1,
       "HelloCheck": 1,
       "HelloFanout": 1,
@@ -86045,8 +84620,6 @@
       "IntegrationTesting": 5,
       "IntegrationTests": 4,
       "IntegrityCheck": 1,
-      "InterNodeMessaging": 1,
-      "InterShardCommunication": 1,
       "InterfaceBoundary": 1,
       "InteriorBytesUnconditionalOwnership": 1,
       "InteriorDupeArenaBacked": 1,
@@ -86135,7 +84708,7 @@
       "LastElement": 1,
       "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
-      "LatencyVarianceEnvelope": 2,
+      "LatencyVarianceEnvelope": 1,
       "LaterEntryReplacesEarlier": 1,
       "LayeredArchitecture": 1,
       "LazyFetchCache": 1,
@@ -86176,7 +84749,6 @@
       "LibFuzzerEntry": 1,
       "Lifecycle": 1,
       "LifecycleAndJsonRpc": 1,
-      "LifecycleIntegration": 1,
       "Lifetime": 1,
       "LifetimeRegression": 1,
       "LifetimeRegressionBuild": 2,
@@ -86221,7 +84793,6 @@
       "LocalRestore": 1,
       "LocalRestoreWritesAndVerifies": 1,
       "LocalTime": 1,
-      "LocalityAware": 1,
       "LockUnavailableDiagnostic": 1,
       "LockedPlannerGates": 1,
       "LockedResidentWalk": 1,
@@ -86334,7 +84905,6 @@
       "MergeAliases": 1,
       "MergeCodec": 1,
       "MergeCreateUndoLog": 1,
-      "MergeError": 1,
       "MergeExecution": 1,
       "MergeFiltering": 1,
       "MergeMatchesVisibleSet": 1,
@@ -86345,7 +84915,6 @@
       "MergePrePass": 1,
       "MergeStatementUndo": 1,
       "MerkleOfServerLog": 1,
-      "MessageDispatch": 1,
       "MetaCommand": 1,
       "MetaCommandDispatch": 1,
       "MetadataDerived": 3,
@@ -86359,7 +84928,7 @@
       "MetricsPoolIsolation": 1,
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
-      "Migration": 5,
+      "Migration": 4,
       "MigrationHmacKey": 1,
       "MigrationModule": 2,
       "MigrationScript": 1,
@@ -86370,7 +84939,6 @@
       "MinRefactor": 1,
       "MinimalEntryPoint": 1,
       "MiscBatch2": 1,
-      "MismatchFalsePositiveGuard": 1,
       "MissCounter": 1,
       "MixedVersionFailLoud": 1,
       "MixedWorkload": 1,
@@ -86392,7 +84960,7 @@
       "MultiIdDerivation": 1,
       "MultiLabelJoin": 1,
       "MultiMatch": 1,
-      "MultiNode": 3,
+      "MultiNode": 2,
       "MultiNodeCountDistinct": 1,
       "MultiNodeMatch": 2,
       "MultiPolicy": 1,
@@ -86432,10 +85000,7 @@
       "NestedTreeRefusal": 1,
       "NestedValues": 1,
       "NestingAndLinkBounds": 1,
-      "NetworkCallback": 1,
       "NetworkTests": 1,
-      "NetworkTransport": 1,
-      "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
       "Next": 1,
@@ -86502,7 +85067,6 @@
       "NoUnmeasuredTdeOverheadClaim": 1,
       "NoUnreadDeployConfig": 1,
       "NodeCache": 1,
-      "NodeCapture": 1,
       "NodeCompare": 1,
       "NodeCreateAutoTenant": 1,
       "NodeCreateInMemory": 1,
@@ -86515,7 +85079,7 @@
       "NodeGraphNamePersistence": 1,
       "NodeGraphTag": 2,
       "NodeLabelAddRemove": 1,
-      "NodeLookup": 4,
+      "NodeLookup": 2,
       "NodeMergeFastPathGate": 1,
       "NodePersistence": 1,
       "NodeProperties": 1,
@@ -86614,7 +85178,7 @@
       "OptionsKeyValidation": 1,
       "OptionsStruct": 1,
       "OrPredicate": 1,
-      "Orchestration": 2,
+      "Orchestration": 1,
       "OrderAndPage": 1,
       "OrderByAfterAggregation": 1,
       "OrderByAndLimit": 1,
@@ -86699,7 +85263,6 @@
       "ParserTests": 3,
       "ParsingGeneration": 1,
       "ParsingInterrupt": 1,
-      "PartialMigration": 1,
       "PartialNodeFreed": 1,
       "PartialRollback": 1,
       "PartialRollbackMechanism": 1,
@@ -86747,7 +85310,6 @@
       "Patterns": 1,
       "Pause": 1,
       "PeerAddress": 1,
-      "PeerDecimal": 1,
       "PeerIPExtraction": 1,
       "PeerIsolation": 1,
       "PeerTls": 1,
@@ -86786,13 +85348,11 @@
       "PersistRestriction": 1,
       "PersistSplitPhase": 1,
       "PersistableLengths": 1,
-      "Persistence": 1,
       "PersistenceDeleteFailure": 1,
       "PersistenceStopIsPrompt": 1,
       "PersistentFollowupBackoff": 1,
       "PersistentResolver": 1,
       "PersistentStorage": 2,
-      "PersistentStorageWiring": 1,
       "PersistentStreamFairness": 1,
       "Phase0Infra": 1,
       "Phase1Benchmark": 1,
@@ -86804,7 +85364,6 @@
       "Phase4Benchmark": 1,
       "Phase4ShortestPath": 1,
       "Phase5Telemetry": 1,
-      "PhasePlanning": 1,
       "PhraseProc": 1,
       "PhraseRowFilter": 1,
       "PhraseSearch": 1,
@@ -86928,7 +85487,6 @@
       "PredictiveVersionCheck": 1,
       "PrefixFilter": 1,
       "PrehydrateBeforePropose": 1,
-      "Prepare": 1,
       "PreparePhase": 1,
       "PrependUseGraph": 1,
       "Prevention": 1,
@@ -86967,7 +85525,7 @@
       "ProgramReadGate": 1,
       "ProgramWriteLock": 1,
       "ProgressPrintedOncePerStep": 1,
-      "ProgressTracking": 2,
+      "ProgressTracking": 1,
       "ProjectionScope": 1,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
@@ -86993,7 +85551,7 @@
       "ProposeWithTenant": 1,
       "ProposeWrite": 1,
       "ProtoReadDeadline": 1,
-      "Protocol": 2,
+      "Protocol": 1,
       "ProtocolConformance": 1,
       "ProtocolE2E": 15,
       "ProtocolE2E_GRPC": 1,
@@ -87029,7 +85587,6 @@
       "QUICListener": 1,
       "QUICLockBypass": 1,
       "QUICLoop": 1,
-      "QUICMessaging": 1,
       "QUICMultiplexedStreams": 1,
       "QUICMultiplexing": 1,
       "QUICPerformanceMetrics": 1,
@@ -87048,9 +85605,8 @@
       "QuantifierCallHandlers": 1,
       "QuarantinedGraphFailClosed": 1,
       "QuarantinedGraphRefusesWrites": 1,
-      "Query": 7,
+      "Query": 3,
       "QueryCommand": 2,
-      "QueryCoordination": 1,
       "QueryDelete": 1,
       "QueryDispatch": 2,
       "QueryExec": 1,
@@ -87069,11 +85625,8 @@
       "QueryParameterCredentials": 1,
       "QueryParsing": 1,
       "QueryPlanCacheEvictVarianceEnvelope": 1,
-      "QueryPlanning": 5,
-      "QueryPlanningFlow": 1,
       "QueryProposeNodeCreate": 1,
       "QueryRewrite": 2,
-      "QueryRouting": 2,
       "QuerySpeed": 1,
       "QueryToolGate": 1,
       "QueryWiring": 1,
@@ -87123,13 +85676,11 @@
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
       "RaftSenderReconnectsInProcess": 1,
-      "RaftState": 1,
       "RandAlias": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
       "RangeLookupOncePerCommit": 1,
       "RangeOperatorsFailClosed": 1,
-      "RangeOverlap": 1,
       "RangeRefused": 1,
       "RangeTracker": 3,
       "RateControl": 1,
@@ -87325,7 +85876,6 @@
       "RevokeUserGraphPermission": 1,
       "RevokeWriteThrough": 1,
       "Right": 1,
-      "RingOperations": 1,
       "RiskModel": 1,
       "RobustnessBase32Decode": 1,
       "Role": 1,
@@ -87350,7 +85900,6 @@
       "Rotation": 1,
       "Round19UndoRegression": 1,
       "RoundTrip": 2,
-      "RoundTripTest": 2,
       "RoundtripTest": 1,
       "RoutingCorrectness": 1,
       "RowBuilding": 1,
@@ -87427,7 +85976,7 @@
       "SecondsPrecisionDeclaration": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
-      "Security": 49,
+      "Security": 47,
       "SecurityAudit": 3,
       "SecurityBatch2": 1,
       "SecurityBoundaries": 1,
@@ -87473,7 +86022,7 @@
       "ServerInitExprEngine": 1,
       "ServerInitFtsApplyHook": 1,
       "ServerInitLabelEngine": 1,
-      "ServerIntegration": 2,
+      "ServerIntegration": 1,
       "ServerLifecycle": 1,
       "ServerMain": 1,
       "ServerModules": 1,
@@ -87525,18 +86074,14 @@
       "SettleThroughExactIndex": 1,
       "ShadowBatchBuild": 1,
       "ShapeTable": 1,
-      "ShardAffinityAnalysis": 1,
       "ShardAlignedBulkNodeCreate": 1,
       "ShardLockedLabelCount": 1,
       "ShardLockedReservation": 1,
-      "ShardLookup": 1,
-      "ShardOptimization": 1,
       "ShardParallelMutationAdmission": 1,
-      "ShardRouting": 4,
-      "ShardSelection": 1,
       "ShardTxnPropertyFastPath": 1,
       "ShardWorkerCoalescing": 1,
       "ShardedMergePropertyIndex": 1,
+      "SharedAnswers": 1,
       "SharedAstConcurrentHits": 1,
       "SharedBackupDecode": 1,
       "SharedConnState": 1,
@@ -87648,7 +86193,6 @@
       "SpatialTypes": 3,
       "SpecResultObjects": 1,
       "Split": 1,
-      "SplitPoint": 1,
       "SplitRequestAnsweredOnce": 1,
       "SqlstateMapping": 10,
       "StableBindings": 1,
@@ -87666,6 +86210,7 @@
       "StartTransaction": 1,
       "StartsEndsContains": 1,
       "Startup": 6,
+      "StartupEnable": 1,
       "StartupGuard": 1,
       "StartupHydration": 2,
       "StartupLoad": 1,
@@ -87794,7 +86339,6 @@
       "TLSConnection": 1,
       "TLSOneShot": 1,
       "TLSSecurity": 1,
-      "TOCTOU": 1,
       "TableCheck": 1,
       "TablePreScan": 1,
       "TaggedUnion": 1,
@@ -87818,11 +86362,10 @@
       "TenantRegistryVarianceEnvelope": 1,
       "TenantScopedMergeLookup": 1,
       "TenantScopedProfile": 1,
-      "TermVotedFor": 1,
       "Test": 5,
       "TestAutomation": 1,
       "TestCleanup": 1,
-      "TestCoverage": 3,
+      "TestCoverage": 2,
       "TestEnforcement": 1,
       "TestExecution": 1,
       "TestExposure": 1,
@@ -87838,7 +86381,7 @@
       "TestModeFlag": 1,
       "TestSuite": 4,
       "TestTransparentEncryption": 1,
-      "Testing": 14,
+      "Testing": 13,
       "TestingBatch2": 1,
       "Tests": 2,
       "TextPropertyValidation": 1,
@@ -87877,11 +86420,9 @@
       "TransactionCoordination": 1,
       "TransactionLifecycle": 1,
       "Transactions": 1,
-      "TransferEstimation": 1,
       "TransientNodeRead": 1,
-      "Transport": 2,
+      "Transport": 1,
       "TransportAgnosticGlobals": 1,
-      "TransportCallback": 1,
       "TransportExecutionParity": 1,
       "TransportFastPath": 1,
       "TransportHotPath": 1,
@@ -87966,7 +86507,7 @@
       "UnitTest": 12,
       "UnitTestExecution": 1,
       "UnitTesting": 5,
-      "UnitTests": 24,
+      "UnitTests": 23,
       "UnitVerification": 1,
       "UniversalAndUserSpecificMixed": 1,
       "UniversalPolicyIncluded": 1,
@@ -88072,6 +86613,8 @@
       "VerifyStagedAuthChain": 1,
       "VisibleDegree": 1,
       "VisibleTenantTags": 1,
+      "VoteDurableBeforeReply": 1,
+      "VoteSurvivesRestart": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
       "WalLsnAnchorAtOpen": 1,

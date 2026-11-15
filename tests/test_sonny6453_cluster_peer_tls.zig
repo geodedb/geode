@@ -1,22 +1,22 @@
 // SONNY-6453 item 2 (+ item 5's raft comment): every cluster peer dial —
-// 2PC, raft and the cluster coordinator — uses ONE verified transport
+// raft and the cluster coordinator — uses ONE verified transport
 // configuration (`cluster_auth.dialClusterPeer`): the CA bundle in
 // GEODE_CLUSTER_CA_CERT, or (Debug builds only) GEODE_CLUSTER_INSECURE.
 //
-// Before: the 2PC transport never read GEODE_CLUSTER_CA_CERT. It dialled
-// with verification on and no trust anchor, so a verified 2PC handshake
-// could never complete. Raft and the coordinator, with no CA configured,
-// fell back to a "system CA bundle" that is never loaded. Now a dial with
-// no CA configured is refused up front with error.ClusterCaRequired.
+// Before: raft and the coordinator, with no CA configured, fell back to a
+// "system CA bundle" that is never loaded. Now a dial with no CA configured
+// is refused up front with error.ClusterCaRequired. (The 2PC transport this
+// test also dialled, src/distributed/twophase.zig, was reached by nothing in
+// the server and was removed, SONNY-6563.)
 //
 // Real QUIC: an in-process `QuicTransport` server on 127.0.0.31 presents a
-// leaf signed by CA "good"; the 2PC transport and the raft/cluster connect
-// helper dial it with the right CA, another CA, and none. Fixtures are made
-// with openssl (skips only if openssl is absent or 127.0.0.31 cannot be bound).
-// 127.0.0.31 is an address no other test step uses (SONNY-6460), so the
-// free port it binds there cannot collide with another step's.
+// leaf signed by CA "good"; the raft/cluster connect helper dials it with the
+// right CA, another CA, and none. Fixtures are made with openssl (skips only
+// if openssl is absent or 127.0.0.31 cannot be bound). 127.0.0.31 is an
+// address no other test step uses (SONNY-6460), so the free port it binds
+// there cannot collide with another step's.
 //
-// CANARY: REQ=REQ-2PC-TLS-003; FEATURE="2PC TLS"; ASPECT=ClusterCa; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=distributed; UPDATED=2026-11-13
+// CANARY: REQ=REQ-2PC-TLS-003; FEATURE="Cluster peer TLS"; ASPECT=ClusterCa; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=distributed; UPDATED=2026-11-14
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -24,7 +24,6 @@ const geode = @import("geode");
 const quic = @import("transport/quic");
 const test_ports = @import("test_ports.zig");
 
-const twophase = geode.distributed.twophase;
 const cluster_auth = geode.distributed.cluster_auth;
 
 const SERVER_IP = "127.0.0.31";
@@ -140,42 +139,6 @@ fn setClusterCa(path: ?[:0]const u8) void {
         _ = setenv("GEODE_CLUSTER_CA_CERT", p, 1);
     } else {
         _ = unsetenv("GEODE_CLUSTER_CA_CERT");
-    }
-}
-
-test "SONNY-6453: 2PC dials participants verified against GEODE_CLUSTER_CA_CERT" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
-    const a = std.testing.allocator;
-    _ = unsetenv("GEODE_CLUSTER_INSECURE");
-    var fx = try makeFixtures();
-    defer fx.deinit();
-    var srv: Server = undefined;
-    try Server.start(a, &srv, &fx);
-    defer srv.stopAndFree(a);
-    defer setClusterCa(null);
-    const endpoint = try std.fmt.allocPrint(a, "{s}:{d}", .{ SERVER_IP, srv.port });
-    defer a.free(endpoint);
-
-    // The cluster CA that signed the participant: the handshake completes.
-    {
-        setClusterCa(fx.good_ca);
-        var t = twophase.TwoPhaseTransport.init(a);
-        defer t.deinit();
-        _ = try t.getConnection(endpoint);
-    }
-    // A CA that did not sign it: refused.
-    {
-        setClusterCa(fx.other_ca);
-        var t = twophase.TwoPhaseTransport.init(a);
-        defer t.deinit();
-        try std.testing.expectError(error.HandshakeFailed, t.getConnection(endpoint));
-    }
-    // No cluster CA configured: refused before dialling, with a clear error.
-    {
-        setClusterCa(null);
-        var t = twophase.TwoPhaseTransport.init(a);
-        defer t.deinit();
-        try std.testing.expectError(error.ClusterCaRequired, t.getConnection(endpoint));
     }
 }
 
