@@ -10714,6 +10714,37 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6594_undo_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6594_undo_step = b.step("test-sonny6594-undo-read-failure", "Run SONNY-6594 item 1 regression (a durable store, gRPC in process, a body rebuild made to fail: ROLLBACK of a SET, REMOVE, label, edge SET or edge DELETE whose body cannot be read fails with 40003 or leaves the data as before the transaction, never reports success with the change in place; a write whose before-image cannot be read fails or is undone)");
     sonny6594_undo_step.dependOn(&run_sonny6594_undo_tests.step);
+    // SONNY-6594 (2): an index build that cannot read a body fails and leaves
+    // no index without the row. Executor and gRPC in process.
+    const sonny6594_index_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_index_build_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_index_test_mod.link_libc = true;
+    sonny6594_index_test_mod.addImport("geode", root_mod);
+    sonny6594_index_test_mod.addImport("schema", schema_mod);
+    sonny6594_index_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_index_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_index_test_mod.addImport("logging", logging_mod);
+    sonny6594_index_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_index_tests = b.addTest(.{ .root_module = sonny6594_index_test_mod });
+    const run_sonny6594_index_tests = b.addRunArtifact(sonny6594_index_tests);
+    shardDep(test_step, &run_sonny6594_index_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_index_step = b.step("test-sonny6594-index-build-read-failure", "Run SONNY-6594 item 2 regression (a durable store, every body evicted and its rebuild made to fail: CREATE INDEX USING vector in process and over gRPC in process fails or leaves no index without the row; knn afterwards answers every row)");
+    sonny6594_index_step.dependOn(&run_sonny6594_index_tests.step);
+    // SONNY-6594 (4): a read that cannot read an edge body fails instead of
+    // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
+    // centrality). gRPC in process.
+    const sonny6594_read_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_read_test_mod.link_libc = true;
+    sonny6594_read_test_mod.addImport("geode", root_mod);
+    sonny6594_read_test_mod.addImport("schema", schema_mod);
+    sonny6594_read_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_read_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_read_test_mod.addImport("logging", logging_mod);
+    sonny6594_read_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_read_tests = b.addTest(.{ .root_module = sonny6594_read_test_mod });
+    const run_sonny6594_read_tests = b.addRunArtifact(sonny6594_read_tests);
+    shardDep(test_step, &run_sonny6594_read_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_read_step = b.step("test-sonny6594-read-failure", "Run SONNY-6594 item 4 regression (a durable store, gRPC in process, every edge body evicted and its rebuild made to fail: MATCH one- and two-hop patterns, path variables, variable-length patterns, COUNT { } and pattern comprehensions, shortestPath, BFS and centrality, top level and inside a transaction, fail or answer exactly the healthy answer)");
+    sonny6594_read_step.dependOn(&run_sonny6594_read_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

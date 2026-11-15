@@ -39,6 +39,19 @@ pub const BodyFault = struct {
         for (edge_ids) |id| self.st.edges.remove(id);
     }
 
+    /// Evict every other node body carrying `label` in `graph` (the rest stay
+    /// resident and readable). Returns how many were evicted.
+    pub fn evictHalfOfLabel(self: *BodyFault, graph: []const u8, label: []const u8) usize {
+        const ids = self.st.getNodesByLabel(graph, label) orelse return 0;
+        var n: usize = 0;
+        for (ids, 0..) |id, i| {
+            if (i % 2 == 0) continue;
+            self.st.nodes.remove(id);
+            n += 1;
+        }
+        return n;
+    }
+
     /// Evict every edge body only.
     pub fn evictEdges(self: *BodyFault) !void {
         const a = std.testing.allocator;
