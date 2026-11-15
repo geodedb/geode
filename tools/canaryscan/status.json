@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:15:43.731247645Z",
+  "generated_at": "2026-11-15T13:44:47.234476873Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78160,6 +78160,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6591-FTS-FAST-CREATE",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "FastPathCreateMaintenance",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6591_fts_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "RegistryArmedFromCatalog",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6591_fts_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6591-FTS-WRITE-PATHS",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "WirePathMatrix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6591_fts_write_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6591_fts_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83250,7 +83307,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4130
+      "TESTED": 4133
     },
     "by_aspect": {
       "2PC": 3,
@@ -84451,6 +84508,7 @@
       "FalsePositiveReduction": 1,
       "FanoutScaledServerDefaults": 1,
       "FastPath": 2,
+      "FastPathCreateMaintenance": 1,
       "FastPathDecline": 1,
       "FastPathFence": 1,
       "FastPathGate": 1,
@@ -86014,6 +86072,7 @@
       "RefusedAsUnsupported": 2,
       "RefusedCommitOnQuicWire": 1,
       "RefusedDropFailsApply": 1,
+      "RegistryArmedFromCatalog": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
@@ -86900,6 +86959,7 @@
       "WireCode": 1,
       "WireEncoding": 1,
       "WireField": 1,
+      "WirePathMatrix": 1,
       "WireProcedure": 1,
       "WireProtocolCompatibility": 1,
       "WireRegression": 2,

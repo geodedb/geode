@@ -1959,6 +1959,11 @@ pub const ManagedGraph = struct {
     /// not available in the geode root module's std) locked via the global
     /// single-threaded io handle.
     fts_label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-6591: `fts_label_index` holds every fulltext index the catalog
+    /// records for this graph (`fts_index_ops.armLabelRegistry` filled it from
+    /// the catalog and opened their engines). The registry lives in memory
+    /// only, so a graph opened by a restart starts with it empty.
+    fts_registry_armed: std.atomic.Value(bool) = .init(false),
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,

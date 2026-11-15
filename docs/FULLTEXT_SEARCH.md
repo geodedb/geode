@@ -188,7 +188,7 @@ graph dir
 
 After an index exists, ordinary write paths keep it current automatically:
 
-- **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
+- **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created). This includes the QUIC write fast path for a single-statement `CREATE (n:L {k: v})` with no RETURN (`executeBulkSimpleCreate`), which indexed nothing before SONNY-6591.
 - **`SET`** — updating an indexed property re-indexes the node. A `SET`
   that replaces a non-empty indexed string (with another value, a
   non-string, or by `SET n = {map}` dropping or changing it) queues every
@@ -220,6 +220,18 @@ After an index exists, ordinary write paths keep it current automatically:
   thread — never a group-commit worker thread — satisfying the fts engine's
   single-writer-thread contract. Bulk-MERGE'd nodes are searchable
   **immediately**, no rebuild required.
+- **After a restart** — the hooks find an index through a label -> index
+  registry held in memory. The first hook on a graph after a restart fills
+  it from the catalog's fulltext rows (written by CREATE INDEX, removed by
+  DROP INDEX) and opens their engines, so every path above keeps working
+  after a clean restart or a crash (SONNY-6591). Before that fix the
+  registry stayed empty after any restart: search answered what was
+  indexed before it, and no later write reached the index until
+  `CALL geode.fts.rebuild`.
+
+Regression for every path above, over QUIC and gRPC, with and without TDE,
+right after the write and after SIGKILL and SIGTERM restarts:
+`zig build test-sonny6591-fts-write-paths`.
 
 > **Graph scope:** `CALL geode.fts.*` operates on the default graph — a node
 > bulk-MERGE'd into a non-default graph is maintained into *that* graph's own
@@ -294,7 +306,11 @@ that rebuild runs again after its pass instead of the repair being dropped
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to
 be present) before marking ingestion ready — cheap insurance, and the primary
-signal that recovery via `CALL geode.fts.rebuild` is needed.
+signal that recovery via `CALL geode.fts.rebuild` is needed. Use a term from a
+node written LAST, and after the server's latest restart: a term written
+earlier says nothing about later writes. Data written by a binary without the
+SONNY-6591 fix needs one `CALL geode.fts.rebuild` per index if it was written
+by a single-statement QUIC `CREATE` or after a restart.
 
 ### Cluster Mode (2026-06-10)
 

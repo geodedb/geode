@@ -594,6 +594,7 @@ fn executeBulkSimpleCreate(
         return;
     }
     const adapter = adapter_opt.?;
+    var created_node_id: u64 = undefined;
 
     if (group_commit.isEnabled()) {
         // Lazily start the coordinator on first mutation against this graph.
@@ -629,7 +630,7 @@ fn executeBulkSimpleCreate(
             .props = kvs,
             .result = .{},
         } };
-        _ = coord.submit(&op) catch |err| {
+        created_node_id = coord.submit(&op) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return;
@@ -667,7 +668,7 @@ fn executeBulkSimpleCreate(
             kvs,
             null,
         );
-        _ = node_id_res catch |err| {
+        created_node_id = node_id_res catch |err| {
             graph_store.releaseGraphLock(lock_handle);
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
@@ -678,6 +679,21 @@ fn executeBulkSimpleCreate(
         graph_store.releaseGraphLock(lock_handle);
         mut_sample.markLockReleased();
     }
+
+    // CANARY: REQ=REQ-SONNY-6591-FTS-FAST-CREATE; FEATURE="FullText"; ASPECT=FastPathCreateMaintenance; STATUS=TESTED; TEST=tests/test_sonny6591_fts_write_paths.zig; OWNER=fts; UPDATED=2026-11-15
+    // SONNY-6591: keep the fulltext indexes on the node's labels current, as
+    // every other write path does. This path wrote the node through the
+    // adapter only, so a `CREATE (n:L {k: v})` served here was never indexed.
+    // On the connection thread, with no graph lock held, before the answer
+    // (the bulk MERGE twins' placement); cheap-exits when no fulltext index
+    // covers a label. `.create`: append only if the engine does not hold the
+    // node.
+    execution.fts_index_ops.maintainFulltextOnWrite(eval_allocator, query_graph_name, created_node_id, node_pattern.labels, .create) catch |err| {
+        log.warn("bulk-create FTS maintenance failed", &.{
+            Attr.uint("node_id", created_node_id),
+            Attr.string("err", @errorName(err)),
+        });
+    };
 
     try sendEmptySuccessResult(gpa, stream);
 
