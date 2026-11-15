@@ -2583,6 +2583,23 @@
   `knn()` index rebuild is logged with its cause (the scan still answers)
   instead of being swallowed. Regression: `zig build
   test-sonny6607-index-backfill-warning`.
+- **Tenant lifecycle fails closed (SONNY-6607 item 4).** **BREAKING
+  (operator):**
+  - `geode.tenant.create` whose hierarchy add fails (out of memory) now
+    fails and removes the tenant from the registry again; it logged the
+    failure and reported success with a tenant the RLS hierarchy did not
+    know. `HierarchyManager.addTenant` is failure-atomic: a failed child
+    registration freed the key and path the map still held (a crash at
+    shutdown) and left the node without its parent's child entry.
+  - A statement whose session tenant is registered and marked as being
+    dropped (a DROP that failed part-way) is refused with `TenantDropping`
+    at statement entry; it went on reading and writing that tenant.
+  - Startup refuses a tenant registry holding a tenant whose parent is not
+    registered (`TenantRegistryOrphanParent`, naming each tenant on stderr
+    and in the log); it was a warning and the tenant ran outside the
+    hierarchy.
+  Regression: `zig build test-sonny6607-tenant-lifecycle`,
+  `test-sonny6607-tenant-orphan-startup`.
 - **ROLLBACK that cannot read a body it must undo fails instead of
   reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
   undo asked whether the node or edge a change was on still exists, and a

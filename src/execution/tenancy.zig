@@ -167,6 +167,23 @@ pub fn isConcreteScope(tid: []const u8) bool {
 /// Both `crud_operations.tenantFilterFromContext` and
 /// `match_operations.getSessionTenantFilter` delegate here so the
 /// null=all-tenants footgun is closed in exactly one place.
+// CANARY: REQ=REQ-SONNY-6607-TENANT-LIFECYCLE; FEATURE="TenantLifecycle"; ASPECT=DroppingTenantRefused; STATUS=TESTED; TEST=tests/test_sonny6607_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6607 (4): refuse a statement whose session tenant is registered and
+/// marked as being dropped (a DROP that failed part-way leaves it so until
+/// it is retried). Its sessions went on reading and writing it. Checked at
+/// every statement's entry (`executeStatementWithContext`,
+/// `executeProgramWithContext`); an unregistered tenant, or no registry, is
+/// not refused here.
+pub fn refuseDroppingTenant(maybe_tid: ?[]const u8) error{TenantDropping}!void {
+    const tid = maybe_tid orelse return;
+    if (!isConcreteScope(tid)) return;
+    const reg = tenant_registry.getGlobalRegistry() orelse return;
+    if (reg.isDropping(tid)) {
+        log.warn("tenant is being dropped; its statement is refused", &.{logging.Attr.string("tenant", tid)});
+        return error.TenantDropping;
+    }
+}
+
 pub fn resolveTenantFilter(maybe_tid: ?[]const u8) TenancyError!?[]const u8 {
     if (maybe_tid) |tid| {
         if (isConcreteScope(tid)) return tid;

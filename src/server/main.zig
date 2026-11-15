@@ -1244,11 +1244,22 @@ fn rehydrateTenantDerivedState(
             made_progress = true;
         }
     }
+    // SONNY-6607 (4): a tenant whose parent is not registered (or a parent
+    // cycle) cannot be placed in the hierarchy; it was a warning and the
+    // server ran with the tenant outside it (its parent did not see its
+    // rows; a cascade drop missed it). The registry never writes one, so it
+    // is damage: refuse to start, naming each, as for any other part of the
+    // tenant state that cannot be rebuilt.
     if (added.count() < recs.len) {
-        log.warn("tenant_registry.rehydrate_incomplete_orphan_parents", &.{
-            Attr.int("added", @intCast(added.count())),
-            Attr.int("total", @intCast(recs.len)),
-        });
+        for (recs, 0..) |rec, i| {
+            if (added.contains(i)) continue;
+            log.err("tenant_registry.rehydrate_orphan_parent; refusing to start", &.{
+                Attr.string("tenant", rec.tenant_id),
+                Attr.string("parent", rec.parent orelse ""),
+            });
+            std.debug.print("geode: tenant registry: tenant '{s}' names parent '{s}', which is not registered; refusing to start (restore the registry, or remove or re-parent the tenant)\n", .{ rec.tenant_id, rec.parent orelse "" });
+        }
+        return error.TenantRegistryOrphanParent;
     }
 
     // Replay quota overrides into the live manager (order-independent).

@@ -271,18 +271,24 @@ fn resolveRegistry() !*tenant_registry.TenantRegistry {
     return tenant_registry.getGlobalRegistry() orelse error.Unsupported;
 }
 
-/// Best-effort: populate the GAP-0838 production hierarchy from a create. The
-/// registry is the source of truth; the hierarchy is an authz-acceleration
-/// structure. A duplicate (already-present) tenant in the hierarchy is benign.
-fn addToHierarchy(tenant_id: []const u8, parent: ?[]const u8) void {
+/// Populate the GAP-0838 production hierarchy from a create. A duplicate
+/// (already-present) tenant in the hierarchy is benign. SONNY-6607 (4): any
+/// other failure is the create's error (the caller undoes the registry
+/// write): it was logged and the create reported success with a tenant the
+/// hierarchy did not know (its parent did not see its rows; a cascade drop
+/// of the parent missed it).
+fn addToHierarchy(tenant_id: []const u8, parent: ?[]const u8) !void {
     const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return;
     const engine: *rls_core.RLSEngine = @ptrCast(@alignCast(engine_ptr));
     engine.hierarchy_manager.addTenant(tenant_id, parent) catch |err| switch (err) {
         error.TenantAlreadyExists => {}, // already populated — fine
-        else => log.warn("tenant_admin.hierarchy_add_failed", &.{
-            Attr.string("tenant", tenant_id),
-            Attr.string("error", @errorName(err)),
-        }),
+        else => {
+            log.err("tenant_admin.hierarchy_add_failed; the create is undone", &.{
+                Attr.string("tenant", tenant_id),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        },
     };
 }
 
@@ -328,8 +334,15 @@ fn handleCreate(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Exe
     // into the hierarchy, so the parent is present unless the server started
     // with pre-existing registry rows (hydrated) but an empty hierarchy. In
     // that hydrate-without-rehydrate case the hierarchy add is best-effort and
-    // logged; the registry remains authoritative.
-    addToHierarchy(tenant_id, parent);
+    // logged; the registry remains authoritative. SONNY-6607 (4): a failed
+    // add fails the create and removes the tenant from the registry again.
+    addToHierarchy(tenant_id, parent) catch |err| {
+        reg.drop(tenant_id) catch |drop_err| log.err("tenant_admin.create_undo_failed; the tenant stays registered without its hierarchy node", &.{
+            Attr.string("tenant", tenant_id),
+            Attr.string("error", @errorName(drop_err)),
+        });
+        return err;
+    };
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "tenant_id");

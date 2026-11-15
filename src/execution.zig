@@ -1570,6 +1570,7 @@ pub fn detachFromStatementScratch(allocator: std.mem.Allocator, scratch: *const 
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    try @import("execution/tenancy.zig").refuseDroppingTenant(context.tenant_id); // SONNY-6607 (4)
     var scratch: query_arena.StatementScratch = .{};
     scratch.open(allocator);
     defer scratch.close();
@@ -1829,6 +1830,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    try @import("execution/tenancy.zig").refuseDroppingTenant(context.tenant_id); // SONNY-6607 (4)
     // SONNY-6449: see `detachFromStatementScratch`.
     var scratch: query_arena.StatementScratch = .{};
     scratch.open(allocator);

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T17:55:05.695192549Z",
+  "generated_at": "2026-11-15T18:02:03.4360005Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78612,6 +78612,20 @@
       "features": [
         {
           "feature": "TenantLifecycle",
+          "aspect": "DroppingTenantRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/tenancy.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_tenant_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantLifecycle",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -83755,7 +83769,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4160
+      "TESTED": 4161
     },
     "by_aspect": {
       "2PC": 3,
@@ -84673,6 +84687,7 @@
       "DropWaitsForHydration": 1,
       "DropWaitsForReaders": 1,
       "DroppedNameRefused": 1,
+      "DroppingTenantRefused": 1,
       "DryRunWrapper": 1,
       "DualListenerLifetime": 1,
       "DualTokenValidation": 1,

@@ -4978,6 +4978,7 @@ REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,ErrorReturningGetters,TESTED,src/graph_store.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,storage,2026-11-15
 REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_adjacency_property_read_failure.zig,tests/test_sonny6607_adjacency_property_read_failure.zig,,execution,2026-11-15
 REQ-SONNY-6607-INDEX-BACKFILL-WARNING,VectorIndex,Regression,TESTED,tests/test_sonny6607_index_backfill_warning.zig,tests/test_sonny6607_index_backfill_warning.zig,,index,2026-11-15
+REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,DroppingTenantRefused,TESTED,src/execution/tenancy.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15
 REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_lifecycle.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15
 REQ-SONNY-6607-TENANT-ORPHAN-STARTUP,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_orphan_startup.zig,tests/test_sonny6607_tenant_orphan_startup.zig,,security,2026-11-15
 REQ-SONNY-6607-VOID-WRITE-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_void_write_errors.zig,tests/test_sonny6607_void_write_errors.zig,,storage,2026-11-15
