@@ -744,7 +744,7 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     var ei: usize = 0;
     while (ei < edge_count) : (ei += 1) {
         const edge_id = try r.readU64();
-        if (store.getEdgePtr(edge_id) != null) {
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) != null) {
             if (store.deleteEdgeChecked(edge_id)) |_| {
                 removed += 1;
             } else |err| {
@@ -2013,7 +2013,7 @@ test "GDEL delete round-trips: detach delete removes node + incident edge" {
 
     const removed = try applyDeletePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 2), removed); // 1 edge + 1 node
-    try std.testing.expect(store.getEdgePtr(20) == null);
+    try std.testing.expect((try store.getEdgePtrHydratedChecked(20)) == null);
     try std.testing.expect(store.getNodePtr(10) == null);
     try std.testing.expect(store.getNodePtr(11) != null); // untouched
 }

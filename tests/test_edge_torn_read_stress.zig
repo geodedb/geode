@@ -67,10 +67,10 @@ fn makeNode(env: *Env, sid: []const u8) !u64 {
 }
 
 fn outDegree(env: *Env, src: u64, rel: []const u8) usize {
-    const outgoing = env.store.getOutgoingEdgeIds(src) orelse return 0;
+    const outgoing = (env.store.getOutgoingEdgeIdsOrError(src) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
-        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        const e = (env.store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
         n += 1;

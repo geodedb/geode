@@ -191,7 +191,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         }
         i = 0;
         while (i < E) : (i += 17) {
-            const edge = store.getEdgePtrHydrated(edge_ids[i]) orelse return error.EdgeNotFound;
+            const edge = (try store.getEdgePtrHydratedChecked(edge_ids[i])) orelse return error.EdgeNotFound;
             const w = edge.properties.get("weight") orelse return error.PropertyNotFound;
             try testing.expectEqual(@as(i64, @intCast(i)), w.Int);
             const k = edge.properties.get("kind") orelse return error.PropertyNotFound;
@@ -236,7 +236,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         // Edge property parity after reopen (legacy chains read back).
         var i: usize = 0;
         while (i < E) : (i += 17) {
-            const edge = store.getEdgePtrHydrated(edge_ids[i]) orelse return error.EdgeNotFound;
+            const edge = (try store.getEdgePtrHydratedChecked(edge_ids[i])) orelse return error.EdgeNotFound;
             const w = edge.properties.get("weight") orelse return error.PropertyNotFound;
             try testing.expectEqual(@as(i64, @intCast(i)), w.Int);
         }
@@ -254,7 +254,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         const renamed = try store.getNodePropertyValue(seed_ids[0], "name");
         try testing.expectEqualStrings("renamed-0", renamed.String);
         try store.setEdgeProperty(edge_ids[0], "weight", .{ .Int = 424242 });
-        const edge = store.getEdgePtrHydrated(edge_ids[0]) orelse return error.EdgeNotFound;
+        const edge = (try store.getEdgePtrHydratedChecked(edge_ids[0])) orelse return error.EdgeNotFound;
         const w2 = edge.properties.get("weight") orelse return error.PropertyNotFound;
         try testing.expectEqual(@as(i64, 424242), w2.Int);
 

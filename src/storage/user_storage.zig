@@ -2233,8 +2233,8 @@ test "persistUserWithHmac produces deterministic HMAC" {
 
     const record1 = backend1.getUser(1).?;
     const record2 = backend2.getUser(1).?;
-    const hmac1 = store1.getNodeProperty(backend1.user_nodes.get(1).?, "hmac").?.String;
-    const hmac2 = store2.getNodeProperty(backend2.user_nodes.get(1).?, "hmac").?.String;
+    const hmac1 = (try store1.getNodePropertyOrError(backend1.user_nodes.get(1).?, "hmac")).?.String;
+    const hmac2 = (try store2.getNodePropertyOrError(backend2.user_nodes.get(1).?, "hmac")).?.String;
 
     // The stored HMAC is the verifier's recomputation over the stored record.
     try testing.expectEqualStrings(&auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record1)), hmac1);

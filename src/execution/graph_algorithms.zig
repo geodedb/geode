@@ -236,14 +236,14 @@ const ScanSource = struct {
         if (self.ids) |*ids| ids.deinit(self.allocator);
     }
 
-    fn next(self: *ScanSource) ?*graph_store.Node {
+    fn next(self: *ScanSource) !?*graph_store.Node {
         if (self.graph_iter) |*it| return it.next();
         const ids = self.ids orelse return null;
         while (self.pos < ids.items.len) {
             const id = ids.items[self.pos];
             self.pos += 1;
             // A stale index entry (deleted node) reads as absent.
-            if (self.store.getNodePtrForScan(id)) |node| return node;
+            if ((try self.store.getNodePtrForScan(id))) |node| return node;
         }
         return null;
     }
@@ -391,7 +391,7 @@ fn findFirstMatchingNode(
     // SONNY-1562: every node of the graph, not just the resident ones.
     var source = try ScanSource.init(allocator, store, scope, node_pattern.labels);
     defer source.deinit();
-    while (source.next()) |node_ptr| {
+    while (try source.next()) |node_ptr| {
         const node = node_ptr.*;
         // SONNY-1326 / SONNY-2679 / SONNY-2687: a start/end node the session
         // cannot see (another graph or tenant, or denied by RLS) must read as
@@ -406,7 +406,7 @@ fn findFirstMatchingNode(
 
 /// Whether node `id` is one the session may see that `pattern` matches.
 fn endMatches(store: *graph_store.GraphStore, id: u64, pattern: ast.NodePattern, env: Env, allocator: std.mem.Allocator, scope: *ExprScope) !bool {
-    const node = (store.nodes.getOrHydratePtr(id) catch null) orelse return false;
+    const node = (try store.nodes.getOrHydratePtr(id)) orelse return false;
     if (!scope.nodeVisible(node)) return false;
     return nodeMatchesPattern(node.*, pattern, env, allocator);
 }
@@ -498,7 +498,7 @@ const PatternWalk = struct {
 
     fn node(self: *PatternWalk, id: u64) !?*graph_store.Node {
         if (self.nodes.get(id)) |n| return n;
-        const n = self.store.getNodePtrForScan(id) orelse return null;
+        const n = (try self.store.getNodePtrForScan(id)) orelse return null;
         try self.nodes.put(self.allocator, id, n);
         return n;
     }
@@ -540,7 +540,7 @@ const PatternWalk = struct {
         // SONNY-1562: every node of the graph, not just the resident ones.
         var source = try ScanSource.init(self.allocator, self.store, self.scope, start.labels);
         defer source.deinit();
-        while (source.next()) |n| {
+        while (try source.next()) |n| {
             // SONNY-1326 / SONNY-2679 / SONNY-2687: only rows the session
             // scope admits (graph, tenant and RLS).
             if (!self.scope.nodeVisible(n)) continue;
@@ -971,7 +971,7 @@ fn materializePath(
         // Hydrate-on-miss, as before: a node evicted from the bounded cache is
         // still live. A node that resolves nowhere is skipped (pre-existing
         // behaviour); a node that resolves but is OUT OF SCOPE kills the path.
-        const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+        const node_ptr = (try store.nodes.getOrHydratePtr(node_id)) orelse continue;
         // SONNY-2679 / SONNY-2687: a node denied by RLS, or in another graph,
         // kills the path the same way.
         if (!scope.nodeVisible(node_ptr)) {

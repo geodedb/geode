@@ -348,7 +348,7 @@ test "SONNY-6321 (8) a configured FLE field is stored as an envelope and read as
     // encrypted field, and what reaches disk (WAL and checkpointed pages)
     // holds no plaintext of it, while the unencrypted field's value is there.
     const store = graph_store.getGlobalStore(allocator);
-    const raw = store.getNodeProperty(node_id, "ssn") orelse return error.NoProperty;
+    const raw = (try store.getNodePropertyOrError(node_id, "ssn")) orelse return error.NoProperty;
     try testing.expect(raw == .String);
     try testing.expect(std.mem.indexOf(u8, raw.String, "123-45-6789") == null);
     try store.saveToFile();

@@ -423,7 +423,7 @@ pub fn setNodePropertyFromValue(
         .Str => |s| blk: {
             // SONNY-6347: the record's stored tenant is the encryption
             // identity's (hydrated here when the node is not resident).
-            const record_tenant = if (resident) |n| n.tenant_id else if (store.nodes.getOrHydratePtr(node_id) catch null) |n| n.tenant_id else fle_integration.tenantPreferringActiveContext();
+            const record_tenant = if (resident) |n| n.tenant_id else if (try store.nodes.getOrHydratePtr(node_id)) |n| n.tenant_id else fle_integration.tenantPreferringActiveContext();
             const encrypted_or_plain = try fle_hooks.encryptPropertyIfNeeded(
                 allocator,
                 node_graph,

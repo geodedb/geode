@@ -112,7 +112,7 @@ fn renderEdge(store: *GraphStore, graph: []const u8, edge_id: u64) ![]u8 {
     store.ensureGraphHydrated(graph);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(testing.allocator);
-    const edge = store.getEdgeHydrated(edge_id) orelse {
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse {
         try out.appendSlice(testing.allocator, "absent");
         return out.toOwnedSlice(testing.allocator);
     };
@@ -513,8 +513,8 @@ test "SONNY-6302: a replicated delete whose engine delete fails reports it and a
         return error.FailureNotReported;
     } else |_| {}
     // Neither edge was deleted (each delete failed).
-    try testing.expect(store.getEdgeHydrated(e1) != null);
-    try testing.expect(store.getEdgeHydrated(e2) != null);
+    try testing.expect((try store.getEdgeHydratedChecked(e1)) != null);
+    try testing.expect((try store.getEdgeHydratedChecked(e2)) != null);
 
     // Only the first delete fails: the second edge is still deleted.
     graph_store.setAdapterWriteFaultForTesting(.delete_edge, 1);
@@ -524,10 +524,10 @@ test "SONNY-6302: a replicated delete whose engine delete fails reports it and a
         std.debug.print("applyDeletePayload reported success ({d} removed) with an engine delete failing\n", .{n});
         return error.FailureNotReported;
     } else |_| {}
-    try testing.expect(store.getEdgeHydrated(e1) == null);
-    try testing.expect(store.getEdgeHydrated(e2) != null);
+    try testing.expect((try store.getEdgeHydratedChecked(e1)) == null);
+    try testing.expect((try store.getEdgeHydratedChecked(e2)) != null);
 
     // The re-apply (a retry, or the replay after a restart) completes it.
     try testing.expectEqual(@as(usize, 1), try cluster_replication.applyDeletePayload(testing.allocator, &store, payload));
-    try testing.expect(store.getEdgeHydrated(e2) == null);
+    try testing.expect((try store.getEdgeHydratedChecked(e2)) == null);
 }

@@ -102,7 +102,7 @@ const Resolver = struct {
             // read through the hydrate hook, racing the DROP.
             if (i % 4 == 0) {
                 self.st.nodes.remove(id);
-                if (self.st.getNodePtrHydrated(id)) |node| {
+                if ((self.st.getNodePtrHydratedChecked(id) catch @panic("SONNY-6621: unexpected read failure"))) |node| {
                     _ = node;
                     self.hydrated += 1;
                 }

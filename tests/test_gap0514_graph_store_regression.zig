@@ -150,7 +150,7 @@ test "GAP-0514 REQ-PERF-EDGE-ADJ: createEdge populates outgoing and incoming ind
     const e_ac = try h.store.createEdge(a, c, "LINK");
 
     // a has two outgoing edges (→b and →c), no incoming edges.
-    const a_out = h.store.getOutgoingEdgeIds(a) orelse return error.MissingOutgoing;
+    const a_out = (try h.store.getOutgoingEdgeIdsOrError(a)) orelse return error.MissingOutgoing;
     try testing.expectEqual(@as(usize, 2), a_out.len);
     // Both edge IDs must be present (order-independent).
     var saw_ab = false;
@@ -161,16 +161,16 @@ test "GAP-0514 REQ-PERF-EDGE-ADJ: createEdge populates outgoing and incoming ind
     }
     try testing.expect(saw_ab);
     try testing.expect(saw_ac);
-    try testing.expect(h.store.getIncomingEdgeIds(a) == null);
+    try testing.expect((try h.store.getIncomingEdgeIdsOrError(a)) == null);
 
     // b has one incoming edge (from a), no outgoing.
-    const b_in = h.store.getIncomingEdgeIds(b) orelse return error.MissingIncoming;
+    const b_in = (try h.store.getIncomingEdgeIdsOrError(b)) orelse return error.MissingIncoming;
     try testing.expectEqual(@as(usize, 1), b_in.len);
     try testing.expectEqual(e_ab, b_in[0]);
-    try testing.expect(h.store.getOutgoingEdgeIds(b) == null);
+    try testing.expect((try h.store.getOutgoingEdgeIdsOrError(b)) == null);
 
     // c symmetric to b.
-    const c_in = h.store.getIncomingEdgeIds(c) orelse return error.MissingIncoming;
+    const c_in = (try h.store.getIncomingEdgeIdsOrError(c)) orelse return error.MissingIncoming;
     try testing.expectEqual(@as(usize, 1), c_in.len);
     try testing.expectEqual(e_ac, c_in[0]);
 }

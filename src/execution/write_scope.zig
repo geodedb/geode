@@ -109,7 +109,7 @@ pub const WriteScope = struct {
     /// Bind `name` to node `id` as it is now (a detached box, stable across
     /// later writes; `refresh` reads it again).
     pub fn bindNode(self: *WriteScope, store: *graph_store.GraphStore, name: []const u8, id: u64) !void {
-        const box = store.getNodePtrForScan(id) orelse return error.NodeNotFound;
+        const box = (try store.getNodePtrForScan(id)) orelse return error.NodeNotFound;
         try self.bind(name, .{ .Node = box });
     }
 
@@ -183,7 +183,7 @@ pub const WriteScope = struct {
     /// is copied too.
     pub fn refresh(self: *WriteScope, store: *graph_store.GraphStore) !void {
         for (self.values.items) |*v| switch (v.*) {
-            .Node => |node| v.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
+            .Node => |node| v.* = .{ .Node = (try store.getNodePtrForScan(node.id)) orelse return error.NodeNotFound },
             .Edge => |edge| {
                 const fresh = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable;
                 if (self.ownsBox(edge)) |box| {

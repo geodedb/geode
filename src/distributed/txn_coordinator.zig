@@ -625,7 +625,7 @@ pub const TxnCoordinator = struct {
                 };
                 switch (edge_op.op_type) {
                     .create => {
-                        if (self.store.getEdgePtr(edge_op.edge_id) == null) {
+                        if ((try self.store.getEdgePtrHydratedChecked(edge_op.edge_id)) == null) {
                             self.store.createEdgeWithId(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, graph_name) catch |err| switch (err) {
                                 error.EdgeAlreadyExists => {},
                                 else => return err,
@@ -642,7 +642,7 @@ pub const TxnCoordinator = struct {
                         // resolve null and SILENTLY DROP this replicated edge
                         // property update. Hydrate first (no-op once hydrated).
                         self.store.ensureGraphHydratedForReplicatedApply(graph_name);
-                        if (self.store.getEdgePtr(edge_op.edge_id) != null) {
+                        if ((try self.store.getEdgePtrHydratedChecked(edge_op.edge_id)) != null) {
                             for (edge_op.props) |p| {
                                 try self.store.setEdgeProperty(edge_op.edge_id, p.key, p.value);
                             }

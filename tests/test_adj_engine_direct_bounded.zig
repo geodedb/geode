@@ -121,7 +121,7 @@ const AdjHarness = struct {
     /// Reads via the public `getOutgoingEdgeIds` API (whose residency the cache
     /// bounds) — a miss hydrates from the engine.
     fn outIdsSorted(self: *AdjHarness, node_id: u64) ![]u64 {
-        const ids = self.store.getOutgoingEdgeIds(node_id) orelse return self.allocator.alloc(u64, 0);
+        const ids = (try self.store.getOutgoingEdgeIdsOrError(node_id)) orelse return self.allocator.alloc(u64, 0);
         const copy = try self.allocator.dupe(u64, ids);
         std.mem.sort(u64, copy, {}, std.sort.asc(u64));
         return copy;
@@ -200,8 +200,8 @@ test "P0-adj: residentCount plateaus at/below cap for a high-degree parent; read
         // We don't track target ids individually to keep the K-loop lean, so use
         // the edge bodies: pick the i-th edge id from `got` and resolve its to_id.
         const eid = got[i];
-        const to_id = h.store.getEdgePtr(eid).?.to_id;
-        const in_ids = h.store.getIncomingEdgeIds(to_id) orelse return error.MissingIncoming;
+        const to_id = (try h.store.getEdgePtrHydratedChecked(eid)).?.to_id;
+        const in_ids = (try h.store.getIncomingEdgeIdsOrError(to_id)) orelse return error.MissingIncoming;
         try testing.expectEqual(@as(usize, 1), in_ids.len);
         try testing.expectEqual(eid, in_ids[0]);
         try testing.expect(h.store.incoming_edges.residentCount() <= CAP);

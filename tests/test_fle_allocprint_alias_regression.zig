@@ -37,7 +37,7 @@ const ThreadCtx = struct {
 fn hammerGetNodeProperty(ctx: *ThreadCtx) void {
     var i: usize = 0;
     while (i < ctx.iterations) : (i += 1) {
-        if (ctx.store.getNodeProperty(ctx.node_id, ctx.key)) |_| {
+        if ((ctx.store.getNodePropertyOrError(ctx.node_id, ctx.key) catch @panic("SONNY-6621: unexpected read failure"))) |_| {
             _ = ctx.hit_count.fetchAdd(1, .monotonic);
         }
     }

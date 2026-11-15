@@ -381,7 +381,7 @@ test "SONNY-6327 (2): a stored value that does not decrypt is an error (58030) o
         try testing.expectError(error.FleDecryptionFailed, store.getNodePropertyChecked(e.aa(), ids[0], "ssn"));
         try testing.expectError(error.FleDecryptionFailed, store.getEdgePropertyChecked(e.aa(), ids[1], "secret"));
     }
-    try testing.expectEqualStrings(try storedString(ents.node, "ssn"), store.getNodeProperty(ids[0], "ssn").?.String);
+    try testing.expectEqualStrings(try storedString(ents.node, "ssn"), (try store.getNodePropertyOrError(ids[0], "ssn")).?.String);
 
     // A principal without the plaintext role is not told anything more.
     try expectStr("[REDACTED]", try e.str("analyst", "MATCH ()-[r:S6327R]->() RETURN r.secret AS v"), "analyst under a wrong key");

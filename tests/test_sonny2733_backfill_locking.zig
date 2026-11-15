@@ -43,7 +43,7 @@ fn legacyEdge(st: *GraphStore, graph: []const u8, w: i64) !u64 {
 }
 
 fn tagOf(st: *GraphStore, edge_id: u64) ![]const u8 {
-    const edge = st.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+    const edge = (try st.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
     return edge.tenant_id;
 }
 
@@ -80,7 +80,7 @@ fn awaitRetag(st: *GraphStore, graph: []const u8, edge_id: u64) bool {
     while (graph_store.monoNanosNowPub() < give_up) {
         const deadline = graph_store.monoNanosNowPub() + 100 * std.time.ns_per_ms;
         const lock = graph_store.acquireGraphWriteLockCancelable(graph, deadline) catch continue;
-        const retagged = if (st.getEdgeHydrated(edge_id)) |edge| std.mem.eql(u8, edge.tenant_id, tenant_a) else false;
+        const retagged = if ((st.getEdgeHydratedChecked(edge_id) catch @panic("SONNY-6621: unexpected read failure"))) |edge| std.mem.eql(u8, edge.tenant_id, tenant_a) else false;
         graph_store.releaseGraphLock(lock);
         if (retagged) return true;
         sleepMs(2);
@@ -110,7 +110,7 @@ test "SONNY-2733: the backfill takes each graph's lock in turn and holds none wh
     // still needs g2): it released g1 before it waited for g2.
     const g1_free_and_retagged = awaitRetag(st, "g1", e1);
     const finished_before_g2 = run.done.load(.acquire);
-    const e2_untouched = if (st.getEdgeHydrated(e2)) |edge| std.mem.eql(u8, edge.tenant_id, default_tenant) else false;
+    const e2_untouched = if ((try st.getEdgeHydratedChecked(e2))) |edge| std.mem.eql(u8, edge.tenant_id, default_tenant) else false;
     graph_store.releaseGraphLock(g2_lock);
     thread.join();
 
@@ -147,7 +147,7 @@ const Reader = struct {
             for (self.graphs, self.edges) |graph, ids| {
                 const lock = graph_store.acquireGraphReadLock(graph);
                 for (ids) |id| {
-                    const edge = self.store.getEdgeHydrated(id) orelse {
+                    const edge = (self.store.getEdgeHydratedChecked(id) catch @panic("SONNY-6621: unexpected read failure")) orelse {
                         _ = self.bad.fetchAdd(1, .monotonic);
                         continue;
                     };

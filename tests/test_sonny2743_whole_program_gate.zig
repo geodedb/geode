@@ -242,7 +242,7 @@ test "SONNY-2743: over gRPC a read-only session's changes are refused and the st
     try testing.expect(!st.graphExists("g2743"));
     {
         const seed_id = (st.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "Seed") orelse return error.SeedMissing)[0];
-        const v = (st.getNodePtrHydrated(seed_id) orelse return error.SeedMissing).properties.get("v") orelse return error.PropertyLost;
+        const v = ((try st.getNodePtrHydratedChecked(seed_id)) orelse return error.SeedMissing).properties.get("v") orelse return error.PropertyLost;
         try testing.expectEqual(@as(i64, 1), v.Int);
     }
 

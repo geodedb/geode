@@ -191,7 +191,7 @@ test "SONNY-3109: MERGE sees a label added by SET and forgets one removed by REM
 
 /// The `t` property of node `id`, or "" when it has none.
 fn tOf(id: u64) []const u8 {
-    const v = graph_store.getGlobalStore(testing.allocator).getNodeProperty(id, "t") orelse return "";
+    const v = (graph_store.getGlobalStore(testing.allocator).getNodePropertyOrError(id, "t") catch @panic("SONNY-6621: unexpected read failure")) orelse return "";
     return switch (v) {
         .String => |t| t,
         else => "?",

@@ -233,7 +233,7 @@ test "typed-edge enum: concrete-tenant + multi-chain executor shapes route throu
         defer if (alpha_ids.len > 0) testing.allocator.free(alpha_ids);
         try testing.expectEqual(ALPHA, alpha_ids.len);
         for (alpha_ids) |eid| {
-            const e = store.getEdgePtrHydrated(eid) orelse return error.EdgeBodyLost;
+            const e = (try store.getEdgePtrHydratedChecked(eid)) orelse return error.EdgeBodyLost;
             try testing.expectEqualStrings("tenant_alpha", e.tenant_id);
         }
     }

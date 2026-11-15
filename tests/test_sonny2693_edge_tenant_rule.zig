@@ -64,7 +64,7 @@ fn expectEntry(
 }
 
 fn tagOf(store: *GraphStore, edge_id: u64) ![]const u8 {
-    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeNotFound;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
     return edge.tenant_id;
 }
 
@@ -160,7 +160,7 @@ test "SONNY-2693: the backfill re-tags only a default edge between two nodes of 
 
     // The re-tagged edge keeps its endpoints, type and properties.
     {
-        const edge = store.getEdgeHydrated(legacy) orelse return error.EdgeNotFound;
+        const edge = (try store.getEdgeHydratedChecked(legacy)) orelse return error.EdgeNotFound;
         try testing.expectEqual(a1, edge.from_id);
         try testing.expectEqual(a2, edge.to_id);
         try testing.expectEqualStrings("LEGACY", edge.label);
@@ -456,9 +456,9 @@ test "SONNY-2693: CALL geode.tenant.backfill_edge_tags re-tags the legacy edge, 
     const st = s.store();
     try testing.expect(graph_store.getGlobalAdapter() != null);
     st.edges.remove(fx.legacy);
-    const reread = st.getEdgeHydrated(fx.legacy) orelse return error.EdgeNotRehydrated;
+    const reread = (try st.getEdgeHydratedChecked(fx.legacy)) orelse return error.EdgeNotRehydrated;
     try testing.expectEqualStrings(tenant_a, reread.tenant_id);
-    const cross = st.getEdgeHydrated(fx.cross) orelse return error.EdgeNotFound;
+    const cross = (try st.getEdgeHydratedChecked(fx.cross)) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(default_tenant, cross.tenant_id);
 }
 
@@ -476,7 +476,7 @@ test "SONNY-2693: backfill_edge_tags is admin-only and takes one optional boolea
     try testing.expectError(error.Unauthorized, s.runAs(null, "CALL geode.tenant.backfill_edge_tags(true)"));
     s.ctx.role = null;
     s.ctx.user = null;
-    const legacy = s.store().getEdgeHydrated(fx.legacy) orelse return error.EdgeNotFound;
+    const legacy = (try s.store().getEdgeHydratedChecked(fx.legacy)) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(default_tenant, legacy.tenant_id);
 
     user_mgmt.setAuthEnabled(false);

@@ -117,13 +117,13 @@ fn makeNodeOnShard(env: *Env, sid: []const u8, want_shard: usize) !u64 {
 // Count outgoing edges of type `rel` from `src` to `dst` (resident mirror is
 // engine-direct/bounded post Phase-1, but small here so it stays resident).
 fn countEdgesTo(env: *Env, src: u64, dst: u64, rel: []const u8) usize {
-    const outgoing = env.store.getOutgoingEdgeIds(src) orelse return 0;
+    const outgoing = (env.store.getOutgoingEdgeIdsOrError(src) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
         // Concurrency-safe by-value read: getEdgeHydrated snapshots the edge
         // body under the cache's per-shard map lock, so a concurrent writer's
         // edge-cache insert-resize cannot tear/move it mid-read.
-        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        const e = (env.store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (e.to_id != dst) continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
@@ -133,10 +133,10 @@ fn countEdgesTo(env: *Env, src: u64, dst: u64, rel: []const u8) usize {
 }
 
 fn outDegree(env: *Env, src: u64, rel: []const u8) usize {
-    const outgoing = env.store.getOutgoingEdgeIds(src) orelse return 0;
+    const outgoing = (env.store.getOutgoingEdgeIdsOrError(src) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
-        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        const e = (env.store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
         n += 1;
@@ -148,10 +148,10 @@ fn outDegree(env: *Env, src: u64, rel: []const u8) usize {
 // public getIncomingEdgeIds path (which, post co-location, hydrates from the
 // engine's 16-shard FanInEdgeIterator scatter on cache miss).
 fn inDegree(env: *Env, dst: u64, rel: []const u8) usize {
-    const incoming = env.store.getIncomingEdgeIds(dst) orelse return 0;
+    const incoming = (env.store.getIncomingEdgeIdsOrError(dst) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (incoming) |eid| {
-        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        const e = (env.store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;
         n += 1;
@@ -162,10 +162,10 @@ fn inDegree(env: *Env, dst: u64, rel: []const u8) usize {
 // Count `rel` in-edges to `dst` whose source is exactly `src` (reverse mirror of
 // countEdgesTo).
 fn countEdgesFrom(env: *Env, src: u64, dst: u64, rel: []const u8) usize {
-    const incoming = env.store.getIncomingEdgeIds(dst) orelse return 0;
+    const incoming = (env.store.getIncomingEdgeIdsOrError(dst) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (incoming) |eid| {
-        const e = env.store.getEdgeHydrated(eid) orelse continue;
+        const e = (env.store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (e.from_id != src) continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, rel)) continue;

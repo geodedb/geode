@@ -172,7 +172,7 @@ test "SONNY-6347 (2): a crafted envelope-shaped node value reaching setNodePrope
 
     const crafted = craftedEnvelopeShape();
     try e.f.st.setNodeProperty(id, "ssn", .{ .String = &crafted });
-    try expectNotInClear(e.f.st.getNodeProperty(id, "ssn").?.String, "setNodeProperty");
+    try expectNotInClear((try e.f.st.getNodePropertyOrError(id, "ssn")).?.String, "setNodeProperty");
     try expectStr(&crafted, try e.str(null, "MATCH (n:T6347) RETURN n.ssn"), "read back");
 }
 
@@ -187,7 +187,7 @@ test "SONNY-6347 (2): a crafted envelope-shaped value reaching the batch primiti
     const crafted = craftedEnvelopeShape();
     const props = [_]graph_store.GraphStore.BatchPropertyEntry{.{ .key = "ssn", .value = .{ .String = &crafted } }};
     try e.f.st.setNodePropertiesBatch(id, &props);
-    try expectNotInClear(e.f.st.getNodeProperty(id, "ssn").?.String, "setNodePropertiesBatch");
+    try expectNotInClear((try e.f.st.getNodePropertyOrError(id, "ssn")).?.String, "setNodePropertiesBatch");
     try expectStr(&crafted, try e.str(null, "MATCH (n:T6347) RETURN n.ssn"), "read back");
 }
 
@@ -203,7 +203,7 @@ test "SONNY-6347 (2): a crafted envelope-shaped edge value reaching setEdgePrope
 
     const crafted = craftedEnvelopeShape();
     try e.f.st.setEdgeProperty(edges[0], "p", .{ .String = &crafted });
-    const edge = e.f.st.getEdgeHydrated(edges[0]).?;
+    const edge = (try e.f.st.getEdgeHydratedChecked(edges[0])).?;
     try expectNotInClear(edge.properties.get("p").?.String, "setEdgeProperty");
     try expectStr(&crafted, try e.str(null, "MATCH ()-[r:R6347]->() RETURN r.p"), "read back");
 }
@@ -216,7 +216,7 @@ test "SONNY-6347 (2): an executor write is encrypted once (the store keeps the e
     try e.run(null, "CREATE (:T6347 {ssn: '" ++ secret ++ "'})");
     try e.run(null, "MATCH (n:T6347) SET n.ssn = '" ++ secret ++ "-2'");
     try expectStr(secret ++ "-2", try e.str(null, "MATCH (n:T6347) RETURN n.ssn"), "executor write");
-    try expectNotInClear(e.f.st.getNodeProperty(try e.onlyNode("T6347"), "ssn").?.String, "executor write");
+    try expectNotInClear((try e.f.st.getNodePropertyOrError(try e.onlyNode("T6347"), "ssn")).?.String, "executor write");
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ test "SONNY-6347 (5): a value encrypted under the writer's request tenant (befor
     fle_integration.setCurrentTenantId("org6347");
     try e.f.st.setNodeProperty(id, "ssn", .{ .String = old });
     fle_integration.setCurrentTenantId(null);
-    try testing.expectEqualSlices(u8, old, e.f.st.getNodeProperty(id, "ssn").?.String);
+    try testing.expectEqualSlices(u8, old, (try e.f.st.getNodePropertyOrError(id, "ssn")).?.String);
     try expectStr(secret, try e.str("org6347", "MATCH (n:T6347 {k: 1}) RETURN n.ssn"), "request-tenant identity");
 }
 

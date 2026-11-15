@@ -229,7 +229,7 @@ fn seedFixture(h: *Harness, allocator: std.mem.Allocator) !Fixture {
 
     // The bridge, tagged tenant-A on purpose (see the file header).
     const bridge = try h.store.createEdgeWithGraphAndTenant(f.a2, f.b1, "L", graph_store.DEFAULT_GRAPH_NAME, tenant_a);
-    const bridge_edge = h.store.getEdgeHydrated(bridge) orelse return error.BridgeEdgeMissing;
+    const bridge_edge = (try h.store.getEdgeHydratedChecked(bridge)) orelse return error.BridgeEdgeMissing;
     if (!std.mem.eql(u8, bridge_edge.tenant_id, tenant_a)) return error.BridgeDidNotCarryTenantTag;
 
     return f;

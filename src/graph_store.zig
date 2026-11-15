@@ -3920,7 +3920,13 @@ pub const GraphStore = struct {
         const adapter = global_adapter orelse return null;
         const gs = self.resolveNodeGraphSlot(node_id) orelse return null;
         defer self.unpinIdMap(gs.map);
-        return materializeNodeFromEngine(adapter, allocator, gs.graph_name, gs.slot_id, node_id);
+        // SONNY-6621: a graph dropped under the read leaves the node absent
+        // (as `hydrateEdgeCb` treats it), not unreadable; any other error is
+        // the read's.
+        return materializeNodeFromEngine(adapter, allocator, gs.graph_name, gs.slot_id, node_id) catch |err| switch (err) {
+            error.GraphNotFound => null,
+            else => err,
+        };
     }
 
     /// Rebuild a full `Node` (labels/properties/graph_name/tenant_id) from the
@@ -4133,7 +4139,9 @@ pub const GraphStore = struct {
     /// the heap and adopted by `scan_hydrated_nodes` (freed at the per-graph
     /// grace boundary). Null only when the id exists in neither the cache nor
     /// the engine. NEVER mutates the bounded cache.
-    pub fn getNodePtrForScan(self: *const GraphStore, node_id: u64) ?*Node {
+    /// SONNY-6621 (1): a node that cannot be rebuilt is the rebuild's error
+    /// (it read as absent, and callers answered NodeNotFound or skipped it).
+    pub fn getNodePtrForScan(self: *const GraphStore, node_id: u64) !?*Node {
         const mut: *GraphStore = @constCast(self);
         // SONNY-1979 (CWE-362, use-after-MOVE): a resident HIT must NOT return the
         // raw in-map `*Node`. The shard `map_lock` only makes the LOOKUP atomic;
@@ -4149,10 +4157,10 @@ pub const GraphStore = struct {
         var built: Node = mut.snapshotResidentNodeForScan(node_id) orelse
             // Miss: rebuild from the engine OUTSIDE every lock (slow I/O; leaf
             // discipline; the callback must not re-enter this cache).
-            ((hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id) catch return null) orelse return null);
+            ((try hydrateNodeCb(@ptrCast(mut), mut.allocator, node_id)) orelse return null);
         const box = mut.allocator.create(Node) catch {
             freeNodeValue(mut.allocator, &built);
-            return null;
+            return error.OutOfMemory;
         };
         box.* = built;
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4647,26 +4655,6 @@ pub const GraphStore = struct {
         self.edges.setHydrate(hydrateEdgeCb, @ptrCast(self));
     }
 
-    /// Borrowed-pointer edge-body read with HYDRATE-ON-MISS. Returns the
-    /// resident `*Edge` (a hit) or rebuilds the edge from the engine, inserts it
-    /// into the bounded cache (evicting cold entries), and returns the
-    /// freshly-resident pointer. Null only if the edge exists in neither the
-    /// cache nor the engine (pure in-memory deployment with no adapter, or a
-    /// genuinely-missing id).
-    ///
-    /// Lifetime: the returned `*Edge` stays valid for the caller's read span
-    /// under the per-graph SHARED lock — eviction (triggered here or by a
-    /// concurrent insert) only UNLINKs+RETIREs, never frees inline; retired
-    /// edges are freed only at the per-graph EXCLUSIVE checkpoint grace window
-    /// (which drained all SHARED readers). `getOrHydratePtr` mutates the cache on
-    /// a miss under the shard's hydrate mutex, so we `@constCast`: callers
-    /// already hold the store/graph read lock that serializes this against the
-    /// per-graph-exclusive evict/reclaim, matching the node cache's contract.
-    pub fn getEdgePtrHydrated(self: *const GraphStore, edge_id: u64) ?*Edge {
-        const cache: *EdgeCache = @constCast(&self.edges);
-        return (cache.getOrHydratePtr(edge_id) catch return null) orelse return null;
-    }
-
     // CANARY: REQ=REQ-SONNY-6567-HYDRATED-GETTER-ERRORS; FEATURE="StorageIntegrity"; ASPECT=CheckedHydratedGetters; STATUS=TESTED; TEST=tests/test_sonny6567_hydrated_getter_errors.zig; OWNER=storage; UPDATED=2026-11-15
     /// SONNY-6567 (2): `getEdgePtrHydrated` that tells "absent" (null) from
     /// "could not be read" (the rebuild's error: out of memory, an engine
@@ -4683,19 +4671,6 @@ pub const GraphStore = struct {
     pub fn getEdgeHydratedChecked(self: *const GraphStore, edge_id: u64) !?Edge {
         const cache: *EdgeCache = @constCast(&self.edges);
         return cache.getOrHydrate(edge_id);
-    }
-
-    /// By-value variant of `getEdgePtrHydrated`. Returns a COPY of the edge body
-    /// (its byte slices still point into the cache-owned heap, valid for the
-    /// caller's read span — that heap is grace-freed). CONCURRENCY-SAFE: the copy
-    /// is taken under the cache's per-shard map lock SHARED, so it cannot observe
-    /// a torn/moved value during a concurrent writer's insert-resize on the
-    /// edge's shard (the edge-body torn-read race). Prefer THIS over
-    /// `getEdgePtrHydrated` on any read path that runs concurrently with the
-    /// shard-locked edge-create writers (e.g. analytical traverse during ingest).
-    pub fn getEdgeHydrated(self: *const GraphStore, edge_id: u64) ?Edge {
-        const cache: *EdgeCache = @constCast(&self.edges);
-        return cache.getOrHydrate(edge_id) catch return null;
     }
 
     /// Predicate: does this retired/evicted edge belong to `graph_name`? An Edge
@@ -6500,7 +6475,7 @@ pub const GraphStore = struct {
         inner: ?std.AutoHashMap(u64, void).KeyIterator,
         store: *const GraphStore,
 
-        pub fn next(it: *NodesByGraphIterator) ?*Node {
+        pub fn next(it: *NodesByGraphIterator) !?*Node {
             const inner = &(it.inner orelse return null);
             while (inner.next()) |id_ptr| {
                 // GAP-ENT-0023 P3: hydrate-on-miss, DETACHED (review C2).
@@ -6516,9 +6491,9 @@ pub const GraphStore = struct {
                 // result rows), and a cache insert here would rehash/evict
                 // the very slots those pointers alias (use-after-move). The
                 // detached box shares the resident pointers' grace-boundary
-                // lifetime. A per-node engine failure is skipped defensively,
-                // matching the old stale-id stance.
-                if (it.store.getNodePtrForScan(id_ptr.*)) |node_ptr| return node_ptr;
+                // lifetime. SONNY-6621 (1): a per-node engine failure is the
+                // iterator's error (it was skipped as a stale id).
+                if ((try it.store.getNodePtrForScan(id_ptr.*))) |node_ptr| return node_ptr;
             }
             return null;
         }
@@ -8383,7 +8358,7 @@ pub const GraphStore = struct {
         // under the per-graph EXCLUSIVE lock, so the cache insert cannot race
         // shard readers (the same guarantee the evict-retire machinery relies
         // on). A truly-missing id still falls through to error.NodeNotFound.
-        _ = self.nodes.getOrHydratePtr(node_id) catch null;
+        _ = try self.nodes.getOrHydratePtr(node_id);
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         try self.undoRecordNodeProperty(node_id, key, false); // SONNY-3348 (round 18)
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
@@ -8774,31 +8749,6 @@ pub const GraphStore = struct {
     }
 
     // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=GraphStoreCheckedRead; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
-    /// The node's STORED property value: for an FLE-encrypted string, the
-    /// stored envelope. A caller that needs the value as the requesting
-    /// principal may see it uses `getNodePropertyChecked`.
-    ///
-    /// SONNY-6327: this used to try to decrypt and return the stored bytes
-    /// when that failed, so its caller took ciphertext for the value. It
-    /// also decrypted with the store's tenant/schema and a "node_<id>"
-    /// record identity, which the executor's FLE hook (label, request
-    /// tenant, "<id>") never writes, so it failed on every value the
-    /// executor encrypted, and a decrypted copy leaked on `self.allocator`.
-    /// Its callers are the security graph (never FLE-encrypted, GAP-0854),
-    /// the fulltext indexer (which must not index plaintext of an encrypted
-    /// field), the in-memory MERGE key check, and the aggregate fast paths,
-    /// which decline whenever an FLE field is configured.
-    pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
-        // Hydrate-on-miss: an evicted-but-live node is rebuilt from the engine
-        // so this read is transparent under the bounded cache. The returned
-        // String borrows the now-resident node's property storage; it stays
-        // valid until a grace-point reclaim, which the caller's per-graph rwlock
-        // excludes for the read's duration (same borrow lifetime as pre-cache).
-        if (self.nodes.getOrHydratePtr(node_id) catch null) |node| {
-            return node.properties.get(key);
-        }
-        return null;
-    }
 
     /// SONNY-6607 (1): `getNodeProperty` that tells "absent" (null) from "the
     /// node could not be read" (the hydrate's error), which it returns as
@@ -9577,7 +9527,7 @@ pub const GraphStore = struct {
         // listed.
         try entries.ensureUnusedCapacity(allocator, 1);
 
-        const edge = self.getEdgeHydrated(edge_id) orelse {
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse {
             log.warn("edge tag backfill: an edge of the graph cannot be read; it is listed as failed", &.{
                 Attr.string("graph", graph_name),
                 Attr.uint("edge_id", edge_id),
@@ -10060,51 +10010,11 @@ pub const GraphStore = struct {
         return self.nodes.getPtr(node_id);
     }
 
-    /// Hydrate-on-miss variant of `getNodePtr` (node twin of
-    /// `getEdgePtrHydrated`): a node body evicted from the bounded resident
-    /// cache is rebuilt from the durable engine, so callers that must
-    /// distinguish "node truly absent from the store" from "node body
-    /// evicted from the resident cache" never confuse the two.
-    ///
-    /// Returns null when the id exists in neither the cache nor the engine,
-    /// AND (SONNY-2772) when the node's graph has not been hydrated yet: after
-    /// a no-snapshot (crash) reopen a graph's IdMap stays empty until its
-    /// first access, so the engine slot cannot be resolved and an EXISTING
-    /// node reads as null. A failed engine read also returns null. Null means
-    /// "absent" only once the node's graph is hydrated, so take the id from a
-    /// hydration chokepoint first: `getNodesByLabel(graph, ..)`
-    /// (`ensureGraphHydrated`), `getAllNodes` (`ensureAllGraphsHydrated`), or
-    /// `ensureNodeGraphHydrated` for a bare id (as `nodeExistsForUndo` does).
-    /// Every caller does. This function cannot hydrate the graph itself: its
-    /// callers hold store/graph locks, and the hydration build must run before
-    /// any of them.
-    ///
-    /// Gap 0034: the periodic HMAC verifier's chain-root read used the raw
-    /// `getNodePtr`; a bulk ingest evicting the bootstrap-era AuthChainRoot
-    /// body made every verify round report MissingChainRoot ("POSSIBLE
-    /// TAMPERING") on a perfectly healthy fresh store until restart.
-    ///
-    /// NOTE: on a miss this MUTATES the cache (insert + maybe evict) under
-    /// the shard's hydrate mutex + map lock, so the caller must hold a lock
-    /// that serializes cache writes — NOT merely a shared read lock (the
-    /// periodic verifier holds the GLOBAL EXCLUSIVE store lock; startup/CLI
-    /// callers are single-threaded). Same contract as `getNodeProperty`'s
-    /// hydrate-on-miss read.
-    pub fn getNodePtrHydrated(self: *const GraphStore, node_id: u64) ?*const Node {
-        const cache: *NodeCache = @constCast(&self.nodes);
-        return (cache.getOrHydratePtr(node_id) catch return null) orelse null;
-    }
-
     /// SONNY-6567 (2): `getNodePtrHydrated` that tells "absent" (null) from
     /// "could not be read" (the rebuild's error). Same locking contract.
     pub fn getNodePtrHydratedChecked(self: *const GraphStore, node_id: u64) !?*const Node {
         const cache: *NodeCache = @constCast(&self.nodes);
         return cache.getOrHydratePtr(node_id);
-    }
-
-    pub fn getEdgePtr(self: *const GraphStore, edge_id: u64) ?*const Edge {
-        // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
-        return self.getEdgePtrHydrated(edge_id);
     }
 
     // PHASE 0: borrowed-slice adjacency read with HYDRATE-ON-MISS. Returns the
@@ -10157,14 +10067,6 @@ pub const GraphStore = struct {
         const cache: *AdjCache = @constCast(&self.incoming_edges);
         const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
         return adjItemsSnapshot(&p.list);
-    }
-
-    pub fn getOutgoingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return self.outAdjItems(node_id) catch null;
-    }
-
-    pub fn getIncomingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return self.inAdjItems(node_id) catch null;
     }
 
     // CANARY: REQ=REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE; FEATURE="StorageIntegrity"; ASPECT=ErrorReturningGetters; STATUS=TESTED; TEST=tests/test_sonny6607_adjacency_property_read_failure.zig; OWNER=storage; UPDATED=2026-11-15
@@ -10275,7 +10177,7 @@ pub const GraphStore = struct {
     pub fn hasEdge(self: *const GraphStore, source: u64, target: u64) !bool {
         if (try self.outAdjItems(source)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.getEdgePtrHydrated(edge_id)) |edge| {
+                if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     if (edge.to_id == target) return true;
                 }
             }
@@ -11153,11 +11055,11 @@ pub const GraphStore = struct {
     /// out so both `setEdgeProperty` and `setEdgePropertiesBatch` share the
     /// same logic.  Mirrors `applyFleEncryption` (the node variant) at line
     /// 2132.
-    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) FleWriteError!FleApplyResult {
+    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !FleApplyResult {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields()) {
-                    const maybe_edge = self.getEdgeHydrated(edge_id);
+                    const maybe_edge = (try self.getEdgeHydratedChecked(edge_id));
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
@@ -11249,7 +11151,7 @@ pub const GraphStore = struct {
                 };
             }
         }
-        if (self.getEdgePtrHydrated(edge_id)) |edge| {
+        if ((self.getEdgePtrHydratedChecked(edge_id) catch |err| return undoRecordFailed(err))) |edge| {
             {
                 // ENG-3954 / #874: edge parity with removeNodeProperty.
                 self.edges.lockShardExclusive(edge_id);
@@ -11403,7 +11305,7 @@ pub const GraphStore = struct {
         };
         while (ids_iter.next()) |id_ptr| {
             _ = typed_edge_node_walk_nodes_total.fetchAdd(1, .monotonic);
-            const out_ids = self.getOutgoingEdgeIds(id_ptr.*) orelse continue;
+            const out_ids = (try self.getOutgoingEdgeIdsOrError(id_ptr.*)) orelse continue;
             for (out_ids) |eid| {
                 const edge = (try self.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!std.mem.eql(u8, edge.label, edge_type)) continue;
@@ -11483,7 +11385,7 @@ pub const GraphStore = struct {
         var result: std.ArrayList(Edge) = .empty;
         if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
-                if (self.getEdgeHydrated(edge_id)) |edge| {
+                if ((try self.getEdgeHydratedChecked(edge_id))) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
             }
@@ -11496,7 +11398,7 @@ pub const GraphStore = struct {
         var result = std.ArrayList(Edge){};
         if (try self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
-                if (self.getEdgeHydrated(edge_id)) |edge| {
+                if ((try self.getEdgeHydratedChecked(edge_id))) |edge| {
                     result.append(allocator, edge) catch continue;
                 }
             }
@@ -16495,7 +16397,7 @@ pub const GraphStore = struct {
     /// Remove an edge property without saving (used during rollback)
     pub fn removeEdgePropertyNoSave(self: *GraphStore, edge_id: u64, key: []const u8) void {
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
-        if (self.getEdgePtrHydrated(edge_id)) |edge| {
+        if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
             // ENG-3954 / #874: see setNodePropertyNoSave.
             self.edges.lockShardExclusive(edge_id);
             defer self.edges.unlockShardExclusive(edge_id);
@@ -19418,7 +19320,7 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     const node_name = node.properties.get("name") orelse return error.PropertyNotFound;
     try testing.expectEqualStrings("replicated", node_name.String);
 
-    const edge = store.getEdgePtr(9001) orelse return error.EdgeNotFound;
+    const edge = (try store.getEdgePtrHydratedChecked(9001)) orelse return error.EdgeNotFound;
     try testing.expectEqual(@as(u64, 1001), edge.from_id);
     try testing.expectEqual(@as(u64, 1002), edge.to_id);
     const edge_weight = edge.properties.get("weight") orelse return error.PropertyNotFound;
@@ -19802,7 +19704,7 @@ test "getOutgoingEdgeIds and getIncomingEdgeIds return edge list without allocat
     const edge2 = try store.createEdgeWithGraph(node1, node3, "LIKES", "test_graph");
 
     // getOutgoingEdgeIds returns the two edges from node1
-    const out_ids = store.getOutgoingEdgeIds(node1);
+    const out_ids = (try store.getOutgoingEdgeIdsOrError(node1));
     try testing.expect(out_ids != null);
     try testing.expectEqual(@as(usize, 2), out_ids.?.len);
     // Both edge IDs should be present (order depends on insertion)
@@ -19812,22 +19714,22 @@ test "getOutgoingEdgeIds and getIncomingEdgeIds return edge list without allocat
     try testing.expect(has_edge2);
 
     // getIncomingEdgeIds: node2 has one incoming edge (edge1)
-    const in_ids = store.getIncomingEdgeIds(node2);
+    const in_ids = (try store.getIncomingEdgeIdsOrError(node2));
     try testing.expect(in_ids != null);
     try testing.expectEqual(@as(usize, 1), in_ids.?.len);
     try testing.expectEqual(edge1, in_ids.?[0]);
 
     // node3 has one incoming edge (edge2)
-    const in_ids3 = store.getIncomingEdgeIds(node3);
+    const in_ids3 = (try store.getIncomingEdgeIdsOrError(node3));
     try testing.expect(in_ids3 != null);
     try testing.expectEqual(@as(usize, 1), in_ids3.?.len);
     try testing.expectEqual(edge2, in_ids3.?[0]);
 
     // A node with no outgoing edges returns null
-    try testing.expect(store.getOutgoingEdgeIds(node2) == null);
+    try testing.expect((try store.getOutgoingEdgeIdsOrError(node2)) == null);
 
     // A node with no incoming edges returns null
-    try testing.expect(store.getIncomingEdgeIds(node1) == null);
+    try testing.expect((try store.getIncomingEdgeIdsOrError(node1)) == null);
 
     // No allocations occurred — std.testing.allocator enforces this
 }
@@ -19911,7 +19813,7 @@ test "GAP-0525: high-degree single-hop expansion returns all edges" {
     }
 
     // getOutgoingEdgeIds returns the allocation-free slice from the adjacency list
-    const out_ids = store.getOutgoingEdgeIds(hub);
+    const out_ids = (try store.getOutgoingEdgeIdsOrError(hub));
     try testing.expect(out_ids != null);
     try testing.expectEqual(@as(usize, 100), out_ids.?.len);
 

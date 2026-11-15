@@ -284,6 +284,6 @@ test "ENG-3983: getEdgePtr rehydrates an edge body on a cold store (adapter edge
     // the engine. Pre-fix `getEdgeRecordBySlot` read the unmaterialized
     // per-shard `edge_index` and returned null, so this was null for every
     // live edge — which is precisely what made cold DELETE a silent no-op.
-    const edge = store.getEdgePtr(edge_id) orelse return error.ColdEdgeBodyUnresolvable;
+    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse return error.ColdEdgeBodyUnresolvable;
     try testing.expectEqualStrings("E83_KNOWS", edge.label);
 }

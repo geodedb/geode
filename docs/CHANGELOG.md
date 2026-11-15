@@ -2542,6 +2542,20 @@
 
 ### Fixed
 
+- **The null-on-error node and edge getters are gone (SONNY-6621).**
+  **BREAKING (behaviour / API):** `GraphStore.getNodeProperty`,
+  `getNodePtrHydrated`, `getEdgePtrHydrated`, `getEdgeHydrated`,
+  `getEdgePtr`, `getOutgoingEdgeIds` and `getIncomingEdgeIds` returned null
+  both for an absent entity and for one that could not be read; they are
+  removed, and every caller (the executor, MERGE, cluster apply, the 2PC
+  coordinator, the storage adapter's getter call sites, the index manager,
+  the tests) uses `getNodePropertyOrError`, the `*Checked` body getters and
+  `get*EdgeIdsOrError`. `getNodePtrForScan` and `NodesByGraphIterator.next`
+  now return error unions, and the ~25 `getOrHydratePtr(..) catch null`
+  reads in the executor, eval, the index manager and the adapter propagate
+  the error. MERGE of an existing node whose body could not be read created
+  a second node beside it; it now fails with the read's error. Regression:
+  `zig build test-sonny6621-hydrate-catch-null`.
 - **Auth records, cluster apply and index maintenance read node
   properties with the error-returning getter (SONNY-6612 item 1).** The
   auth stores read every record field (`hmac`, ids, user / role / grant /

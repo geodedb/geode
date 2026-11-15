@@ -231,7 +231,7 @@ test "SONNY-2847: MERGE finds the remaining holder after a DELETE, SET or REMOVE
 
 fn tOf(id: u64) []const u8 {
     const store = graph_store.getGlobalStore(testing.allocator);
-    const v = store.getNodeProperty(id, "t") orelse return "";
+    const v = (store.getNodePropertyOrError(id, "t") catch @panic("SONNY-6621: unexpected read failure")) orelse return "";
     return switch (v) {
         .String => |t| t,
         else => "?",
