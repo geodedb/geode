@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:15:43.731247645Z",
+  "generated_at": "2026-11-15T13:17:29.379763322Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78094,6 +78094,288 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6567-AUTH-HYDRATION",
+      "features": [
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "CustomRoleHydrationFailsClosed",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "StartupHydrationFailsClosed",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_startup_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "StartupRefusesPartialAuthState",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-FTS-UNREADABLE-HIT",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "UnreadableHitFailsSearch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-GRPC-STREAM-IDS",
+      "features": [
+        {
+          "feature": "GrpcTransport",
+          "aspect": "StreamIdAllocation",
+          "status": "TESTED",
+          "files": [
+            "src/client/grpc_query_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "GrpcTransport",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_grpc_stream_ids.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-HYDRATED-GETTER-ERRORS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "SnapshotCopiesEvictedEdges",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "CheckedHydratedGetters",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-RAFT-APPLY-HYDRATION",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "FollowerPrehydratesBeforeStep",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RefusedReplicatedDropHaltsApply",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_single_voter_drop.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyThreadNeverPersistsHydration",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-TENANT-DROP-FAILURES",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "DropFailsLoudlyRetryable",
+          "status": "TESTED",
+          "files": [
+            "src/execution/tenant_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantRegistry",
+          "aspect": "PersistOrRestore",
+          "status": "TESTED",
+          "files": [
+            "src/security/tenant_registry.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6569-HOST-NO-USERINFO",
       "features": [
         {
@@ -83250,7 +83532,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4130
+      "TESTED": 4148
     },
     "by_aspect": {
       "2PC": 3,
@@ -83382,6 +83664,7 @@
       "ApplySetGroups": 1,
       "ApplySnapshotPointer": 1,
       "ApplyStatementBatch": 1,
+      "ApplyThreadNeverPersistsHydration": 1,
       "ApplyTxnDecide": 1,
       "ApplyTxnPrepare": 1,
       "ApplyUnderTenant": 1,
@@ -83676,6 +83959,7 @@
       "CheckRefused": 1,
       "CheckedFloatAndDecimalToInt": 1,
       "CheckedFloatToDecimal": 2,
+      "CheckedHydratedGetters": 1,
       "CheckedNarrowing": 1,
       "CheckedRecordRemoval": 1,
       "CheckedResult": 1,
@@ -83947,6 +84231,7 @@
       "CurrentUserEquality": 1,
       "CustomRoleGrantRefused": 1,
       "CustomRoleHydration": 1,
+      "CustomRoleHydrationFailsClosed": 1,
       "CustomRoleStoreOwnsMemory": 1,
       "DDL": 2,
       "DEDUP": 1,
@@ -84135,6 +84420,7 @@
       "DropConstraintPersisted": 1,
       "DropDeleteFailure": 1,
       "DropDrainsWriters": 1,
+      "DropFailsLoudlyRetryable": 1,
       "DropGraph": 1,
       "DropGraphReset": 1,
       "DropInTransaction": 1,
@@ -84501,6 +84787,7 @@
       "FloatEncoding": 1,
       "FloatSupport": 1,
       "FlowControl": 1,
+      "FollowerPrehydratesBeforeStep": 1,
       "FollowerRemovedTextRebuild": 1,
       "ForAndSubqueryStages": 1,
       "ForkJoin": 1,
@@ -85606,6 +85893,7 @@
       "PermissiveRestrictive": 1,
       "PermitGatedMutationRetry": 1,
       "PersistCallbacks": 1,
+      "PersistOrRestore": 1,
       "PersistPolicy": 1,
       "PersistRestriction": 1,
       "PersistSplitPhase": 1,
@@ -86014,10 +86302,11 @@
       "RefusedAsUnsupported": 2,
       "RefusedCommitOnQuicWire": 1,
       "RefusedDropFailsApply": 1,
+      "RefusedReplicatedDropHaltsApply": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 360,
+      "Regression": 366,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -86425,6 +86714,7 @@
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,
       "SnapshotCleanup": 1,
       "SnapshotCompactionVarianceEnvelope": 1,
+      "SnapshotCopiesEvictedEdges": 1,
       "SnapshotCreate": 1,
       "SnapshotCreation": 1,
       "SnapshotEncryption": 1,
@@ -86472,9 +86762,11 @@
       "StartupEnable": 1,
       "StartupGuard": 1,
       "StartupHydration": 2,
+      "StartupHydrationFailsClosed": 1,
       "StartupLoad": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupRefusesPartialAuthState": 1,
       "StartupReport": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
@@ -86545,6 +86837,7 @@
       "StreamCloseBeforeTeardown": 1,
       "StreamFairness": 1,
       "StreamHandler": 1,
+      "StreamIdAllocation": 1,
       "StreamPoolSizing": 1,
       "StreamReadPollCadence": 1,
       "StreamToFile": 1,
@@ -86780,6 +87073,7 @@
       "UnknownPropertyDiagnostic": 1,
       "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
+      "UnreadableHitFailsSearch": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,
       "UnsavedRestrictions": 1,

@@ -66,6 +66,8 @@ pub const RegistryError = error{
     InvalidTenantId,
     TenantHasChildren,
     TenantReserved,
+    /// SONNY-6567 (4): the parent is being dropped (`markDropping`).
+    TenantDropping,
 };
 
 /// One persisted tenant record. `quota` is optional: a null quota means the
@@ -169,7 +171,12 @@ pub const TenantRegistry = struct {
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.tenants.contains(tenant_id)) return RegistryError.TenantAlreadyExists;
-        if (parent) |p| if (!self.tenants.contains(p)) return RegistryError.TenantNotFound;
+        if (parent) |p| {
+            const prec = self.tenants.get(p) orelse return RegistryError.TenantNotFound;
+            // SONNY-6567 (4): no child under a tenant being dropped (its
+            // cascade has snapshotted its children already).
+            if (!prec.active) return RegistryError.TenantDropping;
+        }
 
         const owned_id = try self.allocator.dupe(u8, tenant_id);
         errdefer self.allocator.free(owned_id);
@@ -187,12 +194,42 @@ pub const TenantRegistry = struct {
             .has_quota = false,
         });
 
+        // CANARY: REQ=REQ-SONNY-6567-TENANT-DROP-FAILURES; FEATURE="TenantRegistry"; ASPECT=PersistOrRestore; STATUS=TESTED; TEST=tests/test_sonny6567_tenant_drop_failures.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6567 (4): a write of the file that fails fails the create and
+        // takes the record back out. It was logged and the create reported
+        // success: the tenant was gone at the next restart.
         self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "create"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
+            self.logPersistFailed("create", tenant_id, err);
+            _ = self.tenants.remove(owned_id);
+            return err;
+        };
+    }
+
+    fn logPersistFailed(_: *TenantRegistry, op: []const u8, tenant_id: []const u8, err: anyerror) void {
+        log.err("tenant_registry.persist_failed: the change was not made", &.{
+            Attr.string("op", op),
+            Attr.string("tenant", tenant_id),
+            Attr.string("error", @errorName(err)),
+        });
+    }
+
+    /// SONNY-6567 (4): mark `tenant_id` as being dropped (`active = false`),
+    /// written to the file before it returns, or not marked and an error. A
+    /// tenant DROP marks the tenant before it removes anything, so a drop
+    /// that fails part-way leaves it registered and visibly inactive
+    /// (`geode.tenant.list` / `show`), across a restart, until a retry
+    /// finishes; no child tenant can be created under it meanwhile.
+    pub fn markDropping(self: *TenantRegistry, tenant_id: []const u8) !void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (std.mem.eql(u8, tenant_id, DEFAULT_TENANT_ID)) return RegistryError.TenantReserved;
+        const rec = self.tenants.getPtr(tenant_id) orelse return RegistryError.TenantNotFound;
+        if (!rec.active) return;
+        rec.active = false;
+        self.persist() catch |err| {
+            self.logPersistFailed("mark_dropping", tenant_id, err);
+            rec.active = true;
+            return err;
         };
     }
 
@@ -225,16 +262,18 @@ pub const TenantRegistry = struct {
         }
 
         const entry = self.tenants.fetchRemove(tenant_id) orelse return RegistryError.TenantNotFound;
+        // SONNY-6567 (4): the record is freed only once the file no longer
+        // has it. A write that fails puts it back (the slot `fetchRemove`
+        // freed is still there) and fails the drop; it was logged and the
+        // drop reported success, and the tenant came back at the next
+        // restart.
+        self.persist() catch |err| {
+            self.logPersistFailed("drop", tenant_id, err);
+            self.tenants.putAssumeCapacity(entry.key, entry.value);
+            return err;
+        };
         var rec = entry.value;
         self.freeRecord(&rec);
-
-        self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "drop"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
-        };
     }
 
     /// Set (or replace) a tenant's quota override. Returns TenantNotFound if the
@@ -251,18 +290,19 @@ pub const TenantRegistry = struct {
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const rec = self.tenants.getPtr(tenant_id) orelse return RegistryError.TenantNotFound;
+        const before = rec.*;
         rec.has_quota = true;
         rec.max_connections = max_connections;
         rec.max_concurrent_queries = max_concurrent_queries;
         rec.max_graphs = max_graphs;
         rec.max_nodes_per_graph = max_nodes_per_graph;
 
+        // SONNY-6567 (4): as `create` (it reported success and the quota
+        // was gone at the next restart).
         self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "set_quota"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
+            self.logPersistFailed("set_quota", tenant_id, err);
+            rec.* = before;
+            return err;
         };
     }
 

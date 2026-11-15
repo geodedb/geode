@@ -48,6 +48,11 @@ const sharded_store = @import("graph_storage").sharded_store;
 
 pub const SHARD_COUNT = sharded_store.SHARD_COUNT;
 
+/// The shard `key` lives in (tests: keys that share a shard's cap).
+pub fn shardOf(key: u64) usize {
+    return sharded_store.shardIndex(key);
+}
+
 /// Default resident cap when `GEODE_NODE_CACHE_ENTRIES` is unset.
 pub const DEFAULT_CAP: usize = 1_000_000;
 
@@ -517,7 +522,7 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 try sh.retired.ensureUnusedCapacity(self.allocator, len - per_shard);
             }
             sh.fifo.pushBackAssumeCapacity(key);
-            self.evictShardToCapAssumeCapacity(idx);
+            self.evictShardToCapAssumeCapacity(idx, key);
         }
 
         /// Remove `key`. The removed value is retired (freed at the next
@@ -848,7 +853,7 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             }
             gop.value_ptr.* = value;
             sh.fifo.pushBackAssumeCapacity(key);
-            self.evictShardToCapAssumeCapacity(idx);
+            self.evictShardToCapAssumeCapacity(idx, key);
         }
 
         /// Evict (unlink + retire) cold entries from shard `idx` until that
@@ -860,11 +865,24 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// SONNY-6268: the caller reserved retire-list room for every eviction,
         /// so nothing here can fail. (An unreserved append that failed after
         /// `fetchRemove` lost the victim: unlinked, never retired, never freed.)
-        fn evictShardToCapAssumeCapacity(self: *Self, idx: usize) void {
+        ///
+        /// SONNY-6567 (2): `keep` (the key just inserted) is never evicted. A
+        /// key `remove`d and inserted again (an undo restoring a deleted
+        /// node) leaves a stale FIFO entry ahead of its new one; popping it
+        /// evicted the live key, and when that happened during the key's own
+        /// insert, `getOrHydratePtr` returned null: an existing body read as
+        /// absent. Its entry goes back to the end instead (the pass is bounded
+        /// by the queue's length, so a shard of stale entries cannot spin).
+        fn evictShardToCapAssumeCapacity(self: *Self, idx: usize, keep: K) void {
             const per_shard = self.perShardCap();
             if (per_shard == 0) return;
-            while (self.store.shardLen(idx) > per_shard) {
+            var budget = self.shards[idx].fifo.len;
+            while (self.store.shardLen(idx) > per_shard and budget > 0) : (budget -= 1) {
                 const victim_key = self.shards[idx].fifo.popFront() orelse return;
+                if (victim_key == keep) {
+                    self.shards[idx].fifo.pushBackAssumeCapacity(victim_key);
+                    continue;
+                }
                 if (self.store.fetchRemove(victim_key)) |kv| {
                     self.shards[idx].retired.appendAssumeCapacity(kv.value);
                     self.evictions_total += 1;

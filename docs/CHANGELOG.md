@@ -2737,6 +2737,109 @@
   `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
   22G03 for a NULL argument: each now answers NULL. Regression: `zig build
   test-sonny6555-null-arguments`.
+
+- **Startup refuses to run with part of its auth state; per-graph grants
+  load under the right graph (SONNY-6567 item 5).** **BREAKING (operator):**
+  a server whose stored custom roles, per-graph grants, FLE role grants, GPS
+  policies, or tenant hierarchy / quotas cannot all be loaded at startup now
+  refuses to start (it logged a warning and ran with part of them: a missing
+  grant or role changed authorization outcomes, and a deny policy not loaded
+  hid nothing). `auth_dispatch.hydrateCustomRolesFromGraph` returns its
+  error; the grant and FLE grant loads moved into the named module
+  `auth_startup_hydration`. Found on the way: the startup grant load
+  captured each stored grant BY VALUE and kept `getGraphName()`, a slice of
+  that per-iteration stack copy, so a grant could be loaded under another
+  graph's name after a restart. Regression: `zig build
+  test-sonny6567-auth-hydration`.
+
+- **Raft apply: no hydration persist under the Raft mutex, a follower
+  hydrates before it steps, and a refused replicated drop halts the apply
+  (SONNY-6567 item 6).** A statement batch whose entry wrote a graph not
+  hydrated yet hydrated it WITH its completion persist under
+  `inner_mutex`; with a reader holding that graph's lock the apply took
+  3.2 s (now 0.2 s): every hydration on a thread applying an entry skips
+  the persist (`GraphStore.enterReplicatedApply`). A follower now hydrates
+  the graphs of an AppendEntries' entries on its receiving thread before
+  `handleMessage` takes `inner_mutex` (measured: the scan of a 20,000-node
+  graph held `inner_mutex` 0.23 s, linear in graph size). Log replay at
+  restart still scans under `inner_mutex` (bounded by the scan; the node is
+  not serving yet). A replicated DROP GRAPH refused on a node because a
+  session transaction changed the graph now **halts that node's apply**
+  (`raft_apply.applyHalted`, every later entry `ReplicatedApplyHalted`,
+  an operator error to restart it) instead of going on without the drop;
+  unreachable today (nothing proposes `schema_change`). Regression: `zig
+  build test-sonny6567-raft-apply-hydration`, `test-sonny6547-single-voter-drop`.
+
+- **A node or edge body that cannot be read is an error, not "absent"; read
+  snapshots list evicted edges (SONNY-6567 item 2).** The hydrated getters
+  turned a failed rebuild of an evicted body (out of memory, an engine read
+  error) into null, the value that means "no such row", and their callers
+  skipped it: `CALL db.propertyKeys()` / `db.relationshipTypes()` answered
+  short lists, and an unreadable edge endpoint was taken for a hidden one.
+  New checked getters (`getNodePtrHydratedChecked`,
+  `getEdgePtrHydratedChecked`, `getEdgeHydratedChecked`) return the error;
+  `db.*`, the security-graph loaders and listings (`user_storage`), the
+  role resolver (an unreadable `HAS_ROLE` edge now resolves to no global
+  role instead of possibly an older, higher one), edge property writes (FLE
+  tenant identity) and the statement undo record use them and fail the
+  statement. Found on the way: rebuilding an evicted node or edge read a
+  tenant tag that could not be read as the `default` tenant's (fail open
+  across tenants; now an error); `hydrateEdgeCb` freed the label, graph name
+  and tenant twice on any error after the edge was built (heap corruption)
+  and leaked a property on failure; a key removed from a bounded cache and
+  inserted again left a stale FIFO entry that could evict the live key
+  during its own insert, so an existing body read as absent; and a read
+  snapshot (`QueryReadSession`, which serves top-level CALLs and server
+  reads) copied only the RESIDENT edges of a bounded edge cache (the
+  default, 1,000,000 entries), so every evicted edge was missing from its
+  answers with nothing failing at all. Regressions: `zig build
+  test-sonny6567-hydrated-getter-errors`, `test-bounded-node-cache`.
+
+- **A fulltext hit whose node cannot be read fails the search (SONNY-6567
+  item 3).** `geode.fts.search` / `phrase` / `proximity` skipped such a hit
+  as if the node were gone and reported the shorter result as complete. A
+  node deleted since indexing is still skipped and another tenant's node
+  still filtered. Regression: `zig build test-sonny6567-fts-unreadable-hit`.
+
+- **A tenant DROP that fails part-way fails, and can be retried (SONNY-6567
+  item 4).** **BREAKING:** `geode.tenant.drop` is refused inside an explicit
+  transaction (`TenantDropInTransaction`), and `geode.tenant.create` under a
+  tenant being dropped is refused (`TenantDropping`). A cascade drop now
+  marks the tenant (`active = false`, on disk) before removing anything,
+  and every failure fails it: the registry's own write of its file (logged
+  while the drop, and also `create` and `set_quota`, reported success; the
+  tenant came back at the next restart), the hierarchy removal (logged, or
+  `catch {}` for a child) and a child's registry lookup (`catch null`). The
+  drop no longer takes part in the statement's undo: a failed drop rolled a
+  child's rows back after the child had left the registry, orphaning them.
+  Regression: `zig build test-sonny6567-tenant-drop-failures` (registry and
+  statement allocation-failure sweeps, each followed by a restart and a
+  retry). See docs/security/MULTI_TENANT_HARDENING.md.
+
+- **gRPC client: every RPC on a connection gets its own HTTP/2 stream, and
+  a pushed result is never cut short silently (SONNY-6567 item 1).** The
+  client transport (`src/client/grpc_query_transport.zig`) sent every
+  Execute on stream 3, so a second Execute on one connection reused a
+  closed stream (RFC 9113 §5.1.1) and failed with `IncompleteResponse`; the
+  library's `StreamingQueryAdapter` and the test client now take odd,
+  increasing ids from a per-connection `StreamIds` (which refuses to wrap:
+  `StreamIdsExhausted`, open a new connection), and a response is read only
+  from its own stream. The CLI opens a connection per Execute and keeps
+  using stream 3. Two defects the large-response check found: the client
+  raised the per-stream receive window (SETTINGS) but never the
+  connection window, which stays 65,535 octets until a WINDOW_UPDATE on
+  stream 0, and the gRPC server cannot read WINDOW_UPDATEs while it pushes
+  a result (SONNY-1560), so a result over 64 KiB was refused after its
+  first pages; the client now raises the connection window to 16 MiB at
+  connect. And `collectQueryWithTransport` took a pushed result whose
+  stream ended before its final page for a complete one: `geode query
+  --grpc` printed 384 of 4,000 rows and exited 0. It now fails with
+  `IncompleteResponse` (the CLI's "the server closed the connection before
+  the query completed", exit 1). Regression: `zig build
+  test-sonny6567-grpc-stream-ids` (a real server: eight Execute RPCs, a
+  4,000-row and a 90,000-row response and one more Execute on one
+  connection; a multi-statement `--file` over gRPC).
+
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when

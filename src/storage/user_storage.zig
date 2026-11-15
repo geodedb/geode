@@ -741,6 +741,10 @@ pub const UserStorageBackend = struct {
         return @max(@as(u64, 1), record.auth_version);
     }
 
+    // SONNY-6567 (2): the security-graph loaders and listings below read
+    // each record's body with the CHECKED getter: a body that cannot be read
+    // fails the load / listing, instead of the record being skipped as if
+    // absent (a role, permission, policy or grant silently missing).
     fn loadRolesFromGraph(self: *Self) !void {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, ROLE_LABEL);
         if (nodes_opt == null) return;
@@ -748,7 +752,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -777,7 +781,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -804,7 +808,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const id_val = getIntProp(self.store, node_id, "id", -1);
@@ -912,7 +916,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             // A record whose fields do not give an id (tampered: SONNY-2757) is
@@ -949,7 +953,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
@@ -1034,7 +1038,7 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
@@ -1085,7 +1089,7 @@ pub const UserStorageBackend = struct {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, FLE_ROLE_GRANT_LABEL);
         if (nodes_opt == null) return;
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
             // As for GraphGrant: a record whose fields give no id is still
             // mapped (under its stored id) so the chain check sees it.
@@ -1301,7 +1305,7 @@ pub const UserStorageBackend = struct {
 
         if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) return false;
@@ -1318,7 +1322,7 @@ pub const UserStorageBackend = struct {
 
         if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) {
@@ -1339,7 +1343,7 @@ pub const UserStorageBackend = struct {
 
         if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
 

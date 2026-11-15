@@ -300,3 +300,34 @@ test "BoundedNodeCache: getPtr returns a usable pointer; iterator visits residen
     while (it.next()) |_| count += 1;
     try testing.expectEqual(@as(usize, 1), count);
 }
+
+// SONNY-6567 (2): a key removed and inserted again leaves a stale FIFO entry
+// ahead of its new one. Eviction popped it and removed the LIVE key; during
+// the key's own hydrate-insert that made `getOrHydratePtr` return null, so a
+// body that exists in the engine read as absent.
+test "BoundedNodeCache: a hydrate-insert never evicts the key it inserts (stale FIFO entry)" {
+    const a = testing.allocator;
+    var eng = FakeEngine.init(a);
+    defer eng.deinit();
+    const x: u64 = 1;
+    var y: u64 = 2;
+    while (node_cache.shardOf(y) != node_cache.shardOf(x)) y += 1;
+    try eng.put(x, "x");
+    try eng.put(y, "y");
+
+    // One entry per shard.
+    var cache = try Cache.init(a, .{
+        .cap = node_cache.SHARD_COUNT,
+        .free_fn = freeFakeVal,
+        .hydrate_fn = FakeEngine.hydrate,
+        .hydrate_ctx = &eng,
+    });
+    defer cache.deinit();
+
+    try cache.put(x, try makeVal(a, x, "x"));
+    cache.remove(x); // its FIFO entry stays behind
+    try cache.put(y, try makeVal(a, y, "y"));
+    const got = (try cache.getOrHydratePtr(x)) orelse return error.ExistingBodyReadAsAbsent;
+    try testing.expectEqualStrings("x", got.name);
+    cache.reclaimRetired();
+}

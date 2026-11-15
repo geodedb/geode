@@ -1206,10 +1206,15 @@ fn rehydrateTenantDerivedState(
     reg: *geode.tenant_registry.TenantRegistry,
     engine: *@import("rls").RLSEngine,
     quota_mgr: *geode.tenant_quota.TenantQuotaManager,
-) void {
+) !void {
+    // SONNY-6567 (5): the tenant hierarchy and quotas are rebuilt from the
+    // registry whole, or startup fails. A failed listing, hierarchy add or
+    // quota replay was a warning: a tenant missing from the hierarchy (its
+    // parent no longer sees its rows; a cascade drop misses it) or running
+    // with the default quota instead of its own.
     const recs = reg.list(gpa) catch |err| {
-        log.warn("tenant_registry.rehydrate_list_failed", &.{Attr.string("error", @errorName(err))});
-        return;
+        log.err("tenant_registry.rehydrate_list_failed; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     defer geode.tenant_registry.TenantRegistry.freeRecordSlice(gpa, recs);
     if (recs.len == 0) return;
@@ -1227,12 +1232,15 @@ fn rehydrateTenantDerivedState(
             if (!parent_ready) continue;
             engine.hierarchy_manager.addTenant(rec.tenant_id, rec.parent) catch |err| switch (err) {
                 error.TenantAlreadyExists => {},
-                else => log.warn("tenant_registry.rehydrate_hierarchy_failed", &.{
-                    Attr.string("tenant", rec.tenant_id),
-                    Attr.string("error", @errorName(err)),
-                }),
+                else => {
+                    log.err("tenant_registry.rehydrate_hierarchy_failed; refusing to start", &.{
+                        Attr.string("tenant", rec.tenant_id),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return err;
+                },
             };
-            added.put(i, {}) catch {};
+            try added.put(i, {});
             made_progress = true;
         }
     }
@@ -1251,10 +1259,13 @@ fn rehydrateTenantDerivedState(
             .max_concurrent_queries = rec.max_concurrent_queries,
             .max_graphs = rec.max_graphs,
             .max_nodes_per_graph = rec.max_nodes_per_graph,
-        }) catch |err| log.warn("tenant_registry.rehydrate_quota_failed", &.{
-            Attr.string("tenant", rec.tenant_id),
-            Attr.string("error", @errorName(err)),
-        });
+        }) catch |err| {
+            log.err("tenant_registry.rehydrate_quota_failed; refusing to start", &.{
+                Attr.string("tenant", rec.tenant_id),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
     }
 
     log.info("tenant_registry.rehydrated", &.{Attr.int("tenants", @intCast(recs.len))});
@@ -1920,7 +1931,7 @@ pub fn main() !void {
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
     // P7: Install write-through callbacks for user/role/grant DDL and hydrate
     // in-memory state from __geode_security.
-    server_init.wireAuthDDLCallbacks(agm, gpa);
+    try server_init.wireAuthDDLCallbacks(agm, gpa);
     // SONNY-6378: registered here, so it runs after the listener blocks
     // below have stopped every request thread.
     defer server_init.releaseAuthDDLPolicy(gpa);
@@ -1928,10 +1939,9 @@ pub fn main() !void {
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
     // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
-    // persisted :Policy nodes in __geode_security.  Errors are non-fatal —
-    // the server continues without pre-loaded policies (operators can
-    // recreate them via DDL).
-    server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
+    // persisted :Policy nodes in __geode_security.  SONNY-6567 (5): an error
+    // fails startup (it continued without the stored policies).
+    try server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
@@ -2014,7 +2024,7 @@ pub fn main() !void {
     // sorted parent-before-child by their created_at so addTenant's "parent must
     // exist" invariant holds for hierarchies built in order; any out-of-order
     // parent is retried until the set stabilizes.
-    rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
+    try rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
 
     // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
     // GAP-0848: resolve the FINAL effective strict-tenancy mode now that the
