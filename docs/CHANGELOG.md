@@ -348,16 +348,29 @@
   transaction, undone by `abortTxn`; the source's node page is no longer
   imaged (0.4.16's tail reconcile finds `.adj_out` page owners itself). The
   adapter's own property-chain index upkeep went too (`putPropertyTxn` does
-  it). `test-sonny6492-edge-prop-image-cost`, this branch, load average
-  about 6: a SET that moves the chain head logs 16,584 instead of 24,826
-  bytes of WAL; an in-place overwrite 8,342 (unchanged); with
-  `GEODE_WAL_SYNC=deferred` a head-moving SET takes 126 us against 69 us in
-  place (the run before this change measured 357 us with the images against
-  75 us without them); with fsync per commit both are within noise of each
-  other (about 18.8 ms). The crash guarantees of SONNY-6471/6472/6492 hold
-  (`test-sonny6471-edge-prop-crash`, `test-sonny6492-*`,
-  `test-edge-durability-churn-repro`). The batch now moves the adjacency
-  heads after each property that moves the chain, not once at its end.
+  it). `test-sonny6492-edge-prop-image-cost` (reworked: a head-moving
+  first-property SET against an in-place overwrite, plus five properties
+  per relationship in one `setEdgePropertiesBatch`), the same bench run on
+  the tree before this change and after it, load average 6-10, medians:
+  a SET that moves the chain head logs 16,584 instead of 24,826 bytes of
+  WAL and takes 126 instead of 177 us with `GEODE_WAL_SYNC=deferred`; an
+  in-place overwrite is unchanged (8,342 bytes, about 69 us); five
+  properties on one relationship log 49,717 instead of 57,876 bytes and
+  take 408 instead of 468 us (the batch now moves the adjacency heads after
+  each property that moves the chain instead of once at its end, and no
+  longer images the node page); with fsync per commit every shape is
+  within noise (18.3-19.4 ms). The crash guarantees of SONNY-6471/6472/6492
+  hold (`test-sonny6471-edge-prop-crash`, `test-sonny6492-*`,
+  `test-edge-durability-churn-repro`).
+- **Measured: commit- and abort-heavy statements on 0.4.15 and on 0.4.16
+  with the changes above (SONNY-6529).** Two real `geode serve` Debug
+  binaries of this branch (before: the 0.4.15 tree; after: this change),
+  fsync per commit, 5 interleaved rounds of 100 operations, medians, load
+  average 8-10: CREATE 19.9 -> 20.0 ms, a node SET 21.6 -> 19.8 ms, a
+  relationship's first property SET 24.2 -> 24.9 ms, an auto-commit SET
+  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET
+  + ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
+  the commit path.
 - **The security graph's label-page re-log is gone (SONNY-6529).**
   `relogSecurityLabelPageTxn` re-imaged a node's label page in the
   mutating transaction (gap 0026), a workaround for a graph-storage label
