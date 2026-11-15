@@ -170,6 +170,9 @@ const cmdFLE = fle_cli.cmdFLE;
 // Auth chain management CLI module (init, reseal, verify)
 const auth_init_cli = @import("auth_init_cli.zig");
 
+// SONNY-6560: the formats `geode query --format` renders.
+const transport_response = geode.cli_transport_response;
+
 // Import shared types and functions from cli_dispatcher
 const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
@@ -292,9 +295,6 @@ fn printQueryUsage() void {
         "                         sent again\n" ++
         "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
         "                         independent of the authenticated user's role\n" ++
-        "  --begin                Start transaction\n" ++
-        "  --commit               Commit transaction\n" ++
-        "  --rollback             Rollback transaction\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
         "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
@@ -316,7 +316,7 @@ fn printQueryUsage() void {
         "Authentication:\n" ++
         "  For authenticated servers, provide both --user and --password:\n" ++
         "    geode query --user geode --password yourpassword \"RETURN 1\"\n" ++
-        "    geode query -U geode -P \"RETURN 1\"  # (prompts for password)\n" ++
+        "    geode query \"RETURN 1\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  Environment variables are NOT used for authentication.\n" ++
         "  The default admin username is 'geode' (not 'admin').\n" ++
@@ -334,7 +334,7 @@ fn printQueryUsage() void {
         "Examples:\n" ++
         "  # Authenticated query (use 'geode' as default admin user)\n" ++
         "  geode query --user geode --password \"$GEODE_DEFAULT_PASSWORD\" \"RETURN 1 AS x\"\n" ++
-        "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
+        "  geode query \"RETURN 1 AS x\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  # Using DSN connection string\n" ++
         "  geode query --dsn quic://localhost:3141 \"RETURN 1 AS x\"\n" ++
@@ -364,6 +364,12 @@ fn printQueryUsage() void {
         "  cat queries.txt | geode query --batch\n" ++
         "  cat queries.txt | geode query --batch -   # explicit stdin marker\n" ++
         "  echo -e 'RETURN 1\\nRETURN 2' | geode query --batch --server localhost:3141\n" ++
+        "\n" ++
+        "  # An explicit transaction: its statements on one connection (--batch)\n" ++
+        "  printf 'BEGIN\\nCREATE (:T)\\nROLLBACK\\n' | geode query --batch\n" ++
+        "\n" ++
+        "An option geode query does not know, a --format it does not render, or a\n" ++
+        "value option without its value exits 2 (usage error).\n" ++
         "\n", .{});
 }
 
@@ -417,80 +423,6 @@ fn printShellUsage() void {
         "\n", .{});
 }
 
-fn printUserUsage() void {
-    std.debug.print("geode user - User management\n" ++
-        "\n" ++
-        "Usage: geode user [options] <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create <username> <email> [password]    Create a new user\n" ++
-        "  delete <username>                       Delete a user\n" ++
-        "  list                                    List all users\n" ++
-        "  show <username>                         Show user details\n" ++
-        "  enable <username>                       Enable a user\n" ++
-        "  disable <username>                      Disable a user\n" ++
-        "  password <username> [new_password]      Change user password\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -U, --user <username>  Authenticate as user\n" ++
-        "  --format <fmt>         Output format: json|table|csv (default: table)\n" ++
-        "  --yes                  Skip confirmation prompts\n" ++
-        "  --no-prompt            Don't prompt for missing values\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode user create alice alice@example.com\n" ++
-        "  geode user list --format json\n" ++
-        "  geode user password alice\n" ++
-        "\n", .{});
-}
-
-fn printUserSubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode user create - Create a new user\n" ++
-            "\n" ++
-            "Usage: geode user create <username> [email] [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --password <password>  Set initial password\n" ++
-            "  --role <role>          Assign role to user\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode user list - List all users\n" ++
-            "\n" ++
-            "Usage: geode user list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode user show - Show user details\n" ++
-            "\n" ++
-            "Usage: geode user show <username> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode user delete - Delete a user\n" ++
-            "\n" ++
-            "Usage: geode user delete <username> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
 fn printAuthUsage() void {
     std.debug.print("geode auth - Authentication commands\n" ++
         "\n" ++
@@ -519,7 +451,7 @@ fn printAuthUsage() void {
         "Sessions:\n" ++
         "  geode servers do not accept session tokens yet (no server keeps the session\n" ++
         "  ids it issues): a saved session does not log later commands in. Pass -U and\n" ++
-        "  --password (or --dsn) to each command. 'geode auth validate' is not supported.\n" ++
+        "  a password (or a DSN) to each command. 'geode auth validate' is not supported.\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode auth login -U alice --save-session\n" ++
@@ -530,186 +462,6 @@ fn printAuthUsage() void {
         "  geode auth verify --data-dir /var/lib/geode\n" ++
         "\n", .{});
 }
-
-fn printRoleUsage() void {
-    std.debug.print("geode role - Role management commands\n" ++
-        "\n" ++
-        "Usage: geode role <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create                 Create a new role\n" ++
-        "  list                   List all roles\n" ++
-        "  show                   Show role details\n" ++
-        "  delete                 Delete a role\n" ++
-        "  grant                  Grant permissions to a role\n" ++
-        "  revoke                 Revoke permissions from a role\n" ++
-        "\n" ++
-        "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode role create admin\n" ++
-        "  geode role list\n" ++
-        "  geode role delete obsolete_role\n" ++
-        "\n", .{});
-}
-
-fn printRoleSubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode role create - Create a new role\n" ++
-            "\n" ++
-            "Usage: geode role create <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --description <desc>   Role description\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode role list - List all roles\n" ++
-            "\n" ++
-            "Usage: geode role list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode role show - Show role details\n" ++
-            "\n" ++
-            "Usage: geode role show <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode role delete - Delete a role\n" ++
-            "\n" ++
-            "Usage: geode role delete <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
-fn printPolicyUsage() void {
-    std.debug.print("geode policy - RLS policy management commands\n" ++
-        "\n" ++
-        "Usage: geode policy <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create                 Create a new policy\n" ++
-        "  list                   List all policies\n" ++
-        "  show                   Show policy details\n" ++
-        "  delete                 Delete a policy\n" ++
-        "  enable                 Enable a policy\n" ++
-        "  disable                Disable a policy\n" ++
-        "\n" ++
-        "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode policy create read_own_data\n" ++
-        "  geode policy list\n" ++
-        "  geode policy delete outdated_policy\n" ++
-        "\n", .{});
-}
-
-fn printPolicySubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode policy create - Create a new policy\n" ++
-            "\n" ++
-            "Usage: geode policy create <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --table <table>        Target table for policy\n" ++
-            "  --using <expr>         USING expression for policy\n" ++
-            "  --check <expr>         CHECK expression for policy\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode policy list - List all policies\n" ++
-            "\n" ++
-            "Usage: geode policy list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode policy show - Show policy details\n" ++
-            "\n" ++
-            "Usage: geode policy show <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode policy delete - Delete a policy\n" ++
-            "\n" ++
-            "Usage: geode policy delete <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
-fn printGrantUsage() void {
-    std.debug.print("geode grant - Grant permissions\n" ++
-        "\n" ++
-        "Usage: geode grant <permission> TO <role|user> [options]\n" ++
-        "\n" ++
-        "Permissions:\n" ++
-        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
-        "  ALL PRIVILEGES\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode grant SELECT TO role_reader\n" ++
-        "  geode grant ALL PRIVILEGES TO admin\n" ++
-        "  geode grant INSERT,UPDATE TO user_alice\n" ++
-        "\n", .{});
-}
-
-fn printRevokeUsage() void {
-    std.debug.print("geode revoke - Revoke permissions\n" ++
-        "\n" ++
-        "Usage: geode revoke <permission> FROM <role|user> [options]\n" ++
-        "\n" ++
-        "Permissions:\n" ++
-        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
-        "  ALL PRIVILEGES\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode revoke DELETE FROM role_reader\n" ++
-        "  geode revoke ALL PRIVILEGES FROM ex_employee\n" ++
-        "  geode revoke UPDATE FROM user_bob\n" ++
-        "\n", .{});
-}
-
-// Subcommand implementations
 
 // CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-10-28
 fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -1160,6 +912,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             format = argv[i + 1];
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-FORMAT; FEATURE="CliOptions"; ASPECT=UnsupportedFormatRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: any value used to be stored, and a format the
+            // renderer does not draw printed nothing and exited 0.
+            if (!transport_response.isSupportedFormat(format)) {
+                std.debug.print("Error: geode query: unsupported --format '{s}' (supported: " ++ transport_response.supported_formats_text ++ ")\n", .{format});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure-tls-skip-verify")) {
             insecure = true;
@@ -1227,7 +986,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             // SONNY-6554: the token was parsed and never sent. geode servers
             // authenticate a user name and a password (or a client
             // certificate) in HELLO, and accept no token.
-            std.debug.print("Error: --token is not supported by this server: geode servers accept no session or API token; authenticate with -U and --password, or --dsn (docs/USER_AUTH.md)\n", .{});
+            std.debug.print("Error: geode query: option '--token' is not supported by this server: geode servers accept no session or API token; authenticate with -U and --password, or --dsn (docs/USER_AUTH.md)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--param")) {
             if (i + 2 >= argv.len) {
@@ -1318,11 +1077,29 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             forward_principal_envelope_hex = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--begin") or std.mem.eql(u8, arg, "--commit") or std.mem.eql(u8, arg, "--rollback")) {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-TXN-FLAGS; FEATURE="CliOptions"; ASPECT=TransactionFlagsRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: --help documented these and nothing read them
+            // (the client that did was deleted in 78c9534e4), so
+            // `--begin --rollback` committed the write. Each geode query
+            // is its own connection; an explicit transaction is BEGIN /
+            // ... / COMMIT or ROLLBACK lines of --batch, on one connection.
+            std.debug.print("Error: geode query: {s} is not supported: run the transaction's statements with --batch, one per line, between BEGIN and COMMIT or ROLLBACK (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
-            // First non-option argument is the query text, or "-" for stdin
-            if (query_text == null) {
-                query_text = arg;
+            // First non-option argument is the query text, or "-" for stdin.
+            // SONNY-6560: a second one used to be dropped without a word.
+            if (query_text != null) {
+                std.debug.print("Error: geode query: unexpected argument '{s}': the query is one argument (quote it), or - for stdin (see geode query --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
+            query_text = arg;
+        } else {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-UNKNOWN-OPTION; FEATURE="CliOptions"; ASPECT=UnknownOptionRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: an option geode query does not know used to be
+            // skipped (exit 0); `geode serve` refuses one since SONNY-6442.
+            std.debug.print("Error: geode query: unknown option '{s}' (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -1819,63 +1596,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         };
     }
     if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
-}
-
-/// Escape a string for safe embedding in JSON
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    // Count how many characters need escaping to allocate correct size
-    var escape_count: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
-        }
-    }
-
-    // If no escaping needed, just duplicate the string
-    if (escape_count == 0) {
-        return allocator.dupe(u8, input);
-    }
-
-    // Allocate buffer for escaped string
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var write_idx: usize = 0;
-
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '"';
-                write_idx += 2;
-            },
-            '\\' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '\\';
-                write_idx += 2;
-            },
-            '\n' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'n';
-                write_idx += 2;
-            },
-            '\r' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'r';
-                write_idx += 2;
-            },
-            '\t' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 't';
-                write_idx += 2;
-            },
-            else => {
-                result[write_idx] = c;
-                write_idx += 1;
-            },
-        }
-    }
-
-    return result;
 }
 
 const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024; // 1 MB max param payload
@@ -3497,334 +3217,6 @@ fn runQueryOnHelloedStream(
     return try result.render(stdout, stderr_handle);
 }
 
-/// Convert a JSON value to a string ID (handles both string and integer IDs)
-fn getDotIdString(allocator: std.mem.Allocator, val: ?std.json.Value) ?[]const u8 {
-    const v = val orelse return null;
-    if (v == .string) return allocator.dupe(u8, v.string) catch null;
-    if (v == .integer) return std.fmt.allocPrint(allocator, "{d}", .{v.integer}) catch null;
-    return null;
-}
-
-/// Get node ID as string (handles id field being int or string)
-fn getDotNodeId(allocator: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const u8 {
-    // Try id first (server uses "id"), then _id, then element_id
-    if (obj.get("id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    if (obj.get("_id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    if (obj.get("element_id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    return null;
-}
-
-fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
-    var label_parts = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-    defer label_parts.deinit(allocator);
-
-    // Add labels
-    if (labels_val == .array) {
-        for (labels_val.array.items, 0..) |lbl, i| {
-            if (i > 0) try label_parts.append(allocator, ':');
-            if (lbl == .string) {
-                try label_parts.appendSlice(allocator, lbl.string);
-            }
-        }
-    }
-
-    // Add a display property if available (name, title, etc.)
-    // Properties might be at top level or inside a "properties" object
-    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
-
-    // First check properties object (server format)
-    if (obj.get("properties")) |props_val| {
-        if (props_val == .object) {
-            for (display_props) |prop| {
-                if (props_val.object.get(prop)) |val| {
-                    if (val == .string and val.string.len > 0) {
-                        try label_parts.appendSlice(allocator, "\\n");
-                        try label_parts.appendSlice(allocator, val.string);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (label_parts.items.len == 0) {
-        // Fall back to node ID
-        const id = getDotNodeId(allocator, obj) orelse return try allocator.dupe(u8, "node");
-        return id;
-    }
-
-    return try allocator.dupe(u8, label_parts.items);
-}
-
-/// Output DOT format from pre-collected row data
-/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=TESTED; TEST=geodetestlab/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-06-10
-fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.Io.File) !void {
-    // Start DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  rankdir=LR;\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  edge [fontsize=10];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
-
-    // Track nodes and edges to avoid duplicates
-    var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer {
-        var key_iter = seen_nodes.keyIterator();
-        while (key_iter.next()) |key| allocator.free(key.*);
-        seen_nodes.deinit();
-    }
-
-    // Process each row looking for node/edge data
-    for (rows) |row| {
-        for (row.items, 0..) |cell, col_idx| {
-            // Try to parse cell as JSON (might be a serialized node/edge)
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
-            defer parsed.deinit();
-
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-
-            // Check if this is a node (has labels)
-            if (obj.get("labels")) |labels_val| {
-                const node_id = getDotNodeId(allocator, obj) orelse continue;
-                defer allocator.free(node_id);
-
-                if (!seen_nodes.contains(node_id)) {
-                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
-
-                    const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
-                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
-
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), node_id) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), label) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
-                }
-            }
-            // Check if this is a relationship
-            else if (obj.get("label") orelse obj.get("type")) |type_val| {
-                if (type_val != .string) continue;
-                const rel_type = type_val.string;
-
-                const start_id = getDotIdString(allocator, obj.get("from")) orelse
-                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
-                defer allocator.free(start_id);
-                const end_id = getDotIdString(allocator, obj.get("to")) orelse
-                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
-                defer allocator.free(end_id);
-
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), start_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" -> \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), end_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), rel_type) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
-            }
-
-            _ = col_idx; // Suppress unused variable warning
-        }
-    }
-
-    // End DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n") catch {};
-}
-
-fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]u8 {
-    return switch (val) {
-        .null => try allocator.dupe(u8, "null"),
-        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .float => |f| try std.fmt.allocPrint(allocator, "{d:.6}", .{f}),
-        .string => |s| try allocator.dupe(u8, s),
-        .array => try allocator.dupe(u8, "[...]"),
-        .object => blk: {
-            // For objects, try to show a useful summary
-            const obj = val.object;
-            if (obj.get("labels")) |labels_val| {
-                if (labels_val == .array and labels_val.array.items.len > 0 and labels_val.array.items[0] == .string) {
-                    break :blk try std.fmt.allocPrint(allocator, "({s})", .{labels_val.array.items[0].string});
-                }
-                break :blk try allocator.dupe(u8, "(node)");
-            }
-            if (obj.get("label")) |t| {
-                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
-                break :blk try allocator.dupe(u8, "[rel]");
-            }
-            if (obj.get("type")) |t| {
-                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
-                break :blk try allocator.dupe(u8, "[rel]");
-            }
-            break :blk try allocator.dupe(u8, "{...}");
-        },
-        .number_string => |s| try allocator.dupe(u8, s),
-    };
-}
-
-fn jsonNumberFromU64(allocator: std.mem.Allocator, value: u64) !std.json.Value {
-    if (value <= @as(u64, std.math.maxInt(i64))) {
-        return .{ .integer = @intCast(value) };
-    }
-    const num_str = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    return .{ .number_string = num_str };
-}
-
-fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
-    const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
-    _ = std.base64.standard.Encoder.encode(out, bytes);
-    return out;
-}
-
-fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.MapEntry) !std.json.ObjectMap {
-    var obj = std.json.ObjectMap.init(allocator);
-    for (entries) |entry| {
-        const key = try allocator.dupe(u8, entry.key);
-        const val = if (entry.value) |v|
-            try protoValueToJson(allocator, v)
-        else
-            std.json.Value.null;
-        try obj.put(key, val);
-    }
-    return obj;
-}
-
-fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, node.id));
-
-    var labels = std.json.Array.init(allocator);
-    for (node.labels.items) |label| {
-        try labels.append(.{ .string = try allocator.dupe(u8, label) });
-    }
-    try obj.put(try allocator.dupe(u8, "labels"), .{ .array = labels });
-
-    const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
-    return .{ .object = obj };
-}
-
-fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, edge.id));
-    try obj.put(try allocator.dupe(u8, "from"), try jsonNumberFromU64(allocator, edge.from_id));
-    try obj.put(try allocator.dupe(u8, "to"), try jsonNumberFromU64(allocator, edge.to_id));
-    try obj.put(try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, edge.label) });
-
-    const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
-    return .{ .object = obj };
-}
-
-fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-
-    var nodes = std.json.Array.init(allocator);
-    for (path.nodes.items) |node| {
-        try nodes.append(try protoNodeToJson(allocator, node));
-    }
-    try obj.put(try allocator.dupe(u8, "nodes"), .{ .array = nodes });
-
-    var edges = std.json.Array.init(allocator);
-    for (path.edges.items) |edge| {
-        try edges.append(try protoEdgeToJson(allocator, edge));
-    }
-    try obj.put(try allocator.dupe(u8, "edges"), .{ .array = edges });
-    return .{ .object = obj };
-}
-
-fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    if (ext.type_name.len > 0) {
-        try obj.put(try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, ext.type_name) });
-    }
-    if (ext.data) |data| {
-        const val: std.json.Value = switch (data) {
-            .text => |t| .{ .string = try allocator.dupe(u8, t) },
-            .bytes => |b| .{ .string = try base64Encode(allocator, b) },
-            .int_val => |n| .{ .integer = n },
-            .double_val => |f| .{ .float = f },
-            .bool_val => |b| .{ .bool = b },
-        };
-        try obj.put(try allocator.dupe(u8, "value"), val);
-    }
-    return .{ .object = obj };
-}
-
-fn protoValueToJson(allocator: std.mem.Allocator, value: schema.Value) error{OutOfMemory}!std.json.Value {
-    const kind = value.kind orelse return std.json.Value.null;
-    return switch (kind) {
-        .null_val => std.json.Value.null,
-        .int_val => |v| .{ .integer = v.value },
-        .double_val => |v| .{ .float = v.value },
-        .bool_val => |b| .{ .bool = b },
-        .string_val => |v| .{ .string = try allocator.dupe(u8, v.value) },
-        .decimal_val => |v| blk: {
-            const repr = if (v.orig_repr.len > 0) v.orig_repr else v.coeff;
-            break :blk .{ .string = try allocator.dupe(u8, repr) };
-        },
-        .bytes_val => |v| .{ .string = try base64Encode(allocator, v.value) },
-        .list_val => |v| blk: {
-            var arr = std.json.Array.init(allocator);
-            for (v.values.items) |item| {
-                try arr.append(try protoValueToJson(allocator, item));
-            }
-            break :blk .{ .array = arr };
-        },
-        .map_val => |v| blk: {
-            const obj = try protoMapEntriesToJson(allocator, v.entries.items);
-            break :blk .{ .object = obj };
-        },
-        .node_val => |v| try protoNodeToJson(allocator, v),
-        .edge_val => |v| try protoEdgeToJson(allocator, v),
-        .path_val => |v| try protoPathToJson(allocator, v),
-        .ext_val => |v| try protoExtendedToJson(allocator, v),
-    };
-}
-
-fn valueToJsonString(allocator: std.mem.Allocator, value: schema.Value) ![]const u8 {
-    const json_val = try protoValueToJson(allocator, value);
-    defer freeJsonValue(allocator, json_val);
-    return std.json.Stringify.valueAlloc(allocator, json_val, .{});
-}
-
-fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-    freeJsonValueImpl(allocator, value, true);
-}
-
-/// Free a JSON value tree. When `free_keys` is true, object keys are freed;
-/// when false, only values are freed (useful for root objects whose keys are
-/// string literals that must not be freed).
-fn freeJsonValueImpl(allocator: std.mem.Allocator, value: std.json.Value, free_keys: bool) void {
-    switch (value) {
-        .number_string => |ns| allocator.free(ns),
-        .string => |s| allocator.free(s),
-        .array => |arr| {
-            for (arr.items) |item| {
-                freeJsonValueImpl(allocator, item, true);
-            }
-            var mutable_arr = arr;
-            mutable_arr.deinit();
-        },
-        .object => |obj| {
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                if (free_keys) allocator.free(entry.key_ptr.*);
-                freeJsonValueImpl(allocator, entry.value_ptr.*, true);
-            }
-            var mutable_obj = obj;
-            mutable_obj.deinit();
-        },
-        else => {},
-    }
-}
-
 fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Get REPL types
     const repl_loop = geode.repl.repl_loop;
@@ -4572,12 +3964,14 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 "Removes ~/.geode/credentials.json, written by 'geode auth login --save-session'.\n" ++
                 "This is local only: geode servers keep no session to end.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return; // SONNY-6559: success returns through main
         }
-        // SONNY-6554: the token was skipped and the command still said
-        // "Successfully logged out"; no server can invalidate a token.
+        // SONNY-6554 / SONNY-6560: `--token` was documented and skipped, and
+        // the command still said "Successfully logged out". No server keeps
+        // session tokens, so none can be invalidated: refused (exit 2) here,
+        // where the reason can be given (option_check lets it through).
         if (std.mem.eql(u8, argv[i], "--token")) {
-            std.debug.print("Error: auth logout --token is not supported by this server: geode servers keep no record of session tokens, so none can be invalidated\n", .{});
+            std.debug.print("Error: geode auth logout: option '--token' is not supported by this server: geode servers keep no record of session tokens, so none can be invalidated\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
@@ -4617,7 +4011,7 @@ fn cmdAuthValidate(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
                 "geode servers keep no record of the session tokens they issue, so no\n" ++
                 "token can be validated. The command exits 1.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return; // SONNY-6559: success returns through main
         }
     }
     std.debug.print("Error: geode auth validate is not supported by this server: geode servers keep no record of the session tokens they issue, so no token can be validated (docs/USER_AUTH.md, 'Saved sessions')\n", .{});

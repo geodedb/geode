@@ -66,11 +66,12 @@ pub fn cmdSession(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printSessionUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        // SONNY-6559 (11): success returns through main, which records it.
+        return;
     } else if (std.mem.eql(u8, subcommand, "info")) {
         try cmdSessionInfo(allocator, argv, start_idx + 1);
     } else if (unsupportedReason(subcommand)) |why| {
-        refuseUnsupported(subcommand, why, argv, start_idx + 1);
+        return refuseUnsupported(subcommand, why, argv, start_idx + 1);
     } else {
         std.debug.print("Error: Unknown session subcommand '{s}'\n", .{subcommand});
         printSessionUsage();
@@ -93,12 +94,14 @@ fn unsupportedReason(subcommand: []const u8) ?[]const u8 {
     return null;
 }
 
-fn refuseUnsupported(subcommand: []const u8, why: []const u8, argv: [][:0]u8, start_idx: usize) noreturn {
+/// Help returns (through main, SONNY-6559); the command itself exits 1,
+/// so no success is recorded for it.
+fn refuseUnsupported(subcommand: []const u8, why: []const u8, argv: [][:0]u8, start_idx: usize) void {
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             std.debug.print("geode session {s} - not supported by this server: {s}. The command exits 1.\n", .{ subcommand, why });
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
     std.debug.print("Error: geode session {s} is not supported by this server: {s} (docs/USER_AUTH.md, 'Saved sessions')\n", .{ subcommand, why });
@@ -138,7 +141,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "Options:\n" ++
                 "  -h, --help          Show this help\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
     }
 
@@ -156,5 +159,4 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     std.debug.print("  created: {d} (timestamp)\n", .{creds.created_at});
     std.debug.print("  expires: {d} (timestamp)\n", .{creds.expires_at});
     std.debug.print("  token: {s}...\n", .{creds.token[0..@min(16, creds.token.len)]});
-    std.process.exit(@intFromEnum(ExitCode.success));
 }

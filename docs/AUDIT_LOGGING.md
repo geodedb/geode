@@ -375,7 +375,12 @@ The system is designed with multiple layers of protection:
 ## Command audit (`geode --audit*`, `GEODE_AUDIT_*`)
 
 Every `geode` command (including `geode serve`) can log its own start and
-dispatch events, separately from the server's audit chain above. The sinks
+dispatch events, separately from the server's audit chain above. A command
+that succeeds and returns to the dispatcher also logs
+`{"category":"command","action":"<command>","outcome":"success"}`
+(SONNY-6559); a command that fails exits with its code without that record.
+`--audit-file` and `--audit-syslog` given without a value are refused
+(exit 2, SONNY-6560). The sinks
 come from the global flags `--audit`, `--audit-file <path>`,
 `--audit-syslog <host>[:<port>]` and `--audit-eventlog [<source>]`, or from
 the environment:

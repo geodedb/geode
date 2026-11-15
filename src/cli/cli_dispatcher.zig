@@ -87,6 +87,8 @@ const mtls_cli = @import("mtls_cli.zig");
 // GAP-0839: `geode tenant` connects to the server and issues CALL geode.tenant.*,
 // so it delegates to cmdQuery (handled as a special subcommand in dispatch()).
 const tenant_cli = @import("tenant_cli.zig");
+// SONNY-6560: the options each command reads (unknown ones are refused).
+const option_check = @import("option_check.zig");
 
 // Re-export command handlers for main to use
 pub const cmdUser = user_mgmt_cli.cmdUser;
@@ -140,6 +142,23 @@ pub const CliAuditConfig = struct {
     windows_eventlog_enabled: bool = false,
     windows_eventlog_source: ?[]const u8 = null,
     windows_eventlog_log: ?[]const u8 = null,
+
+    /// SONNY-6559 (7): the strings are owned (parseAuditConfigFromEnv and
+    /// the --audit-* flags duplicate them); they used to be leaked.
+    pub fn deinit(self: *CliAuditConfig, allocator: std.mem.Allocator) void {
+        inline for (.{ "syslog_host", "file_path", "windows_eventlog_source", "windows_eventlog_log" }) |field| {
+            if (@field(self, field)) |owned| allocator.free(owned);
+            @field(self, field) = null;
+        }
+    }
+
+    /// Replace an owned string field, freeing the value it held (a flag
+    /// given after the GEODE_AUDIT_* variable of the same setting).
+    fn setOwned(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) !void {
+        const copy = try allocator.dupe(u8, value);
+        if (field.*) |old| allocator.free(old);
+        field.* = copy;
+    }
 };
 
 /// Simple audit logging structures
@@ -214,15 +233,21 @@ pub fn dispatch(
         audit_env_err = err;
         break :blk CliAuditConfig{};
     };
+    // SONNY-6559 (7): freed after the audit logger, which borrows the
+    // strings, is closed (defers run in reverse order).
+    defer audit_cfg.deinit(allocator);
 
     // Parse global audit flags
     var subcommand_start: usize = 1;
+    var global_config: ?[]const u8 = null;
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--audit")) {
             audit_cfg.enabled = true;
             subcommand_start = i + 1;
         } else if (std.mem.eql(u8, argv[i], "--audit-syslog")) {
+            // SONNY-6560: without its value the flag was skipped.
+            if (i + 1 >= argv.len) refuseMissingGlobalValue(argv[i]);
             if (i + 1 < argv.len) {
                 audit_cfg.syslog_enabled = true;
                 audit_cfg.enabled = true;
@@ -239,17 +264,18 @@ pub fn dispatch(
                     std.debug.print("Error: --audit-syslog '{f}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{geode.dsn_credentials.redacted(hostport)});
                     return error.InvalidAuditSyslogAddress;
                 }
-                audit_cfg.syslog_host = try allocator.dupe(u8, target.host);
+                try CliAuditConfig.setOwned(allocator, &audit_cfg.syslog_host, target.host);
                 audit_cfg.syslog_port = target.port;
 
                 i += 1;
                 subcommand_start = i + 1;
             }
         } else if (std.mem.eql(u8, argv[i], "--audit-file")) {
+            if (i + 1 >= argv.len) refuseMissingGlobalValue(argv[i]);
             if (i + 1 < argv.len) {
                 audit_cfg.file_enabled = true;
                 audit_cfg.enabled = true;
-                audit_cfg.file_path = try allocator.dupe(u8, argv[i + 1]);
+                try CliAuditConfig.setOwned(allocator, &audit_cfg.file_path, argv[i + 1]);
                 i += 1;
                 subcommand_start = i + 1;
             }
@@ -258,11 +284,11 @@ pub fn dispatch(
             audit_cfg.enabled = true;
 
             // Check if there's an optional source name argument
-            if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) {
-                audit_cfg.windows_eventlog_source = try allocator.dupe(u8, argv[i + 1]);
+            if (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-") and findCommandName(argv[i + 1]) == null) {
+                try CliAuditConfig.setOwned(allocator, &audit_cfg.windows_eventlog_source, argv[i + 1]);
                 i += 1;
             } else {
-                audit_cfg.windows_eventlog_source = try allocator.dupe(u8, "Geode");
+                try CliAuditConfig.setOwned(allocator, &audit_cfg.windows_eventlog_source, "Geode");
             }
             subcommand_start = i + 1;
         } else if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -271,24 +297,23 @@ pub fn dispatch(
         } else if (std.mem.eql(u8, argv[i], "--version")) {
             std.debug.print("geode " ++ build_options.version ++ "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
-        } else if (std.mem.eql(u8, argv[i], "--verbose") or std.mem.eql(u8, argv[i], "-v")) {
-            // Set global verbose flag (would be used throughout the application)
-            // For now, just accept the flag
-            subcommand_start = i + 1;
-        } else if (std.mem.eql(u8, argv[i], "--json")) {
-            // Set global JSON output flag (would be used throughout the application)
-            // For now, just accept the flag
-            subcommand_start = i + 1;
+        } else if (std.mem.eql(u8, argv[i], "--verbose") or std.mem.eql(u8, argv[i], "-v") or
+            std.mem.eql(u8, argv[i], "--json"))
+        {
+            // CANARY: REQ=REQ-SONNY-6560-GLOBAL-UNREAD-OPTIONS; FEATURE="CliOptions"; ASPECT=DocumentedUnreadRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: geode --help documented these and nothing read
+            // them ("For now, just accept the flag"): --json changed no
+            // output, --verbose nothing.
+            std.debug.print("Error: geode: option '{s}' is not supported (a subcommand's own options are given after it; see geode --help)\n", .{argv[i]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, argv[i], "--config")) {
-            if (i + 1 < argv.len) {
-                // Would load configuration file
-                // For now, just accept the flag
-                i += 1;
-                subcommand_start = i + 1;
-            } else {
-                std.debug.print("Error: --config requires a path\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
+            // SONNY-6560: only `geode serve` reads it (its parser scans the
+            // whole command line for --config); checked once the
+            // subcommand is known.
+            if (i + 1 >= argv.len) refuseMissingGlobalValue(argv[i]);
+            global_config = argv[i];
+            i += 1;
+            subcommand_start = i + 1;
         } else {
             break;
         }
@@ -324,6 +349,19 @@ pub fn dispatch(
 
     const subcommand = argv[subcommand_start];
 
+    // SONNY-6560: the global --config was accepted and ignored by every
+    // command but serve.
+    if (global_config) |opt| {
+        if (!std.mem.eql(u8, subcommand, "serve")) {
+            std.debug.print("Error: geode: option '{s}' is read by geode serve only (see geode serve --help)\n", .{opt});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+    }
+
+    // SONNY-6560: an option the command does not read, or a value option
+    // without its value, is refused here (exit 2) before the command runs.
+    option_check.enforce(subcommand, argv[subcommand_start + 1 ..]);
+
     // Dispatch to subcommand using unified command table
     if (findCommand(&commands, subcommand)) |cmd_entry| {
         logAuditEvent("command", cmd_entry.name, "started");
@@ -339,13 +377,16 @@ pub fn dispatch(
             subcommand_start;
 
         try cmd_entry.handler(allocator, argv, actual_start_idx);
+        logCommandSucceeded(cmd_entry.name);
     } else if (std.mem.eql(u8, subcommand, "audit")) {
         // Check for help flag first
+        logAuditEvent("command", "audit", "started");
         var audit_i: usize = subcommand_start + 1;
         while (audit_i < argv.len) : (audit_i += 1) {
             if (std.mem.eql(u8, argv[audit_i], "-h") or std.mem.eql(u8, argv[audit_i], "--help")) {
                 printAuditHelp();
-                std.process.exit(@intFromEnum(ExitCode.success));
+                logCommandSucceeded("audit");
+                return;
             }
         }
         // geode audit verify --file <path> ...
@@ -358,20 +399,39 @@ pub fn dispatch(
         var pubkeys: [64][32]u8 = undefined;
         var pubkey_count: usize = 0;
         audit_i = subcommand_start + 1;
+        var saw_verify = false;
         while (audit_i < argv.len) : (audit_i += 1) {
-            if (std.mem.eql(u8, argv[audit_i], "verify")) {
+            const arg = argv[audit_i];
+            // SONNY-6560: a value option without its value, an unknown
+            // option or argument, and an --algo other than sha256 or
+            // blake3 (which verified with sha256) are refused.
+            if ((std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "--algo") or std.mem.eql(u8, arg, "--pubkey")) and audit_i + 1 >= argv.len) {
+                std.debug.print("Error: geode audit verify: option '{s}' requires a value (see geode audit --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            if (std.mem.eql(u8, arg, "verify") and !saw_verify) {
+                saw_verify = true;
                 continue;
-            } else if (std.mem.eql(u8, argv[audit_i], "--file") and audit_i + 1 < argv.len) {
+            } else if (std.mem.eql(u8, arg, "--file")) {
                 path = argv[audit_i + 1];
                 is_default_path = false;
                 audit_i += 1;
-            } else if (std.mem.eql(u8, argv[audit_i], "--algo") and audit_i + 1 < argv.len) {
+            } else if (std.mem.eql(u8, arg, "--algo")) {
                 const a = argv[audit_i + 1];
                 audit_i += 1;
-                algo = if (std.mem.eql(u8, a, "blake3")) .blake3 else .sha256;
-            } else if (std.mem.eql(u8, argv[audit_i], "--require-digest")) {
+                algo = if (std.mem.eql(u8, a, "blake3")) .blake3 else if (std.mem.eql(u8, a, "sha256")) .sha256 else {
+                    std.debug.print("Error: geode audit verify: unsupported --algo '{s}' (supported: sha256, blake3)\n", .{a});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                };
+            } else if (std.mem.eql(u8, arg, "--require-digest")) {
                 require_digest = true;
-            } else if (std.mem.eql(u8, argv[audit_i], "--pubkey") and audit_i + 1 < argv.len) {
+            } else if (std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "--pubkey")) {
+                std.debug.print("Error: geode audit verify: unknown option '{s}' (see geode audit --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            } else if (!std.mem.eql(u8, arg, "--pubkey")) {
+                std.debug.print("Error: geode audit: unexpected argument '{s}' (see geode audit --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            } else if (std.mem.eql(u8, arg, "--pubkey")) {
                 // An invalid key used to be dropped silently, which turned
                 // signature checking off.
                 if (pubkey_count == pubkeys.len) {
@@ -394,13 +454,15 @@ pub fn dispatch(
             std.debug.print("FAILED ❌  audit log {s} did not verify: {s}\n", .{ path, @errorName(err) });
             std.process.exit(if (err == error.ChainMismatch) 3 else @intFromEnum(ExitCode.general_error));
         };
-        std.process.exit(@intFromEnum(ExitCode.success));
+        // SONNY-6559 (11): returns through main (exit 0, as before).
+        logCommandSucceeded("audit");
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01
         // Shell completion script generation using external CLI library.
         // SONNY-6552: returns through main (exit 0), so the Debug leak
         // check runs.
         try handleCompletionsCommand(allocator, argv, subcommand_start);
+        logCommandSucceeded("completion");
     } else if (std.mem.eql(u8, subcommand, "mcp")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-MCP-006; FEATURE="External Library Migration"; ASPECT=MCPCommand; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
         // Model Context Protocol server for AI/LLM integration.
@@ -408,22 +470,31 @@ pub fn dispatch(
         // std.process.exit, so main's DebugAllocator.deinit runs and a
         // Debug `geode mcp` reports its leaks.
         try handleMcpCommand(allocator, argv, subcommand_start);
+        logCommandSucceeded("mcp");
     } else if (std.mem.eql(u8, subcommand, "login") or std.mem.eql(u8, subcommand, "logout")) {
+        // CANARY: REQ=REQ-SONNY-6559-RETURN-THROUGH-MAIN; FEATURE="CliExitPaths"; ASPECT=ReturnThroughMain; STATUS=TESTED; TEST=tests/test_sonny6559_cli_exit_paths.zig; OWNER=cli; UPDATED=2026-11-14
+        // SONNY-6559 (11): these commands return through main on success
+        // (exit 0, as before), so main's DebugAllocator check and the
+        // audit logger's close run; they ended with std.process.exit(0).
         // Top-level aliases - route to auth subcommands
+        logAuditEvent("command", subcommand, "started");
         const auth_start_idx = if (subcommand_start > 0) subcommand_start - 1 else 0;
         try cmdAuth(allocator, argv, auth_start_idx);
-        std.process.exit(@intFromEnum(ExitCode.success));
+        logCommandSucceeded(subcommand);
     } else if (std.mem.eql(u8, subcommand, "session")) {
         // Session management command
+        logAuditEvent("command", "session", "started");
         try session_cli.cmdSession(allocator, argv, subcommand_start + 1);
-        std.process.exit(@intFromEnum(ExitCode.success));
+        logCommandSucceeded("session");
     } else if (std.mem.eql(u8, subcommand, "authn")) {
         // Authentication provider configuration command
+        logAuditEvent("command", "authn", "started");
         try authn_cli.cmdAuthn(allocator, argv, subcommand_start + 1);
-        std.process.exit(@intFromEnum(ExitCode.success));
+        logCommandSucceeded("authn");
     } else if (std.mem.eql(u8, subcommand, "mtls")) {
+        logAuditEvent("command", "mtls", "started");
         try mtls_cli.cmdMtls(allocator, argv, subcommand_start + 1);
-        std.process.exit(@intFromEnum(ExitCode.success));
+        logCommandSucceeded("mtls");
     } else if (std.mem.eql(u8, subcommand, "tenant")) {
         // GAP-0839: tenant lifecycle administration over CALL geode.tenant.*.
         // It connects to the server (reusing cmdQuery's client + auth path) and
@@ -432,7 +503,7 @@ pub fn dispatch(
         // because its signature carries the extra cmdQuery parameter).
         logAuditEvent("command", "tenant", "started");
         try tenant_cli.cmdTenant(allocator, argv, subcommand_start, cmdQuery);
-        std.process.exit(@intFromEnum(ExitCode.success));
+        logCommandSucceeded("tenant");
     } else {
         // Check if this is an option that should be handled by query command
         if (std.mem.startsWith(u8, subcommand, "--format") or
@@ -443,10 +514,12 @@ pub fn dispatch(
             // These are query command options, auto-route to query command
             logAuditEvent("command", "query", "started");
             try cmdQueryImplicit(allocator, argv, subcommand_start, cmdQuery);
+            logCommandSucceeded("query");
         } else if (looksLikeGqlQuery(subcommand)) {
             // Check if this looks like a GQL query and auto-route to query command
             logAuditEvent("command", "query", "started");
             try cmdQueryImplicit(allocator, argv, subcommand_start, cmdQuery);
+            logCommandSucceeded("query");
         } else if (std.mem.startsWith(u8, subcommand, "--")) {
             // Check if it looks like an option (starts with --)
             std.debug.print("Error: unknown option '{s}'\n", .{subcommand});
@@ -460,6 +533,32 @@ pub fn dispatch(
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
+}
+
+/// SONNY-6559 (11): the CLI audit log records a command's success when the
+/// command returns to the dispatcher (a failure exits with its code first).
+fn logCommandSucceeded(name: []const u8) void {
+    logAuditEvent("command", name, "success");
+}
+
+/// SONNY-6560: a global option given without its value (it was skipped).
+fn refuseMissingGlobalValue(opt: []const u8) noreturn {
+    std.debug.print("Error: geode: option '{s}' requires a value (see geode --help)\n", .{opt});
+    std.process.exit(@intFromEnum(ExitCode.usage_error));
+}
+
+/// The subcommands geode dispatches (for `--audit-eventlog [source]`: a
+/// following subcommand name is not the event source).
+fn findCommandName(name: []const u8) ?[]const u8 {
+    const names = [_][]const u8{
+        "serve",       "query", "shell",  "lsp",    "backup",  "restore", "migrate", "user",   "role",
+        "policy",      "grant", "revoke", "auth",   "fle",     "storage", "apikey",  "audit",  "completion",
+        "completions", "mcp",   "login",  "logout", "session", "authn",   "mtls",    "tenant",
+    };
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return n;
+    }
+    return null;
 }
 
 /// Helper function to find command by name
@@ -526,18 +625,15 @@ pub fn cmdQueryImplicit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
 const geode_completion_global_flags = [_]CliFlagSpec{
     .{ .name = "help", .short = 'h', .help = "Show help", .ftype = CliFlagType.bool },
     .{ .name = "version", .help = "Show version", .ftype = CliFlagType.bool },
-    .{ .name = "verbose", .short = 'v', .help = "Enable verbose output", .ftype = CliFlagType.bool },
-    .{ .name = "json", .help = "Output in JSON format", .ftype = CliFlagType.bool },
-    .{ .name = "config", .help = "Configuration file path", .ftype = CliFlagType.path },
     .{ .name = "audit", .help = "Enable audit logging", .ftype = CliFlagType.bool },
     .{ .name = "audit-syslog", .help = "Syslog host:port for audit", .ftype = CliFlagType.string },
     .{ .name = "audit-file", .help = "Audit log file path", .ftype = CliFlagType.path },
 };
 
 const geode_completion_serve_flags = [_]CliFlagSpec{
-    .{ .name = "listen", .short = 'l', .help = "Listen address (host:port)", .ftype = CliFlagType.string },
+    .{ .name = "listen", .help = "Listen address (host:port)", .ftype = CliFlagType.string },
     .{ .name = "listen-grpc", .help = "Listen address for gRPC", .ftype = CliFlagType.string },
-    .{ .name = "data-dir", .short = 'd', .help = "Data directory path", .ftype = CliFlagType.path },
+    .{ .name = "data-dir", .help = "Data directory path", .ftype = CliFlagType.path },
     .{ .name = "cert", .help = "TLS certificate path", .ftype = CliFlagType.path },
     .{ .name = "key", .help = "TLS private key path", .ftype = CliFlagType.path },
     .{ .name = "idle-timeout", .help = "QUIC idle timeout in milliseconds", .ftype = CliFlagType.int },
@@ -545,14 +641,16 @@ const geode_completion_serve_flags = [_]CliFlagSpec{
 };
 
 const geode_completion_query_flags = [_]CliFlagSpec{
-    .{ .name = "server", .short = 's', .help = "Server address", .ftype = CliFlagType.string },
-    .{ .name = "format", .short = 'f', .help = "Output format", .ftype = CliFlagType.string, .completions = &.{ "json", "table", "csv" } },
+    // SONNY-6560: the completion offered -s and -f, which geode query does
+    // not read (-f is --file), and not dot/mermaid.
+    .{ .name = "server", .help = "Server address", .ftype = CliFlagType.string },
+    .{ .name = "format", .help = "Output format", .ftype = CliFlagType.string, .completions = &.{ "json", "table", "csv", "dot", "mermaid" } },
     .{ .name = "param", .help = "Query parameter", .ftype = CliFlagType.string_array, .is_repeatable = true },
     .{ .name = "page-size", .help = "Page size for paginated output", .ftype = CliFlagType.int },
 };
 
 const geode_completion_shell_flags = [_]CliFlagSpec{
-    .{ .name = "server", .short = 's', .help = "Server address", .ftype = CliFlagType.string },
+    .{ .name = "server", .help = "Server address", .ftype = CliFlagType.string },
     .{ .name = "insecure-tls-skip-verify", .help = "Skip TLS verification", .ftype = CliFlagType.bool },
     .{ .name = "insecure", .help = "Skip TLS verification (deprecated)", .ftype = CliFlagType.bool, .is_deprecated = true },
     .{ .name = "client-cert", .help = "Client certificate path", .ftype = CliFlagType.path },
@@ -769,21 +867,40 @@ fn generateCompletionScript(allocator: std.mem.Allocator, shell: CliShell) ![]co
 /// Generates shell completion scripts for bash, zsh, fish, and powershell
 fn handleCompletionsCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var shell_str: []const u8 = "bash"; // default to bash
+    var saw_shell_arg = false;
     var ai: usize = start_idx + 1;
 
     while (ai < argv.len) : (ai += 1) {
         if (std.mem.eql(u8, argv[ai], "--shell") or std.mem.eql(u8, argv[ai], "-s")) {
-            if (ai + 1 < argv.len) {
-                shell_str = argv[ai + 1];
-                if (parseCompletionShell(shell_str) == null) {
-                    std.debug.print("Error: Unknown shell type '{s}'. Supported: bash, zsh, fish, powershell\n", .{shell_str});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                ai += 1;
+            // SONNY-6560: without its value the option was skipped.
+            if (ai + 1 >= argv.len) {
+                std.debug.print("Error: geode completion: option '{s}' requires a value (see geode completion --help)\n", .{argv[ai]});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
+            shell_str = argv[ai + 1];
+            if (parseCompletionShell(shell_str) == null) {
+                std.debug.print("Error: Unknown shell type '{s}'. Supported: bash, zsh, fish, powershell\n", .{shell_str});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            ai += 1;
         } else if (std.mem.eql(u8, argv[ai], "-h") or std.mem.eql(u8, argv[ai], "--help")) {
             printCompletionsHelp();
             return;
+        } else if (std.mem.startsWith(u8, argv[ai], "-")) {
+            std.debug.print("Error: geode completion: unknown option '{s}' (see geode completion --help)\n", .{argv[ai]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        } else if (!saw_shell_arg) {
+            // `geode completion zsh`: the shell named as an argument. It
+            // used to be ignored, so this printed the bash script.
+            if (parseCompletionShell(argv[ai]) == null) {
+                std.debug.print("Error: Unknown shell type '{s}'. Supported: bash, zsh, fish, powershell\n", .{argv[ai]});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            shell_str = argv[ai];
+            saw_shell_arg = true;
+        } else {
+            std.debug.print("Error: geode completion: unexpected argument '{s}' (see geode completion --help)\n", .{argv[ai]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -791,7 +908,12 @@ fn handleCompletionsCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_
     const shell = parseCompletionShell(shell_str) orelse unreachable;
     const script = try generateCompletionScript(allocator, shell);
     defer allocator.free(script);
-    std.debug.print("{s}", .{script});
+    // CANARY: REQ=REQ-SONNY-6559-COMPLETION-STDOUT; FEATURE="CliExitPaths"; ASPECT=CompletionOnStdout; STATUS=TESTED; TEST=tests/test_sonny6559_cli_exit_paths.zig; OWNER=cli; UPDATED=2026-11-14
+    // SONNY-6559 (8): the script is the command's output: stdout, so
+    // `geode completion --shell bash > file` writes it. It went to stderr
+    // (std.debug.print) and the file was empty.
+    const stdout = std.Io.File.stdout();
+    try stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), script);
 }
 
 test "completion scripts use external cli library" {
@@ -808,7 +930,7 @@ test "completion scripts use external cli library" {
 
 fn printCompletionsHelp() void {
     std.debug.print("Generate shell completion scripts\n\n", .{});
-    std.debug.print("Usage: geode completion [--shell <shell>]\n\n", .{});
+    std.debug.print("Usage: geode completion [<shell> | --shell <shell>]\n\n", .{});
     std.debug.print("Options:\n", .{});
     std.debug.print("  -s, --shell <shell>    Shell type: bash, zsh, fish, powershell (default: bash)\n", .{});
     std.debug.print("  -h, --help             Show this help message\n\n", .{});
@@ -1053,22 +1175,31 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var read_only: bool = false;
     var ai: usize = start_idx + 1;
 
+    var saw_serve = false;
     while (ai < argv.len) : (ai += 1) {
-        if (std.mem.eql(u8, argv[ai], "--port")) {
-            if (ai + 1 < argv.len) {
-                http_port = std.fmt.parseInt(u16, argv[ai + 1], 10) catch 8080;
-                ai += 1;
-            }
-        } else if (std.mem.eql(u8, argv[ai], "--endpoint") or std.mem.eql(u8, argv[ai], "-e")) {
-            if (ai + 1 < argv.len) {
-                endpoint = argv[ai + 1];
-                ai += 1;
-            }
-        } else if (std.mem.eql(u8, argv[ai], "--token")) {
-            if (ai + 1 < argv.len) {
-                bearer_token = argv[ai + 1];
-                ai += 1;
-            }
+        const arg = argv[ai];
+        // CANARY: REQ=REQ-SONNY-6560-MCP-OPTIONS; FEATURE="CliOptions"; ASPECT=McpOptionsRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+        // SONNY-6560 / SONNY-6559 (9): a value option without its value, a
+        // --port that is not a port (it became 8080), an unknown option and
+        // a stray argument are refused; each used to be skipped.
+        const takes_value = std.mem.eql(u8, arg, "--port") or std.mem.eql(u8, arg, "--endpoint") or
+            std.mem.eql(u8, arg, "-e") or std.mem.eql(u8, arg, "--token");
+        if (takes_value and ai + 1 >= argv.len) {
+            std.debug.print("Error: geode mcp: option '{s}' requires a value (see geode mcp --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        if (std.mem.eql(u8, arg, "--port")) {
+            http_port = std.fmt.parseInt(u16, argv[ai + 1], 10) catch {
+                std.debug.print("Error: geode mcp: option '--port' takes a port number 0-65535, not '{s}'\n", .{argv[ai + 1]});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            };
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--endpoint") or std.mem.eql(u8, arg, "-e")) {
+            endpoint = argv[ai + 1];
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--token")) {
+            bearer_token = argv[ai + 1];
+            ai += 1;
         } else if (std.mem.eql(u8, argv[ai], "--no-auth")) {
             // Record the request; the release-build gate is applied after the
             // parse loop because it depends on the selected transport (which
@@ -1082,9 +1213,16 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         } else if (std.mem.eql(u8, argv[ai], "-h") or std.mem.eql(u8, argv[ai], "--help")) {
             printMcpHelp();
             return;
-        } else if (std.mem.eql(u8, argv[ai], "serve")) {
+        } else if (std.mem.eql(u8, argv[ai], "serve") and !saw_serve) {
             // Skip the 'serve' subcommand as it's the default action
+            saw_serve = true;
             continue;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            std.debug.print("Error: geode mcp: unknown option '{s}' (see geode mcp --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        } else {
+            std.debug.print("Error: geode mcp: unexpected argument '{s}' (see geode mcp --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -1153,11 +1291,14 @@ fn printMcpHelp() void {
     std.debug.print("Usage: geode mcp [serve] [options]\n\n", .{});
     std.debug.print("Transports:\n", .{});
     std.debug.print("  --stdio             Use stdio transport (stdin/stdout JSONRPC)\n", .{});
-    std.debug.print("                      Default transport if no --port is specified\n", .{});
     std.debug.print("                      Required for Claude Desktop, Claude Code, etc.\n", .{});
-    std.debug.print("  --port <port>       Use HTTP transport on given port (default: 8080)\n\n", .{});
+    std.debug.print("  --port <port>       HTTP transport port (default: 8080); HTTP is the\n", .{});
+    std.debug.print("                      transport unless --stdio is given\n\n", .{});
     std.debug.print("Options:\n", .{});
-    std.debug.print("  -e, --endpoint      Geode server endpoint (default: localhost:3141)\n", .{});
+    std.debug.print("  -e, --endpoint <dsn>  Geode server endpoint (default: localhost:3141)\n", .{});
+    std.debug.print("  --token <token>     Bearer token HTTP clients must present (default:\n", .{});
+    std.debug.print("                      GEODE_MCP_TOKEN)\n", .{});
+    std.debug.print("  --no-auth           No MCP bearer auth: --stdio, or a debug build's HTTP\n", .{});
     std.debug.print("  --read-only         Refuse mutating/unparseable query tool calls\n", .{});
     std.debug.print("                      pre-wire (fail-closed; no data modification)\n", .{});
     std.debug.print("  -h, --help          Show this help message\n\n", .{});
@@ -1511,6 +1652,8 @@ fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u
 }
 
 pub fn deinitializeAuditLogger() void {
+    // The host is the audit configuration's string, freed after this.
+    global_syslog_host = null;
     if (global_audit_file) |file| {
         file.close(std.Io.Threaded.global_single_threaded.io());
         global_audit_file = null;
@@ -1536,9 +1679,8 @@ pub fn printMainUsage() void {
         "\n" ++
         "Global Options:\n" ++
         "  -h, --help          Show help\n" ++
-        "  -v, --verbose       Verbose output\n" ++
-        "  --config <path>     Configuration file path\n" ++
-        "  --json              Force JSON output for all subcommands\n" ++
+        "  --version           Show the version\n" ++
+        "  --config <path>     Configuration file for geode serve (geode serve --config)\n" ++
         "  --audit             Enable audit logging\n" ++
         "  --audit-syslog <host:port>  Syslog server for audit logs\n" ++
         "  --audit-file <path> File path for audit logs\n" ++
@@ -1571,5 +1713,7 @@ pub fn printMainUsage() void {
         "  geode shell --server localhost:3141\n" ++
         "\n" ++
         "Use 'geode <subcommand> --help' for more information on a specific command.\n" ++
+        "An option a command does not read, or a value option without its value,\n" ++
+        "exits 2 (usage error).\n" ++
         "\n", .{});
 }

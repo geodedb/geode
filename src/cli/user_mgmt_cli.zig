@@ -131,7 +131,7 @@ fn printRoleUsage() void {
     printOut("geode role - Role management commands\n", .{});
     printOut("Usage: geode role <command> [options]\n", .{});
     printOut("Commands:\n", .{});
-    printOut("  create <rolename> [description] [--permissions <perm1,perm2>]\n", .{});
+    printOut("  create <rolename> [description]\n", .{});
     printOut("  list                              List all roles\n", .{});
     printOut("  delete <rolename>\n", .{});
     printOut("  show <rolename>\n", .{});
@@ -1297,14 +1297,15 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var description: []const u8 = "Role created via CLI";
         var description_is_default = true;
 
+        // SONNY-6560: `--permissions` was documented and skipped (the
+        // permissions were never stored); it is refused as unknown
+        // (option_check). A role's privileges are granted with
+        // `geode grant` / GRANT ... ON GRAPH.
         var i = start_idx + 3;
         while (i < argv.len) : (i += 1) {
             if (!std.mem.startsWith(u8, argv[i], "--") and description_is_default) {
                 description = argv[i];
                 description_is_default = false;
-            } else if (std.mem.eql(u8, argv[i], "--permissions") and i + 1 < argv.len) {
-                // Permissions are stored separately in graph; skip for role node
-                i += 1;
             }
         }
 

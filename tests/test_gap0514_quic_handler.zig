@@ -41,8 +41,8 @@ test "savepoint/rollback_to over QUIC: txn-gated, happy lane, unknown-name refus
     try testing.expect(!(try client.rollbackTo(allocator, "sp0")));
 
     // Happy lane: BEGIN -> SAVEPOINT -> mutate -> ROLLBACK TO -> COMMIT.
-    // Undo-log semantics themselves are covered by tests/test_twophase_unit.zig;
-    // this drives the QUIC dispatch + session-auth + txn gating around them.
+    // This drives the QUIC dispatch + session-auth + txn gating around the
+    // session's undo log.
     var begin_res = try client.begin(allocator);
     defer begin_res.deinit(allocator);
     try testing.expect(begin_res.tx_id.len > 0);

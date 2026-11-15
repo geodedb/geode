@@ -13,9 +13,10 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
   `PlanCostModelCalibrationVarianceEnvelope` at CV ≤ 0.20, p95/mean ≤ 2.50.
   `PlanCostModelCalibrationVarianceEnvelope`, an inline test of
   `src/planner/cost_calibration.zig` run by `test-sonny6511-lib-inline`,
-  checks CV > 0.22 only and only reports it unless
-  `GEODE_PERF_GATES=enforce`; it times `Calibration.compute` over the
-  module's synthetic samples, and no query path calls the module.
+  checked CV > 0.22 only and only reported it unless
+  `GEODE_PERF_GATES=enforce`; it timed `Calibration.compute` over the
+  module's synthetic samples, and no query path called the module, which
+  SONNY-6555 removed with it.
   `tests/benchmark_advanced_cost_model_calibration_variance.zig` uses the
   global 0.22 / 2.55 and no build step compiles it.)
 - Future candidates for tightening: WAL flush batch, redo optimized latency.
@@ -81,8 +82,11 @@ no build compiled; they were removed with that code (SONNY-6511).
 
 ### Query Planner (Cost Model & Enumeration)
 
-- PlanCostModelCalibrationVarianceEnvelope
-- AdvancedCostModelCalibrationVarianceEnvelope
+- PlanCostModelCalibrationVarianceEnvelope (removed with
+  `src/planner/cost_calibration.zig`, SONNY-6555)
+- AdvancedCostModelCalibrationVarianceEnvelope (its CANARY row removed,
+  SONNY-6555: the benchmark measures a local stand-in model and does not
+  compile)
 - PlanCostModelVarianceEnvelope
 - PlanEnumerationVarianceEnvelope
 - PlanEnumerationCostPruneVarianceEnvelope

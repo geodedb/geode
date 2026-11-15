@@ -164,7 +164,6 @@ const tool_properties = [_]struct { name: []const u8, props: []const []const u8 
     .{ .name = "query", .props = &.{ "query", "parameters" } },
     .{ .name = "schema", .props = &.{} },
     .{ .name = "explain", .props = &.{"query"} },
-    .{ .name = "catalogs", .props = &.{} },
     .{ .name = "graphs", .props = &.{} },
     .{ .name = "validate", .props = &.{"query"} },
     .{ .name = "complete", .props = &.{ "query", "line", "column" } },
@@ -493,12 +492,11 @@ const live_backend_reqs = [_]Req{
     .{ .id = 44, .msg =
     \\{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"explain","arguments":{"query":"MATCH (n) RETURN n"}}}
     , .expect = .{ .tool = .{ .is_error = false } } },
-    // geode has no SHOW CATALOGS, so the server answers a parse error; a
-    // backend failure is a tool execution error (isError: true), never a
-    // success result.
+    // SONNY-6559 (5): there is no catalogs tool (geode has no SHOW
+    // CATALOGS and no catalog to list): an unknown tool, -32602.
     .{ .id = 45, .msg =
     \\{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"catalogs"}}
-    , .expect = .{ .tool = .{ .is_error = true } } },
+    , .expect = .{ .err = invalid_params } },
     .{ .id = 46, .msg =
     \\{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"graphs","arguments":{}}}
     , .expect = .{ .tool = .{ .is_error = false } } },

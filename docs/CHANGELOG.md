@@ -2512,6 +2512,201 @@
 
 ### Fixed
 
+- **A cluster node's vote is on disk before its grant can leave the node
+  (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
+  its transport from inside `step()` and writes the hard state (term,
+  voted_for; fsync) only in `advance()`, which `RaftNode.drainReady` calls
+  after `step()` returns. Geode's bridge queued the grant on the peer's
+  outbox at once and the outbox thread sends without the raft mutex, so a
+  node could tell a candidate "granted", crash before the fsync, restart
+  with no vote for that term and grant it to another candidate: two
+  leaders in one term. The bridge now holds everything the library sends
+  during `step` / `tick` / `propose` until `advance()` has succeeded, then
+  queues it; if `ready()` or `advance()` fails the held messages are
+  dropped (raft resends). Leader AppendEntries now leave after the
+  leader's own append is durable (one fsync later than before). The vote
+  already survived a clean restart (the library stores term and vote
+  together); `test-raft-hardstate-durability` now asserts it and that the
+  restarted node refuses a second candidate in the same term. Regression:
+  `zig build test-sonny6563-vote-persist-before-send` (the grant reached
+  the network while the disk held term 0, voted_for null).
+
+- **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
+  (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
+  nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC
+  answered `NO_ENGINE` to every CDC_CONTROL action and reported CDC
+  disabled, while gRPC read the running engine. Both transports now answer
+  through one implementation (`storage_dispatch.cdcDiagnosticsAnswer` /
+  `cdcControlAnswer`) and the field is deleted. **Changed refusals (both
+  frames, both transports):** an unauthenticated caller is refused `28000`
+  and a caller that is not an administrator `42501` (QUIC: an error frame;
+  gRPC: grpc-status 16 / 7 with a grpc-message starting with the SQLSTATE).
+  QUIC refused a non-admin's diagnostics `42000` (the 18 other privilege
+  refusals answer `42501`) and answered its CDC_CONTROL `PERMISSION_DENIED`;
+  gRPC answered a non-admin's or an unauthenticated caller's diagnostics
+  with an empty "CDC disabled" payload and its CDC_CONTROL
+  `AUTH_REQUIRED`. In cluster mode CDC_CONTROL is refused
+  (`CLUSTER_NOT_LEADER` / `CLUSTER_WRITE_NOT_REPLICABLE`) as `CALL
+  cdc.reset_guardrails()` is. `GEODE_CDC_ENABLE=1`, which
+  docs/QUICK_REFERENCE.md documents and nothing read, starts the engine at
+  startup through the path `CALL cdc.enable()` takes; the engine lives in
+  the process allocator and `CALL cdc.disable()` now frees it
+  (`CDCEngine.deinit`). Regression: `zig build
+  test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
+  40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
+- **The geode CLI refuses what it does not support (SONNY-6560).**
+  **BREAKING: exit 2 (usage error) where these used to exit 0.** An option
+  a command does not read, a value option given last without its value,
+  and a stray argument are refused with exit 2 and a message naming them,
+  before anything runs, by every command (`geode query`, `user`, `role`,
+  `policy`, `grant`, `revoke`, `auth`, `login`, `logout`, `fle`, `apikey`,
+  `session`, `authn`, `tenant`, `audit`, `completion`, `mcp`, `migrate`,
+  `backup list|info`, and the global `--audit-file` / `--audit-syslog`;
+  `serve`, `shell`, `lsp`, `storage`, `backup create|cleanup` and `restore`
+  already did, and `mtls` refuses every subcommand as unsupported). They were skipped, so a misspelt option ran
+  the command on its defaults. `geode query --format` takes json, table,
+  csv, dot or mermaid and refuses anything else (`--format txt` printed
+  nothing and exited 0; the renderer's fall-through is now an error).
+  `--format dot` and `mermaid` draw paths and lists of nodes and
+  relationships, print an error result's message on stderr (exit 1) and an
+  EXPLAIN/PROFILE plan, note on stderr how many values were not graph
+  elements, and escape `"` and `\` in DOT strings; they printed an empty
+  graph for all of those and wrote a name holding `"` into DOT unescaped.
+  Documented options nothing read are gone from the help and refused:
+  `geode query --begin`, `--commit` and `--rollback` (`--begin --rollback`
+  committed the write; an explicit transaction is `BEGIN` / ... / `COMMIT`
+  or `ROLLBACK` lines of `geode query --batch`, on one connection), the
+  global `--config`, `--json` and `-v`/`--verbose`, `geode role create
+  --permissions` and `geode auth logout --token`. `geode audit verify
+  --algo` refuses an algorithm other than sha256 and blake3 (it verified
+  with sha256); `geode mcp --port` refuses a value that is not a port (it
+  used to listen on 8080), and `geode mcp --help` documents `--token` and
+  `--no-auth` and says HTTP is the default transport. The shell completion
+  scripts no longer offer `-s`/`-f` for `geode query` (`-f` is `--file`).
+  Regressions: `zig build test-sonny6560-cli-unsupported-options`,
+  `zig build test-sonny6548-cli-query-options` (now in the aggregate).
+
+- **MCP backend tools and resources work against a real server
+  (SONNY-6559 items 5, 6, 10).** **BREAKING for MCP clients:** the
+  `catalogs` tool is gone (it sent `SHOW CATALOGS`, which geode does not
+  parse; geode has no catalog object, so `{catalog}` in a resource URI is
+  always `default`). The backend tools and resources decode results with
+  geode's own wire schema, as `geode query` does: the `schema` tool's label
+  lists and the `query` tool's nodes, relationships, paths and lists were
+  `null`, and `explain` answered `{"columns":[],"rows":[]}`; it now returns
+  the plan `geode query "EXPLAIN ..." --format json` prints. The advertised
+  `geode://{catalog}/{graph}/node/{label}` and `/relationship/{type}`
+  templates read (a count and up to 25 elements) and `{graph}` is honoured
+  by the schema and stats templates (it was ignored); every read goes
+  through the normal client path, so the endpoint user's permissions and
+  row-level security apply. A resource URI is parsed exactly
+  (docs/MCP_SERVER.md, "Resources and the backend tools"); any other URI,
+  and a graph that does not exist, is `-32002` (any path holding `config`
+  or `/schema` used to match). Regression: `zig build
+  test-sonny6559-mcp-backend`.
+
+- **CLI commands return through `main`; the audit configuration is freed;
+  `geode completion` writes to stdout (SONNY-6559 items 7, 8, 11).**
+  `geode completion` wrote the script to stderr, so `geode completion
+  --shell bash > file` wrote nothing; a shell named as an argument
+  (`geode completion zsh`) was ignored and the bash script printed. `audit`, `login`, `logout`,
+  `session`, `authn`, `mtls` and `tenant` ended with `std.process.exit(0)`
+  before `main`'s Debug leak check and before the audit logger was closed;
+  they return (exit 0, as before) and the CLI audit log now records each
+  command's success (`"outcome":"success"`) when it returns. The audit
+  configuration's strings (`GEODE_AUDIT_*`, `--audit-file`,
+  `--audit-syslog`, `--audit-eventlog`) were duplicated and never freed (a
+  flag after its environment variable leaked both); `--audit-eventlog`
+  followed by a subcommand no longer takes the subcommand as the event
+  source. Regression: `zig build test-sonny6559-cli-exit-paths`.
+
+- **An ORDER BY on a column the ordered index cannot serve no longer starts
+  its build (SONNY-6555 item 3, SONNY-6518 item 6).** `orderedScanFastPath`
+  started the value-ordered index's background build (and its persisting
+  checkpoint) for a `(label, key)` before anything knew the column's class,
+  then declined that index forever when the column mixed order classes
+  (INTEGER, DOUBLE, STRING), held a string that is not its own NFC form, or
+  a value of no ordered class (SONNY-6499). The new
+  `StorageAdapter.probeOrderedColumnClass` reads the column's values first
+  (stopping at the first one that breaks it) and such a column is declined
+  before the build starts. A single-class canonical column still builds; the
+  probe reads the label's values once on the query path before that build
+  (the heap fallback serving the same query reads them too). Regression:
+  `zig build test-sonny6555-ordered-build-probe`.
+- **The statements after a FOR read its whole table, and a chain's last
+  RETURN DISTINCT reads every row (SONNY-6555 item 7, BREAKING: results
+  change).** ISO/IEC 39075:2024 14.8: a FOR extends the working table, a
+  record per element of each incoming record's list, and the statements
+  after it read that table as a whole (14.3, 14.11, 14.9). A FOR whose body
+  reads ran the body once per element (`statement_handlers.executeForBody`),
+  so `FOR x IN [1, 1, 2] MATCH (z) WHERE z.k = x RETURN count(*)` gave one
+  count per element and the body's WITH DISTINCT, WITH ... ORDER BY ...
+  LIMIT, RETURN DISTINCT and RETURN ... ORDER BY ... LIMIT each read one
+  element's rows; after a part (`MATCH (z) WITH z FOR x IN z.l MATCH ...`)
+  the chain ran the FOR part per row binding nothing and returned one empty
+  row per row. Such a body now runs as the rest of a chain whose part before
+  it is the FOR's table (`query_execution.runReadForBody`, through
+  `continueChain`, the SONNY-6540 stage logic). A body that writes still
+  runs once per element (geode#876). Also: a chain's last RETURN DISTINCT
+  after a part run per row (`MATCH (z) WITH z MATCH (z)-->(y) RETURN
+  DISTINCT z.g`) was applied to each row's rows alone; it now reads every
+  row, before the ORDER BY and window. A CALL subquery reaches no later
+  stage (`CALL { } WITH` does not parse; `CALL { } MATCH ... WITH` is
+  0A000). `test-sonny2683-return-shapes` pinned the per-element grouping
+  (`FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) ... HAVING c > 7` as
+  a|10, a|10, b|10, b|10); it now expects a|20, b|20, c|10, the tenant-scoped
+  session included (the FOR statement makes its context the active one, as
+  `executeQueryWithContext` does, so the per-row parts read its tenant
+  scope). Regression: `zig build test-sonny6555-for-chain-stage`.
+- **A function called with the wrong number of arguments is 42000 (SONNY-6555
+  item 5, BREAKING: GQLSTATE changes).** ISO/IEC 39075:2024 4.7.3 step 4: a
+  source that matches no production, or violates a Syntax Rule, fails with
+  "syntax error or access rule violation" (42000); an operand count is
+  decided by the program text, as SONNY-6540 item 9 pinned for `abs(1,
+  2)`. The parser checks only a few functions, and the rest answered as
+  their handler happened to: 22023 (`sqrt()`, `upper('a', 'b')`,
+  `ipaddr()`, `toFloat()`, `datetime('a', 'b')`), NULL (`tail()`, `head([1],
+  2)`, `url_host('a', 'b')`, `smallint(1, 2)`, `range(1)`) or 42883 "unknown
+  function" (`nullif(1)`, `properties()`, `date(1, 2)`, `startsWith('a')`).
+  Every arity refusal of the function dispatch (built-ins, timeseries
+  functions, the extension registry) is now the new `WrongArgumentCount`,
+  mapped to 42000 on QUIC and gRPC, and a function Geode lists (SHOW
+  FUNCTIONS) that no handler took is that too, not 42883; it fails the
+  statement in a grouped projection as well. `InvalidArgs` (22023) is left
+  for an argument value a function refuses and for procedures (`CALL`),
+  whose arity is unchanged. The check stays in the dispatch, which owns
+  the function catalogue the parser does not (extension registry,
+  timeseries flag): a call no row reaches is not refused. Regression: `zig
+  build test-sonny6555-function-arity`.
+- **A WITH takes SKIP / OFFSET before LIMIT (SONNY-6555 item 6).** ISO/IEC
+  39075:2024 14.9 `<order by and page statement>` puts the offset clause
+  (`OFFSET` or `SKIP`, 16.19) before the limit clause (16.18). A RETURN
+  accepted `ORDER BY s SKIP 1 LIMIT 2`, but a WITH, a leading WITH, a
+  UNION's trailing page and a FOR's RETURN refused it with 42000: each read
+  LIMIT, then OFFSET, and nothing after. Every page clause now goes through
+  one parser routine that takes the standard order. `LIMIT n OFFSET m` is
+  kept as a documented Geode extension (the same page; docs/GQL_COMPLIANCE.md
+  now shows the standard order); a repeated LIMIT or OFFSET is 42000. The
+  ISO conformance case named "17.4: OFFSET" was written in the extension
+  order; it now reads the standard order and the extension has its own
+  case. Regression: `zig build test-sonny6555-page-clause-order`,
+  `zig build test-iso-conformance`.
+- **`length(NULL)` and `size(NULL)` are NULL, and a string's length counts
+  characters (SONNY-6555 item 4, BREAKING: results change).** ISO/IEC
+  39075:2024 20.22 GR 1 b), 3 b) and 4 e): the length or cardinality of the
+  null value is the null value; GR 1 a) with NOTE 331: a character string's
+  length is its number of characters. `length(NULL)`, `size(NULL)` and
+  `size(n.missing)` answered 0, `length('héllo')` 6 (bytes), and
+  `length(1)` / `size(true)` 0; they now answer NULL, 5 and 22G03. A sweep
+  of every function the dispatch knows, called with NULL arguments, found
+  the same defect in `tail(NULL)` (`[]`; a non-list is now 22G03 too),
+  `indegree(NULL)` / `outdegree(NULL)` (0), `xml_is_well_formed(NULL)`
+  (false), and every extension-registry function (`ipaddr`, `st_x`,
+  `currency`, `hash`, `latlon`, ...) and the `url_*`, `domain_*`,
+  `uuid_equal`, `to_hex`, `from_hex`, `array_*`, `bit_*`, `range_contains` /
+  `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
+  22G03 for a NULL argument: each now answers NULL. Regression: `zig build
+  test-sonny6555-null-arguments`.
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
@@ -6872,6 +7067,29 @@
   with the `session rotate` output seam it pinned (rotate is refused; the
   no-token-in-output check moved to `tests/test_sonny6554_cli_honesty.zig`).
 
+- **Distributed modules the server never reached (SONNY-6563, SONNY-6567
+  item 7).** Each had no reference chain from the server root (`lib.zig`
+  exported some as unreferenced `distributed.*` decls; the rest were
+  imported only by their own test roots or by each other) and no symbol in
+  the Debug `geode` binary: `src/distributed/raft_persistent.zig` (it
+  persisted the term and not the vote, so a reopened node forgot its vote;
+  the cluster uses the raft library's FileStorage, which keeps both),
+  `raft_log_storage.zig` with `raft_consensus.PersistentStorage` and the
+  no-op `RaftNode.setStorage`, `twophase.zig` (a 2PC transport) and
+  `value_convert.zig`, `query_planner.zig` (`DistributedQueryPlanner`,
+  `FederationManager`) and the never-assigned
+  `ServerState.distributed_query_planner`, `network_transport.zig`,
+  `enhanced_query_transport.zig`, `node_registry.zig` and its test,
+  `sharding.zig`, `consistent_hash.zig`, `federation_flag.zig`; with their
+  tests, benchmarks and steps (`test-dist-query-planner`, `test-sharding`,
+  `test-gap0889`, `test-sonny6487-federation-flag-inline`, the red
+  `test-sonny6548-raft-persistent-voted-for`; `test-gap0870` keeps its Raft
+  command half, `test-sonny6453-cluster-peer-tls` its raft / coordinator
+  dial). `src/distributed/README.md` lists what remains, all of it reached
+  by the server. docs/TDE_FILE_LEVEL_ENCRYPTION.md named
+  `raft_persistent.zig` as the encrypted Raft state: the Raft hard state,
+  log and snapshots are written in plaintext by the library's FileStorage.
+
 - **Product code no build reached, which no longer compiled (SONNY-6548 item
   3).** Zig analyzes lazily, so these compiled only because nothing in the
   server referenced them: `src/types/hash.zig` (`hash`, `argon2idStrHash`,
@@ -6926,6 +7144,25 @@
   collision benchmark is compiled by no step) and annotated
   `docs/performance/2026-04-20-query-bench/FINAL.md` (the AST cache does not
   use `structural_key.zig`).
+- **Dead code: `src/ml/integration_enhanced.zig`, `src/planner/pipeline.zig`
+  and `src/planner/cost_calibration.zig` (SONNY-6555 item 8).** No server
+  path reaches any of them (the server binary builds without them):
+  `integration_enhanced.zig` (a second Node2Vec, a PageRank, a third
+  Louvain, link prediction and `gds.node2vec/pageRank/louvain/linkPrediction`
+  procedure stubs that no dispatcher registered) was compiled only by its own
+  in-module tests in `test-gap0879` and `tests/e2e_ml_integration.zig`
+  (compiled by nothing); `pipeline.zig` (the synthetic plan-selection runner)
+  and `cost_calibration.zig` (with `cost_model.estimateWithCalibration`, its
+  only user) only by `lib.zig`'s inline-test roots and three canary tests
+  (`canary_planner_pipeline_selection`, `canary_planner_cost_model`,
+  `canary_planner_join_reorder`). Removed with those tests, their build.zig
+  registrations, the `test-canary-planner-pipeline-selection` step (and its
+  perf-gate CI entry), and their allowlist rows. `src/canary.zig` claimed
+  REQ-GQL-075 "Query Optimizer / AdvancedCostModel" TESTED by
+  `TestCANARY_REQ_GQL_075_AdvancedCostModel`, which does not exist, and a
+  BENCHED envelope of a benchmark that does not compile; both rows removed.
+  Docs corrected: ML_GRAPH_EMBEDDINGS.md, CURRENT_ARCHITECTURE.md,
+  SERVER_FEATURES.md, kb/PROFILING.md, kb/VARIANCE_ENVELOPES.md.
 - **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
   `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
   no query: nothing outside `planner.zig` named them except 17 test and

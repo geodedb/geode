@@ -661,6 +661,41 @@ pub const Parser = struct {
 
     /// Parse a LIMIT or OFFSET value: accepts either an integer literal or a $param reference.
     /// Returns .{ literal_value_or_null, param_name_or_null }.
+    /// SONNY-6555 item 6: the page of an ORDER BY and page statement (ISO/IEC
+    /// 39075:2024 14.9): `<offset clause> [<limit clause>] | <limit clause>`,
+    /// the offset (OFFSET | SKIP, 16.19) first. `LIMIT n OFFSET m` is a Geode
+    /// extension and means the same page. Each clause is given at most once;
+    /// a second is left for the caller, which refuses it (42000).
+    const PageClauses = struct {
+        limit: ?u64 = null,
+        limit_param: ?[]const u8 = null,
+        offset: ?u64 = null,
+        offset_param: ?[]const u8 = null,
+        has_limit: bool = false,
+        has_offset: bool = false,
+    };
+
+    fn parsePageClauses(self: *Parser) !PageClauses {
+        var page: PageClauses = .{};
+        var i: usize = 0;
+        while (i < 2) : (i += 1) {
+            if (!page.has_offset and (self.cur.kind == .OFFSET or self.cur.kind == .SKIP)) {
+                self.advance();
+                const off = try self.parseLimitValue();
+                page.offset = off.value;
+                page.offset_param = off.param;
+                page.has_offset = true;
+            } else if (!page.has_limit and self.cur.kind == .LIMIT) {
+                self.advance();
+                const lim = try self.parseLimitValue();
+                page.limit = lim.value;
+                page.limit_param = lim.param;
+                page.has_limit = true;
+            } else break;
+        }
+        return page;
+    }
+
     fn parseLimitValue(self: *Parser) !struct { value: ?u64, param: ?[]const u8 } {
         if (self.cur.kind == .dollar) {
             self.advance();
@@ -1500,18 +1535,15 @@ pub const Parser = struct {
                         order_by = order_by_ptr;
                     }
 
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const limit_expr = try self.parseOrExpr();
-                        if (limit_expr != .Int) return self.unexpected("LIMIT requires integer constant");
-                        limit_val = @intCast(limit_expr.Int);
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    if (page.has_limit) {
+                        limit_val = page.limit;
+                        limit_param = page.limit_param;
                     }
-
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const offset_expr = try self.parseOrExpr();
-                        if (offset_expr != .Int) return self.unexpected("OFFSET/SKIP requires integer constant");
-                        offset_val = @intCast(offset_expr.Int);
+                    if (page.has_offset) {
+                        offset_val = page.offset;
+                        offset_param = page.offset_param;
                     }
 
                     break :blk_with .{ .Union = .{
@@ -1633,18 +1665,15 @@ pub const Parser = struct {
                         order_by = order_by_ptr;
                     }
 
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const lim = try self.parseLimitValue();
-                        limit_val = lim.value;
-                        limit_param = lim.param;
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    if (page.has_limit) {
+                        limit_val = page.limit;
+                        limit_param = page.limit_param;
                     }
-
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const off = try self.parseLimitValue();
-                        offset_val = off.value;
-                        offset_param = off.param;
+                    if (page.has_offset) {
+                        offset_val = page.offset;
+                        offset_param = page.offset_param;
                     }
 
                     break :blk_r .{ .Union = .{
@@ -2068,33 +2097,12 @@ pub const Parser = struct {
                         order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
                     }
 
-                    // Optional LIMIT clause
-                    var limit: ?usize = null;
-                    var limit_param: ?[]const u8 = null;
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const lim = try self.parseLimitValue();
-                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-                        limit_param = lim.param;
-                    }
-
-                    // Optional OFFSET/SKIP clause
-                    var offset: ?usize = null;
-                    var offset_param: ?[]const u8 = null;
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const off = try self.parseLimitValue();
-                        offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-                        offset_param = off.param;
-                    }
-                    // SONNY-2779: `SKIP n LIMIT m`, as after any RETURN; a
-                    // LIMIT after the SKIP was a syntax error.
-                    if (self.cur.kind == .LIMIT and limit == null and limit_param == null) {
-                        self.advance();
-                        const lim = try self.parseLimitValue();
-                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-                        limit_param = lim.param;
-                    }
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    const limit: ?usize = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+                    const limit_param = page.limit_param;
+                    const offset: ?usize = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+                    const offset_param = page.offset_param;
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,
@@ -2249,27 +2257,16 @@ pub const Parser = struct {
             }
         }
 
-        // Parse LIMIT and OFFSET in any order
-        // First check for LIMIT
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
+        // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9), or Geode's
+        // LIMIT-first extension.
+        const page = try self.parsePageClauses();
+        if (page.has_limit) {
+            limit = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+            limit_param = page.limit_param;
         }
-        // Check for OFFSET/SKIP
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
-        // Check for LIMIT again (in case it comes after OFFSET)
-        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
+        if (page.has_offset) {
+            offset = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+            offset_param = page.offset_param;
         }
 
         return .{ .order_by = ord, .limit = limit, .offset = offset, .limit_param = limit_param, .offset_param = offset_param };
@@ -2358,18 +2355,15 @@ pub const Parser = struct {
                 order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                limit_val = lim.value;
-                limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                limit_val = page.limit;
+                limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                offset_val = off.value;
-                offset_param = off.param;
+            if (page.has_offset) {
+                offset_val = page.offset;
+                offset_param = page.offset_param;
             }
 
             return .{ .Union = .{
@@ -2473,18 +2467,15 @@ pub const Parser = struct {
                 with_order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                with_limit = lim.value;
-                with_limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                with_limit = page.limit;
+                with_limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                with_offset = off.value;
-                with_offset_param = off.param;
+            if (page.has_offset) {
+                with_offset = page.offset;
+                with_offset_param = page.offset_param;
             }
 
             initial_with_clause = .{
@@ -3071,18 +3062,15 @@ pub const Parser = struct {
                 with_order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                with_limit = lim.value;
-                with_limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                with_limit = page.limit;
+                with_limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                with_offset = off.value;
-                with_offset_param = off.param;
+            if (page.has_offset) {
+                with_offset = page.offset;
+                with_offset_param = page.offset_param;
             }
 
             with_clause = .{
@@ -5489,18 +5477,15 @@ pub const Parser = struct {
                     with_order_by = order_by_ptr;
                 }
 
-                if (self.cur.kind == .LIMIT) {
-                    self.advance();
-                    const lim = try self.parseLimitValue();
-                    with_limit = lim.value;
-                    with_limit_param = lim.param;
+                // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                const page = try self.parsePageClauses();
+                if (page.has_limit) {
+                    with_limit = page.limit;
+                    with_limit_param = page.limit_param;
                 }
-
-                if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                    self.advance();
-                    const off = try self.parseLimitValue();
-                    with_offset = off.value;
-                    with_offset_param = off.param;
+                if (page.has_offset) {
+                    with_offset = page.offset;
+                    with_offset_param = page.offset_param;
                 }
 
                 with_clause = .{
@@ -7037,24 +7022,12 @@ pub const Parser = struct {
         }
 
         // Optional LIMIT
-        var limit: ?usize = null;
-        var limit_param: ?[]const u8 = null;
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
-
-        // Optional OFFSET
-        var offset: ?usize = null;
-        var offset_param: ?[]const u8 = null;
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
+        // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+        const page = try self.parsePageClauses();
+        const limit: ?usize = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+        const limit_param = page.limit_param;
+        const offset: ?usize = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+        const offset_param = page.offset_param;
 
         out.* = .{ .For = .{
             .variable = variable,

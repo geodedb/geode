@@ -38,7 +38,7 @@ pub fn cmdMtls(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         const a = argv[sub_idx];
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             printMtlsUsage();
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return;
         }
         if (!std.mem.startsWith(u8, a, "--")) break;
     }

@@ -324,10 +324,6 @@ pub const ServerState = struct {
     // Telemetry toggles (env-driven). When enabled, server emits JSON log lines on paging events.
     telemetry_paging: bool = false,
 
-    // Optional CDC engine pointer for diagnostics protocol frame
-    // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
-    cdc_engine: ?*@import("../streaming/cdc_enhanced.zig").CDCEngine = null,
-
     // Session management state
     session_config: ?SessionConfiguration = null,
     // Execution session state (SESSION SET/RESET/CLOSE)
@@ -350,9 +346,6 @@ pub const ServerState = struct {
         node_count: u64,
         edge_count: u64,
     } = null,
-
-    // Distributed query planner for federation-aware optimization
-    distributed_query_planner: ?*anyopaque = null,
 
     // Query plan cache and optimizer for performance optimization
     // Issue #460: Changed from per-connection QueryOptimizer to shared cross-connection optimizer

@@ -29,7 +29,7 @@ const planner = @import("../planner.zig");
 // was never compiled and was removed (SONNY-6298). EXPLAIN reports the
 // per-operator seed model in `src/planner/cost_explain.zig`. What remains
 // here is the genuinely shared piece: `StatsRegistry` (used by
-// `src/planner/cost_model.zig` and `src/distributed/query_planner.zig`)
+// `src/planner/cost_model.zig`)
 // and a truthful `explainEstimateJSON` that derives per-scan-node row
 // estimates from collected statistics.
 

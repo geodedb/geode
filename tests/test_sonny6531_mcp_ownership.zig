@@ -251,8 +251,6 @@ fn driveBackendMethods(server: *GeodeMcpServer, tool_needle: []const u8, resourc
         ,
         \\"explain","arguments":{"query":"MATCH (n) RETURN n"}
         ,
-        \\"catalogs"
-        ,
         \\"graphs"
         ,
         \\"graphs","arguments":{}

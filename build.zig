@@ -751,10 +751,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-cli-query-options", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): geode query ignores an unknown --format and unknown options; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-quic-cdc-control", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): QUIC CDC_CONTROL reads ServerState.cdc_engine, which nothing assigns; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-raft-persistent-voted-for", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): raft_persistent.RaftNode does not persist voted_for; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -4578,37 +4575,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_e2e_ts_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_store_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // GAP-D007: Distributed query planner unit tests
-    const dist_query_planner_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_distributed_query_planner.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    dist_query_planner_test_mod.addImport("geode", root_mod);
-    const dist_query_planner_tests = b.addTest(.{
-        .root_module = dist_query_planner_test_mod,
-    });
-    const run_dist_query_planner_tests = b.addRunArtifact(dist_query_planner_tests);
-    shardDep(test_step, &run_dist_query_planner_tests.step, 1, test_shard_loads, test_shard_index);
-    // GAP-0514 Phase 6 P3: named step so the distributed query planner suites
-    // run outside the blocked monolithic `zig build test`. Two halves:
-    // tests/test_distributed_query_planner.zig (geode-module API surface) and
-    // src/distributed/query_planner.zig rooted directly so its INLINE tests
-    // (which exercise private fns like generateShardQuery / planDistributed*)
-    // are actually discovered — tests in a different module (geode root_mod)
-    // are not collected by the test runner.
-    const qp_inline_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/query_planner_test_root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const qp_inline_tests = b.addTest(.{ .root_module = qp_inline_test_mod });
-    const run_qp_inline_tests = b.addRunArtifact(qp_inline_tests);
-    shardDep(test_step, &run_qp_inline_tests.step, 1, test_shard_loads, test_shard_index);
-    const dist_query_planner_step = b.step("test-dist-query-planner", "Run distributed query planner unit tests (GAP-D007 + inline query_planner.zig tests)");
-    dist_query_planner_step.dependOn(&run_dist_query_planner_tests.step);
-    dist_query_planner_step.dependOn(&run_qp_inline_tests.step);
-
     // SEC-D009: Nonce tracker unit tests
     const nonce_tracker_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -4619,19 +4585,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_nonce_tracker_tests = b.addRunArtifact(nonce_tracker_tests);
     shardDep(test_step, &run_nonce_tracker_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // GAP-0513: ConsistentHash ring unit tests
-    const consistent_hash_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/consistent_hash.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    consistent_hash_test_mod.addImport("logging", logging_mod);
-    const consistent_hash_tests = b.addTest(.{
-        .root_module = consistent_hash_test_mod,
-    });
-    const run_consistent_hash_tests = b.addRunArtifact(consistent_hash_tests);
-    shardDep(test_step, &run_consistent_hash_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0513: cluster_health unit tests
     const cluster_health_test_mod = b.createModule(.{
@@ -4645,65 +4598,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_cluster_health_tests = b.addRunArtifact(cluster_health_tests);
     shardDep(test_step, &run_cluster_health_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // SEC-D014: Raft persistent state atomic write tests
-    const raft_persistent_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/raft_persistent.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_persistent_test_mod.addImport("raft", raft_ext_mod);
-    const raft_persistent_tests = b.addTest(.{
-        .root_module = raft_persistent_test_mod,
-    });
-    const run_raft_persistent_tests = b.addRunArtifact(raft_persistent_tests);
-    shardDep(test_step, &run_raft_persistent_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // Raft log storage append-only binary log round-trip tests
-    const raft_log_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_log_storage.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_log_test_mod.addImport("geode", root_mod);
-    const raft_log_tests = b.addTest(.{ .root_module = raft_log_test_mod });
-    const run_raft_log_tests = b.addRunArtifact(raft_log_tests);
-    shardDep(test_step, &run_raft_log_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // Raft lifecycle integration test (propose, persist, restart, recover)
-    const raft_integration_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_integration.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_integration_test_mod.addImport("geode", root_mod);
-    const raft_integration_tests = b.addTest(.{ .root_module = raft_integration_test_mod });
-    const run_raft_integration_tests = b.addRunArtifact(raft_integration_tests);
-    shardDep(test_step, &run_raft_integration_tests.step, 10, test_shard_loads, test_shard_index);
-
-    // GAP-0513: network_transport compile-time verification tests
-    const network_transport_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/network_transport.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    network_transport_test_mod.addImport("protobuf", protobuf_mod);
-    network_transport_test_mod.addImport("distributed_schema", distributed_schema_mod);
-    network_transport_test_mod.addImport("transport/quic", transport_quic_mod);
-    const network_transport_tests = b.addTest(.{ .root_module = network_transport_test_mod });
-    const run_network_transport_tests = b.addRunArtifact(network_transport_tests);
-    shardDep(test_step, &run_network_transport_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // GAP-0513: query_transport NodeRegistry unit tests (stdlib-only, no QUIC)
-    const query_transport_registry_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/distributed/test_query_transport_node_registry.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const run_query_transport_registry_tests = b.addRunArtifact(query_transport_registry_tests);
-    shardDep(test_step, &run_query_transport_registry_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0856: distributed EXPLAIN/PROFILE node-local-scope contract (stdlib-only, no QUIC).
     const gap0856_dist_explain_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -4723,45 +4617,6 @@ pub fn build(b: *std.Build) void {
     const gap0856_dist_explain_step = b.step("test-gap0856", "Run GAP-0856 distributed EXPLAIN/PROFILE node-local-scope test");
     gap0856_dist_explain_step.dependOn(&run_gap0856_dist_explain_tests.step);
     shardDep(test_step, &run_gap0856_dist_explain_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // GAP-0513: sharding.zig unit tests (enhanced ShardManager init/add/merge/callback/key-lookup)
-    const sharding_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/sharding.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    sharding_test_mod.addImport("logging", logging_mod);
-    const sharding_tests = b.addTest(.{ .root_module = sharding_test_mod });
-    const run_sharding_tests = b.addRunArtifact(sharding_tests);
-    shardDep(test_step, &run_sharding_tests.step, 1, test_shard_loads, test_shard_index);
-    // GAP-0514 Phase 6 P3: named step so the sharding.zig inline suite
-    // (ShardManager add/merge/transport-callback/key-lookup + migration,
-    // split-point, range/graph/geo routing) runs outside the blocked
-    // monolithic `zig build test`.
-    const sharding_step = b.step("test-sharding", "Run sharding.zig inline unit tests (ShardManager, migration, split, range/graph/geo routing)");
-    sharding_step.dependOn(&run_sharding_tests.step);
-
-    // Raft consensus PersistentStorage file-backed round-trip tests
-    const raft_ps_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_ps_test_mod.addImport("geode", root_mod);
-    const raft_ps_tests = b.addTest(.{ .root_module = raft_ps_test_mod });
-    const run_raft_ps_tests = b.addRunArtifact(raft_ps_tests);
-    shardDep(test_step, &run_raft_ps_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // Raft PersistentStorage log-wiring round-trip tests (GAP-0520)
-    const raft_log_wiring_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_persistent_log_wiring.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_log_wiring_test_mod.addImport("geode", root_mod);
-    const raft_log_wiring_tests = b.addTest(.{ .root_module = raft_log_wiring_test_mod });
-    const run_raft_log_wiring_tests = b.addRunArtifact(raft_log_wiring_tests);
-    shardDep(test_step, &run_raft_log_wiring_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0519: Raft snapshot manager creation + installation round-trip tests
     const raft_snap_test_mod = b.createModule(.{
@@ -4788,8 +4643,7 @@ pub fn build(b: *std.Build) void {
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
 
     // GAP-0870: Raft command variants (config_change / snapshot_pointer /
-    // txn_prepare / txn_decide / alter_graph rejection) + enhanced query
-    // transport dispatch honesty (route-or-fail-loud handlers).
+    // txn_prepare / txn_decide / alter_graph rejection).
     const gap0870_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_gap0870_raft_command_variants.zig"),
         .target = target,
@@ -4799,43 +4653,8 @@ pub fn build(b: *std.Build) void {
     const gap0870_tests = b.addTest(.{ .root_module = gap0870_test_mod });
     const run_gap0870_tests = b.addRunArtifact(gap0870_tests);
     shardDep(test_step, &run_gap0870_tests.step, 1, test_shard_loads, test_shard_index);
-    // GAP-0870 (transport half): enhanced_query_transport compiles as its own
-    // standalone test root; nothing in the geode lib graph imports it (its
-    // former importers, the federation query coordinators, were removed as
-    // never-compiled code in SONNY-6279).
-    const gap0870_eqt_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/enhanced_query_transport.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    gap0870_eqt_test_mod.addImport("protobuf", protobuf_mod);
-    gap0870_eqt_test_mod.addImport("distributed_schema", distributed_schema_mod);
-    gap0870_eqt_test_mod.addImport("transport/quic", transport_quic_mod);
-    gap0870_eqt_test_mod.addImport("logging", logging_mod);
-    const gap0870_eqt_tests = b.addTest(.{ .root_module = gap0870_eqt_test_mod });
-    const run_gap0870_eqt_tests = b.addRunArtifact(gap0870_eqt_tests);
-    shardDep(test_step, &run_gap0870_eqt_tests.step, 1, test_shard_loads, test_shard_index);
-    const gap0870_step = b.step("test-gap0870", "GAP-0870: Raft command variants applied + transport handlers route or fail loud");
+    const gap0870_step = b.step("test-gap0870", "GAP-0870: Raft command variants applied");
     gap0870_step.dependOn(&run_gap0870_tests.step);
-    gap0870_step.dependOn(&run_gap0870_eqt_tests.step);
-
-    // GAP-0889: distributed quality batch. Named step so the 2PC
-    // commit-delivery honesty regression (tests/test_twophase_unit.zig) and
-    // the raft_persistent fail-loud tests run outside the blocked monolithic
-    // `zig build test` (test_twophase_unit was previously only reachable
-    // through all_tests.zig there).
-    const gap0889_twophase_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_twophase_unit.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    gap0889_twophase_test_mod.addImport("geode", root_mod);
-    const gap0889_twophase_tests = b.addTest(.{ .root_module = gap0889_twophase_test_mod });
-    const run_gap0889_twophase_tests = b.addRunArtifact(gap0889_twophase_tests);
-    const gap0889_step = b.step("test-gap0889", "GAP-0889: distributed quality batch — 2PC delivery honesty + raft persistent fail-loud");
-    gap0889_step.dependOn(&run_gap0889_twophase_tests.step);
-    shardDep(test_step, &run_gap0889_twophase_tests.step, 1, test_shard_loads, test_shard_index);
-    gap0889_step.dependOn(&run_raft_persistent_tests.step);
 
     // MATCH…CREATE summary-counter mislabel regression: the implicit summary
     // row must report nodes_created and relationships_created SEPARATELY (the
@@ -5315,11 +5134,6 @@ pub fn build(b: *std.Build) void {
     const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
     planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_prune_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const planner_pipeline_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_pipeline_selection.zig"), .target = target, .optimize = optimize }) });
-    // Import shared geode root for planner + pipeline access
-    planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
-    planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
-    planner_pipeline_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
     phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const run_phantom_tests = b.addRunArtifact(phantom_tests);
@@ -5358,10 +5172,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_planner_prune_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_prune_tests_step = b.step("test-canary-planner-prune", "Run plan enumeration cost-prune CANARY tests (REQ-GQL-024)");
     planner_prune_tests_step.dependOn(&run_planner_prune_tests.step);
-    const run_planner_pipeline_selection_tests = b.addRunArtifact(planner_pipeline_selection_tests);
-    shardDep(test_step, &run_planner_pipeline_selection_tests.step, 1, test_shard_loads, test_shard_index);
-    const planner_pipeline_selection_tests_step = b.step("test-canary-planner-pipeline-selection", "Run plan selection pipeline adoption CANARY tests (REQ-GQL-024)");
-    planner_pipeline_selection_tests_step.dependOn(&run_planner_pipeline_selection_tests.step);
 
     // Variance auto-calibration tests (cost model & pagination)
     const cost_model_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_cost_model_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
@@ -5931,9 +5741,6 @@ pub fn build(b: *std.Build) void {
     // const tde_hierarchy_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_hierarchy.zig"), .target = target, .optimize = optimize });
     // const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
 
-    // Legacy WAL dependencies removed; GraphStore is the sole storage layer.
-    //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
-
     // transport_quic_mod is defined early (line ~141) and shared across all modules
     // Add transport modules to unified geode binary
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
@@ -6397,10 +6204,10 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6459-hygiene", "Run the SONNY-6459 items 4, 7, 8 and 9 regression (cluster.zig has no uncompilable handleJoinCluster / serializeClusterTopology; the raft_consensus, cluster, twophase and cluster_auth inline tests have a step; the docs do not present cluster join/leave or sharded scaling as working; tests/test_groupby_having_count_distinct.zig is gone)").dependOn(&run_tests.step);
+        b.step("test-sonny6459-hygiene", "Run the SONNY-6459 items 4, 7, 8 and 9 regression (cluster.zig has no uncompilable handleJoinCluster / serializeClusterTopology; the raft_consensus, cluster and cluster_auth inline tests have a step; the docs do not present cluster join/leave or sharded scaling as working; tests/test_groupby_having_count_distinct.zig is gone)").dependOn(&run_tests.step);
     }
 
-    // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
+    // SONNY-6453 (2): raft and the cluster coordinator dial peers
     // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
     // QUIC against an in-process server with openssl-made CAs.
     {
@@ -6411,7 +6218,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the 2PC transport verifies participants against GEODE_CLUSTER_CA_CERT: the signing CA completes the handshake, another CA fails it; 2PC and the raft / cluster peer dial refuse with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
+        b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the raft / cluster peer dial verifies against GEODE_CLUSTER_CA_CERT and refuses with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
     }
 
     // SONNY-6490 (1): the mTLS client CA bundle is no process-wide trust
@@ -6456,6 +6263,68 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6442-serve-unknown-options", "Run SONNY-6442 item 4 regression (geode serve refuses an unknown option, a positional argument or a value option without its value with exit 2, and parses every option its --help documents)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6560: every geode command refuses an option it does not know, a
+    // value option without its value and (query) a format it does not
+    // render with exit 2; dot/mermaid render every result shape; the help
+    // texts document only options that are read (built binary + a server).
+    {
+        const option_check_mod = b.createModule(.{ .root_source_file = b.path("src/cli/option_check.zig"), .target = target, .optimize = optimize });
+        const unit_tests = b.addTest(.{ .root_module = option_check_mod });
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        shardDep(test_step, &run_unit_tests.step, 1, test_shard_loads, test_shard_index);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6560_cli_unsupported_options.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("cli_option_check", option_check_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        const sonny6560_step = b.step("test-sonny6560-cli-unsupported-options", "Run SONNY-6560 regression (every geode command refuses an option it does not know and a value option given without its value with exit 2 naming it; geode query refuses a --format it does not render, and dot/mermaid render paths, plans and errors and escape DOT labels; --begin/--commit/--rollback and the other documented-but-unread options are refused and no longer documented; --batch BEGIN/ROLLBACK leaves nothing; every option a command's --help documents is one src/cli/option_check.zig reads; plus option_check's unit tests; built binary + a real server)");
+        sonny6560_step.dependOn(&run_tests.step);
+        sonny6560_step.dependOn(&run_unit_tests.step);
+    }
+
+    // SONNY-6559 (7, 8, 11): a successful geode command returns through main
+    // (its Debug leak check runs; the CLI audit log records the success),
+    // the audit configuration's strings are freed, and geode completion
+    // writes its script to stdout (built binary + a server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_cli_exit_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-cli-exit-paths", "Run SONNY-6559 items 7, 8 and 11 regression (geode completion writes its script to stdout with stderr empty for every shell; a Debug command run with every GEODE_AUDIT_* setting and --audit-file/--audit-syslog/--audit-eventlog reports no leak; audit, login, logout, session, authn, mtls and tenant return through main on success: the CLI audit log records the command's success and no leak report is printed; built binary + a real server)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6559 (5, 6, 10): every MCP backend tool and advertised resource
+    // template works against a real server (catalogs is gone, schema and
+    // query return lists and nodes, explain the plan geode query prints,
+    // {graph} is honoured, node/relationship templates read) and resource
+    // URIs are parsed strictly (a real geode mcp --stdio session).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6559_mcp_backend.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6559-mcp-backend", "Run SONNY-6559 items 5, 6 and 10 regression (through a real geode mcp --stdio session against a real geode serve: no catalogs tool, the schema/graphs/query tools return lists and nodes, explain returns the plan geode query --format json prints, the schema/stats templates honour {graph}, node/{label} and relationship/{type} read, an unknown graph and every malformed geode:// URI are -32002, no leak report)").dependOn(&run_tests.step);
     }
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
@@ -6508,22 +6377,6 @@ pub fn build(b: *std.Build) void {
     pathcache_degree_util_bench.root_module.addImport("geode", root_mod);
     const run_pathcache_degree_util_bench = b.addRunArtifact(pathcache_degree_util_bench);
     test_e2e_step.dependOn(&run_pathcache_degree_util_bench.step);
-
-    // Federation mismatch false-positive guard benchmark (optional SLO)
-    const federation_mismatch_guard_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_guard", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_frequency.zig"), .target = target, .optimize = optimize }) });
-    federation_mismatch_guard_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    const run_federation_mismatch_guard_bench = b.addRunArtifact(federation_mismatch_guard_bench);
-    test_e2e_step.dependOn(&run_federation_mismatch_guard_bench.step);
-
-    // Federation mismatch latency variance envelope benchmark (optional SLO, unpromoted IMPL)
-    const federation_mismatch_latency_bench = b.addExecutable(.{ .name = "bench_federation_mismatch_latency", .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
-    federation_mismatch_latency_bench.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    const run_federation_mismatch_latency_bench = b.addRunArtifact(federation_mismatch_latency_bench);
-    test_e2e_step.dependOn(&run_federation_mismatch_latency_bench.step);
-    // Also compile its tests explicitly (so the test block runs under the zig test harness aside from executable run)
-    const federation_mismatch_latency_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/debug/benchmark_federation_mismatch_latency.zig"), .target = target, .optimize = optimize }) });
-    federation_mismatch_latency_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    test_e2e_step.dependOn(&federation_mismatch_latency_test.step);
 
     // Redo optimization delta variance benchmark (S-016)
     const redo_opt_delta_bench = b.addExecutable(.{ .name = "bench_redo_optimization_delta", .root_module = b.createModule(.{ .root_source_file = b.path("tests/benchmark_redo_optimization_delta.zig"), .target = target, .optimize = optimize }) });
@@ -6653,12 +6506,12 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("rls", rls_mod);
 
     // SONNY-6459 item 7: the inline tests of src/distributed/raft_consensus.zig,
-    // cluster.zig, twophase.zig and cluster_auth.zig, through a src/-rooted
-    // module wired like the graph_store test root above (the first three are
-    // also collected there; twophase.zig's were collected by no test root).
+    // cluster.zig and cluster_auth.zig, through a src/-rooted module wired
+    // like the graph_store test root above (they are also collected there).
     // That root's import set compiles these files without the `geode`
     // library module, whose files would otherwise belong to two modules.
-    // The filters select those four files' tests.
+    // The filters select those files' tests (twophase.zig's went with the
+    // file, SONNY-6563: nothing in the server reached it).
     const distributed_inline_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed_inline_test_root.zig"),
         .target = target,
@@ -6671,17 +6524,14 @@ pub fn build(b: *std.Build) void {
     }
     const distributed_inline_tests = b.addTest(.{
         .root_module = distributed_inline_mod,
-        // twophase.zig: every test (SONNY-6463 removed the two that called
-        // `TwoPCCoordinator.handleMessage`, which could not compile).
         .filters = &.{
             "distributed.raft_consensus.test.",
             "distributed.cluster.test.",
             "distributed.cluster_auth.test.",
-            "distributed.twophase.test.",
         },
     });
     const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);
-    const distributed_inline_step = b.step("test-sonny6459-distributed-inline", "Run the inline tests of src/distributed/raft_consensus.zig, cluster.zig, twophase.zig and cluster_auth.zig (SONNY-6459 item 7)");
+    const distributed_inline_step = b.step("test-sonny6459-distributed-inline", "Run the inline tests of src/distributed/raft_consensus.zig, cluster.zig and cluster_auth.zig (SONNY-6459 item 7)");
     distributed_inline_step.dependOn(&run_distributed_inline_tests.step);
     shardDep(test_step, &run_distributed_inline_tests.step, 1, test_shard_loads, test_shard_index);
 
@@ -7094,7 +6944,8 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
     // and an embedding-sign "community detection" hack) was dead code — no
-    // production importer; superseded by src/ml/integration_enhanced.zig.
+    // production importer (its successor integration_enhanced.zig went the
+    // same way in SONNY-6555).
     // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
@@ -7261,14 +7112,6 @@ pub fn build(b: *std.Build) void {
     configureVulkanPaths(b, bench_gpu_shortest_path);
     const bench_gpu_shortest_path_run = b.addRunArtifact(bench_gpu_shortest_path);
     bench_gpu_step.dependOn(&bench_gpu_shortest_path_run.step);
-
-    // Federation mismatch flag E2E protocol-style test (lightweight)
-    const fed_mismatch_flag_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_federation_mismatch_flag.zig"), .target = target, .optimize = optimize }),
-    });
-    fed_mismatch_flag_test.root_module.addImport("geode", root_mod);
-    fed_mismatch_flag_test.root_module.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    test_e2e_step.dependOn(&fed_mismatch_flag_test.step);
 
     // Security and RLS tests
     const auth_test = b.addTest(.{
@@ -7582,16 +7425,12 @@ pub fn build(b: *std.Build) void {
     const gap0879_tests = b.addTest(.{ .root_module = gap0879_test_mod });
     const run_gap0879_tests = b.addRunArtifact(gap0879_tests);
     shardDep(test_step, &run_gap0879_tests.step, 1, test_shard_loads, test_shard_index);
-    // Also compile+run the in-module tests of src/ml/integration_enhanced.zig
-    // (caller-owned getNeighbors allocation contract, p/q-biased RandomWalker).
-    const gap0879_ie_tests = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration_enhanced.zig"), .target = target, .optimize = optimize }),
-    });
-    const run_gap0879_ie_tests = b.addRunArtifact(gap0879_ie_tests);
-    shardDep(test_step, &run_gap0879_ie_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6555 item 8: src/ml/integration_enhanced.zig (a third Louvain,
+    // a Node2Vec/PageRank/link-prediction copy and stub gds.* procedures no
+    // server path registered) was compiled only by its own in-module tests
+    // here; removed with them.
     const gap0879_step = b.step("test-gap0879", "GAP-0879 regression (Node2Vec p/q bias + real training loss + ML allocator ownership)");
     gap0879_step.dependOn(&run_gap0879_tests.step);
-    gap0879_step.dependOn(&run_gap0879_ie_tests.step);
 
     // GAP-0891 regression suite (native-tenant write tagging + edge reads).
     const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
@@ -10990,15 +10829,6 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
     }
 
-    // SONNY-6487 item 5: src/distributed/federation_flag.zig (std-only; the
-    // build imports it only as a named module of benchmarks and tests).
-    {
-        const mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
-        const tests = b.addTest(.{ .name = "sonny6487-federation-flag", .root_module = mod });
-        const run_tests = b.addRunArtifact(tests);
-        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6487-federation-flag-inline", "Run SONNY-6487 item 5: src/distributed/federation_flag.zig's inline test").dependOn(&run_tests.step);
-    }
     // SONNY-6487 (3): src/client/repl/line_text.zig's grapheme/width helpers.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("src/client/repl/line_text.zig"), .target = target, .optimize = optimize });
@@ -13465,7 +13295,7 @@ pub fn build(b: *std.Build) void {
     const sonny6518_builtin_tests = b.addTest(.{ .root_module = sonny6518_builtin_mod });
     const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
     shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
-    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
+    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 42000 (SONNY-6555), a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
     // SONNY-6518 item 3: the gql tool's ORDER BY orders as the server's full sort. See tests/test_sonny6518_exec_order.zig.
     const sonny6518_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_exec_order.zig"), .target = target, .optimize = optimize });
     sonny6518_exec_mod.addImport("geode", root_mod);
@@ -14036,6 +13866,50 @@ pub fn build(b: *std.Build) void {
     const run_sonny6540_cws_tests = b.addRunArtifact(sonny6540_cws_tests);
     shardDep(test_step, &run_sonny6540_cws_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6540-chain-with-stage", "Run SONNY-6540 item 5 regression (an aggregating, DISTINCT or windowed WITH in a later part of a chain is computed over every row reaching it, with its WHERE, ORDER BY, SKIP and LIMIT, whatever parts come before it: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6540_cws_tests.step);
+    // SONNY-6555 item 4: a NULL argument gives NULL. See tests/test_sonny6555_null_arguments.zig.
+    const sonny6555_null_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_null_arguments.zig"), .target = target, .optimize = optimize });
+    sonny6555_null_mod.addImport("geode", root_mod);
+    sonny6555_null_mod.addImport("logging", logging_mod);
+    const sonny6555_null_tests = b.addTest(.{ .root_module = sonny6555_null_mod });
+    const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
+    shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6555 item 3: a column the ordered index cannot serve is declined before its build starts. See tests/test_sonny6555_ordered_build_probe.zig.
+    const sonny6555_obp_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_ordered_build_probe.zig"), .target = target, .optimize = optimize });
+    sonny6555_obp_mod.addImport("geode", root_mod);
+    sonny6555_obp_mod.addImport("logging", logging_mod);
+    sonny6555_obp_mod.link_libc = true;
+    const sonny6555_obp_tests = b.addTest(.{ .root_module = sonny6555_obp_mod });
+    const run_sonny6555_obp_tests = b.addRunArtifact(sonny6555_obp_tests);
+    shardDep(test_step, &run_sonny6555_obp_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-ordered-build-probe", "Run SONNY-6555 item 3 regression (an ORDER BY ... LIMIT on a mixed-class column, one holding a non-canonical string or a value of no ordered class starts no value-ordered index build; a single-class canonical column still builds; the rows are the full sort's: persisted sessions, bounded and unbounded node cache)").dependOn(&run_sonny6555_obp_tests.step);
+    // SONNY-6555 item 7: a WITH stage after a FOR or a CALL subquery reads every row reaching it. See tests/test_sonny6555_for_chain_stage.zig.
+    const sonny6555_fcs_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_for_chain_stage.zig"), .target = target, .optimize = optimize });
+    sonny6555_fcs_mod.addImport("geode", root_mod);
+    sonny6555_fcs_mod.addImport("logging", logging_mod);
+    sonny6555_fcs_mod.addImport("rls_types", rls_types_mod);
+    const sonny6555_fcs_tests = b.addTest(.{ .root_module = sonny6555_fcs_mod });
+    const run_sonny6555_fcs_tests = b.addRunArtifact(sonny6555_fcs_tests);
+    shardDep(test_step, &run_sonny6555_fcs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-for-chain-stage", "Run SONNY-6555 item 7 regression (ISO/IEC 39075 14.3 / 14.8 / 14.11: a FOR whose body reads runs it over the FOR's whole table, at the start of a statement or after a part, so its aggregate, DISTINCT, ORDER BY and LIMIT read every element; a chain's last RETURN DISTINCT reads every row: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6555_fcs_tests.step);
+    // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
+    const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
+    sonny6555_arity_mod.addImport("geode", root_mod);
+    sonny6555_arity_mod.addImport("logging", logging_mod);
+    sonny6555_arity_mod.link_libc = true;
+    const sonny6555_arity_tests = b.addTest(.{ .root_module = sonny6555_arity_mod });
+    const run_sonny6555_arity_tests = b.addRunArtifact(sonny6555_arity_tests);
+    shardDep(test_step, &run_sonny6555_arity_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-function-arity", "Run SONNY-6555 item 5 regression (ISO/IEC 39075 4.7.3 step 4: a function called with the wrong number of arguments is WrongArgumentCount, GQLSTATE 42000, whether it is a built-in, an extension-registry function or one the dispatch resolved as unknown; an operand value stays its data exception)").dependOn(&run_sonny6555_arity_tests.step);
+    // SONNY-6555 item 6: OFFSET/SKIP before LIMIT in every page clause. See tests/test_sonny6555_page_clause_order.zig.
+    const sonny6555_page_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_page_clause_order.zig"), .target = target, .optimize = optimize });
+    sonny6555_page_mod.addImport("geode", root_mod);
+    sonny6555_page_mod.addImport("logging", logging_mod);
+    sonny6555_page_mod.link_libc = true;
+    const sonny6555_page_tests = b.addTest(.{ .root_module = sonny6555_page_mod });
+    const run_sonny6555_page_tests = b.addRunArtifact(sonny6555_page_tests);
+    shardDep(test_step, &run_sonny6555_page_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-page-clause-order", "Run SONNY-6555 item 6 regression (ISO/IEC 39075 14.9: a WITH, a leading WITH, a UNION's trailing page and FOR take OFFSET/SKIP before LIMIT; LIMIT before OFFSET stays a Geode extension; a repeated clause is 42000; the rows are paged in every session kind)").dependOn(&run_sonny6555_page_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
@@ -17360,8 +17234,6 @@ pub fn build(b: *std.Build) void {
             "client.repl.spinner.test.",
             "performance.memory_mapped_io.test.",
             "ml.graph_embeddings.test.",
-            "planner.cost_calibration.test.",
-            "planner.pipeline.test.",
             "graph.containers.lfu.test.",
             // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
             "planner.test.",
@@ -19027,10 +18899,7 @@ pub fn build(b: *std.Build) void {
     // it registers it there. They get tests/all_tests.zig's module graph; the
     // e2e ones spawn this build's geode.
     const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{
-        .{ .file = "tests/test_sonny6548_cli_query_options.zig", .step = "test-sonny6548-cli-query-options", .desc = "Run SONNY-6548 reproduction (intentionally red: geode query prints nothing and exits 0 for --format txt, exits 0 for an unknown option, and commits a write under the --begin --rollback its --help documents)" },
-        .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 reproduction (intentionally red: with CDC running, QUIC CDC_CONTROL answers NO_ENGINE to RESET_GUARDRAILS and to an unknown action; it reads ServerState.cdc_engine, which nothing assigns)" },
         .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 reproduction (intentionally red: an exact numeric column is typed FLOAT, a UNION column INTEGER although it holds 1.25; FOR ... ORDER BY reports ordered:false; PROFILE reports spill_reason with no spill)" },
-        .{ .file = "tests/test_sonny6548_raft_persistent_voted_for.zig", .step = "test-sonny6548-raft-persistent-voted-for", .desc = "Run SONNY-6548 reproduction (intentionally red: raft_persistent.RaftNode persists current_term and not voted_for, so a reopened node forgets its vote; the cluster's raft_consensus node is not affected)" },
         .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 reproduction (intentionally red: SET and REMOVE refuse a variable named with an ISO/IEC 39075 non-reserved word such as type or property, which MATCH binds and RETURN reads; a reserved word such as MATCH is accepted as a variable)" },
     };
     for (sonny6548_repros) |repro| {
@@ -19045,5 +18914,42 @@ pub fn build(b: *std.Build) void {
         if (target.result.os.tag == .linux) repro_tests.root_module.linkSystemLibrary("dl", .{});
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
+    }
+    // SONNY-6561 / SONNY-6563 regressions, with tests/all_tests.zig's module
+    // graph (the e2e ones spawn this build's geode).
+    const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
+        .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
+        .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
+        .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
+    };
+    for (sonny656x_regressions) |reg| {
+        const reg_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| reg_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        reg_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            reg_tests.root_module.linkSystemLibrary("ssl", .{});
+            reg_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) reg_tests.root_module.linkSystemLibrary("dl", .{});
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, reg.weight, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+    // SONNY-6560: the SONNY-6548 geode query reproduction passes and runs in
+    // the aggregate (same module graph as the reproductions above).
+    {
+        const cli_query_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6548_cli_query_options.zig"), .target = target, .optimize = optimize }) });
+        var it = custom_tests.root_module.import_table.iterator();
+        while (it.next()) |e| cli_query_tests.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
+        cli_query_tests.root_module.link_libc = true;
+        if (enable_openssl) {
+            cli_query_tests.root_module.linkSystemLibrary("ssl", .{});
+            cli_query_tests.root_module.linkSystemLibrary("crypto", .{});
+        }
+        if (target.result.os.tag == .linux) cli_query_tests.root_module.linkSystemLibrary("dl", .{});
+        const run_cli_query_tests = b.addRunArtifact(cli_query_tests);
+        shardDep(test_step, &run_cli_query_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6548-cli-query-options", "Run SONNY-6548 / SONNY-6560 regression (geode query refuses --format txt and an unknown option with exit 2, and refuses --begin --rollback without writing)").dependOn(&run_cli_query_tests.step);
     }
 }

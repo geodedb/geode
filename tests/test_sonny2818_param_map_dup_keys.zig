@@ -9,7 +9,7 @@
 // allocated after freeParamBindings. QUIC decodes with the process allocator,
 // so any authenticated client grew the server's memory by about the size of
 // each request: a remote memory-growth DoS. 076a7ba1 fixed the same bug on
-// the peer path (value_convert.zig).
+// the peer path (value_convert.zig, since removed: SONNY-6563).
 //
 // The decoder now stores each entry with getOrPut and, for a repeated key,
 // frees the duplicate key and the value it replaces (the last value still

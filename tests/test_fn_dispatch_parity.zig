@@ -827,9 +827,11 @@ test "FN-DISPATCH-PARITY: datetime accepts a date-only literal and reports parse
     try testing.expectError(error.TimeParse, h.exec("RETURN datetime('garbage') AS x"));
     // SONNY-6489: a duration string's own data exception (22G0H).
     try testing.expectError(error.DurationParse, h.exec("RETURN duration('garbage') AS x"));
-    // Non-string / wrong-arity are data exceptions on the resolved name too.
+    // A non-string is a data exception on the resolved name too; a wrong
+    // arity is 42000 (SONNY-6555 item 5: the operand count is the program
+    // text's; it was 22023).
     try testing.expectError(error.TypeMismatch, h.exec("RETURN datetime(123) AS x"));
-    try testing.expectError(error.InvalidArgs, h.exec("RETURN datetime('a', 'b') AS x"));
+    try testing.expectError(error.WrongArgumentCount, h.exec("RETURN datetime('a', 'b') AS x"));
 }
 
 test "FN-DISPATCH-PARITY: valueType() names the value's type without type()'s edge special-case" {

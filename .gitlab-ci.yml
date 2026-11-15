@@ -1314,7 +1314,6 @@ test-perf-gates-enforced:
         test-canary-planner-prune \
         test-canary-planner-enumerator \
         test-canary-planner-plan-selection \
-        test-canary-planner-pipeline-selection \
         test-canary-txn-write-skew \
         test-canary-recovery-corrupt-latency \
         test-perf-optimizations; do

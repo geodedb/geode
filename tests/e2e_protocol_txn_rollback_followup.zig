@@ -9,11 +9,14 @@ fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
 
 test "protocol: rollback then subsequent query works" {
     const exe = geode_test_bin.geode_exe;
-    // First run with BEGIN + ROLLBACK
+    // SONNY-6560: --begin/--rollback were documented and never read (the
+    // statement auto-committed); they are refused (usage error, exit 2).
+    // An explicit transaction is BEGIN / ... / ROLLBACK lines of --batch
+    // (test-sonny6560-cli-unsupported-options).
     const res1 = try run(&.{ exe, "RETURN 1 AS x", "--begin", "--rollback" });
     defer std.testing.allocator.free(res1.out);
     defer std.testing.allocator.free(res1.err);
-    try std.testing.expectEqual(@as(i32, 0), res1.code);
+    try std.testing.expectEqual(@as(i32, 2), res1.code);
     // Now a fresh query without txn flags should still succeed
     const res2 = try run(&.{ exe, "RETURN 2 AS y ORDER BY y LIMIT 1" });
     defer std.testing.allocator.free(res2.out);

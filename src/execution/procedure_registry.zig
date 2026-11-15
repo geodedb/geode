@@ -47,16 +47,11 @@ const fle_admin = @import("fle_admin.zig");
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
 
-/// Public accessor so other transports (gRPC) can read the global CDC engine.
-pub fn getGlobalCdcEngine() ?*@import("../streaming/cdc_enhanced.zig").CDCEngine {
-    return storage_dispatch.getGlobalCdcEngine();
-}
-
-/// Public accessor for the CDC mutex so external transports (gRPC) can
-/// acquire it before accessing the CDC engine.
-pub fn getCdcMutex() *std.Io.Mutex {
-    return storage_dispatch.getCdcMutex();
-}
+/// SONNY-6561: the CDC_DIAGNOSTICS / CDC_CONTROL frames, answered the same on
+/// every transport.
+pub const CdcRefusal = storage_dispatch.CdcRefusal;
+pub const cdcDiagnosticsAnswer = storage_dispatch.cdcDiagnosticsAnswer;
+pub const cdcControlAnswer = storage_dispatch.cdcControlAnswer;
 
 // ==================== Main Dispatch Entry Point ====================
 

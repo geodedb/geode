@@ -152,8 +152,6 @@ pub const cost_explain = @import("planner/cost_explain.zig");
 pub const pagination_calibration = @import("pagination/calibration.zig");
 // Expose structural key utilities for benchmarks (PathCache related)
 pub const planner_structural_key = @import("planner/structural_key.zig");
-// Expose planner pipeline orchestration (synthetic phases + selection integration)
-pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
@@ -351,8 +349,6 @@ pub const net_policy = @import("net_policy.zig");
 // Distributed systems modules
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
-    pub const raft_log_storage = @import("distributed/raft_log_storage.zig");
-    pub const raft_persistent = @import("distributed/raft_persistent.zig");
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
     pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
@@ -366,9 +362,6 @@ pub const distributed = struct {
     /// file-path import that would split cluster_auth.zig across modules.
     pub const cluster_auth = @import("distributed/cluster_auth.zig");
     pub const raft = @import("raft");
-    pub const query_planner = @import("distributed/query_planner.zig");
-    pub const twophase = @import("distributed/twophase.zig");
-    pub const value_convert = @import("distributed/value_convert.zig");
     /// GPS Phase 6 Task 6-3: Principal identity envelope for cluster RPCs.
     pub const principal_envelope = @import("distributed/principal_envelope.zig");
 };
@@ -975,8 +968,6 @@ test "sonny6511-lib: inline test roots" {
     _ = @import("client/repl/spinner.zig");
     _ = @import("performance/memory_mapped_io.zig");
     _ = @import("ml/graph_embeddings.zig");
-    _ = @import("planner/cost_calibration.zig");
-    _ = @import("planner/pipeline.zig");
     _ = @import("graph/containers/lfu.zig");
     // SONNY-6517 item 3: the planner's own inline tests.
     _ = @import("planner.zig");

@@ -47,14 +47,15 @@ pub fn cmdAuthn(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     const subcommand = argv[start_idx];
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printAuthnUsage();
-        std.process.exit(@intFromEnum(ExitCode.success));
+        // SONNY-6559 (11): success returns through main, which records it.
+        return;
     }
     for (subcommands) |s| {
         if (!std.mem.eql(u8, s.name, subcommand)) continue;
         for (argv[start_idx + 1 ..]) |a| {
             if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
                 std.debug.print("geode authn {s} - not supported by this server: {s}. The command exits 1.\n", .{ s.name, s.why });
-                std.process.exit(@intFromEnum(ExitCode.success));
+                return;
             }
         }
         std.debug.print("Error: geode authn {s} is not supported by this server: {s}\n", .{ s.name, s.why });

@@ -334,6 +334,26 @@ pub fn renderTransportResponseWithStreams(
                 _ = out.writeAll(count_str) catch {};
             }
         }
+        return false;
+    }
+
+    // SONNY-6560: a format this renderer does not draw is an error, not a
+    // success that prints nothing (`geode query --format txt` exited 0 with
+    // no output). `geode query` refuses such a format before it connects
+    // (`isSupportedFormat`); dot and mermaid are drawn by the caller
+    // (ResultAccumulator.render).
+    return error.UnsupportedOutputFormat;
+}
+
+/// SONNY-6560: the values `geode query --format` accepts.
+pub const supported_formats = [_][]const u8{ "json", "table", "csv", "dot", "mermaid" };
+
+/// "json, table, csv, dot, mermaid", for messages.
+pub const supported_formats_text = "json, table, csv, dot, mermaid";
+
+pub fn isSupportedFormat(format: []const u8) bool {
+    for (supported_formats) |f| {
+        if (std.mem.eql(u8, f, format)) return true;
     }
     return false;
 }

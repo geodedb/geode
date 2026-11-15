@@ -97,7 +97,7 @@ SEC-08) and routes `tools/call` to `src/mcp/tools.zig:callTool`, which
 dispatches by tool name to the typed function below. The four bridge
 tools are **read-only language services**: they never touch the graph
 backend and require no QUIC endpoint (unlike the `query`/`schema`/
-`explain`/`catalogs`/`graphs` tools).
+`explain`/`graphs` tools).
 
 ## Auth posture
 

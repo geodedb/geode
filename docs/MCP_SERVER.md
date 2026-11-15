@@ -22,11 +22,11 @@ operators and client authors must understand.
 | `initialize` | Negotiates protocol version, returns `serverInfo` (`geode-mcp`) and a capabilities object. |
 | `notifications/initialized` | Accepted; flips the server to the initialized state. |
 | `ping` | Standard liveness reply. |
-| `tools/list` | Lists Geode tools: `query`, `schema`, `explain`, `catalogs`, `graphs`, `validate`, `complete`, `hover`, `diagnostics`. |
-| `tools/call` | Dispatches to the named tool (`src/mcp/tools.zig`). Backend tools (`query`/`schema`/`explain`/`catalogs`/`graphs`) require a configured geode endpoint; the language tools (`validate`/`complete`/`hover`/`diagnostics`) are pure and need no backend; `validate` and `diagnostics` include the recommendations listed in [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md). |
+| `tools/list` | Lists Geode tools: `query`, `schema`, `explain`, `graphs`, `validate`, `complete`, `hover`, `diagnostics`. There is no `catalogs` tool (SONNY-6559): geode has no catalog object to list (see below). |
+| `tools/call` | Dispatches to the named tool (`src/mcp/tools.zig`). Backend tools (`query`/`schema`/`explain`/`graphs`) require a configured geode endpoint; the language tools (`validate`/`complete`/`hover`/`diagnostics`) are pure and need no backend; `validate` and `diagnostics` include the recommendations listed in [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md). |
 | `resources/list` | Lists Geode resources (`geode://default/default/schema`, `geode://default/default/stats`, `geode://config`). |
-| `resources/read` | Reads a resource by URI. |
-| `resources/templates/list` | Lists resource templates. |
+| `resources/read` | Reads a resource by URI (grammar below). |
+| `resources/templates/list` | Lists resource templates: `geode://{catalog}/{graph}/schema`, `/stats`, `/node/{label}`, `/relationship/{type}`; each is read by `resources/read`. |
 | `prompts/list` / `prompts/get` | Lists / fetches the Geode prompt catalog; `prompts/get` writes the argument values into the prompt text. |
 
 ## Result shapes and error codes (SONNY-6552)
@@ -67,8 +67,8 @@ Tool **execution** failures are not protocol errors: they are a
 covers bad tool arguments, an argument a tool does not advertise (the
 `query` tool refuses `catalog` / `graph`, the `graphs` tool takes no
 arguments), a backend that cannot be reached, and a statement the server
-reports as failed (for `query`, `schema`, `explain`, `catalogs` and
-`graphs` alike). A `resources/read` whose endpoint DSN is unusable answers
+reports as failed (for `query`, `schema`, `explain` and `graphs`
+alike). A `resources/read` whose endpoint DSN is unusable answers
 the resource with a `{"error": "<reason>"}` text document (the library can
 only report a Zig error name, which would drop the reason); when the
 server is unreachable, `schema` and `stats` answer their offline
@@ -80,6 +80,42 @@ URI was a success carrying `{"error": ...}`, an unknown tool was
 `-32603`, the `query` tool advertised `catalog` / `graph` and the `graphs`
 tool `catalog` without using them, `prompts/get` ignored its arguments,
 and `query` failed every call that passed `parameters`.
+
+## Resources and the backend tools (SONNY-6559)
+
+A resource URI is exactly one of:
+
+| URI | Text (`application/json`) |
+|---|---|
+| `geode://config` | `{"version", "gql_compliance", "transport"}` (local; no server round trip) |
+| `geode://default/<graph>/schema` | `{"graph", "node_labels": [label sets, up to 100], "relationship_types": [up to 100]}` |
+| `geode://default/<graph>/stats` | `{"graph", "node_count", "relationship_count"}` |
+| `geode://default/<graph>/node/<label>` | `{"graph", "label", "count", "sample": [up to 25 nodes]}` |
+| `geode://default/<graph>/relationship/<type>` | `{"graph", "type", "count", "sample": [up to 25 relationships]}` |
+
+`<graph>`, `<label>` and `<type>` are GQL identifiers
+(`[A-Za-z_][A-Za-z0-9_]*`); a graph that does not exist, any other path, a
+query string, a fragment or another scheme is `-32002`. The catalog
+segment is always `default`: geode keeps its graphs in one namespace and
+has no catalog object (an ISO/IEC 39075 catalog holds schemas that hold
+graphs), so there is no other catalog to name and no catalogs tool. The
+statements run through the normal client path with the endpoint's
+credentials (`USE GRAPH <graph>` first), so the endpoint user's
+permissions and row-level security apply to every count and sample.
+
+The backend tools and resources decode results with geode's own wire
+schema, as `geode query` does: nodes, relationships, paths, lists and maps
+come back whole, and `explain` returns the plan (`{"explain": {...}}`, the
+object `geode query "EXPLAIN ..." --format json` prints). Before SONNY-6559
+the client library's decoder kept scalars only (the `schema` tool's label
+lists and every node were `null`) and dropped the plan (`explain` answered
+`{"columns":[],"rows":[]}`), the node/relationship templates were
+advertised and answered `-32002`, `{catalog}/{graph}` was ignored, any URI
+holding `config` or `/schema` matched, and the `catalogs` tool sent `SHOW
+CATALOGS`, which does not parse.
+
+Regression: `zig build test-sonny6559-mcp-backend` (a real `geode mcp
+--stdio` session against a real server).
 
 Regression: `zig build test-sonny6552-mcp-result-shapes` checks each
 response field by field through the real `mcp.Server.processMessage` and
@@ -191,8 +227,11 @@ the source CANARY markers.
 
 - Default `auth_mode` is `.bearer` (SEC-08): the server **refuses to
   start** without a bearer token (`error.MissingBearerToken`). Set
-  `--mcp-token` (or `Options.bearer_token`), or explicitly opt into
-  `auth_mode = .none` for a trusted, non-production environment.
+  `geode mcp --token <token>` or `GEODE_MCP_TOKEN` (`Options.bearer_token`),
+  or explicitly opt into `--no-auth` (`auth_mode = .none`) for `--stdio` or
+  a debug build's HTTP transport. `geode mcp` refuses an option it does not
+  read, a value option without its value and a `--port` that is not a port
+  (exit 2, SONNY-6560); HTTP is the transport unless `--stdio` is given.
 - A single per-server `Principal` is derived from the bearer token at
   init time (GPS Phase 5, `source = .mcp_handler`, username from
   `Options.mcp_username`, default `mcp`). Per-connection multi-user
