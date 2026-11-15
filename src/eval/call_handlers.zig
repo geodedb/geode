@@ -79,6 +79,16 @@ pub fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
     };
 }
 
+/// SONNY-6587 item 4: an exact integer argument of range().
+fn rangeInt(value: Value) ?i64 {
+    return switch (value) {
+        .Int => |i| i,
+        .SmallInt => |i| i,
+        .BigInt => |i| i,
+        else => null,
+    };
+}
+
 fn textLike(value: Value) ?[]const u8 {
     return switch (value) {
         .Str => |s| s,
@@ -1697,27 +1707,19 @@ pub fn evalCollectionFunction(
         // fall through to evalAdvancedTypeFunction.
         if (args.len < 2 or args.len > 3) return null;
 
+        // CANARY: REQ=REQ-SONNY-6587-LIST-FUNCTION-ARGS; FEATURE="ListFunctions"; ASPECT=RangeArguments; STATUS=TESTED; TEST=tests/test_sonny6587_list_functions.zig; OWNER=eval; UPDATED=2026-11-15
+        // SONNY-6587 item 4: NULL in is NULL out; a value that is not an
+        // integer is 22G03 and a zero step 22023 (both answered NULL). The
+        // end stays exclusive, as documented (SONNY-6466).
         const start_val = try eval.evalExpr(allocator, args[0].*, env);
-        const start = switch (start_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
         const stop_val = try eval.evalExpr(allocator, args[1].*, env);
-        const stop = switch (stop_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
+        const step_val: Value = if (args.len == 3) try eval.evalExpr(allocator, args[2].*, env) else .{ .Int = 1 };
+        if (start_val == .Null or stop_val == .Null or step_val == .Null) return Value{ .Null = {} };
+        const start = rangeInt(start_val) orelse return EvalError.TypeMismatch;
+        const stop = rangeInt(stop_val) orelse return EvalError.TypeMismatch;
+        const step = rangeInt(step_val) orelse return EvalError.TypeMismatch;
 
-        const step = if (args.len == 3) blk: {
-            const step_val = try eval.evalExpr(allocator, args[2].*, env);
-            break :blk switch (step_val) {
-                .Int => |i| i,
-                else => return Value{ .Null = {} },
-            };
-        } else 1;
-
-        if (step == 0) return Value{ .Null = {} };
+        if (step == 0) return EvalError.InvalidArgs;
 
         // SONNY-2769: in i128, so a span or a step at the edge of i64
         // (`range(minInt, maxInt)`, a step of minInt) no longer overflows

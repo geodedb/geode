@@ -2616,6 +2616,14 @@
 
 ### Fixed
 
+- **range() refuses a non-integer argument and a zero step (SONNY-6587).**
+  `range(start, end[, step])` (a Geode extension; its end stays exclusive,
+  as documented since SONNY-6466) answered NULL for `range(1.5, 3)`,
+  `range(1, '3')` and `range(1, 4, 0)`. **BREAKING:** a value that is not an
+  integer is now 22G03 and a zero step 22023; a NULL argument still gives
+  NULL. docs/TYPES_AND_FUNCTIONS.md says so. Regression:
+  `zig build test-sonny6587-list-functions`.
+
 - **head() and last() of a value that is no list are 22G03 (SONNY-6587).**
   They answered NULL for `head(1)`, `last('ab')` or `head({a: 1})`; tail()
   raised 22G03 since SONNY-6555. NULL in is still NULL out, and an empty
