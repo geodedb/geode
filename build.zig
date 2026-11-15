@@ -10598,6 +10598,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6547_sv_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6547_sv_step = b.step("test-sonny6547-single-voter-drop", "Run SONNY-6547 item 3 regression (a one-voter cluster: a drop_graph proposed by a thread holding the graph's read lock commits and applies on the tick thread once the lock is released, and the graph is gone; a drop_graph apply refused with ObjectInUse because its thread holds the graph's read lock fails instead of reporting the graph dropped)");
     sonny6547_sv_step.dependOn(&run_sonny6547_sv_tests.step);
+
+    // SONNY-6591: every node write path keeps a fulltext index current over
+    // the wire (a real server; QUIC and gRPC; with and without TDE; after a
+    // SIGKILL and after a checkpoint).
+    const sonny6591_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6591_fts_write_paths.zig"), .target = target, .optimize = optimize });
+    sonny6591_test_mod.link_libc = true;
+    sonny6591_test_mod.addImport("geode", root_mod);
+    sonny6591_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6591_test_mod.addImport("schema", schema_mod);
+    sonny6591_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6591_tests = b.addTest(.{ .root_module = sonny6591_test_mod });
+    const run_sonny6591_tests = b.addRunArtifact(sonny6591_tests);
+    spawnsBuiltGeode(sonny6591_tests);
+    shardDep(test_step, &run_sonny6591_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6591_step = b.step("test-sonny6591-fts-write-paths", "Run SONNY-6591 regression against a real server with QUIC and plaintext gRPC listeners, with and without TDE: after CREATE INDEX ... USING fulltext, every node write path (index backfill, executor and fast-path CREATE, two labels, fast-path and executor MERGE, /*+BATCH*/ bulk MERGE, MATCH ... SET, REMOVE, DELETE, a transaction COMMIT and ROLLBACK, an integer property then a string) leaves geode.fts.search and geode.fts.phrase answering what the graph holds, immediately, after a SIGKILL and restart, and after a checkpoint and restart");
+    sonny6591_step.dependOn(&run_sonny6591_tests.step);
     // SONNY-6547 (4): a replicated write's first hydration of its graph does
     // not run under the Raft node's inner_mutex. In-process 3-node cluster.
     const sonny6547_hs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_apply_hydration_stall.zig"), .target = target, .optimize = optimize });
