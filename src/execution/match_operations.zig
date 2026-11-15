@@ -1113,7 +1113,7 @@ pub fn countNodesFastPath(
     const n: usize = if (plan.label) |label|
         store.countNodesByLabel(filter_graph, label, filter_tenant)
     else
-        store.countNodesForGraph(filter_graph, filter_tenant);
+        try store.countNodesForGraph(filter_graph, filter_tenant);
 
     // Build single-row `{<alias>: n}` result. Match the column-naming
     // conventions of `generateUniqueColumnNames`: prefer explicit alias,

@@ -2610,6 +2610,26 @@
   user" when that finds nothing. `canUserAccessGraph` and
   `UserStorageBackend.loadChainRoot` now return error unions. Regression:
   `zig build test-sonny6594-auth-read-failure`.
+- **A tenant scan that cannot read a row's tenant tag or body fails
+  instead of listing the row for the wrong tenant or dropping it
+  (SONNY-6594 item 6).** **SECURITY / BREAKING (behaviour):** with a
+  bounded node cache, `getAllNodesForTenant` and the tenant-filtered
+  `count(n)` fast path (`countNodesForGraph`) resolve an evicted node's
+  tenant from its persisted tag, and a tag read that FAILED was taken for
+  an absent tag, the default tenant: another tenant's nodes were listed,
+  and counted, as the default tenant's. `getAllEdgesForTenant` and the
+  typed edge scan dropped an edge whose body could not be read (the DROP
+  TENANT cascade's input among others), and the snapshot writer
+  (`serializeSnapshot`) left it out. Each now fails with the read's error.
+  At graph hydration (cold open) a node or edge tenant tag that cannot be
+  read now fails the hydration, so the graph is quarantined (58000) instead
+  of the row loading as the default tenant's; an absent tag still means the
+  default tenant. `countNodesForGraph` now returns an error union. The edge
+  write methods (`setEdgeProperty`, `setEdgePropertiesBatch`,
+  `removeEdgeProperty`, the `*NoSave` setter) and the adjacency helpers
+  (`getOutgoingEdges`, `getNeighbors`, ...) fail on an unreadable edge body
+  instead of skipping it. Regression: `zig build
+  test-sonny6594-tenant-scan-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,

@@ -121,7 +121,7 @@ fn visibleEdgeCount(store: *graph_store.GraphStore, allocator: std.mem.Allocator
 }
 
 /// SONNY-1318 / SONNY-2685: number of nodes visible to the scope.
-fn visibleNodeCount(store: *graph_store.GraphStore, scope: *AlgoScope) usize {
+fn visibleNodeCount(store: *graph_store.GraphStore, scope: *AlgoScope) !usize {
     if (!scope.restricts()) return store.countNodesForGraph(scope.graph(), null);
     var n: usize = 0;
     var it = store.nodes.iterator();
@@ -1969,7 +1969,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
 /// For undirected: 2E / (N * (N-1)), for directed: E / (N * (N-1))
 pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, scope: *AlgoScope) !ExecutionResult {
     // SONNY-1318: density of the graph the session's tenant scope can see.
-    const node_count = visibleNodeCount(store, scope);
+    const node_count = try visibleNodeCount(store, scope);
     const edge_count = try visibleEdgeCount(store, allocator, scope);
 
     const density: f64 = if (node_count > 1)
