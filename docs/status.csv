@@ -1694,7 +1694,7 @@ REQ-GQL-015,Set Operations,SetOpDistinctDedupVarianceEnvelope,IMPL,,,engine,2026
 REQ-GQL-016,Path Expand Breadth,Planner,IMPL,,,planner,2026-11-14,tests/benchmark_path_expand_breadth.zig,3
 REQ-GQL-016,Paths,PathExpansionHeuristicVarianceEnvelope,IMPL,,,planner,2026-11-14,tests/benchmark_path_expansion_heuristic_variance.zig,3
 REQ-GQL-016,Planner Paths,PathExpandBreadthVarianceEnvelope,IMPL,,,planner,2026-11-14,tests/benchmark_path_expand_breadth_variance.zig,5
-REQ-GQL-016,Weighted Path Cost,Planner,TESTED,,,planner,2025-09-20,src/canary.zig,20
+REQ-GQL-016,Weighted Path Cost,Planner,IMPL,,,planner,2026-11-15,src/canary.zig,24
 REQ-GQL-017,E2EMatchBasic,Protocol,TESTED,,,engine,2025-09-24,tests/e2e_protocol_match_basic.zig,4
 REQ-GQL-017,MATCH ORDER/LIMIT determinism,ProtocolE2E,TESTED,,,engine,2026-11-14,tests/e2e_protocol_match.zig,5
 REQ-GQL-017,MATCH ORDER/LIMIT determinism,ProtocolE2E_QUIC,TESTED,,,engine,2026-11-14,tests/e2e_protocol_match_quic.zig,10
@@ -1777,7 +1777,7 @@ REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-26,src/tra
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,TESTED,,,txn,2025-09-21,tests/canary_txn_write_skew.zig,44
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md,310
 REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,,conformance,2026-11-13,src/conformance.zig,2
-REQ-GQL-028,Recovery After Compaction,Storage,TESTED,,,storage,2025-09-20,src/canary.zig,21
+REQ-GQL-028,Recovery After Compaction,Storage,TESTED,,,storage,2025-09-20,src/canary.zig,25
 REQ-GQL-028,Snapshot Adaptive Policy,SnapshotAdaptivePolicyLatencyVarianceEnvelope,IMPL,,,storage,2026-11-14,tests/benchmark_snapshot_adaptive_policy_latency_variance.zig,2
 REQ-GQL-028,Snapshot Adaptive Policy,Storage,BENCHED,,,storage,2026-02-04,src/canary.zig,12
 REQ-GQL-028,Snapshot Adaptive Policy,Storage,IMPL,,,storage,2026-11-14,tests/benchmark_snapshot_adaptive_policy.zig,3
@@ -1949,7 +1949,7 @@ REQ-GQL-074,Network Transport,QUICErrorHandling,TESTED,,,wire,2025-09-22,tests/e
 REQ-GQL-074,Network Transport,QUICHandshakeRegression,IMPL,,,wire,2026-11-14,tests/test_quic_handshake_regression.zig,1
 REQ-GQL-074,Network Transport,QUICListener,IMPL,,,wire,2026-11-14,tests/canary_quic.zig,21
 REQ-GQL-074,Network Transport,QUICMultiplexedStreams,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig,79
-REQ-GQL-074,Network Transport,QUICMultiplexing,IMPL,,,wire,2026-11-14,src/canary.zig,24
+REQ-GQL-074,Network Transport,QUICMultiplexing,IMPL,,,wire,2026-11-14,src/canary.zig,28
 REQ-GQL-074,Network Transport,QUICMultiplexing,IMPL,,,wire,2026-11-14,tests/canary_quic.zig,79
 REQ-GQL-074,Network Transport,QUICPerformanceMetrics,BENCHED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig,48
 REQ-GQL-074,Network Transport,QUICProtocol,TESTED,,,wire,2025-09-22,tests/e2e_quic_basic.zig,12
@@ -1982,13 +1982,13 @@ REQ-GQL-075,Cost Model Enumeration Seed,ExplainJSONRecursive,IMPL,,,planner,2026
 REQ-GQL-075,CostModelVarianceAutoCalibration,AutoCalibrationLogic,TESTED,,,planner,2025-09-27,src/monitoring/variance_calibration.zig,9
 REQ-GQL-075,CostModelVarianceAutoCalibration,Test,TESTED,,,planner,2025-09-27,tests/canary_variance_autocalibration.zig,5
 REQ-GQL-075,Query Optimizer,AdvancedCostModelCalibrationVarianceEnvelope,IMPL,,,planner,2026-11-14,tests/benchmark_advanced_cost_model_calibration_variance.zig,27
-REQ-GQL-076,Materialized Views,MvRefreshLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,src/canary.zig,31
+REQ-GQL-076,Materialized Views,MvRefreshLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,src/canary.zig,35
 REQ-GQL-076,Materialized Views,MvRefreshLatencyVarianceEnvelope,IMPL,,,engine,2026-11-14,tests/benchmark_mv_refresh_jitter_variance.zig,4
-REQ-GQL-076,Materialized Views,RefreshScheduler,TESTED,,,engine,2025-09-22,src/canary.zig,30
-REQ-GQL-077,Full-Text Search,InvertedIndexCore,TESTED,,,engine,2025-09-22,src/canary.zig,32
-REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,src/canary.zig,57
+REQ-GQL-076,Materialized Views,RefreshScheduler,TESTED,,,engine,2025-09-22,src/canary.zig,34
+REQ-GQL-077,Full-Text Search,InvertedIndexCore,TESTED,,,engine,2025-09-22,src/canary.zig,36
+REQ-GQL-077,Full-Text Search,InvertedIndexQueryLatencyVarianceEnvelope,BENCHED,,,engine,2025-09-22,src/canary.zig,61
 REQ-GQL-079,RecursiveExecution,ParserRecognition,TESTED,,,engine,2025-09-26,src/gql/ast.zig,115
-REQ-GQL-080,Additional Data Types,ValueTags,TESTED,,,types,2025-09-27,src/canary.zig,35
+REQ-GQL-080,Additional Data Types,ValueTags,TESTED,,,types,2025-09-27,src/canary.zig,39
 REQ-GQL-080,VariableLengthPaths,BFSExpansion,TESTED,,,engine,2026-04-11,src/execution.zig,3890
 REQ-GQL-080,VariableLengthPaths,Execution,TESTED,,,engine,2025-10-09,src/execution/match_operations.zig,7131
 REQ-GQL-080,VariableLengthPaths,Execution,TESTED,,,engine,2025-10-09,src/execution/match_operations.zig,10308
@@ -2001,7 +2001,7 @@ REQ-GQL-081,MonitoringVariance,TailLatencyP999Envelope,BENCHED,,,ops-team,2025-0
 REQ-GQL-081,MonitoringVariance,UnifiedVarianceEnvelope,BENCHED,,,ops-team,2025-09-27,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,7
 REQ-GQL-081,MonitoringVariance,UnifiedVarianceEnvelope,BENCHED,,,ops-team,2025-09-27,benchmarks/benchmark_monitoring_variance_unified.zig,4
 REQ-GQL-081,MonitoringVariance,UnifiedVarianceEnvelope,IMPL,,,ops-team,2026-11-14,tests/canary_monitoring_variance_unified.zig,3
-REQ-GQL-081,Numeric Types,IntWidths,TESTED,,,types,2025-09-27,src/canary.zig,36
+REQ-GQL-081,Numeric Types,IntWidths,TESTED,,,types,2025-09-27,src/canary.zig,40
 REQ-GQL-081,SessionManagement,SessionClose,TESTED,,,engine,2025-10-09,src/execution.zig,3357
 REQ-GQL-081,SessionManagement,SessionReset,TESTED,,,engine,2025-10-09,src/execution.zig,3316
 REQ-GQL-081,SessionManagement,SessionSet,TESTED,,,engine,2025-10-09,src/execution.zig,2350
@@ -2018,7 +2018,7 @@ REQ-GQL-082,ExtendedBuiltins,FUNCTION_POLYGON_AREA,TESTED,,,engine,2025-09-26,sr
 REQ-GQL-082,ExtendedBuiltins,FUNCTION_UUID_V4,TESTED,,,engine,2026-09-23,src/types/extended_functions.zig,270
 REQ-GQL-082,ExtendedBuiltins,FUNCTION_VECTOR_COSINE,TESTED,,,engine,2025-09-26,src/types/extended_functions.zig,284
 REQ-GQL-082,ExtendedBuiltins,PERFORMANCE,BENCHED,,,engine,2025-09-26,benchmarks/benchmark_extended_builtins_overhead.zig,7
-REQ-GQL-082,Float Types,NaNForbidden,TESTED,,,types,2025-09-27,src/canary.zig,37
+REQ-GQL-082,Float Types,NaNForbidden,TESTED,,,types,2025-09-27,src/canary.zig,41
 REQ-GQL-082,TransactionManagement,Commit,TESTED,,,engine,2025-10-12,src/execution.zig,2245
 REQ-GQL-082,TransactionManagement,Rollback,TESTED,,,engine,2025-10-12,src/execution.zig,2294
 REQ-GQL-082,TransactionManagement,StartTransaction,TESTED,,,engine,2025-10-09,src/execution.zig,2142
@@ -2026,14 +2026,14 @@ REQ-GQL-082,TransactionManagement,State,TESTED,,,engine,2025-10-09,src/execution
 REQ-GQL-082,TransactionManagement,StatePropagation,TESTED,,,engine,2025-10-09,src/execution.zig,1653
 REQ-GQL-083,CreateWithClause,ParserSupport,TESTED,,,parser,2025-10-09,src/gql/parser.zig,5736
 REQ-GQL-083,CreateWithClause,VariablePropagation,TESTED,,,engine,2025-10-09,src/execution/crud_operations.zig,1946
-REQ-GQL-083,Decimal128,ArithmeticRounding,TESTED,,,types,2025-09-27,src/canary.zig,38
+REQ-GQL-083,Decimal128,ArithmeticRounding,TESTED,,,types,2025-09-27,src/canary.zig,42
 REQ-GQL-083,ExtendedDecimalFormatting,FORMATTER,TESTED,,,engine,2025-09-26,src/types/extended.zig,5
 REQ-GQL-083,ExtendedDecimalFormatting,FORMATTER,TESTED,,,engine,2025-09-27,tests/canary_extended_builtins.zig,7
 REQ-GQL-084,CreateIndexKeywordProperties,ParserSupport,TESTED,,,parser,2025-10-14,src/gql/parser.zig,6422
-REQ-GQL-084,String Types,CharPadComparison,TESTED,,,types,2025-09-27,src/canary.zig,39
+REQ-GQL-084,String Types,CharPadComparison,TESTED,,,types,2025-09-27,src/canary.zig,43
 REQ-GQL-085,ParenthesizedSetOperations,ParserSupport,TESTED,,,parser,2025-10-14,src/gql/parser.zig,2318
-REQ-GQL-085,String Types,VarcharBounds,TESTED,,,types,2025-09-27,src/canary.zig,40
-REQ-GQL-086,Temporal Types,DateParsing,TESTED,,,types,2025-09-27,src/canary.zig,41
+REQ-GQL-085,String Types,VarcharBounds,TESTED,,,types,2025-09-27,src/canary.zig,44
+REQ-GQL-086,Temporal Types,DateParsing,TESTED,,,types,2025-09-27,src/canary.zig,45
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval/call_handlers.zig,1482
 REQ-GQL-087,MigrationEngine,CliParityStatusCommand,IMPL,,,migration,2026-11-14,src/migration/mod.zig,543
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-04-01,src/migration/mod.zig,46
@@ -2042,10 +2042,10 @@ REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,IMPL,,,migration,2026-11-14
 REQ-GQL-087,MigrationEngine,ObservabilityMetrics,IMPL,,,migration,2026-11-14,src/migration/mod.zig,540
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,IMPL,,,migration,2026-11-14,src/migration/mod.zig,542
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig,1563
-REQ-GQL-087,Temporal Types,TimestampTZNormalization,TESTED,,,types,2025-09-27,src/canary.zig,42
+REQ-GQL-087,Temporal Types,TimestampTZNormalization,TESTED,,,types,2025-09-27,src/canary.zig,46
 REQ-GQL-088,GraphSimilarityFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig,4338
-REQ-GQL-088,Temporal Types,IntervalArithmetic,TESTED,,,types,2025-09-27,src/canary.zig,43
-REQ-GQL-089,Binary Types,ByteaHex,TESTED,,,types,2025-09-27,src/canary.zig,44
+REQ-GQL-088,Temporal Types,IntervalArithmetic,TESTED,,,types,2025-09-27,src/canary.zig,47
+REQ-GQL-089,Binary Types,ByteaHex,TESTED,,,types,2025-09-27,src/canary.zig,48
 REQ-GQL-089,ListComprehension,AST,TESTED,,,parser,2025-12-23,src/gql/ast.zig,473
 REQ-GQL-089,ListComprehension,Environment,TESTED,,,eval,2025-10-17,src/value_types.zig,298
 REQ-GQL-089,ListComprehension,Evaluation,TESTED,,,eval,2025-12-23,src/eval.zig,2089
@@ -2053,22 +2053,22 @@ REQ-GQL-089,ListComprehension,Evaluation,TESTED,,,eval,2026-08-25,src/eval/quant
 REQ-GQL-089,ListComprehension,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig,4679
 REQ-GQL-089,ListComprehension,Printing,TESTED,,,print,2025-10-14,src/gql/print.zig,977
 REQ-GQL-090,ChainedComparisons,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig,4449
-REQ-GQL-090,JSON Types,JsonbCanonical,TESTED,,,types,2025-09-27,src/canary.zig,45
+REQ-GQL-090,JSON Types,JsonbCanonical,TESTED,,,types,2025-09-27,src/canary.zig,49
 REQ-GQL-090,StreamingTelemetry,PagingEvents,IMPL,,,wire,2026-11-14,tests/e2e_protocol_more.zig,128
 REQ-GQL-091,PathAssignmentAfterWITH,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig,3674
 REQ-GQL-091,ServerDataDirFlag,CliErgonomics,TESTED,,,client,2026-11-14,tests/e2e_client_server_arg_passthrough.zig,8
-REQ-GQL-091,XML Types,WellFormed,TESTED,,,types,2025-09-27,src/canary.zig,46
-REQ-GQL-092,URL Types,Normalization,TESTED,,,types,2025-09-27,src/canary.zig,47
-REQ-GQL-093,Domain Types,PunycodeHandling,TESTED,,,types,2025-09-27,src/canary.zig,48
-REQ-GQL-094,UUID Types,ParsingGeneration,TESTED,,,types,2025-09-27,src/canary.zig,49
-REQ-GQL-095,Enum Types,OrdinalComparison,TESTED,,,types,2025-09-27,src/canary.zig,50
-REQ-GQL-096,Array Types,HomogeneousOperations,TESTED,,,types,2025-09-27,src/canary.zig,51
-REQ-GQL-097,Bit Types,BitwiseOperations,TESTED,,,types,2025-09-27,src/canary.zig,52
-REQ-GQL-098,Range Types,ContainmentOverlap,TESTED,,,types,2025-09-27,src/canary.zig,53
-REQ-GQL-099,Specialized Indexes,IntervalTreePersistence,TESTED,,,index,2025-09-27,src/canary.zig,54
-REQ-GQL-100,Specialized Indexes,JsonbInvertedPersistence,TESTED,,,index,2025-09-27,src/canary.zig,55
+REQ-GQL-091,XML Types,WellFormed,TESTED,,,types,2025-09-27,src/canary.zig,50
+REQ-GQL-092,URL Types,Normalization,TESTED,,,types,2025-09-27,src/canary.zig,51
+REQ-GQL-093,Domain Types,PunycodeHandling,TESTED,,,types,2025-09-27,src/canary.zig,52
+REQ-GQL-094,UUID Types,ParsingGeneration,TESTED,,,types,2025-09-27,src/canary.zig,53
+REQ-GQL-095,Enum Types,OrdinalComparison,TESTED,,,types,2025-09-27,src/canary.zig,54
+REQ-GQL-096,Array Types,HomogeneousOperations,TESTED,,,types,2025-09-27,src/canary.zig,55
+REQ-GQL-097,Bit Types,BitwiseOperations,TESTED,,,types,2025-09-27,src/canary.zig,56
+REQ-GQL-098,Range Types,ContainmentOverlap,TESTED,,,types,2025-09-27,src/canary.zig,57
+REQ-GQL-099,Specialized Indexes,IntervalTreePersistence,TESTED,,,index,2025-09-27,src/canary.zig,58
+REQ-GQL-100,Specialized Indexes,JsonbInvertedPersistence,TESTED,,,index,2025-09-27,src/canary.zig,59
 REQ-GQL-100,UNION Query Operations,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig,2474
-REQ-GQL-101,Specialized Indexes,DomainTriePersistence,TESTED,,,index,2025-09-27,src/canary.zig,56
+REQ-GQL-101,Specialized Indexes,DomainTriePersistence,TESTED,,,index,2025-09-27,src/canary.zig,60
 REQ-GQL-164,Pattern Comprehension Shorthand,Parser,TESTED,,,parser,2025-10-14,src/gql/parser.zig,5265
 REQ-GQL-165,Pattern Comprehension Execution,Evaluator,TESTED,,,eval,2025-10-14,src/eval.zig,2228
 REQ-GQL-166,Pattern Comprehension Execution,Execution,TESTED,,,execution,2025-10-14,src/execution/graph_algorithms.zig,1037

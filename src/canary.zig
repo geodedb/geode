@@ -17,7 +17,11 @@
 // CANARY: REQ=REQ-GQL-004; FEATURE="Pagination Policy Override"; ASPECT=Planner; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_OffsetWithoutOrderPolicyToggle; OWNER=planner; UPDATED=2026-11-14
 // CANARY: REQ=REQ-GQL-046; FEATURE="TDE Key Rotation Throughput"; ASPECT=Storage; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput; OWNER=security; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Backfill Latency"; ASPECT=API; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_BackfillLatency; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-016; FEATURE="Weighted Path Cost"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathWeightedCost; OWNER=planner; UPDATED=2025-09-20
+// SONNY-6587 item 6: REQ-GQL-016 claimed TESTED by a test no source defines;
+// the weighted shortest path (algo.shortestPath.dijkstra with a weight
+// property, src/execution/recursion_handler.zig executeDijkstra) has no test
+// that checks a cost (tests/test_match_call_integration.zig only parses one).
+// CANARY: REQ=REQ-GQL-016; FEATURE="Weighted Path Cost"; ASPECT=Planner; STATUS=IMPL; OWNER=planner; UPDATED=2026-11-15
 // CANARY: REQ=REQ-GQL-028; FEATURE="Recovery After Compaction"; ASPECT=Storage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_RecoveryAfterCompaction; OWNER=storage; UPDATED=2025-09-20
 // NOTE: Original provisional IDs 070–073 conflicted with existing REQUIREMENTS.md (String Search, GreyCardinal, HyperledgerGraphMVCC, MvccAdvanced)
 // Re-seated strategic gap IDs to 074–077 to avoid collision.
