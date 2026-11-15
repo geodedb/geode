@@ -5,7 +5,10 @@
 // - Index files (HNSW, R-tree, Patricia, Domain, JSONB, Interval)
 // - Catalog files (schema, FLE)
 // - Backup files
-// - Raft state files
+//
+// The cluster's Raft log and snapshots are encrypted by
+// src/distributed/raft_tde_storage.zig (keys derived from GEODE_TDE_KEY),
+// not by this module (SONNY-6571).
 //
 // Usage:
 //   const encrypted = try tde_file_encryption.encrypt(allocator, plaintext);

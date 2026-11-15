@@ -50,6 +50,15 @@ pub const Error = error{
     /// distinctly so the operator sees a real "already running / stale lock"
     /// diagnosis instead of a misleading InvalidNodeId.
     RaftStorageDirLocked,
+    /// SONNY-6571: GEODE_TDE_KEY is set and `<data_dir>/raft` holds Raft
+    /// state written without TDE (plaintext). Refused, not migrated.
+    RaftStoragePlaintextUnderTde,
+    /// SONNY-6571: `<data_dir>/raft` is encrypted and GEODE_TDE_KEY is unset.
+    RaftStorageNeedsTdeKey,
+    /// SONNY-6571: `<data_dir>/raft` was encrypted under another GEODE_TDE_KEY.
+    RaftStorageTdeKeyMismatch,
+    /// SONNY-6571: `<data_dir>/raft/tde.marker` is malformed.
+    RaftStorageCorrupt,
     OutOfMemory,
 };
 
@@ -357,6 +366,24 @@ pub fn maybeStart(
         error.RaftStorageDirLocked => {
             std.log.err("cluster: raft storage dir '{s}/raft' is locked by another process (FileStorage .lock); refusing to start. Stop the other node or clear a stale lock.", .{data_dir orelse "<unset>"});
             return Error.RaftStorageDirLocked;
+        },
+        // SONNY-6571: the Raft storage and GEODE_TDE_KEY disagree. Name the
+        // directory and what to do; never print the key.
+        error.RaftStoragePlaintextUnderTde => {
+            std.log.err("cluster: GEODE_TDE_KEY is set, but raft storage dir '{s}/raft' holds Raft state (log, hard state or snapshot) written without TDE, in plaintext; refusing to start rather than mix plaintext and encrypted Raft storage (SONNY-6571). Rebuild this node's data from the cluster: stop it, move its data directory aside, start it with GEODE_TDE_KEY set and an empty data directory, then destroy the old one (docs/TDE_FILE_LEVEL_ENCRYPTION.md).", .{data_dir orelse "<unset>"});
+            return Error.RaftStoragePlaintextUnderTde;
+        },
+        error.RaftStorageNeedsTdeKey => {
+            std.log.err("cluster: raft storage dir '{s}/raft' is encrypted (tde.marker) and GEODE_TDE_KEY is not set; refusing to start (SONNY-6571). Set the GEODE_TDE_KEY it was written with.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageNeedsTdeKey;
+        },
+        error.RaftStorageTdeKeyMismatch => {
+            std.log.err("cluster: raft storage dir '{s}/raft' was encrypted under a different GEODE_TDE_KEY (its tde.marker key check does not match); refusing to start (SONNY-6571). Set the GEODE_TDE_KEY it was written with.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageTdeKeyMismatch;
+        },
+        error.RaftStorageCorrupt => {
+            std.log.err("cluster: raft storage dir '{s}/raft' has a malformed tde.marker; refusing to start (SONNY-6571).", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageCorrupt;
         },
         // ClusterCoordinator.init can return errors from raft init,
         // graph_store init, nonce tracker init, etc.  We surface the

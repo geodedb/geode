@@ -465,6 +465,91 @@ fn leaderIndex(nodes: []Node) ?usize {
     return idx;
 }
 
+/// What every node of the test cluster is started with.
+const ClusterSpec = struct {
+    certs: Certs,
+    needles: Needles,
+    client_port: u16,
+    peers: []const u8,
+    cluster_port_str: []const u8,
+    hmac: []const u8,
+    token: []const u8,
+
+    fn dataDir(self: ClusterSpec, aa: std.mem.Allocator, i: usize) ![]const u8 {
+        return std.fmt.allocPrint(aa, "{s}/data{d}", .{ self.certs.dir, i + 1 });
+    }
+};
+
+/// Spawn the three nodes on their data directories (created if missing) and
+/// wait for a leader and a quorum; returns the leader's index.
+fn startCluster(spec: ClusterSpec, gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, nodes: *[3]Node, spawned: *usize) !usize {
+    for (0..3) |i| {
+        const ip = NODE_IPS[i];
+        const data_dir = try spec.dataDir(aa, i);
+        try std.Io.Dir.cwd().createDirPath(io, data_dir);
+        const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, spec.client_port });
+        const env = try aa.create(std.process.Environ.Map);
+        env.* = std.process.Environ.Map.init(aa);
+        try env.put("GEODE_TDE_KEY", spec.needles.tde_key);
+        try env.put("GEODE_CLUSTER_TOKEN", spec.token);
+        try env.put("GEODE_AUTH_HMAC_KEY", spec.hmac);
+        try env.put("GEODE_NODE_ID", try std.fmt.allocPrint(aa, "{d}", .{i + 1}));
+        try env.put("GEODE_PEERS", spec.peers);
+        try env.put("GEODE_CLUSTER_PORT", spec.cluster_port_str);
+        try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
+        try env.put("GEODE_CLUSTER_CA_CERT", spec.certs.ca);
+        try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
+        nodes[i] = .{
+            .child = try spawnServe(io, &.{
+                BINARY_PATH,      "serve",               "--listen",    listen,
+                "--cluster-port", spec.cluster_port_str, "--peers",     spec.peers,
+                "--data-dir",     data_dir,              "--cert",      spec.certs.leaf,
+                "--key",          spec.certs.key,        "--log-level", "info",
+            }, env),
+            .data_dir = data_dir,
+        };
+        spawned.* += 1;
+    }
+
+    const deadline = nowMillis() + STARTUP_DEADLINE_MS;
+    while (nowMillis() < deadline) : (sleepMs(250)) {
+        var followers: usize = 0;
+        var leaders: usize = 0;
+        for (nodes, 0..) |*n, i| {
+            n.drain(gpa, io);
+            if (lastRole(n.capture.buf.items, i + 1)) |r| {
+                if (std.mem.eql(u8, r, "leader")) leaders += 1;
+                if (std.mem.eql(u8, r, "follower")) followers += 1;
+            }
+        }
+        if (leaders == 1 and followers >= 1) return leaderIndex(nodes) orelse continue;
+    }
+    for (nodes, 0..) |*n, i| std.debug.print("\n--- node {d} log tail ---\n{s}\n", .{ i + 1, n.tail() });
+    return error.NoLeaderElected;
+}
+
+/// Poll every node until `read_q` returns `want` on each.
+fn expectOnEveryNode(spec: ClusterSpec, gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, nodes: *[3]Node, read_q: []const u8, want: []const u8) !void {
+    for (0..3) |i| {
+        var seen = false;
+        var poll: usize = 0;
+        while (poll < 20 and !seen) : (poll += 1) {
+            const out = try runQuery(gpa, io, aa, spec.certs.ca, NODE_IPS[i], spec.client_port, read_q);
+            defer gpa.free(out);
+            seen = std.mem.indexOf(u8, out, want) != null;
+            if (!seen) sleepMs(500);
+        }
+        if (!seen) {
+            std.debug.print("node {d} never answered '{s}' with '{s}'\n", .{ i + 1, read_q, want });
+            for (nodes, 0..) |*n, j| {
+                n.drain(gpa, io);
+                std.debug.print("\n--- node {d} log tail ---\n{s}\n", .{ j + 1, n.tail() });
+            }
+            return error.WriteNotReplicated;
+        }
+    }
+}
+
 test "cluster: with TDE on, no replicated plaintext appears anywhere under any node's data directory" {
     if (builtin.os.tag != .linux or !binaryPresent()) return error.SkipZigTest;
     if (posixGetenv("GEODE_SKIP_SUBPROC_CLUSTER") != null) return error.SkipZigTest;
@@ -478,13 +563,18 @@ test "cluster: with TDE on, no replicated plaintext appears anywhere under any n
 
     const certs = try makeCerts(aa, io);
     defer std.Io.Dir.cwd().deleteTree(io, certs.dir) catch {};
-    const needles = try Needles.make(aa);
     const client_port = try test_ports.freeUdpPort();
     const cluster_port = try test_ports.freeUdpPortExcept(&.{client_port});
-    const peers = try std.fmt.allocPrint(aa, "{s}:{d},{s}:{d},{s}:{d}", .{ NODE_IPS[0], cluster_port, NODE_IPS[1], cluster_port, NODE_IPS[2], cluster_port });
-    const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_port});
-    const hmac = try randomHex(aa, 32);
-    const token = try randomHex(aa, 16);
+    const spec = ClusterSpec{
+        .certs = certs,
+        .needles = try Needles.make(aa),
+        .client_port = client_port,
+        .peers = try std.fmt.allocPrint(aa, "{s}:{d},{s}:{d},{s}:{d}", .{ NODE_IPS[0], cluster_port, NODE_IPS[1], cluster_port, NODE_IPS[2], cluster_port }),
+        .cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_port}),
+        .hmac = try randomHex(aa, 32),
+        .token = try randomHex(aa, 16),
+    };
+    const needles = spec.needles;
 
     var nodes: [3]Node = undefined;
     var spawned: usize = 0;
@@ -492,87 +582,43 @@ test "cluster: with TDE on, no replicated plaintext appears anywhere under any n
         stopNodes(nodes[0..spawned], gpa, io);
         for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
     }
-    for (0..3) |i| {
-        const ip = NODE_IPS[i];
-        const data_dir = try std.fmt.allocPrint(aa, "{s}/data{d}", .{ certs.dir, i + 1 });
-        try std.Io.Dir.cwd().createDirPath(io, data_dir);
-        const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
-        const env = try aa.create(std.process.Environ.Map);
-        env.* = std.process.Environ.Map.init(aa);
-        try env.put("GEODE_TDE_KEY", needles.tde_key);
-        try env.put("GEODE_CLUSTER_TOKEN", token);
-        try env.put("GEODE_AUTH_HMAC_KEY", hmac);
-        try env.put("GEODE_NODE_ID", try std.fmt.allocPrint(aa, "{d}", .{i + 1}));
-        try env.put("GEODE_PEERS", peers);
-        try env.put("GEODE_CLUSTER_PORT", cluster_port_str);
-        try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
-        try env.put("GEODE_CLUSTER_CA_CERT", certs.ca);
-        try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
-        nodes[i] = .{
-            .child = try spawnServe(io, &.{
-                BINARY_PATH,      "serve",          "--listen",    listen,
-                "--cluster-port", cluster_port_str, "--peers",     peers,
-                "--data-dir",     data_dir,         "--cert",      certs.leaf,
-                "--key",          certs.key,        "--log-level", "info",
-            }, env),
-            .data_dir = data_dir,
-        };
-        spawned += 1;
-    }
-
-    // A leader and a quorum.
-    const deadline = nowMillis() + STARTUP_DEADLINE_MS;
-    var leader: ?usize = null;
-    while (nowMillis() < deadline) : (sleepMs(250)) {
-        var followers: usize = 0;
-        var leaders: usize = 0;
-        for (&nodes, 0..) |*n, i| {
-            n.drain(gpa, io);
-            if (lastRole(n.capture.buf.items, i + 1)) |r| {
-                if (std.mem.eql(u8, r, "leader")) leaders += 1;
-                if (std.mem.eql(u8, r, "follower")) followers += 1;
-            }
-        }
-        if (leaders == 1 and followers >= 1) {
-            leader = leaderIndex(&nodes);
-            break;
-        }
-    }
-    const li = leader orelse {
-        for (&nodes, 0..) |*n, i| std.debug.print("\n--- node {d} log tail ---\n{s}\n", .{ i + 1, n.tail() });
-        return error.NoLeaderElected;
-    };
+    const li = try startCluster(spec, gpa, aa, io, &nodes, &spawned);
 
     const create_q = try std.fmt.allocPrint(aa, "CREATE (:{s} {{{s}: '{s}', n6571: {d}}})", .{ needles.label, needles.key, needles.value, needles.number });
-    const create_out = try runQuery(gpa, io, aa, certs.ca, NODE_IPS[li], client_port, create_q);
-    defer gpa.free(create_out);
-
-    // Every node applied it: read it back on each one.
+    gpa.free(try runQuery(gpa, io, aa, certs.ca, NODE_IPS[li], client_port, create_q));
     const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN n.{s} AS s", .{ needles.label, needles.key });
-    for (0..3) |i| {
-        var seen = false;
-        var poll: usize = 0;
-        while (poll < 20 and !seen) : (poll += 1) {
-            const out = try runQuery(gpa, io, aa, certs.ca, NODE_IPS[i], client_port, read_q);
-            defer gpa.free(out);
-            seen = std.mem.indexOf(u8, out, needles.value) != null;
-            if (!seen) sleepMs(500);
-        }
-        if (!seen) {
-            std.debug.print("node {d} never applied the write (create answered: {s})\n", .{ i + 1, create_out[0..@min(create_out.len, 400)] });
-            for (&nodes, 0..) |*n, j| {
-                n.drain(gpa, io);
-                std.debug.print("\n--- node {d} log tail ---\n{s}\n", .{ j + 1, n.tail() });
-            }
-            return error.WriteNotReplicated;
-        }
-    }
+    try expectOnEveryNode(spec, gpa, aa, io, &nodes, read_q, needles.value);
 
     var findings: std.ArrayList(Finding) = .empty;
     var scanned: usize = 0;
     for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "running", &findings, &scanned);
     stopNodes(&nodes, gpa, io);
     for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "stopped", &findings, &scanned);
+
+    // Restart every node on its encrypted Raft directory: the cluster elects
+    // a leader from the persisted (sealed) logs, keeps the data and
+    // replicates a second write, which the leader appends to and reads from
+    // the sealed log.
+    for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
+    spawned = 0;
+    const li2 = try startCluster(spec, gpa, aa, io, &nodes, &spawned);
+    try expectOnEveryNode(spec, gpa, aa, io, &nodes, read_q, needles.value);
+    const second = try std.fmt.allocPrint(aa, "{s}-after-restart", .{needles.value});
+    const create2_q = try std.fmt.allocPrint(aa, "CREATE (:{s} {{{s}: '{s}'}})", .{ needles.label, needles.key, second });
+    gpa.free(try runQuery(gpa, io, aa, certs.ca, NODE_IPS[li2], client_port, create2_q));
+    try expectOnEveryNode(spec, gpa, aa, io, &nodes, read_q, second);
+    for (&nodes, 0..) |*n, i| {
+        n.drain(gpa, io);
+        for ([_][]const u8{ "RaftStorageAuthenticationFailed", "RaftStorageCorrupt", "RaftStorageTdeKeyMismatch" }) |bad| {
+            if (std.mem.indexOf(u8, n.capture.buf.items, bad) != null) {
+                std.debug.print("node {d} logged {s}:\n{s}\n", .{ i + 1, bad, n.tail() });
+                return error.RaftStorageError;
+            }
+        }
+    }
+    stopNodes(&nodes, gpa, io);
+    for (&nodes) |*n| try scanTree(gpa, aa, io, n.data_dir, needles, "restart", &findings, &scanned);
+
     report("3-node cluster, TDE on", findings.items, scanned);
     try std.testing.expectEqual(@as(usize, 0), countOtherHits(findings.items));
 }

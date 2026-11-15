@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:01:48.62681769Z",
+  "generated_at": "2026-11-15T12:33:37.794713188Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77909,6 +77909,53 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6571-TDE-RAFT-AT-REST",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "RaftStorage",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_tde_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "RaftStorageSealOpenRefuse",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "NoPlaintextUnderDataDir",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6571_tde_at_rest.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_tde_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -82999,7 +83046,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 534,
-      "TESTED": 4113
+      "TESTED": 4116
     },
     "by_aspect": {
       "2PC": 3,
@@ -85051,6 +85098,7 @@
       "NoPerTableCacheOfRowVerdict": 1,
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,
+      "NoPlaintextUnderDataDir": 1,
       "NoPrincipalUnauthenticated": 1,
       "NoReboxing": 1,
       "NoReplayAfterSend": 1,
@@ -85676,6 +85724,8 @@
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
       "RaftSenderReconnectsInProcess": 1,
+      "RaftStorage": 1,
+      "RaftStorageSealOpenRefuse": 1,
       "RandAlias": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
