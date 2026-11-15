@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T19:30:24.929185275Z",
+  "generated_at": "2026-11-15T19:32:36.512056196Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78731,6 +78731,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6621-HYDRATE-CATCH-NULL",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6621_hydrate_catch_null.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6621_hydrate_catch_null.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83821,7 +83840,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4164
+      "TESTED": 4165
     },
     "by_aspect": {
       "2PC": 3,
@@ -86597,7 +86616,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 382,
+      "Regression": 383,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

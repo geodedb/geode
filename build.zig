@@ -10892,6 +10892,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6612_af_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6612_af_step = b.step("test-sonny6612-auth-field-reads", "Run SONNY-6612 item 1 regression (a durable store, a real AuthGraphManager, the k-th body rebuild on failing with an engine read error for every k: verifyChain succeeds or fails with the read error, never a tamper verdict)");
     sonny6612_af_step.dependOn(&run_sonny6612_af_tests.step);
+    // SONNY-6621 (1): a write whose node body cannot be read fails.
+    const sonny6621_hc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6621_hydrate_catch_null.zig"), .target = target, .optimize = optimize });
+    sonny6621_hc_test_mod.link_libc = true;
+    sonny6621_hc_test_mod.addImport("geode", root_mod);
+    sonny6621_hc_test_mod.addImport("schema", schema_mod);
+    sonny6621_hc_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6621_hc_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6621_hc_test_mod.addImport("logging", logging_mod);
+    sonny6621_hc_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6621_hc_tests = b.addTest(.{ .root_module = sonny6621_hc_test_mod });
+    const run_sonny6621_hc_tests = b.addRunArtifact(sonny6621_hc_tests);
+    shardDep(test_step, &run_sonny6621_hc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6621_hc_step = b.step("test-sonny6621-hydrate-catch-null", "Run SONNY-6621 item 1 regression (a durable store, gRPC in process, the k-th body rebuild on failing with an engine read error: MERGE of an existing node, MATCH ... CREATE and DETACH DELETE fail or leave exactly the healthy state)");
+    sonny6621_hc_step.dependOn(&run_sonny6621_hc_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.
