@@ -4,6 +4,48 @@
 
 ### Security
 
+- **Cluster tokens are compared in full and must be at least 16 bytes;
+  MFA recovery codes are held as digests; auth checks that could not run
+  are errors, not verdicts; stored password hashes are parsed strictly
+  (SONNY-6600).** The cluster token comparison copied both tokens into
+  256-byte zero-padded buffers, so a token longer than 256 bytes was
+  accepted from a peer that knew only its first 256 bytes (and the token
+  truncated to 256 bytes was accepted); both are now hashed with SHA-256
+  and the digests compared in constant time. **BREAKING:** `geode serve`
+  refuses to start (exit 1, naming the variable and its length) when
+  `GEODE_CLUSTER_TOKEN` or `GEODE_CLUSTER_TOKEN_PREVIOUS` is set and
+  shorter than 16 bytes, empty included (`GEODE_CLUSTER_TOKEN=t` turned
+  cluster mode on); generate one with `openssl rand -hex 32`. MFA recovery
+  codes were compared with `std.mem.eql` (a timing side channel) and held
+  in plaintext, by `SecurityManager` and by the `geode.auth.mfa_setup`
+  store; they are now SHA-256 digests compared in constant time, plaintext
+  ones converted on their first check (`SecurityManager.setRecoveryCodes`
+  stores new ones), still redeemed once under concurrent logins. The MFA
+  store kept the allocator of the first `mfa_*` request (a request-scoped
+  allocator left it in freed memory) and handed out its secret after
+  releasing its lock; it now allocates from the process allocator, copies
+  the secret under its lock and zeroes the copy after use, and frees the
+  MFA attempt record's key (it leaked). The LSP `initialize` token check
+  answered every error of the auth provider, out of memory included,
+  "invalid auth token" (-32002); a check that could not run is now
+  -32603 "authentication temporarily unavailable" and logged. A Raft frame
+  whose nonce could not be recorded was dropped as a replay (and the
+  tracker's ring and set disagreed after it); it is still dropped, logged
+  at ERROR as that and counted (`nonce_tracker.record_errors_total`), and
+  the tracker is unchanged. `geode.auth.user_change_password` (and any
+  procedure) answers `AuthUnavailable` with GQLSTATUS 53000 "Authentication
+  temporarily unavailable" and `AuthCredentialInvalid` with 58000 and the
+  HELLO path's message (both were 58000 with the error's name).
+  **BREAKING:** the Argon2id PHC parser accepts only
+  `$argon2id$v=19$m=..,t=..,p=..$<32 hex>$<64 hex>`: a parameter without
+  `=`, an unknown, missing (it defaulted), duplicate or reordered
+  parameter, a sign or leading zero, or anything after the hash is now an
+  unusable stored credential (`InvalidHashFormat`), and that account
+  cannot log in until its password is reset; every hash Geode writes has
+  this form. Regressions: `zig build test-sonny6600-cluster-token`
+  (validator, a real two-node in-process cluster, a spawned server),
+  `test-sonny6600-mfa`, `test-sonny6600-auth-outcomes`. See
+  src/distributed/README.md and docs/USER_AUTH.md.
 - **CDC procedures answer the engine's state or refuse, Admin only, audited
   (SONNY-6570).** Change capture is not implemented (SONNY-6572): no write
   path feeds the CDC engine, so no change is ever captured. The `CALL cdc.*`

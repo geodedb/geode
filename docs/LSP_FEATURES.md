@@ -89,7 +89,10 @@ non-`initialize` request is honored. The handshake is:
 3. `AuthState.verify(allocator, verifier)` validates the token via the
    `Verifier` vtable plugged in at `Server.initWithAuth(...)`. With `null`
    verifier (the current default in `geode serve`'s embedded listener),
-   any non-empty token returns `InvalidToken` — fail-closed.
+   any non-empty token returns `InvalidToken` — fail-closed. A token check
+   that could not run (e.g. out of memory in the provider) is not an invalid
+   token: `initialize` is answered JSON-RPC `-32603` "authentication
+   temporarily unavailable ..." and the session stays unbound (SONNY-6600).
 4. On success the Server caches a per-session `AuthState`, builds a
    `SchemaProvider` and `ExecutionContext`, and opens the request gate.
 5. Until the gate opens, every non-init request gets JSON-RPC error `-32002`

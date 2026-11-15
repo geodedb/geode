@@ -145,7 +145,7 @@ The server reads none of `GEODE_WAL_COMPACT_INTERVAL`,
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_CLUSTER_TOKEN` | - | Turns cluster mode on (and authenticates cluster clients); without it the server is standalone |
+| `GEODE_CLUSTER_TOKEN` | - | Turns cluster mode on (and authenticates cluster clients); without it the server is standalone. At least 16 bytes (e.g. `openssl rand -hex 32`), or the server refuses to start |
 | `GEODE_PEERS` | - | Comma-separated `host:port` of every node, the same list on each |
 | `GEODE_NODE_ID` | - | This node's number: its 1-based position in `GEODE_PEERS` (derived from `$HOSTNAME` when that matches an entry) |
 | `GEODE_CLUSTER_NAME` | - | Cluster name |

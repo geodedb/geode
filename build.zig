@@ -18589,6 +18589,38 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6600: the cluster token is compared in full and checked at
+    // startup; MFA recovery codes are held as digests and compared in
+    // constant time; the MFA secret is copied under the store's lock; an
+    // auth check that could not run (LSP token check, Raft nonce record,
+    // procedure GQLSTATUS) is an error, not a verdict; the PHC parser is
+    // strict. The cluster-token regression spawns a server.
+    const sonny6600_lsp_auth_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/auth.zig"), .target = target, .optimize = optimize });
+    sonny6600_lsp_auth_mod.addImport("geode", root_mod);
+    sonny6600_lsp_auth_mod.link_libc = true;
+    const sonny6600_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6600_cluster_token.zig", .step = "test-sonny6600-cluster-token", .desc = "Run the SONNY-6600 regression (cluster tokens are compared in full: two tokens equal in their first 256 bytes are refused, by the validator and by a real two-node in-process cluster; a GEODE_CLUSTER_TOKEN or GEODE_CLUSTER_TOKEN_PREVIOUS shorter than 16 bytes is refused at startup; spawns a server)", .spawns = true },
+        .{ .file = "tests/test_sonny6600_mfa.zig", .step = "test-sonny6600-mfa", .desc = "Run the SONNY-6600 regression (MFA recovery codes are held as SHA-256 digests, plaintext ones converted when checked, compared in constant time and redeemed once under concurrent logins; geode.auth.mfa_setup keeps no plaintext recovery code; an MFA check racing re-enrollment reads a whole secret)", .spawns = false },
+        .{ .file = "tests/test_sonny6600_auth_outcomes.zig", .step = "test-sonny6600-auth-outcomes", .desc = "Run the SONNY-6600 regression (an allocation failure in the LSP API-key check is an error, not an invalid token; a Raft nonce that cannot be recorded is an error, not a replay; the PHC parser refuses anything but $argon2id$v=19$m=..,t=..,p=..$salt$hash; user_change_password answers AuthUnavailable 53000 and AuthCredentialInvalid 58000 with the HELLO messages)", .spawns = false },
+    };
+    for (sonny6600_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("lsp_auth", sonny6600_lsp_auth_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.

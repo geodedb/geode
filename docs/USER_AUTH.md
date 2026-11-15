@@ -379,6 +379,16 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
   1 <= p <= 16; outside them, or unparseable, verification fails without
   running Argon2, so a corrupt stored hash cannot burn CPU or memory on
   every login (SONNY-6378)
+- **Stored hash format** (SONNY-6600): exactly
+  `$argon2id$v=19$m=<m>,t=<t>,p=<p>$<salt: 32 hex digits>$<hash: 64 hex digits>`,
+  the parameters in that order, each a decimal number with no sign and no
+  leading zero, and nothing after the hash. Anything else (a parameter
+  without `=`, an unknown, missing, duplicate or reordered parameter, a
+  trailing `$...`) is an unusable stored credential (`InvalidHashFormat`,
+  "the stored credential of this account cannot be used"). **Breaking:**
+  such hashes were parsed leniently (a missing parameter took the default,
+  the rest was ignored), so a record whose hash has extra text now cannot
+  log in until its password is reset. Every hash Geode writes has this form.
 - **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`,
   `geode.auth.user_import(..., 'blake2b')`) is accepted for migration only:
   64 hex digits of BLAKE2b-256 over the password followed by the static salt
@@ -973,5 +983,32 @@ a store read error) is reported as unverifiable, not as tampering: the server
 refuses to start with `AuthChainUnverifiable` (the reseal override does not
 apply), the offline CLI refuses with "could not be verified", and the periodic
 check logs it without the tampering alarm.
+
+SONNY-6600 carries the rule to the remaining checks:
+
+- A GQL procedure whose credential check could not run answers what HELLO
+  answers: `geode.auth.user_change_password` with an old-password check
+  the server could not run is GQLSTATUS `53000` "Authentication temporarily
+  unavailable" (retryable), and with an unusable stored hash `58000`
+  "Authentication unavailable: the stored credential of this account cannot
+  be used (server-side error; contact the administrator)". Both were the
+  generic `58000` with the error's name. A wrong old password stays `28000`.
+- The LSP `initialize` token check (API key, then session token) answers a
+  check that could not run (e.g. out of memory) with JSON-RPC `-32603`
+  "authentication temporarily unavailable ...", logged as a warning, instead
+  of `-32002` "invalid auth token". The session is not bound either way.
+- A Raft frame whose nonce the replay check cannot record (out of memory)
+  is still dropped, but logged at ERROR as that, not as a replay, and
+  counted in `nonce_tracker.record_errors_total`.
+- MFA recovery codes are held as SHA-256 digests, never in plaintext:
+  the codes `geode.auth.mfa_setup` issues (it kept them in plaintext) and
+  the `SecurityManager` codes (`setRecoveryCodes`; codes stored in
+  plaintext before are converted the first time they are checked). A
+  presented code is compared with every stored digest in constant time
+  (it was a byte-by-byte `std.mem.eql`), and is redeemed at most once,
+  concurrent logins included. The MFA secret a check uses is copied under
+  the MFA store's lock and zeroed after use, and the store allocates from
+  the process allocator (it kept the allocator of the first `mfa_*`
+  request). Note: no procedure redeems the codes `mfa_setup` issues.
 
 CANARY: REQ=REQ-DOC-SONNY-6598-AUTH-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-15

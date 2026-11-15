@@ -5013,6 +5013,16 @@ REQ-SONNY-6598-KDF-FAULT-HOOK,AuthOutcomeClassification,TestOnlyKdfFaultHook,TES
 REQ-SONNY-6598-MFA-VERIFY-ERRORS,AuthOutcomeClassification,MfaVerifyErrors,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6598_verify_outcomes.zig,,security,2026-11-15
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,Argon2idVerifyErrors,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6598_verify_outcomes.zig,,security,2026-11-15
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors,TESTED,src/security/user_management.zig,tests/test_sonny6598_verify_outcomes.zig,,security,2026-11-15
+REQ-SONNY-6600-AUTH-ERROR-GQLSTATUS,AuthOutcomeClassification,ProcedureGqlstatus,TESTED,src/server/proto_util.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
+REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG,ClusterAuth,StartupTokenCheck,TESTED,src/distributed/cluster_auth.zig,tests/test_sonny6600_cluster_token.zig,,security,2026-11-15
+REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG,ClusterAuth,StartupRefusal,TESTED,src/server/main.zig,tests/test_sonny6600_cluster_token.zig,,security,2026-11-15
+REQ-SONNY-6600-CLUSTER-TOKEN-FULL-COMPARE,ClusterAuth,FullLengthConstantTimeCompare,TESTED,src/distributed/cluster_auth.zig,tests/test_sonny6600_cluster_token.zig,,security,2026-11-15
+REQ-SONNY-6600-LSP-AUTH-ERROR-OUTCOME,LspPermissionAwareCompletion,VerifierErrorOutcome,TESTED,src/cli/lsp/auth.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
+REQ-SONNY-6600-MFA-SECRET-COPY,MFA authentication,SecretCopiedUnderLock,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6600_mfa.zig,,security,2026-11-15
+REQ-SONNY-6600-MFA-STORE-LIFETIME,MFA authentication,StoreOwnsItsMemory,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6600_mfa.zig,,security,2026-11-15
+REQ-SONNY-6600-NONCE-RECORD-ERROR,Nonce Replay Protection,RecordFailureIsAnError,TESTED,src/distributed/nonce_tracker.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
+REQ-SONNY-6600-RECOVERY-CODE-DIGESTS,MFA recovery code,DigestAtRest,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6600_mfa.zig,,security,2026-11-15
+REQ-SONNY-6600-STRICT-PHC,Canonical Argon2id Hashing,StrictPhcParse,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
