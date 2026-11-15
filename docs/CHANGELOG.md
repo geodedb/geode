@@ -256,6 +256,29 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **graph-storage v0.4.16 (SONNY-6529, SONNY-6527): an aborted transaction
+  is undone.** `abortTxn` used to drop only the transaction's WAL records:
+  the pages it had written stayed modified, its slots and counts stayed
+  taken, readers saw its writes and the next checkpoint made them durable.
+  It now undoes every write it recorded, logs the undo in the aborting
+  transaction and ends it with COMMIT (crash-safe). A transaction it cannot
+  undo exactly (a page the caller imaged itself with `logPagePublic` or
+  `zeroPageLogged`, a property change on a legacy chain or one that frees an
+  overflow value, a `putNodeTxn` moving a chain pointer of an existing node,
+  more than 1,048,576 writes) fails with `AbortNotUndone`, after which every
+  write, commit and checkpoint of that shard fails until the graph is
+  reopened (geode keeps the default `abort_undo = .fail_closed`). Also: the
+  first-access tail reconcile re-derives the owners of `.adj_out` pages, so
+  a relationship-property SET no longer needs the source node-page image
+  (`setEdgePropertyTxn` joins the caller's transaction); the persistence
+  dirty flag is atomic (a TSan-reported race between label naming and shard
+  writers); naming a label past the id space fails with
+  `LabelIdSpaceExhausted` instead of wrapping; shard label-dictionary
+  findings reach the caller as structured diagnostics
+  (`GraphConfig.label_dict_report`); `Metrics.txn_aborts_undone` /
+  `txn_aborts_not_undone`. No store format change; same transitive
+  dependencies as 0.4.15. The geode-side changes 0.4.16 requires follow in
+  the next entries.
 - **graph-storage v0.4.15 (SONNY-6524): a new label name costs about a
   sixth of what it did, a failed label write is undone, and shard label
   dictionaries are compared at open.** `ShardedGraphEngine.getOrAssignLabel`
