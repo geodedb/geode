@@ -154,7 +154,10 @@ fn quicConnect(a: std.mem.Allocator, srv: *const Server, who: Principal) !util.Q
     if (who.credentials()) |cred| {
         var h = try c.hello(a, cred[0], cred[1]);
         defer h.deinit(a);
-        if (!h.success) return error.AuthenticationFailed;
+        if (!h.success) {
+            std.debug.print("HELLO as {s} refused: {s}\n", .{ cred[0], h.error_message });
+            return error.AuthenticationFailed;
+        }
     }
     return c;
 }
@@ -215,7 +218,10 @@ const GrpcSession = struct {
         if (who.credentials()) |cred| {
             var h = try client.hello(a, cred[0], cred[1]);
             defer h.deinit(a);
-            if (!h.success) return error.AuthenticationFailed;
+            if (!h.success) {
+                std.debug.print("HELLO as {s} refused: {s}\n", .{ cred[0], h.error_message });
+                return error.AuthenticationFailed;
+            }
         }
         return .{ .client = client };
     }

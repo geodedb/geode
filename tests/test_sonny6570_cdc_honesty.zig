@@ -190,7 +190,10 @@ fn quicConnect(a: std.mem.Allocator, srv: *const Server, who: Principal) !util.Q
     if (who.credentials()) |cred| {
         var h = try c.hello(a, cred[0], cred[1]);
         defer h.deinit(a);
-        if (!h.success) return error.AuthenticationFailed;
+        if (!h.success) {
+            std.debug.print("HELLO as {s} refused: {s}\n", .{ cred[0], h.error_message });
+            return error.AuthenticationFailed;
+        }
     }
     return c;
 }
@@ -270,7 +273,10 @@ const GrpcSession = struct {
         if (who.credentials()) |cred| {
             var h = try client.hello(a, cred[0], cred[1]);
             defer h.deinit(a);
-            if (!h.success) return error.AuthenticationFailed;
+            if (!h.success) {
+                std.debug.print("HELLO as {s} refused: {s}\n", .{ cred[0], h.error_message });
+                return error.AuthenticationFailed;
+            }
         }
         return .{ .client = client };
     }
@@ -922,4 +928,45 @@ test "SONNY-6570: cdc_enhanced.startCDC frees the engine when start() fails" {
     try testing.expect(engine.isRunning());
     engine.deinit();
     testing.allocator.destroy(engine);
+}
+
+// ---------------------------------------------------------------------------
+// The running engine's worker.
+// ---------------------------------------------------------------------------
+
+fn processCpuNs() u64 {
+    const ru = std.posix.getrusage(0); // RUSAGE_SELF
+    const us = (ru.utime.sec * 1_000_000 + ru.utime.usec) + (ru.stime.sec * 1_000_000 + ru.stime.usec);
+    return @as(u64, @intCast(us)) * 1000;
+}
+
+fn monoNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+test "SONNY-6570: a running CDC engine with nothing to do sleeps between flushes instead of spinning a core, and stops promptly" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const engine = try cdc.startCDC(testing.allocator, .{ .enabled = true, .batch_size = 100, .flush_interval_ms = 1000 });
+    defer testing.allocator.destroy(engine);
+    defer engine.deinit();
+
+    // Idle for 2 s of wall time: the worker's flush interval is 1 s. Its
+    // processing loop busy-waited (the Zig 0.15 `std.time.sleep` it looked
+    // for is gone), so the process burned a full core the whole time.
+    const cpu0 = processCpuNs();
+    const wall0 = monoNs();
+    fsIo().sleep(.fromMilliseconds(2000), .awake) catch {};
+    const cpu = processCpuNs() - cpu0;
+    const wall = monoNs() - wall0;
+    std.debug.print("SONNY-6570: idle CDC engine used {d} ms of CPU in {d} ms\n", .{ cpu / std.time.ns_per_ms, wall / std.time.ns_per_ms });
+    try testing.expect(cpu * 4 < wall); // well under a quarter of one core
+
+    // CALL cdc.stop() / cdc.disable() join the worker: it notices promptly.
+    const stop0 = monoNs();
+    engine.stop();
+    const stop_ms = (monoNs() - stop0) / std.time.ns_per_ms;
+    std.debug.print("SONNY-6570: CDC engine stopped in {d} ms\n", .{stop_ms});
+    try testing.expect(stop_ms < 500);
 }
