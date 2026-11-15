@@ -11,6 +11,7 @@ const eval_extended = @import("../eval_extended.zig");
 const eval = @import("../eval.zig");
 const property_codec = @import("../property_value_codec.zig");
 const unique_constraints = @import("../execution/unique_constraints.zig");
+const storage_dispatch = @import("../execution/storage_dispatch.zig");
 const fle_integration = @import("../fle_integration.zig");
 
 pub const ParamBindings = struct {
@@ -606,6 +607,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GrantWildcardNotSupported => .{ .code = "0A000", .message = "A per-graph grant needs one graph: there is no grant on every graph ('*'). Give the user a built-in role, or create an allow policy for every graph (CREATE POLICY ... ON GRAPH *); nothing was changed" },
         error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
+        // SONNY-6570: a cdc.* procedure that cannot answer truthfully while
+        // change capture is not implemented (the message names it and why),
+        // and start / stop / reset_guardrails with no CDC engine.
+        error.CdcNotImplemented => .{ .code = "0A000", .message = storage_dispatch.cdcNotImplementedMessage() },
+        error.CdcNotEnabled => .{ .code = "55000", .message = "CDC is not enabled: there is no CDC engine to start, stop or reset; CALL cdc.enable() starts it" },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },
         // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported;

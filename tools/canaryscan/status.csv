@@ -401,32 +401,32 @@ REQ-BUILTIN-STRING-001,BuiltinFunctions,String,IMPL,tests/test_gap_0193_batch2_m
 REQ-C4-001,MemoryLeakFix,Environment,TESTED,src/value_types.zig,,,core,2025-10-17
 REQ-CAPABILITY-DISCOVERY-001,SHOW CAPABILITIES,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_show_capabilities.zig,,execution,2026-08-28
 REQ-CAPABILITY-DISCOVERY-001,SHOW CAPABILITIES,DiscoveryRows,TESTED,tests/test_show_capabilities.zig,,,execution,2026-08-28
-REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-02-04
-REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-02-04
-REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
+REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-005,CDCProcedures,GetEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-006,CDCProcedures,Pause,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-007,CDCProcedures,Resume,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-011,CDCProcedures,GetWatermark,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
 REQ-CENTRALITY-001,Centrality,PageRank,IMPL,tests/test_gap_0193_final_batch.zig,,,engine,2026-11-14
 REQ-CENTRALITY-002,Centrality,Betweenness,IMPL,tests/test_gap_0193_final_batch.zig,,,engine,2026-11-14
 REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,.gitlab-ci.yml,scripts/ci/test_prune_zig_cache.py,,ci,2026-10-24
@@ -4976,6 +4976,11 @@ REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantLifecycle,DropFailsLoudlyRetryable,TES
 REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantRegistry,PersistOrRestore,TESTED,src/security/tenant_registry.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-15
 REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantLifecycle,Regression,TESTED,tests/test_sonny6567_tenant_drop_failures.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-14
 REQ-SONNY-6569-HOST-NO-USERINFO,Shared host:port parser,NoCredentialInHost,TESTED,tests/test_sonny6569_host_credentials.zig,tests/test_sonny6569_host_credentials.zig,,transport,2026-11-15
+REQ-SONNY-6570-CDC-AUDIT,CDCProcedures,AuditedChanges,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6570-CDC-REFUSED-PROCEDURES,CDCProcedures,RefuseNotImplemented,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6570-CDC-START-NO-LEAK,CDC Engine,StartFailureFreesEngine,TESTED,src/streaming/cdc_enhanced.zig,tests/test_sonny6570_cdc_honesty.zig,,streaming,2026-11-15
+REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES,CDCProcedures,EngineStateOnly,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6570-CDC-WORKER-SLEEPS,CDC Engine,IdleWorkerSleeps,TESTED,src/streaming/cdc_enhanced.zig,tests/test_sonny6570_cdc_honesty.zig,,streaming,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15
@@ -5056,7 +5061,7 @@ REQ-STREAMING-005,StreamingDataGenerator,EventSimulation,IMPL,tests/test_gap_019
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,TESTED,src/streaming/sinks/kafka_sink.zig,tests/test_gap0855_kafka_sink.zig,,streaming,2026-06-10
 REQ-STREAMING-KAFKA-002,Kafka Sink Real Implementation,Test,TESTED,src/streaming/sinks/kafka_sink.zig,,,streaming,2026-06-10
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,src/security/key_rotation.zig,,,security,2026-11-12
-REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,TESTED,src/streaming/sinks/webhook_sink.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,streaming,2025-12-30
+REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,TESTED,src/streaming/sinks/webhook_sink.zig,tests/test_gap0855_webhook_sink.zig,,streaming,2026-11-15
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPTransport,TESTED,src/streaming/sinks/webhook_sink.zig,tests/test_gap0855_webhook_sink.zig,,streaming,2026-06-10
 REQ-STRING-FUNC-001,StringFunctions,ToUpper,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15
 REQ-STRING-FUNC-002,StringFunctions,ToLower,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15

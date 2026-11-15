@@ -216,6 +216,10 @@ pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !Anom
 
 ## CDC Integration
 
+> A server captures no changes (SONNY-6570; capture is SONNY-6572), so no
+> CDC event reaches this integration from a write. `CDCAnalyticsIntegration`
+> converts events handed to it directly.
+
 ### Change Data Capture Integration
 
 #### CDC Event Processing

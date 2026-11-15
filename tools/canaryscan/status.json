@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T14:26:33.924317678Z",
+  "generated_at": "2026-11-15T15:01:18.159533809Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -6735,11 +6735,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6754,11 +6754,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6773,11 +6773,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6792,11 +6792,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6806,16 +6806,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6825,16 +6823,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "Pause",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6844,16 +6840,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "Resume",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6863,16 +6857,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "SetGuardrail",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6887,11 +6879,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6906,11 +6898,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6920,16 +6912,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetWatermark",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6939,16 +6929,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetPendingEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6958,16 +6946,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "ConfigureAdaptiveFlush",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6977,16 +6963,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetFlushMetrics",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6996,16 +6980,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetMalformedRecords",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7015,16 +6997,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetCorruptionAnalysis",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7034,16 +7014,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetOrderedEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7053,16 +7031,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "CheckDuplicates",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7072,16 +7048,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetChangeStatus",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7091,16 +7065,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "ConfigureChangeStream",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7110,16 +7082,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "SetRetentionPolicy",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7129,16 +7099,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "CleanupExpiredEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7148,16 +7116,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetTelemetryMetrics",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7167,16 +7133,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetPerformanceAlerts",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7191,11 +7155,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7210,11 +7174,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -78575,6 +78539,101 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6570-CDC-AUDIT",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "AuditedChanges",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-REFUSED-PROCEDURES",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "RefuseNotImplemented",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-START-NO-LEAK",
+      "features": [
+        {
+          "feature": "CDC Engine",
+          "aspect": "StartFailureFreesEngine",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "EngineStateOnly",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-WORKER-SLEEPS",
+      "features": [
+        {
+          "feature": "CDC Engine",
+          "aspect": "IdleWorkerSleeps",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6571-TDE-RAFT-AT-REST",
       "features": [
         {
@@ -79988,11 +80047,11 @@
             "src/streaming/sinks/webhook_sink.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_gap0855_webhook_sink.zig"
           ],
           "benches": [],
           "owner": "streaming",
-          "updated": "2025-12-30"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Webhook Sink Implementation",
@@ -83769,7 +83828,8 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4161
+      "STUB": 18,
+      "TESTED": 4148
     },
     "by_aspect": {
       "2PC": 3,
@@ -83935,6 +83995,7 @@
       "AuditSeedEpochsAndHmacStartup": 1,
       "AuditTrail": 1,
       "AuditTransports": 1,
+      "AuditedChanges": 1,
       "AuditedGrantRevokeConfigure": 1,
       "AuthCategories": 1,
       "AuthCommands": 2,
@@ -84789,6 +84850,7 @@
       "EndpointUnification": 1,
       "Engine": 14,
       "EngineBatch2": 1,
+      "EngineStateOnly": 1,
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
       "Entry": 1,
@@ -85326,6 +85388,7 @@
       "IdentityById": 1,
       "IdentityContractDiagnostic": 1,
       "IdleReapDeadline": 1,
+      "IdleWorkerSleeps": 1,
       "IllegalOrderKeyPolicy": 1,
       "ImplDefined": 11,
       "Implementation": 12,
@@ -86540,6 +86603,7 @@
       "RefusalKeysHexEncoded": 1,
       "RefuseFabricated": 2,
       "RefuseInternal": 1,
+      "RefuseNotImplemented": 1,
       "RefuseReserved": 1,
       "RefuseWhatIsNotSupported": 1,
       "RefusedAsUnsupported": 2,
@@ -87002,6 +87066,7 @@
       "StandaloneCallReturn": 1,
       "StandardCastMatrix": 1,
       "Start": 1,
+      "StartFailureFreesEngine": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,
       "Startup": 6,

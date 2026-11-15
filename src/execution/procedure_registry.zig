@@ -52,6 +52,8 @@ const fle_admin = @import("fle_admin.zig");
 pub const CdcRefusal = storage_dispatch.CdcRefusal;
 pub const cdcDiagnosticsAnswer = storage_dispatch.cdcDiagnosticsAnswer;
 pub const cdcControlAnswer = storage_dispatch.cdcControlAnswer;
+pub const CdcActor = storage_dispatch.CdcActor;
+pub const auditCdcFrameRefusal = storage_dispatch.auditCdcFrameRefusal;
 
 // ==================== Main Dispatch Entry Point ====================
 
@@ -121,6 +123,10 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // GPS `.write` gate below, so a ReadWrite user could grant its own FLE
     // role plaintext access). Checked first, so every refusal is audited.
     if (storage_dispatch.isKeyAdministrationProcedure(proc_name)) try fle_admin.requireAdmin(allocator, proc_name, context);
+    // SONNY-6570: every cdc.* procedure is CDC administration, Admin only as
+    // the CDC_DIAGNOSTICS / CDC_CONTROL frames are (a readwrite or readonly
+    // user read cdc.status() and ran cdc.enable() / cdc.disable()).
+    if (storage_dispatch.isCdcProcedure(proc_name)) try fle_admin.requireAdminFor(allocator, proc_name, context, "CDC administration");
 
     if (context.principal) |princ| {
         const access_class = procedure_access.classifyProcedureName(proc_name);
@@ -169,7 +175,19 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- cdc.* procedures (change data capture) ----
     if (std.mem.startsWith(u8, proc_name, "cdc.")) {
-        if (try storage_dispatch.executeCdc(allocator, proc_name, call_stmt)) |result| {
+        // SONNY-6570: a change to the CDC engine is an audit event, whether
+        // it succeeds or fails.
+        const audited = storage_dispatch.isAuditedCdcChange(proc_name);
+        const actor: storage_dispatch.CdcActor = .{
+            .username = context.user orelse "",
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+        };
+        const cdc_result = storage_dispatch.executeCdc(allocator, proc_name, call_stmt) catch |err| {
+            if (audited) storage_dispatch.auditCdcChange(allocator, proc_name, actor, "", @errorName(err));
+            return err;
+        };
+        if (cdc_result) |result| {
+            if (audited) storage_dispatch.auditCdcChange(allocator, proc_name, actor, "", null);
             return result;
         }
     }

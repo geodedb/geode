@@ -194,7 +194,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **Stream Analytics**: Pattern detection in real-time
 - **Anomaly Detection**: ML-powered outlier identification
-- **CDC Integration**: Change data capture with backpressure
+- **CDC Integration**: not implemented — the CDC engine starts and reports its state, but no write is captured (SONNY-6570; capture is SONNY-6572)
 - **Performance Monitoring**: Real-time metrics collection
 
 ## 🛠️ Development Tools
