@@ -7871,9 +7871,8 @@ fn handleClientMessage(
             for (base_flags) |flag| {
                 try appendFlagIfMissing(gpa, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(gpa, &flags, server_flags.F_UNION_PHASES);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(gpa, &flags, "GB03:DoubleSolidusComment");
             }
@@ -8778,12 +8777,15 @@ fn handleClientMessage(
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(gpa);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
@@ -8842,6 +8844,7 @@ fn handleClientMessage(
                         .graph_store_dirty = profile_is_dirty,
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
                     });
 
                     const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);

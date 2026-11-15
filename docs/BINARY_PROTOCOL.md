@@ -105,26 +105,32 @@ Top-level keys, in the order sent:
     `VarLengthExpand`, `ShortestPath`, `PathModeExpand`, `PathCapture`,
     `CallProcedure`, `CallSubquery`, `Create`, `Merge`, `Unwind`, `Set`,
     `Remove`, `Delete`, `RecursiveCTE`, `QueryChain`, `LegacyExecute`,
-    `Filter`, `Aggregate`, `Project`, `Distinct`, `Limit`, `Sort`; version 1:
-    the names above, plus `NodeIndexScan` only for a catalog index the
-    executor seeked (SONNY-1335).
+    `Filter`, `Aggregate`, `Project`, `Distinct`, `Limit`, `Sort`; version 1
+    (a statement the legacy executor ran, which has no operator hooks):
+    `LegacyExecute`, the statement, preceded by `NodeIndexScan` only for a
+    catalog index the executor seeked (SONNY-1335). Until SONNY-6596 version
+    1 listed a fixed set (`NodeScan`, `Expand`, `Project`, the `Union*`
+    phases, ...) whatever ran.
   - `phase`: `SCAN`, `EXPAND`, `MATCH`, `PROJECT`, `CALL`, `WRITE`, `UNWIND`,
     `CTE`, `CHAIN`, `EXECUTE`, `FILTER`, `AGGREGATE`, `DISTINCT`, `ORDER`,
     `PAGE` or `OTHER`.
   - `id` (always 0), `op_index` (0-based position).
-  - `input_rows`, `rows`: rows consumed and produced (version 1: the
-    statement's result row count for every op).
+  - `input_rows`, `rows`: rows consumed and produced (version 1:
+    `input_rows` 0, not counted; `rows` the statement's result rows, or the
+    nodes the index seek returned).
   - `time_ns`, `cpu_time_ns`, `cumulative_time_ns`: version 2 measured
-    (`cpu_time_ns` equals `time_ns`); version 1 synthetic.
+    (`cpu_time_ns` equals `time_ns`); version 1: `LegacyExecute`'s
+    `time_ns` is the wall-clock time measured around the statement,
+    `NodeIndexScan`'s 0 (part of the statement's), `cpu_time_ns` 0 (not
+    measured).
   - `bytes_out`, `bytes_alloc`, `estimate_bytes`, `estimate_vs_actual`,
     `percent_peak`, `percent_net`, `freed_bytes`, `net_after_op`,
-    `error_bytes`, `error_abs_pct`: version 1 synthetic; version 2 all 0.
+    `error_bytes`, `error_abs_pct`: all 0 (not measured) in both versions.
     With `GEODE_PROFILE_COMPACT` set, `estimate_bytes`, `estimate_vs_actual`,
     `percent_peak` and `percent_net` are omitted when 0.
   - `index_name`, `selectivity_est`: present only on an op that seeked a
     catalog index.
-- `peak_contributors`: up to 3 `{ op, bytes_alloc }` (version 1; empty in
-  version 2).
+- `peak_contributors`: empty (no allocation is measured).
 - `totals`: `{ time_ns, peak_bytes }`; `total_time_ns` repeats
   `totals.time_ns`.
 - `spills`: `{ sort_spills, distinct_spills, union_spills }`, followed by
@@ -134,23 +140,25 @@ Top-level keys, in the order sent:
   versions; `GEODE_SPILL_THRESHOLD_BYTES` / `GEODE_QUERY_MEM_LIMIT_BYTES`
   change nothing (until SONNY-6562 version 1 reported a spill when its
   synthetic peak passed the threshold).
-- `memory`: `{ net_bytes, peak_bytes, total_alloc_bytes }` (version 1
-  synthetic; version 2 all 0).
-- `planner_estimates` (version 1, unless `GEODE_DISABLE_ESTIMATES` is set):
-  `sum_estimate_bytes`, `sum_actual_bytes`, `count_estimated_ops`,
-  `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`,
-  `median_error_abs_pct`, `stddev_error_abs_pct`, `adjusted_estimate_factor`.
+- `memory`: `{ net_bytes, peak_bytes, total_alloc_bytes }`, all 0 (not
+  measured; version 1 reported a fixed model until SONNY-6596).
+- `planner_estimates`: absent. No planner estimates byte counts (version 1
+  reported invented ones until SONNY-6596).
 - `mem_curve`: `[{ op_index, net_after_op }]`, version 1 with
-  `GEODE_PROFILE_MEMCURVE` set; absent when empty.
+  `GEODE_PROFILE_MEMCURVE` set (one point per op, `net_after_op` 0); absent
+  when empty.
 - `setop` (version 1, UNION only): `{ type: "UNION", mode, input_rows,
-  output_rows }`, plus `hash_dedup_size` and (when above 0)
-  `distinct_fill_pct` for `mode: "DISTINCT"`.
+  output_rows }`: `output_rows` the rows returned, `input_rows` 0 (the
+  parts' rows are not counted), plus `hash_dedup_size` (0) for
+  `mode: "DISTINCT"`; `distinct_fill_pct` appears only when above 0, so
+  never (both were derived from an invented input count until SONNY-6596).
 - `hashagg_spills`: always 0 (`hashagg_spill_reason` only when it is not).
 - `committed_txns`, `graph_store_nodes`, `graph_store_edges`,
   `graph_store_dirty`: server counters read when the PROFILE ran.
 - `flagger_findings`: the statement's findings (also on the outer frame).
 
-Flags remain on the outer frame (`flagger_findings`). Typical flags: `I:IllegalOrderKeyPolicy=ident-only`, `U:NullsFirstPolicy`, `U:OrderTiebreak=LexJSON`, `U:DistinctOutputUnordered`, `U:UnionPhaseTimings`.
+Flags remain on the outer frame (`flagger_findings`). Typical flags: `I:IllegalOrderKeyPolicy=ident-only`, `U:NullsFirstPolicy`, `U:OrderTiebreak=LexJSON`, `U:DistinctOutputUnordered` (`U:UnionPhaseTimings` is no longer sent: no
+UNION phase is timed, SONNY-6596).
 
 ### Notes
 

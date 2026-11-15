@@ -9,7 +9,7 @@
 - `peak_contributors[]`: Top 3 allocation deltas (bytes_alloc) with op names.
 - `total_time_ns`: Wall-clock pipeline time.
 - `spills`: `{sort_spills, distinct_spills, union_spills}`, plus `spill_reason` only when a counter is above 0. The executor never spills to disk, so every counter is 0 and `spill_reason` is absent (SONNY-6562).
-- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — deterministic synthetic model on the fallback (v1) path, honest zeros on the trace-backed (v2) path; NOT measured allocations (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations).
+- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — zeros on both paths: allocations are not measured (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations). Until SONNY-6596 the fallback (v1) path reported a fixed synthetic model.
 - `planner_estimates` (optional if estimates enabled):
   - `sum_estimate_bytes`
   - `sum_actual_bytes`

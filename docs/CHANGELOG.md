@@ -2616,6 +2616,25 @@
 
 ### Fixed
 
+- **A version-1 PROFILE reports the measured execution, nothing invented
+  (SONNY-6596).** The version-1 payload (a PROFILE the planned read runtime
+  does not serve: a data change, a UNION, a tenant-bound or RLS session)
+  was a fixed model: a `PROFILE CREATE` listed `NodeScan`, `Expand` and
+  `Project`, a UNION `UnionLeft` / `UnionTails` / `UnionDedup` /
+  `SetOpUnion`, each with `time_ns = 10 * (i + 1)`, `cpu_time_ns = 5 * (i +
+  1)`, 64 bytes allocated, planner estimates, and a UNION's `input_rows` as
+  the part count times the output rows. **BREAKING:** the legacy executor's
+  statement is now one `LegacyExecute` operator (phase `EXECUTE`, the name
+  the version-2 trace uses) with the wall-clock time measured around it on
+  QUIC and gRPC and the rows it returned; CPU time, bytes, memory, the
+  memory curve and a UNION's input rows are 0, `planner_estimates` and
+  `distinct_fill_pct` are absent, and the `U:UnionPhaseTimings` flag is no
+  longer sent (no UNION phase is timed). Regression:
+  `zig build test-sonny6596-profile-v1-measured`; the revived
+  `e2e_protocol_union_*` and `profile_allocator_sums` tests
+  (`test-sonny6542-revived`) and `test-sonny1335-profile-access-path` now
+  check the measured shape.
+
 - **A numeric literal with an exponent is an approximate number, a DOUBLE
   (SONNY-6596).** ISO/IEC 39075:2024 21.2 makes `1.5E0`, `1E3` and `2.5e-1`
   <approximate numeric literal>s, whose declared type is an approximate

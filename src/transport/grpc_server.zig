@@ -3215,9 +3215,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             for (base_flags) |flag| {
                 try appendFlagIfMissing(allocator, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(allocator, &flags, server_flags.F_UNION_PHASES);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
@@ -3721,6 +3720,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3728,6 +3729,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(allocator);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
@@ -3780,6 +3782,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         .graph_store_dirty = store_ptr.isDirty(),
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
                     });
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
