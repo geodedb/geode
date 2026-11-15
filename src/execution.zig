@@ -254,6 +254,8 @@ pub const auditCdcFrameRefusal = call_operations.auditCdcFrameRefusal;
 pub const executeMatchCreateQuery = match_operations.executeMatchCreateQuery;
 pub const executeMatchCallQuery = match_operations.executeMatchCallQuery;
 pub const executeMatchQueryWithParams = match_operations.executeMatchQueryWithParams;
+// SONNY-6587 item 2: the point-write seek a PROFILE reports.
+pub const takePointWriteSeek = match_operations.takePointWriteSeek;
 pub const executeMatchQuery = match_operations.executeMatchQuery;
 pub const executeMultiNodeMatch = match_operations.executeMultiNodeMatch;
 pub const executeMatchQueryImpl = match_operations.executeMatchQueryImpl;

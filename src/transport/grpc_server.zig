@@ -3720,6 +3720,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // SONNY-6596: the version-1 PROFILE reports this measured time.
                     const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3729,6 +3730,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     };
                     const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(allocator);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(allocator, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| allocator.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3781,6 +3790,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
                         .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);

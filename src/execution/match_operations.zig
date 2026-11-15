@@ -2063,6 +2063,22 @@ pub fn propertyAggregateFastPath(
 // runs executeClusterMatchUpdateIfNeeded BEFORE dispatching to
 // executeMatchQueryImpl, so replicated/rejected cluster writes never reach
 // this fast path.
+// CANARY: REQ=REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK; FEATURE="PROFILE"; ASPECT=PointWriteSeekRecord; STATUS=TESTED; TEST=tests/test_sonny6587_profile_point_write_seek.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6587 item 2: the exact-property seek `pointWriteFastPath` served a
+/// statement with, for that statement's PROFILE: the label and key (borrowed
+/// from the query) and the nodes the seek returned. Per thread: the
+/// transport runs the statement and reads it on the same thread.
+pub const PointWriteSeek = struct { label: []const u8, key: []const u8, rows: u64 };
+threadlocal var point_write_seek: ?PointWriteSeek = null;
+
+/// The seek the last statement on this thread was served by, cleared. A
+/// transport clears it before a PROFILE'd statement runs and reads it after.
+pub fn takePointWriteSeek() ?PointWriteSeek {
+    const seek = point_write_seek;
+    point_write_seek = null;
+    return seek;
+}
+
 pub fn pointWriteFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -2196,6 +2212,7 @@ pub fn pointWriteFastPath(
             break :blk cols;
         };
         _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+        point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 0 };
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
@@ -2299,6 +2316,7 @@ pub fn pointWriteFastPath(
     }
 
     _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+    point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 1 };
     return ExecutionResult{
         .columns = columns,
         .rows = rows,

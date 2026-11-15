@@ -2616,6 +2616,14 @@
 
 ### Fixed
 
+- **A PROFILE'd point write names the index its seek used (SONNY-6587).**
+  `MATCH (n:L) WHERE n.k = 'v' SET ...` on a persisted graph is served by an
+  exact-property seek (`pointWriteFastPath`); its version-1 PROFILE named no
+  index on either transport. It now reports `NodeIndexScan` with the catalog
+  btree or hash index on the label and key (the version-2 rule, SONNY-1335)
+  and the nodes the seek returned; with no catalog index, none. Regression:
+  `zig build test-sonny6587-profile-point-write-seek` (QUIC and gRPC).
+
 - **A writing FOR after a WITH leaks nothing and runs for every WITH row
   (SONNY-6587).** `WITH 7 AS k FOR x IN [10, 20] CREATE ...` leaked the list
   the FOR header computed on every run (SONNY-6449 fixed the same leak for a

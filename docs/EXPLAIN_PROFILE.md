@@ -244,8 +244,12 @@ name (SONNY-1335).
   a scan, as EXPLAIN does. `selectivity_est` is 0 (not estimated).
 - **`profile_version` 1** (tenant-bound and RLS-evaluating sessions, data
   changes, statement targets the planned runtime declines): the payload
-  comes from the legacy executor, which never consults the index catalog
-  and scans, so it has no index operator. Before SONNY-1335 it put a
+  comes from the legacy executor. It has an index operator only for a point
+  write the exact-index seek served (`MATCH (n:L) WHERE n.k = 'v' SET ...`,
+  SONNY-6587): `NodeIndexScan`, named after the catalog btree or hash index
+  on the label and key (as version 2 names one), with the nodes the seek
+  returned and `time_ns` 0 (part of the statement's); with no such catalog
+  index, none. Otherwise the legacy executor scans. Before SONNY-1335 it put a
   `NodeIndexScan` named `"heuristic_index"` first for any WHERE or FILTER
   equality. The legacy executor has no operator hooks, so the statement is
   one `LegacyExecute` operator with the wall-clock time measured around it

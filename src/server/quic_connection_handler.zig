@@ -8774,6 +8774,7 @@ fn handleClientMessage(
 
                     // SONNY-6596: the version-1 PROFILE reports this measured time.
                     const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -8782,6 +8783,14 @@ fn handleClientMessage(
                     };
                     const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(gpa);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(gpa, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| gpa.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -8840,6 +8849,8 @@ fn handleClientMessage(
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
                         .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(gpa, "00000", exec_result.flags.items);
