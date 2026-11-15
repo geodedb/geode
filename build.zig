@@ -10837,6 +10837,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6607_os_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6607_os_step = b.step("test-sonny6607-tenant-orphan-startup", "Run SONNY-6607 item 4 regression (spawns geode serve on a data directory whose tenant registry holds a tenant with an unregistered parent: startup refuses, naming the tenant)");
     sonny6607_os_step.dependOn(&run_sonny6607_os_tests.step);
+    // SONNY-6607 (5): the gRPC client's max frame size is per connection.
+    const sonny6607_fs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6607_grpc_frame_size.zig"), .target = target, .optimize = optimize });
+    sonny6607_fs_test_mod.link_libc = true;
+    sonny6607_fs_test_mod.addImport("geode", root_mod);
+    const sonny6607_fs_tests = b.addTest(.{ .root_module = sonny6607_fs_test_mod });
+    const run_sonny6607_fs_tests = b.addRunArtifact(sonny6607_fs_tests);
+    shardDep(test_step, &run_sonny6607_fs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6607_fs_step = b.step("test-sonny6607-grpc-frame-size", "Run SONNY-6607 item 5 regression (the real gRPC client functions over two socket pairs: after one connection learns a 64 KiB SETTINGS_MAX_FRAME_SIZE, a 40,000-byte request on the other, which negotiated nothing, arrives in DATA frames of at most 16384)");
+    sonny6607_fs_step.dependOn(&run_sonny6607_fs_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.

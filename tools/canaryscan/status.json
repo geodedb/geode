@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:02:03.4360005Z",
+  "generated_at": "2026-11-15T18:02:30.316528885Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78589,6 +78589,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6607-GRPC-FRAME-SIZE",
+      "features": [
+        {
+          "feature": "GrpcTransport",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6607_grpc_frame_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6607-INDEX-BACKFILL-WARNING",
       "features": [
         {
@@ -83769,7 +83788,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4161
+      "TESTED": 4162
     },
     "by_aspect": {
       "2PC": 3,
@@ -86545,7 +86564,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 377,
+      "Regression": 378,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
