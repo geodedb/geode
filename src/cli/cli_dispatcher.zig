@@ -705,17 +705,17 @@ const geode_completion_mcp_cmd = CliCommand{
 
 const geode_completion_session_cmd = CliCommand{
     .name = "session",
-    .summary = "Session management commands",
+    .summary = "The local saved session (validate/rotate/invalidate-all/check-idle not supported, SONNY-6554)",
 };
 
 const geode_completion_authn_cmd = CliCommand{
     .name = "authn",
-    .summary = "Authentication provider configuration",
+    .summary = "Authentication provider configuration (not supported, SONNY-6554)",
 };
 
 const geode_completion_apikey_cmd = CliCommand{
     .name = "apikey",
-    .summary = "API key management",
+    .summary = "API key format check (create/list/revoke not supported, SONNY-6554)",
 };
 
 const geode_completion_subcommands = [_]*const CliCommand{

@@ -150,10 +150,10 @@ const refusals = [_]Refusal{
     .{ .argv = &.{ "authn", "stepup-check", "--action", "read:data" }, .claim = "No step-up required" },
     .{ .argv = &.{ "authn", "stepup-mark" }, .claim = "Session elevated" },
     .{ .argv = &.{ "apikey", "create", "--user", "geode", "--name", "ci", "--scope", "query:execute" }, .claim = "API key created" },
-    .{ .argv = &.{ "apikey", "list", "--user", "geode" }, .claim = "API keys for" },
-    .{ .argv = &.{ "apikey", "revoke", "--user", "geode", "--name", "ci" }, .claim = "revoked" },
-    .{ .argv = &.{ "apikey", "revoke-all", "--user", "geode", "--yes" }, .claim = "revoked" },
-    .{ .argv = &.{ "apikey", "check-scope", "--user", "geode", "--name", "ci", "--scope", "query:execute" }, .claim = "granted" },
+    .{ .argv = &.{ "apikey", "list", "--user", "geode" }, .claim = "API keys for user" },
+    .{ .argv = &.{ "apikey", "revoke", "--user", "geode", "--name", "ci" }, .claim = "API key 'ci' revoked" },
+    .{ .argv = &.{ "apikey", "revoke-all", "--user", "geode", "--yes" }, .claim = "Revoked " },
+    .{ .argv = &.{ "apikey", "check-scope", "--user", "geode", "--name", "ci", "--scope", "query:execute" }, .claim = "scope granted" },
 };
 
 test "SONNY-6554: session, auth validate, authn and apikey commands with no server-side effect are refused, not reported done" {
@@ -293,12 +293,23 @@ test "SONNY-6554: with a saved session, rotate changes nothing, info and logout 
         const after = try readCredentials(home.path());
         defer testing.allocator.free(after);
         try testing.expectEqualStrings(before, after);
+        // SEC-SESS-LOG-01 (tests/test_sec_sess_log.zig pinned the removed
+        // rotate output seam): no token material on stdout/stderr.
+        const tok_key = "\"token\":\"";
+        const t0 = (std.mem.indexOf(u8, after, tok_key) orelse return error.NoTokenSaved) + tok_key.len;
+        const t1 = std.mem.indexOfScalarPos(u8, after, t0, '"') orelse return error.NoTokenSaved;
+        const token = after[t0..t1];
+        try testing.expect(token.len >= 16);
+        if (r.has(token[0..16])) {
+            r.dump("session rotate printed token material");
+            return error.TestUnexpectedResult;
+        }
     }
     // validate / check-idle: refused even with a saved session.
     for ([_][]const u8{ "validate", "check-idle" }) |sub| {
         const r = try runGeode(home.path(), &.{ exe, "session", sub });
         defer r.deinit();
-        if (r.code == null or r.code.? != 1 or !r.has(unsupported) or r.has("is valid") or r.has("is active")) {
+        if (r.code == null or r.code.? != 1 or !r.has(unsupported) or r.has("Session is valid") or r.has("Session is active")) {
             r.dump(sub);
             return error.TestUnexpectedResult;
         }

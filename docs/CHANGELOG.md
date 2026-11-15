@@ -4,6 +4,51 @@
 
 ### Security
 
+- **The CLI no longer prints success for session, API-key and authn
+  operations no server performs (SONNY-6554).** geode servers have no
+  session-token authentication (the HELLO carries a user name and password
+  only and no server keeps the session ids it issues) and read none of the
+  CLI's API-key or authn state files. `geode session invalidate-all` said
+  "invalidated" and did nothing; `geode auth validate --token` called any
+  non-empty string valid; `geode session rotate` replaced the saved token
+  with client-made random bytes; `session validate` / `check-idle`,
+  `authn config|test-access|stepup-check|stepup-mark` and `apikey
+  create|list|revoke|revoke-all|check-scope` reported results from local
+  files or hard-coded rules. Each now exits 1 with `Error: ... is not
+  supported by this server: <what>` and writes nothing (`--help` says so).
+  `geode query --token` (parsed, never sent) and `geode auth logout
+  --token` exit 2. `auth login`, `auth logout` and `session info` say the
+  saved session is a local file no server accepts. **BREAKING:** exit codes
+  and output of the commands above; scripts that relied on the old success
+  lines (e.g. geodetestlab `authn_provider.yml`, `api_key_auth.yml`) must be
+  updated. See docs/USER_AUTH.md, "Session and API-key commands".
+- **One strict DSN parser for `--dsn` and the MCP endpoint (SONNY-6554,
+  SONNY-6569).** `geode query` / `geode shell --dsn` ignored every query
+  parameter but the credentials, including `insecure=true` (passed by the
+  documented and test-harness DSNs) and `ca=`; `geode mcp --endpoint` used
+  geode-client-zig's lenient `parseDSN`, so an out-of-range
+  `connect_timeout` or a malformed `page_size` silently became the default.
+  Both now parse with `geode.dsn_params.parse` (`parseDSNStrict` plus the
+  docs/DSN.md parameter and boolean checks). The CLI applies `insecure=true`
+  exactly like `--insecure-tls-skip-verify` (same warning, refused under
+  production posture unless `GEODE_ALLOW_INSECURE_TLS=1`), `ca`/`cert`/`key`,
+  `page_size` and `role`; refuses `tenant`, `server_name` and `tls=false`
+  (exit 2), which it cannot apply; and warns that `hello_name`, `hello_ver`,
+  `conformance` and the timeouts have no effect. **BREAKING (`--dsn` and
+  MCP endpoint):** an unknown parameter, a parameter without `=`, a boolean
+  other than `true/false/1/0/yes/no/on/off`, and a malformed or
+  out-of-range `page_size` or timeout are refused; `--dsn` with a `:port`
+  host (no host name) is refused, as the MCP endpoint refused it.
+- **A credential in a `--server` host is refused, never resolved
+  (SONNY-6569).** `host_port.split` accepted any byte in a host name, so
+  `--server pw@host:3141` (and the REPL's `\connect pw@host:3141`) dialled a
+  host named `pw@host`, sending the password to the resolver and the TLS
+  server name. An `@` in a client address is now
+  `UnencodedCredentialDelimiter`, and an unbracketed host must be ASCII
+  letters, digits, `-`, `.`, `_` or `~` on every address path (client,
+  `--listen`, peers). `geode restore` validates `--server` before printing
+  it. **BREAKING:** such addresses are refused.
+
 - **geode-client-zig v0.3.17: one set of DSN rules on every client path
   (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
   geode-client-zig, which split the userinfo at the first `@` anywhere in
@@ -6817,6 +6862,15 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **`src/client/repl/repl_config.zig` `Config.load` / `save` (SONNY-6554):**
+  written against removed Zig APIs and never compiled (no caller), with
+  `getConfigPath` and `shouldUseColor`; and `session_state.getDefaultPath`,
+  which called a function that does not exist. The CLI state-directory
+  resolver (`cli_auth_helpers.resolveStatePath`) went with its last users
+  (`session`, `authn`, `apikey` state files), and `tests/test_sec_sess_log.zig`
+  with the `session rotate` output seam it pinned (rotate is refused; the
+  no-token-in-output check moved to `tests/test_sonny6554_cli_honesty.zig`).
 
 - **Product code no build reached, which no longer compiled (SONNY-6548 item
   3).** Zig analyzes lazily, so these compiled only because nothing in the

@@ -12,18 +12,25 @@ Geode implements a comprehensive authentication system with post-quantum ready s
 
 - Password-based authentication (Argon2id, RFC 9106)
 - Multi-factor authentication (TOTP)
-- Session tokens (with rotation)
-- API tokens (service accounts, automation)
-- mTLS certificate-based authentication
+- mTLS client-certificate requirement (a transport gate: the client then
+  still authenticates with a user name and password)
 - Role-based access control (RBAC)
 - Row-level security (RLS, single-tenant)
+
+**Not supported by the server (SONNY-6554; the CLI refuses the commands
+that claimed them, see "Session and API-key commands" below):**
+
+- Session tokens: the QUIC HELLO carries a user name and a password only,
+  and no server keeps the session ids it issues, so a session can be
+  neither reused, validated, rotated nor invalidated
+- API keys (see "API Key Authentication" below)
 
 **Not supported (no implementation in `src/security/`):**
 
 - LDAP / Active Directory — see issue [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834). Will be implemented when a customer requires it.
 - OAuth2 / OIDC — see issue [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835). Will be implemented when a customer requires it.
 
-For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
+For enterprise SSO requirements today, require mTLS client certificates from your PKI infrastructure in addition to user passwords.
 
 ## 1. Default User Configuration
 
@@ -289,9 +296,15 @@ geode auth login --user $GEODE_ADMIN_USERNAME
 ### Logout Command
 
 ```bash
-# Clear stored credentials
+# Remove the local saved session file (~/.geode/credentials.json)
 geode auth logout
 ```
+
+`auth logout` removes a local file and nothing else: no server keeps a
+session to end. It prints `Removed the local saved session file ...` (or
+`No saved session file to remove`); it used to print `Successfully logged
+out`. `auth logout --token <t>` is refused (exit 2): no token can be
+invalidated (SONNY-6554).
 
 ### Authentication Flow Examples
 
@@ -302,8 +315,14 @@ $ geode auth login --user geode
 Username: geode
 Password: [hidden input]
 Successfully authenticated as 'geode' on server '127.0.0.1:3141'
-Session token saved to ~/.geode/credentials.json
+Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, so it does not log later commands in; pass -U and --password (or --dsn) to each command
 ```
+
+`auth login` checks the user name and password against the server
+(a real HELLO). Without `--save-session` it prints `Note: geode servers do
+not accept session tokens yet, ...`; it used to print the server's session
+id as a reusable `Session token: ...` with `Use --save-session to persist
+credentials locally` (SONNY-6554).
 
 **Password Reset Required:**
 
@@ -379,16 +398,18 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
   (USERPROFILE on Windows when HOME is unset) must be an absolute path: a
   relative or empty HOME is refused with `Error: HOME is empty or not an
   absolute path ...`, never resolved against the working directory
-  (SONNY-6544). The CLI state files (`geode session`, `authn`, `apikey`,
-  `mtls`) follow the same rule, and a relative `XDG_STATE_HOME` is ignored.
-- **Format**: Cryptographically secure random tokens
+  (SONNY-6544). (The CLI state files of `geode session`, `authn` and
+  `apikey` are no longer written: those commands are refused, SONNY-6554.)
+- **Format**: the session id a server returns in HELLO is a random token;
+  the server keeps no record of it, so it is not reusable
 - **Cross-platform**: Windows and Unix support
-- **Policy Enforcement**: Sessions invalidated for policy violations
+- **No server-side session state**: no session is invalidated, rotated or
+  expired by a server; every connection authenticates in its own HELLO
 
 ### Saved sessions (`--save-session`)
 
 `geode auth login --save-session` writes, and `geode query`, `geode auth
-token`, `geode session info|rotate` read, one file through one writer and
+token`, `geode session info` read, one file through one writer and
 one reader (`src/cli/security/session_storage.zig`, SONNY-6551):
 
 ```json
@@ -425,14 +446,38 @@ one reader (`src/cli/security/session_storage.zig`, SONNY-6551):
 - **Not yet usable for authentication.** The QUIC HELLO carries a user name
   and a password only, and the server keeps no record of the session ids
   it returns, so a saved session cannot authenticate a query. When `geode
-  query` (no `-U`, `--token` or `--dsn` credentials) finds a valid one for
+  query` (no `-U` or `--dsn` credentials) finds a valid one for
   its server it prints `Note: found a saved session for <server> (user
   '<name>'), but geode servers do not accept a saved session token yet, so
   it is not used; ...` and sends nothing from it; pass `-U` with
   `--password` / `--password-file`, or `--dsn`. Server-side session
   resumption (a token field in the HELLO, a server registry of issued
   tokens with expiry and revocation on password or role change) is open
-  work (SONNY-6551).
+  work (SONNY-6551, SONNY-6553).
+
+### Session and API-key commands (SONNY-6554)
+
+These commands claimed a server-side effect that no server performs. Each
+now exits 1 with `Error: ... is not supported by this server: <what>` and
+writes nothing:
+
+| Command | It printed | It did |
+|---------|------------|--------|
+| `geode session validate [--token t]` | `Session is valid for user: ...` for any 32+ character string | read a local state file no one writes |
+| `geode session rotate` | `Session token rotated successfully.` | replaced the saved token with random bytes made on the client |
+| `geode session invalidate-all --user u` | `All sessions for user 'u' have been invalidated.` | nothing |
+| `geode session check-idle` | `Session is active.` | checked that a saved file exists |
+| `geode auth validate --token t` | `Session token valid` for any non-empty string | nothing |
+| `geode authn config / test-access` | `anonymous access allowed for path`, `Access allowed` | wrote / read a local file no server reads |
+| `geode authn stepup-check` | `Step-up ... required` from an `admin:` prefix | nothing (the server decides step-up per statement, GAP-0884) |
+| `geode authn stepup-mark` | `Session elevated successfully.` | nothing |
+| `geode apikey create / list / revoke / revoke-all / check-scope` | `API key created`, `revoked`, `scope granted` | kept keys in a local file no server reads |
+
+`geode query --token <t>` (parsed and never sent) and `geode auth logout
+--token <t>` are refused with exit 2. What still works, locally:
+`geode session info` and `geode auth token` show the saved session file,
+`geode auth logout` removes it, and `geode apikey validate` checks a key's
+format (and says that no server accepts API keys).
 
 ### Audit Trail (CANARY Tracking)
 
@@ -465,7 +510,7 @@ export GEODE_PASSWORD_MIN_WORDS=5
 $ geode auth login --user prod_db_admin
 Password: [Production Database Administrative Access Phrase 2024]
 Successfully authenticated as 'prod_db_admin' on server '127.0.0.1:3141'
-Session token saved to ~/.geode/credentials.json
+Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, ...
 ```
 
 ### Example 2: Development Environment (Requires Reset)
@@ -634,7 +679,7 @@ echo "Has lowercase: $(echo $PASSWORD | grep -q '[a-z]' && echo 'Yes' || echo 'N
 - **Backward Compatibility**: Existing `geode` username continues to work
 - **Automatic Migration**: Default user created on first startup
 - **Policy Enforcement**: All existing users subject to new password requirements
-- **Session Preservation**: Existing sessions remain valid until expiration
+- **Sessions**: no server keeps sessions, so there are none to preserve; every connection authenticates in HELLO
 
 ### Environment Migration
 
@@ -659,8 +704,8 @@ This authentication system provides **enterprise-grade security** with **complet
 |--------|--------|----------|----------------|----------------|
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
 | **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
-| **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
-| **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` and the offline `geode apikey` CLI (local state file) only; see below |
+| **Session Tokens** | ❌ Not on the server wire | Session continuity | — | The HELLO carries no token and no server keeps the session ids it issues (SONNY-6551, SONNY-6554); `src/security/authn.zig`'s session store is used only by the embedded LSP verifier, which nothing populates |
+| **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` only; `geode apikey` refuses everything but a format check (SONNY-6554); see below |
 | **mTLS (Certificate)** | ⚠️ Transport gate only (see below) | Zero-trust, service mesh | Very High | `GEODE_MTLS_REQUIRED` + `GEODE_MTLS_CLIENT_CA`; `src/security/mtls_provider.zig` |
 
 ### API Key Authentication (not implemented on the server)
@@ -674,9 +719,12 @@ supported); before SONNY-6291 they were stubs that answered `scope
 granted` for any key and `revoked` without revoking anything. What exists:
 the `auth_lib.api_keys` library (key format `gk1.<token_id>.<secret>`,
 SHA-256 digests, constant-time comparison), used in process by the MCP and
-LSP verifiers, and the offline `geode apikey` CLI, which keeps keys in a
-local state file the server never reads. Use service-account users with
-passwords, or mTLS, for programmatic access.
+LSP verifiers. The `geode apikey` CLI kept keys in a local state file the
+server never reads and reported `API key created` / `revoked`; since
+SONNY-6554 it refuses `create`, `list`, `revoke`, `revoke-all` and
+`check-scope` (exit 1, not supported by this server) and only checks a
+key's format (`validate`). Use service-account users with passwords, or
+mTLS, for programmatic access.
 
 ### mTLS Certificate Authentication
 
@@ -733,7 +781,7 @@ geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/
 | **LDAP/Active Directory** | ❌ Not supported | [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 | **OAuth2/OIDC** | ❌ Not supported | [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 
-**Note**: LDAP/AD and OAuth2/OIDC are NOT supported. Earlier revisions of this document advertised them on a 2026 roadmap; that was inaccurate — no implementation exists in `src/security/`. For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
+**Note**: LDAP/AD and OAuth2/OIDC are NOT supported. Earlier revisions of this document advertised them on a 2026 roadmap; that was inaccurate — no implementation exists in `src/security/`. For enterprise SSO requirements today, require mTLS client certificates from your PKI infrastructure in addition to user passwords.
 
 ---
 
