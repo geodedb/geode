@@ -1113,7 +1113,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
                 // SONNY-6367: the login's verifier (a BLAKE2b import too).
-                const ok = geode.user_management.verifyPassword(old, stored) catch false;
+                // SONNY-6598: a check that could not run (an unusable
+                // stored hash, out of memory) is not "incorrect".
+                const ok = geode.user_management.verifyPassword(old, stored) catch |err| {
+                    std.debug.print("Error: the old password could not be checked ({s}); password NOT changed\n", .{@errorName(err)});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                };
                 if (!ok) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));

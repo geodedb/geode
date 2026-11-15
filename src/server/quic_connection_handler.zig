@@ -7175,13 +7175,13 @@ fn handleClientMessage(
                         // while the coarse per-IP ceiling still accrues a spray.
                         if (g_auth_rate_limiter) |limiter| limiter.recordFailureForPrincipal(peer_ip, hello_req.username);
                     }
+                    // SONNY-6598: audited as a failed login or as an
+                    // auth-system error; answered "failed" only when checked.
+                    audit_mod.logLoginRefusal(gpa, hello_req.username, auth_err);
                     const resp = schema.QuicServerMessage{ .hello = .{
                         .success = false,
                         .session_id = try gpa.dupe(u8, ""),
-                        .error_message = try gpa.dupe(u8, if (checked)
-                            "Authentication failed"
-                        else
-                            "Authentication temporarily unavailable"),
+                        .error_message = try gpa.dupe(u8, auth_rate_limiter.helloRefusalMessage(auth_err)),
                         .capabilities = caps,
                     } };
                     try sendQuicMessage(gpa, stream, resp);

@@ -127,7 +127,8 @@ test "SONNY-6374 (5) verifyPasswordArgon2id refuses a stored hash whose paramete
         "m=19456,t=-1,p=1",
     }) |params| {
         const s = try phc(&buf, params);
-        try testing.expect(!try geode.auth.verifyPasswordArgon2id(allocator, "password", s));
+        // SONNY-6598: refused as an unusable hash (an error), not a mismatch.
+        try testing.expectError(error.InvalidHashFormat, geode.auth.verifyPasswordArgon2id(allocator, "password", s));
     }
 }
 

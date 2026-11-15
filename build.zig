@@ -18539,6 +18539,32 @@ pub fn build(b: *std.Build) void {
     const sonny6367_step = b.step("test-sonny6367-offline-user-cli", "Run the SONNY-6367 regression (offline geode user create / update --role and assign-role give the user the built-in role and refuse any other; user list / show print the stored role; show / enable / disable of a missing user fail; user_enable / user_disable / user_set_attribute / role_create / user_import / mfa_* failures are GQLSTATUS errors; a BLAKE2b-imported user logs in over QUIC; the dead offline user stores are gone; CLAUDE.md's gql_conformance count; spawns the CLI and a server)");
     sonny6367_step.dependOn(&run_sonny6367_tests.step);
 
+    // SONNY-6598: a credential check that could not run (an Argon2id KDF
+    // allocation failure, a stored hash that cannot be parsed, an MFA check
+    // the server cannot run) is an error, never a wrong password: not counted
+    // toward a lockout, audited as an auth-system error. The HELLO regression
+    // spawns a Debug server with the test-only KDF fault hook armed.
+    const sonny6598_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6598_verify_outcomes.zig", .step = "test-sonny6598-verify-outcomes", .desc = "Run the SONNY-6598 regression (every allocation failure of the Argon2id work and every unusable stored hash is an error from verifyPasswordArgon2id and the login verifier, never a verdict; authenticate answers AuthUnavailable / AuthCredentialInvalid, never Unauthenticated, for them; SecurityManager counts no failed attempt for them; an MFA check the server cannot run is 0A000, not 28000, and not counted toward the MFA lockout)", .spawns = false },
+        .{ .file = "tests/test_sonny6598_kdf_error_hello.zig", .step = "test-sonny6598-kdf-error-hello", .desc = "Run the SONNY-6598 regression (against a real Debug geode serve, over QUIC and gRPC: a HELLO whose Argon2id work cannot allocate is answered 'Authentication temporarily unavailable', not 'Authentication failed', more times than the lockout threshold, and the right password then logs in; a malformed stored hash is a server-side credential error, never locked out; a wrong password still locks out; the audit log records AUTH_ERROR, not failed logins)", .spawns = true },
+    };
+    for (sonny6598_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.

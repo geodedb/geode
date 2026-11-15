@@ -268,7 +268,8 @@ test "SONNY-6378 (4) verifyPasswordArgon2id refuses a stored hash whose t or m i
     // A correct hash for the right password, with one iteration more than
     // the bound, is refused: a stored t is untrusted input and is not run.
     const too_many_t = try phcFor(&buf, "pw", 11, 64, 1);
-    try testing.expect(!try auth.verifyPasswordArgon2id(allocator, "pw", too_many_t));
+    // SONNY-6598: refused as an unusable hash (an error), not a mismatch.
+    try testing.expectError(error.InvalidHashFormat, auth.verifyPasswordArgon2id(allocator, "pw", too_many_t));
 
     // Out-of-range parameters are refused without running Argon2 (an
     // unbounded t would not return within the test's lifetime).
@@ -285,7 +286,7 @@ test "SONNY-6378 (4) verifyPasswordArgon2id refuses a stored hash whose t or m i
     }) |params| {
         const s = try std.fmt.bufPrint(&buf, "$argon2id$v=19${s}${s}${s}", .{ params, salt_hex, hash_hex });
         const started = monoMs();
-        try testing.expect(!try auth.verifyPasswordArgon2id(allocator, "pw", s));
+        try testing.expectError(error.InvalidHashFormat, auth.verifyPasswordArgon2id(allocator, "pw", s));
         try testing.expect(monoMs() - started < 5_000);
     }
 

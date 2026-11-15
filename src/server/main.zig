@@ -2338,6 +2338,26 @@ pub fn main() !void {
     auth_rate_limiter_mod.setGlobalRateLimiter(&ip_rate_limiter);
     defer auth_rate_limiter_mod.setGlobalRateLimiter(null);
 
+    // SONNY-6598: test hook, Debug builds only (see
+    // user_management.injectKdfAllocFailures): the next N logins of one user
+    // fail their Argon2id allocation.
+    if (comptime user_mgmt.kdf_fault_hook_available) {
+        if (getEnvVarOwned(gpa, "GEODE_TEST_AUTH_KDF_FAULT_USER")) |fault_user| {
+            defer gpa.free(fault_user);
+            const fault_count = envUsize(gpa, "GEODE_TEST_AUTH_KDF_FAULT_COUNT", 0, 0, 1_000_000);
+            if (fault_count > 0) {
+                user_mgmt.injectKdfAllocFailures(fault_user, @intCast(fault_count)) catch |err| {
+                    log.err("GEODE_TEST_AUTH_KDF_FAULT_USER refused", &.{Attr.string("error", @errorName(err))});
+                    return err;
+                };
+                log.warn("TEST HOOK: password verifications of this user will fail their Argon2id allocation (Debug build only)", &.{
+                    Attr.string("user", fault_user),
+                    Attr.int("count", @intCast(fault_count)),
+                });
+            }
+        } else |_| {}
+    }
+
     // Task 1 (throughput plan): initialise per-mutation timing instrumentation.
     const mutation_timing = geode.mutation_timing;
     mutation_timing.init(null);
