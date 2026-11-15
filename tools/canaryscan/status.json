@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T20:37:48.267158854Z",
+  "generated_at": "2026-11-15T20:52:54.643412404Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -11896,7 +11896,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-05-25"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Raft Wrapper Transport Dispatch",
@@ -78315,7 +78315,7 @@
       "features": [
         {
           "feature": "Raft Consensus Persistence",
-          "aspect": "HeldUntilPersisted",
+          "aspect": "SentAfterAdvancePersist",
           "status": "TESTED",
           "files": [
             "src/distributed/raft_consensus.zig"
@@ -78325,7 +78325,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-14"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Raft Consensus Persistence",
@@ -79029,11 +79029,11 @@
       ]
     },
     {
-      "id": "REQ-SONNY-6589-MCP-TIMEOUT-REFUSED",
+      "id": "REQ-SONNY-6589-MCP-TIMEOUT-APPLIED",
       "features": [
         {
           "feature": "MCPBackendTools",
-          "aspect": "UnappliedTimeoutRefused",
+          "aspect": "EndpointTimeoutApplied",
           "status": "TESTED",
           "files": [
             "tests/test_sonny6589_mcp_timeout.zig"
@@ -80501,6 +80501,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY",
+      "features": [
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "ApplyAfterAdvancePersist",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6611_raft_persist_before_apply.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "EntriesDurableBeforeApplyAndReply",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6611_raft_persist_before_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6611_raft_persist_before_apply.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6614-GRACEFUL-STOP",
       "features": [
         {
@@ -80605,6 +80638,46 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6617-CLI-DSN-TIMEOUT",
+      "features": [
+        {
+          "feature": "DSN parameters",
+          "aspect": "CliAppliesDsnTimeout",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig",
+            "tests/test_sonny6617_cli_dsn_timeout.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6617_cli_dsn_timeout.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6617-RAFT-PERSIST-RETRY",
+      "features": [
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "PersistFailureRetried",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig",
+            "tests/test_sonny6617_raft_persist_failure.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6617_raft_persist_failure.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
           "updated": "2026-11-15"
         }
       ]
@@ -85872,7 +85945,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4259
+      "TESTED": 4263
     },
     "by_aspect": {
       "2PC": 3,
@@ -85986,6 +86059,7 @@
       "AppendOrderedLabelPosting": 1,
       "ApplicationErrorSpace": 1,
       "ApplyAbsoluteIdEdge": 1,
+      "ApplyAfterAdvancePersist": 1,
       "ApplyConfigChange": 1,
       "ApplyDelete": 1,
       "ApplyDeleteFailure": 1,
@@ -86330,6 +86404,7 @@
       "CleanupOwnDirectory": 1,
       "ClearGraphNodes": 2,
       "ClearUnderShardLocks": 1,
+      "CliAppliesDsnTimeout": 1,
       "CliEnvelopeBuild": 1,
       "CliErgonomics": 1,
       "CliFlag": 2,
@@ -86908,6 +86983,7 @@
       "EndToEndTests": 1,
       "EndpointSeek": 1,
       "EndpointSideSetDestroyCleanup": 1,
+      "EndpointTimeoutApplied": 1,
       "EndpointUnification": 1,
       "Engine": 14,
       "EngineAbortCounters": 1,
@@ -86916,6 +86992,7 @@
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
       "EnrollmentWriteThrough": 2,
+      "EntriesDurableBeforeApplyAndReply": 1,
       "Entry": 1,
       "EntryPoint": 1,
       "EntryPointScratch": 1,
@@ -87402,7 +87479,6 @@
       "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,
-      "HeldUntilPersisted": 1,
       "HelloAuthCheck": 1,
       "HelloCheck": 1,
       "HelloCredentialsAuthenticateLsp": 1,
@@ -88287,6 +88363,7 @@
       "PermissiveRestrictive": 1,
       "PermitGatedMutationRetry": 1,
       "PersistCallbacks": 1,
+      "PersistFailureRetried": 1,
       "PersistOrRestore": 1,
       "PersistPolicy": 1,
       "PersistRestriction": 1,
@@ -88966,6 +89043,7 @@
       "Send": 1,
       "SendErrorClassify": 1,
       "SendToNode": 1,
+      "SentAfterAdvancePersist": 1,
       "SentSignal": 1,
       "Serialization": 1,
       "ServeHelpSingleSource": 1,
@@ -89448,7 +89526,6 @@
       "TypedGroupKeys": 2,
       "Types": 10,
       "UbuntuVersionFallback": 1,
-      "UnappliedTimeoutRefused": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundDeleteDeletesNothing": 1,

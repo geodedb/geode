@@ -258,10 +258,17 @@ host must be a name, an IPv4 address or a bracketed IPv6 address
 (`quic://[::1]:3141`, IPv6 servers are reachable since geode-client-zig
 v0.3.16); the port 1-65535 (0 is refused); the scheme `quic://` or
 `grpc://`. See [DSN.md](DSN.md#ipv6-addresses) for the error table
-(SONNY-6494). A `connect_timeout` (`timeout`) or `timeout_ms` parameter is
-refused the same way: geode-client-zig cannot apply it (its QUIC handshake
-and HELLO each wait a fixed 30 s), and it used to be kept and ignored
-(SONNY-6589, [DSN.md](DSN.md#timeout-parameters)).
+(SONNY-6494). A `connect_timeout` (`timeout`) or `timeout_ms` parameter
+bounds the wait for the QUIC handshake and the HELLO answer: a tool on a
+server that does not answer reports `Timeout` after it (SONNY-6589,
+geode-client-zig v0.3.18; before, the parameter was refused because the
+library waited a fixed 30 s). Since v0.3.19 (SONNY-6617) query,
+transaction and ping requests wait the same timeout for their answers
+([DSN.md](DSN.md#timeout-parameters)).
+Without a `hello_name` the HELLO names the client `geode-mcp`, with geode's
+version. A `grpc://` endpoint needs `tls=0`: geode-client-zig's gRPC client
+has no TLS and refuses rather than send in plaintext, and the tools and
+resources answer that, not a bare `ConnectionFailed` (SONNY-6617).
 
 ## Verification
 

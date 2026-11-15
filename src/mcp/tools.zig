@@ -193,7 +193,7 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, read_only: 
     defer if (params_json) |pj| allocator.free(pj);
 
     const result = client.query(query, params_json) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     // GAP-0345: the QUIC server reports query-execution failures (parse
@@ -254,7 +254,7 @@ fn getSchema(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
     defer client.deinit();
 
     const result = client.getSchema() catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatBackendResult(allocator, result);
@@ -278,7 +278,7 @@ fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
     defer client.deinit();
 
     const result = client.explain(parsed.value.query) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatBackendResult(allocator, result);
@@ -304,7 +304,7 @@ fn listGraphs(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []
     defer client.deinit();
 
     const result = client.listGraphs() catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatBackendResult(allocator, result);
@@ -322,7 +322,7 @@ fn validateGql(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8 
     defer parsed.deinit();
 
     const result = lsp.validateQuery(allocator, parsed.value.query) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatToolResult(allocator, result);
@@ -336,7 +336,7 @@ fn getCompletions(allocator: std.mem.Allocator, args_json: []const u8) ![]const 
     defer parsed.deinit();
 
     const result = lsp.getCompletions(allocator, parsed.value.query, parsed.value.line, parsed.value.column) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatToolResult(allocator, result);
@@ -350,7 +350,7 @@ fn getHoverInfo(allocator: std.mem.Allocator, args_json: []const u8) ![]const u8
     defer parsed.deinit();
 
     const result = lsp.getHover(allocator, parsed.value.query, parsed.value.line, parsed.value.column) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatToolResult(allocator, result);
@@ -364,7 +364,7 @@ fn getDiagnostics(allocator: std.mem.Allocator, args_json: []const u8) ![]const 
     defer parsed.deinit();
 
     const result = lsp.getDiagnostics(allocator, parsed.value.query) catch |err| {
-        return try formatErrorResponse(allocator, @errorName(err));
+        return try formatErrorResponse(allocator, mcp_client.initErrorMessage(err, @errorName(err)));
     };
 
     return try formatToolResult(allocator, result);

@@ -146,6 +146,9 @@ fn readGraphResource(allocator: std.mem.Allocator, endpoint: []const u8, uri: []
         error.ResourceNotFound => return err,
         error.OutOfMemory => return err,
         else => {
+            // SONNY-6617 (3): an endpoint that cannot work as configured
+            // (a gRPC endpoint with TLS on) says why, whatever the resource.
+            if (mcp_client.endpointErrorMessage(err)) |why| return try formatResourceError(allocator, uri, why);
             // The server could not be reached: schema and stats answer
             // their offline documents (as before); the others say why.
             return switch (target) {

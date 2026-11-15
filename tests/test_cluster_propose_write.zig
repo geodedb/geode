@@ -300,10 +300,6 @@ fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
 /// on send (SEC-0140).  When we drain and consume the message in the test,
 /// we own that copy and must free it.
 fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
-    switch (msg) {
-        .append_entries => |ae| {
-            if (ae.entries.len > 0) allocator.free(ae.entries);
-        },
-        else => {},
-    }
+    // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
+    raft_lib.InProcessTransport.freeMessage(allocator, msg);
 }

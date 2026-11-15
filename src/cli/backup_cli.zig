@@ -1399,6 +1399,7 @@ fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8,
         },
         null,
         null,
+        .{ .hello_name = "geode-migrate" },
     );
     errdefer {
         client.deinit();
@@ -2136,43 +2137,21 @@ fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
 // CANARY: REQ=REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT; FEATURE="CLI Backup"; ASPECT=TimeoutBoundsHandshake; STATUS=TESTED; TEST=tests/test_sonny6606_backup_handshake_timeout.zig; OWNER=cli; UPDATED=2026-11-15
 /// SONNY-6606 (4): `client.connect()` within --timeout. geode-client-zig
-/// waits a fixed 30 s for the QUIC handshake and takes no deadline, so
-/// `--timeout 2` against a server that did not answer took 30 s. The
-/// handshake runs on its own thread; past the deadline the command reports
-/// it and exits (`what`: "Backup" or "Restore"; `server`: --server, named as
-/// dialled), leaving the thread and the client to the process exit rather
-/// than freeing a client still in use.
-fn connectWithin(client: *zig_client.GeodeClient, timeout_s: u32, what: []const u8, server: []const u8) !void {
-    const Handshake = struct {
-        client: *zig_client.GeodeClient,
-        done: std.atomic.Value(bool) = .init(false),
-        err: ?anyerror = null,
-
-        fn run(self: *@This()) void {
-            self.client.connect() catch |e| {
-                self.err = e;
-            };
-            self.done.store(true, .release);
-        }
-    };
-    // smp_allocator: abandoned (not freed) when the deadline passes.
-    const hs = try std.heap.smp_allocator.create(Handshake);
-    hs.* = .{ .client = client };
-    const thread = try std.Thread.spawn(.{}, Handshake.run, .{hs});
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const start = std.Io.Clock.awake.now(io).toMilliseconds();
-    const limit: i64 = @as(i64, timeout_s) * std.time.ms_per_s;
-    while (!hs.done.load(.acquire)) {
-        if (std.Io.Clock.awake.now(io).toMilliseconds() - start >= limit) {
-            std.debug.print("Error: {s} from server {f} failed: no QUIC handshake within {d} s (--timeout). Nothing was changed.\n", .{ what, serverLabel(server), timeout_s });
+/// waited a fixed 30 s for the QUIC handshake, so `--timeout 2` against a
+/// server that did not answer took 30 s; geode ran the handshake on a
+/// thread of its own to give up sooner. Since v0.3.18 the client's
+/// `timeout_ms` (set from --timeout by `initClientStrictTls`, at most an
+/// hour) bounds the handshake itself. A handshake that times out is
+/// reported and the command exits (`what`: "Backup" or "Restore"; `server`:
+/// --server, named as dialled).
+fn connectWithin(client: *zig_client.GeodeClient, what: []const u8, server: []const u8) !void {
+    client.connect() catch |err| switch (err) {
+        error.ConnectionTimeout => {
+            std.debug.print("Error: {s} from server {f} failed: no QUIC handshake within {d} s (--timeout). Nothing was changed.\n", .{ what, serverLabel(server), client.timeout_ms / std.time.ms_per_s });
             std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-        io.sleep(.fromNanoseconds(20 * std.time.ns_per_ms), .awake) catch {};
-    }
-    thread.join();
-    const err = hs.err;
-    std.heap.smp_allocator.destroy(hs);
-    if (err) |e| return e;
+        },
+        else => return err,
+    };
 }
 
 // CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-09
@@ -2207,6 +2186,7 @@ fn executeRemoteBackup(
         },
         null,
         null,
+        .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_s), .hello_name = "geode-backup" },
     ) catch |err| {
         std.debug.print("Error: Failed to initialize client: {}\n", .{err});
         return err;
@@ -2217,7 +2197,7 @@ fn executeRemoteBackup(
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
     }
 
-    connectWithin(&client, timeout_s, "Backup", server) catch |err| {
+    connectWithin(&client, "Backup", server) catch |err| {
         std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
         return err;
     };
@@ -2457,6 +2437,7 @@ fn executeRemoteRestore(
         },
         null,
         null,
+        .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_s), .hello_name = "geode-restore" },
     ) catch |err| {
         std.debug.print("RESTORE: Failed to initialize client: {}\n", .{err});
         return error.ConnectionFailed;
@@ -2467,7 +2448,7 @@ fn executeRemoteRestore(
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
     }
 
-    connectWithin(&client, timeout_s, "Restore", server) catch |err| {
+    connectWithin(&client, "Restore", server) catch |err| {
         std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
         return error.ConnectionFailed;
     };

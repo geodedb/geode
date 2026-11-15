@@ -144,6 +144,11 @@ fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !voi
 /// keeps the 30 s default.
 pub var read_idle_timeout_ms: i64 = 30000;
 
+/// How long `quicConnect` waits for the QUIC handshake (geode-client-zig
+/// `timeout_ms`, 1..3600000). SONNY-6617 (2): `geode shell --dsn` sets it
+/// from the DSN timeout.
+pub var connect_timeout_ms: u32 = zig_client.config.DEFAULT_TIMEOUT_MS;
+
 // Read length-prefixed protobuf responses and return raw message bytes.
 fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
     const ctx = self.context orelse return error.NotConnected;
@@ -211,7 +216,7 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
 
     // Create QUIC client via the shared Zig client library.
     const client = try allocator.create(zig_client.GeodeClient);
-    client.* = try zig_quic_bridge.initClient(
+    client.* = try zig_quic_bridge.initClientWithOptions(
         allocator,
         parsed.host,
         parsed.port,
@@ -223,6 +228,7 @@ fn quicConnect(allocator: std.mem.Allocator, addr: []const u8) !*repl_dispatch.T
         },
         null,
         null,
+        .{ .timeout_ms = connect_timeout_ms },
     );
     errdefer {
         client.deinit();

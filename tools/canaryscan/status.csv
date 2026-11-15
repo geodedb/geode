@@ -716,7 +716,7 @@ REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,ApplyTxnDecide,TESTED,src/distr
 REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,WireRoundTrip,TESTED,src/distributed/raft_consensus.zig,tests/test_gap0870_raft_command_variants.zig,,distributed,2026-06-11
 REQ-DIST-RAFT-CMD-VARIANTS,Raft Command Variants,IntegrationTest,TESTED,tests/test_gap0870_raft_command_variants.zig,test-gap0870,,distributed,2026-06-11
 REQ-DIST-RAFT-DIVERGENT-RECOVERY,Raft Consensus Persistence,DivergentDurableStateRecovery,TESTED,tests/test_raft_divergent_state_recovery.zig,tests/test_raft_divergent_state_recovery.zig,,distributed,2026-06-11
-REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,DrainReadyMessages,TESTED,src/distributed/raft_consensus.zig,tests/test_drainready_dispatch.zig,,distributed,2026-05-25
+REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,DrainReadyMessages,TESTED,src/distributed/raft_consensus.zig,tests/test_drainready_dispatch.zig,,distributed,2026-11-15
 REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,BridgeAndDrainReady,TESTED,tests/test_drainready_dispatch.zig,tests/test_drainready_dispatch.zig,,distributed,2026-05-25
 REQ-DIST-RAFT-FOLLOWER-DIRECTIONAL-EVICT,Raft Directional Eviction,DirectionalEvictAllowed,TESTED,src/distributed/raft_consensus.zig,tests/test_raft_follower_response_eviction.zig,,distributed,2026-06-12
 REQ-DIST-RAFT-FOLLOWER-DIRECTIONAL-EVICT,Raft Directional Eviction,ImplicitAckStampsProof,TESTED,src/distributed/raft_consensus.zig,tests/test_raft_follower_response_eviction.zig,,distributed,2026-06-12
@@ -4962,7 +4962,7 @@ REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,StreamSchemaUnread,TESTED,src/server
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,ColumnTypeFromAllRows,TESTED,src/server/proto_util.zig,tests/test_sonny6562_wire_metadata.zig,,server,2026-11-15
 REQ-SONNY-6562-RESULT-ORDER,ResultMetadata,OrderedTruthful,TESTED,src/query/query_traits.zig,tests/test_sonny6562_wire_metadata.zig,,query,2026-11-15
 REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
-REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
+REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,SentAfterAdvancePersist,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-15
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,tests/test_sonny6563_vote_persist_before_send.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
 REQ-SONNY-6564-BINDING-NAMES,GQLParser,ReservedWordRefusal,TESTED,src/gql/parser.zig,tests/test_sonny6564_identifier_words.zig,,parser,2026-11-15
 REQ-SONNY-6564-IDENTIFIER-WORDS,GQLParser,ReservedWords,TESTED,src/gql/identifier_words.zig,tests/test_sonny6564_identifier_words.zig,,parser,2026-11-15
@@ -5006,7 +5006,7 @@ REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI,RefusedConnectAndBackupServerNamed,TESTE
 REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,GraphScopedSchemaListing,TESTED,src/graph_store.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
 REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,HelloCredentialsAuthenticateLsp,TESTED,src/server/main.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
 REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,PasswordAuthAndPerUserSchema,TESTED,tests/test_sonny6589_lsp_auth.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
-REQ-SONNY-6589-MCP-TIMEOUT-REFUSED,MCPBackendTools,UnappliedTimeoutRefused,TESTED,tests/test_sonny6589_mcp_timeout.zig,tests/test_sonny6589_mcp_timeout.zig,,mcp,2026-11-15
+REQ-SONNY-6589-MCP-TIMEOUT-APPLIED,MCPBackendTools,EndpointTimeoutApplied,TESTED,tests/test_sonny6589_mcp_timeout.zig,tests/test_sonny6589_mcp_timeout.zig,,mcp,2026-11-15
 REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6589_broken_graph_open.zig,,storage,2026-11-15
 REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,tests/test_sonny6589_broken_graph_open.zig,,,storage,2026-11-15
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
@@ -5096,12 +5096,18 @@ REQ-SONNY-6609-SM-MFA-HYDRATION,MFA authentication,StartupLoadsSecurityManagerMf
 REQ-SONNY-6609-SM-MFA-HYDRATION,MFA authentication,StoredMfaStateLoaded,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
 REQ-SONNY-6609-USER-DELETE-ERRORS,GQL Auth DDL,DropUserReportsErrors,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6609_mfa_at_rest.zig,,security,2026-11-15
 REQ-SONNY-6609-USER-SHOW-MFA,MFA authentication,UserShowMfaState,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6609_mfa_at_rest_scan.zig,,security,2026-11-15
+REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY,Raft Consensus Persistence,ApplyAfterAdvancePersist,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6611_raft_persist_before_apply.zig,,distributed,2026-11-15
+REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY,Raft Consensus Persistence,EntriesDurableBeforeApplyAndReply,TESTED,tests/test_sonny6611_raft_persist_before_apply.zig,tests/test_sonny6611_raft_persist_before_apply.zig,,distributed,2026-11-15
 REQ-SONNY-6614-GRACEFUL-STOP,Test harness,GracefulServerStop,TESTED,tests/proto_test_util.zig,tests/test_sonny6614_offline_verify.zig,,testing,2026-11-15
 REQ-SONNY-6614-MFA-ATTEMPT-STORE,MFA authentication,DurableAttemptRecord,TESTED,src/storage/user_storage.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
 REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,OfflineAttemptLimit,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig,,security,2026-11-15
 REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6614_offline_verify.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-LOAD-ERRDEFER,AuthGraphManager Integration,LoadFreesOnFailure,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-RESIDUALS,MFA authentication,Regression,TESTED,tests/test_sonny6614_auth_residuals.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6617-CLI-DSN-TIMEOUT,DSN parameters,CliAppliesDsnTimeout,TESTED,src/cli/main.zig,tests/test_sonny6617_cli_dsn_timeout.zig,,cli,2026-11-15
+REQ-SONNY-6617-CLI-DSN-TIMEOUT,DSN parameters,CliAppliesDsnTimeout,TESTED,tests/test_sonny6617_cli_dsn_timeout.zig,,,cli,2026-11-15
+REQ-SONNY-6617-RAFT-PERSIST-RETRY,Raft Consensus Persistence,PersistFailureRetried,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6617_raft_persist_failure.zig,,distributed,2026-11-15
+REQ-SONNY-6617-RAFT-PERSIST-RETRY,Raft Consensus Persistence,PersistFailureRetried,TESTED,tests/test_sonny6617_raft_persist_failure.zig,,,distributed,2026-11-15
 REQ-SONNY-6619-MFA-LIMITS,MFA authentication,Regression,TESTED,tests/test_sonny6619_mfa_limits.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
 REQ-SONNY-6619-OFFLINE,MFA authentication,Regression,TESTED,tests/test_sonny6619_offline.zig,tests/test_sonny6619_offline.zig,,security,2026-11-15
 REQ-SONNY-6619-SERVER-LOCKOUT-STORED,MFA authentication,LockoutSurvivesRestart,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
