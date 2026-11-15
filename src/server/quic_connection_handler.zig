@@ -2678,7 +2678,6 @@ pub const SharedConnState = struct {
     disable_estimates: bool = false,
     compact_profile: bool = false,
     memcurve_profile: bool = false,
-    env_spill_threshold: usize = 0,
     env_storage_checksum_error: bool = false,
     /// #683: Cached env config pointer (global lifetime, not owned).
     env_config: ?*const server_init.EnvironmentConfig = null,
@@ -3217,7 +3216,6 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.query_mem_limit_bytes = cs.env_spill_threshold;
     state.storage_checksum_error = cs.env_storage_checksum_error;
     state.security_manager = cs.security_manager;
     state.query_optimizer = cs.shared_optimizer;
@@ -5826,7 +5824,6 @@ pub fn handleQuicConnection(
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     _force_serialization_failure_unused: bool,
     security_manager: ?*geode_auth.SecurityManager,
@@ -5931,7 +5928,6 @@ pub fn handleQuicConnection(
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
-    state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
     // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
@@ -6148,7 +6144,6 @@ pub fn handleQuicConnection(
         .disable_estimates = disable_estimates,
         .compact_profile = compact_profile,
         .memcurve_profile = memcurve_profile,
-        .env_spill_threshold = env_spill_threshold,
         .env_storage_checksum_error = env_storage_checksum_error,
         .env_config = env_config,
     };

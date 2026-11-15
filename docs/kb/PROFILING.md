@@ -41,8 +41,7 @@
 | Variable                      | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
 | `GEODE_NULLS_LAST`            | Nulls last ordering policy                             |
-| `GEODE_SPILL_THRESHOLD_BYTES` | Read at startup; changes no output. The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
-| `GEODE_QUERY_MEM_LIMIT_BYTES` | The same setting under another name (it wins when both are set); changes no output |
+| `GEODE_SPILL_THRESHOLD_BYTES`, `GEODE_QUERY_MEM_LIMIT_BYTES` | Not read by the server (SONNY-6596; read into a setting nothing used until then). The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
 | `GEODE_FORCE_SORT_SPILL`, `GEODE_FORCE_DISTINCT_SPILL`, `GEODE_FORCE_UNION_SPILL` | Not read by the server (SONNY-6435) |
 
 ## CLI Flags

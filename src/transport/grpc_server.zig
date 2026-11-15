@@ -111,7 +111,6 @@ const log = logging.scoped("grpc");
 const Attr = logging.Attr;
 
 pub const GrpcConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     disable_estimates: bool = false,
     compact_profile: bool = false,
@@ -866,7 +865,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
     // GAP-0756: Wire the shared query optimizer so the gRPC handler hits the

@@ -2616,6 +2616,14 @@
 
 ### Fixed
 
+- **The spill-threshold environment variables are no longer read
+  (SONNY-6596).** The server read `GEODE_SPILL_THRESHOLD_BYTES` /
+  `GEODE_QUERY_MEM_LIMIT_BYTES` at startup and copied the value into every
+  QUIC and gRPC session (`ServerState.query_mem_limit_bytes`), where nothing
+  read it: the executor never spills and enforces no per-query memory
+  limit. The plumbing is removed and the docs say the variables are not
+  read. Regression: `zig build test-sonny6596-spill-plumbing`.
+
 - **A double-quoted delimited identifier names what a backquoted one does
   (SONNY-6596).** ISO/IEC 39075:2024 21.3: `<delimited identifier> ::=
   <double quoted character sequence> | <accent quoted character sequence>`.

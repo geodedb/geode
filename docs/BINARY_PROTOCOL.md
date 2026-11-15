@@ -137,9 +137,9 @@ Top-level keys, in the order sent:
   `spill_reason`, `peak_bytes_at_spill` and `first_spill_op_index` only when
   a counter is above 0. The executor never spills a sort, DISTINCT, UNION or
   GROUP BY to disk, so every counter is 0 and `spill_reason` is absent in both
-  versions; `GEODE_SPILL_THRESHOLD_BYTES` / `GEODE_QUERY_MEM_LIMIT_BYTES`
-  change nothing (until SONNY-6562 version 1 reported a spill when its
-  synthetic peak passed the threshold).
+  versions; the server does not read `GEODE_SPILL_THRESHOLD_BYTES` /
+  `GEODE_QUERY_MEM_LIMIT_BYTES` (SONNY-6596; until SONNY-6562 version 1
+  reported a spill when its synthetic peak passed the threshold).
 - `memory`: `{ net_bytes, peak_bytes, total_alloc_bytes }`, all 0 (not
   measured; version 1 reported a fixed model until SONNY-6596).
 - `planner_estimates`: absent. No planner estimates byte counts (version 1

@@ -248,8 +248,9 @@ const geode_auth = @import("geode_auth");
 /// Main server state structure managing all server-side state
 /// Extracted from main.zig in Phase 3 M3.2 to enable better modularization
 pub const ServerState = struct {
-    // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
-    query_mem_limit_bytes: usize = 0,
+    // SONNY-6596: no per-query memory limit or spill threshold. The
+    // executor never spills; the spill-threshold environment variables were
+    // read into a field nothing read.
     // Whether to return results inline in RUN_GQL response (vs separate PULL)
     inline_results_enabled: bool = false,
     // Maximum rows to return inline (0 disables the cap; default keeps
