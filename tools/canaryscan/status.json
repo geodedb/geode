@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T23:17:00.998806879Z",
+  "generated_at": "2026-11-15T23:20:46.926674751Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80700,6 +80700,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6615-TS-WAL-DIR-OWNER",
+      "features": [
+        {
+          "feature": "Timeseries",
+          "aspect": "WalDirClosedOnce",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6615_ts_wal_dir_close.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6615_ts_wal_dir_close.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6616-DATA-DIR-NAMES-SEALED",
       "features": [
         {
@@ -86167,7 +86186,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4276
+      "TESTED": 4277
     },
     "by_aspect": {
       "2PC": 3,
@@ -89916,6 +89935,7 @@
       "VoteSurvivesRestart": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
+      "WalDirClosedOnce": 1,
       "WalDirHandleClosed": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,

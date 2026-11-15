@@ -10611,6 +10611,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6616_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6616-tde-residuals", "Run SONNY-6616 regression (invalidating a graph's exact property index removes prop_rev.idx with prop_exact.idx, with and without an at-rest key)").dependOn(&run_sonny6616_tests.step);
 
+    // SONNY-6615: exactly one owner closes the time-series WAL directory.
+    const sonny6615_wal_dir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6615_ts_wal_dir_close.zig"), .target = target, .optimize = optimize });
+    sonny6615_wal_dir_mod.link_libc = true;
+    sonny6615_wal_dir_mod.addImport("geode", root_mod);
+    const sonny6615_wal_dir_tests = b.addTest(.{ .root_module = sonny6615_wal_dir_mod });
+    const run_sonny6615_wal_dir_tests = b.addRunArtifact(sonny6615_wal_dir_tests);
+    shardDep(test_step, &run_sonny6615_wal_dir_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6615-ts-wal-dir-close", "Run SONNY-6615 regression (closing a time-series store closes only its own WAL directory descriptor, never one another thread has just opened on the same directory)").dependOn(&run_sonny6615_wal_dir_tests.step);
+
     // SONNY-6547 (1): a quarantined graph and a graph whose label
     // dictionaries diverged answer every read and write shape with the same
     // GQLSTATUS and message class over QUIC and gRPC (a real server).

@@ -5107,6 +5107,7 @@ REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,OfflineAttemptLimit,TESTED,s
 REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6614_offline_verify.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-LOAD-ERRDEFER,AuthGraphManager Integration,LoadFreesOnFailure,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-RESIDUALS,MFA authentication,Regression,TESTED,tests/test_sonny6614_auth_residuals.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6615-TS-WAL-DIR-OWNER,Timeseries,WalDirClosedOnce,TESTED,tests/test_sonny6615_ts_wal_dir_close.zig,tests/test_sonny6615_ts_wal_dir_close.zig,,storage,2026-11-15
 REQ-SONNY-6616-DATA-DIR-NAMES-SEALED,TDEFileLevelEncryption,SealedGraphNames,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6616_tde_residuals.zig,,security,2026-11-15
 REQ-SONNY-6616-EXACT-INDEX-INVALIDATE-PAIR,TDEFileLevelEncryption,Regression,TESTED,tests/test_sonny6616_tde_residuals.zig,tests/test_sonny6616_tde_residuals.zig,,security,2026-11-15
 REQ-SONNY-6617-CLI-DSN-TIMEOUT,DSN parameters,CliAppliesDsnTimeout,TESTED,src/cli/main.zig,tests/test_sonny6617_cli_dsn_timeout.zig,,cli,2026-11-15
