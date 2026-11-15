@@ -8,15 +8,26 @@
 // (`geode.parseGql`), as a client's query does. A doc example that does not
 // parse fails here, so the docs cannot rot again.
 //
+// SONNY-6613 item 8: every Markdown doc under docs/, at any depth, not a
+// list (149 examples in 22 docs did not parse). A syntax template (with
+// `[...]` or `<...>` placeholders) is a ```text block, not a ```gql one.
+//
 // CANARY: REQ=REQ-SONNY-6596-DOC-EXAMPLES-PARSE; FEATURE="Documentation"; ASPECT=GqlExamplesParse; STATUS=TESTED; TEST=tests/test_sonny6596_doc_examples_parse.zig; OWNER=docs; UPDATED=2026-11-15
 
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-/// Docs whose every ```gql block is checked.
-const docs = [_][]const u8{
-    "docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md",
+/// The directory whose every Markdown doc's ```gql blocks are checked.
+const docs_root = "docs";
+
+/// The docs checked must include these (the walk reads them all; this
+/// guards against a walk that silently reads nothing).
+const must_check = [_][]const u8{
+    "GRAPH_ALGORITHMS_USAGE_GUIDE.md",
+    "TYPE_QUICK_REFERENCE.md",
+    "GQL_COMPLIANCE.md",
+    "API_REFERENCE.md",
 };
 
 fn isCommentOnly(line: []const u8) bool {
@@ -38,8 +49,8 @@ fn check(doc: []const u8, line_no: usize, query: []const u8) !usize {
     return 0;
 }
 
-fn checkDoc(a: std.mem.Allocator, io: std.Io, doc: []const u8) !usize {
-    const text = try std.Io.Dir.cwd().readFileAlloc(io, doc, a, .limited(8 << 20));
+fn checkDoc(a: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, doc: []const u8) !usize {
+    const text = try dir.readFileAlloc(io, doc, a, .limited(8 << 20));
     defer a.free(text);
     var failures: usize = 0;
     var in_gql = false;
@@ -76,11 +87,29 @@ fn checkDoc(a: std.mem.Allocator, io: std.Io, doc: []const u8) !usize {
     return failures;
 }
 
-test "SONNY-6596: every GQL example in the listed docs parses" {
+test "SONNY-6596 / SONNY-6613: every GQL example in every doc under docs/ parses" {
     const a = testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(io, docs_root, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(a);
+    defer walker.deinit();
     var failures: usize = 0;
-    for (docs) |doc| failures += try checkDoc(a, io, doc);
+    var seen = [_]bool{false} ** must_check.len;
+    var checked: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
+        for (must_check, &seen) |name, *s| {
+            if (std.mem.eql(u8, entry.path, name)) s.* = true;
+        }
+        checked += 1;
+        failures += try checkDoc(a, io, dir, entry.path);
+    }
+    for (must_check, seen) |name, s| {
+        if (!s) std.debug.print("{s}/{s} was not checked\n", .{ docs_root, name });
+        try testing.expect(s);
+    }
+    try testing.expect(checked > must_check.len);
     try testing.expectEqual(@as(usize, 0), failures);
 }
 
