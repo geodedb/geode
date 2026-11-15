@@ -2593,6 +2593,15 @@
   its write and after SIGKILL and SIGTERM restarts, and a wrong-dimension
   vector written by every path in every phase; 27 of 238 cells failed
   before).
+- **A raft snapshot installed after a restart rebuilds the fulltext indexes
+  (SONNY-6595).** `fts_index_ops.rebuildAllFulltextIndexes`, which the
+  snapshot install runs, rebuilt the indexes in each graph's in-memory
+  label registry, which after a restart is filled by the first write. A
+  snapshot installed before any write rebuilt nothing, so a node it
+  restored under an id the engine had tombstoned stayed unsearchable. It
+  now fills the registry from the catalog first (`armLabelRegistry`,
+  SONNY-6591). (`installSnapshotData` has no production caller yet.)
+  Regression: `zig build test-sonny6595-fts-snapshot-restart`.
 
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to

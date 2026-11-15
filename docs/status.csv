@@ -5273,6 +5273,7 @@ REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,,,fts,2026-11-15,t
 REQ-SONNY-6595-FAST-CREATE-DIM-GUARD,VectorIndex,FastPathCreateDimensionGuard,TESTED,,,index,2026-11-15,src/server/quic_connection_handler.zig,566
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,FastPathNodeWriteMaintenance,TESTED,,,index,2026-11-15,src/server/quic_connection_handler.zig,1287
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,IndexNamesCopied,TESTED,,,index,2026-11-15,src/index/index_manager.zig,2151
+REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,,,fts,2026-11-15,src/execution/fts_index_ops.zig,1147
 REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,,,fts,2026-11-15,tests/test_sonny6595_fts_snapshot_restart.zig,18
 REQ-SONNY-6595-STANDALONE-DELETE,DeleteStatement,UnboundDeleteDeletesNothing,TESTED,,,engine,2026-11-15,tests/test_sonny6595_standalone_delete.zig,21
 REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,,,index,2026-11-15,tests/test_sonny6595_vector_write_paths.zig,44

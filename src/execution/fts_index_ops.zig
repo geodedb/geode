@@ -1144,6 +1144,11 @@ pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
     for (graph_names) |gname| {
         const mg = adapter.lookupManagedGraph(gname) catch continue;
         const fa = mg.fts_adapter orelse continue; // no FTS on this graph
+        // CANARY: REQ=REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART; FEATURE="FullText"; ASPECT=SnapshotRebuildArmsRegistry; STATUS=TESTED; TEST=tests/test_sonny6595_fts_snapshot_restart.zig; OWNER=fts; UPDATED=2026-11-15
+        // SONNY-6595: the registry read below is filled from the catalog by
+        // the first write hook after a restart (SONNY-6591); a snapshot
+        // installed before any write found it empty and rebuilt nothing.
+        armLabelRegistry(adapter, mg, fa, gname);
 
         const entries = mg.snapshotFtsLabelIndex(scratch) catch |err| {
             log.warn("fts snapshot rebuild: registry copy failed for graph '{s}': {}", .{ gname, err });
