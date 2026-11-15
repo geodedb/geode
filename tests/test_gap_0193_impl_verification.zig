@@ -209,14 +209,14 @@ test "GAP-0193: REQ-STRING-MIN-MAX-001 - String min/max aggregation" {
 
 // CANARY: REQ=REQ-STRING-FUNC-001; FEATURE="StringFunctions"; ASPECT=ToUpper; STATUS=TESTED; TEST=test_gap_0193_impl_verification.zig; OWNER=eval; UPDATED=2026-01-15
 test "GAP-0193: REQ-STRING-FUNC-001 - String toUpper function" {
-    var result = try geode.parse(testing.allocator, "RETURN toUpper('hello') AS upper", .{});
+    var result = try geode.parse(testing.allocator, "RETURN toUpper('hello') AS `upper`", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-STRING-FUNC-002; FEATURE="StringFunctions"; ASPECT=ToLower; STATUS=TESTED; TEST=test_gap_0193_impl_verification.zig; OWNER=eval; UPDATED=2026-01-15
 test "GAP-0193: REQ-STRING-FUNC-002 - String toLower function" {
-    var result = try geode.parse(testing.allocator, "RETURN toLower('HELLO') AS lower", .{});
+    var result = try geode.parse(testing.allocator, "RETURN toLower('HELLO') AS `lower`", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -270,7 +270,7 @@ test "GAP-0193: REQ-TRIG-002 - Cos function" {
 // =============================================================================
 
 test "GAP-0193: REQ-AGG-COLLECT-001 - Collect aggregation" {
-    var result = try geode.parse(testing.allocator, "FOR n IN [1, 2, 3] RETURN collect(n) AS list", .{});
+    var result = try geode.parse(testing.allocator, "FOR n IN [1, 2, 3] RETURN collect(n) AS `list`", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

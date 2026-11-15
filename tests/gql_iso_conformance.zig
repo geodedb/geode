@@ -610,7 +610,9 @@ test "ISO Negative: Dangling operator" {
 // SR 18: a <non-delimited identifier> whose case-normal form (SR 17) is a
 // <reserved word> is not an identifier; a <non-reserved word> is one; a
 // <delimited identifier> may be any word. Full lists and every binding
-// position: tests/test_sonny6564_identifier_words.zig.
+// position: tests/test_sonny6564_identifier_words.zig. (Geode keeps five
+// reserved words as names, PATH, VALUE, COUNT, AVG and TIMESTAMP, and any
+// word as a label or property name: docs/GQL_COMPLIANCE.md.)
 // ============================================================================
 
 test "ISO 21.3: a non-reserved word is a binding variable (TYPE, PROPERTY, NODE)" {
@@ -622,8 +624,8 @@ test "ISO 21.3: a non-reserved word is a binding variable (TYPE, PROPERTY, NODE)
 test "ISO 21.3: a reserved word is not a binding variable" {
     try expectParseErr("RETURN MATCH");
     try expectParseErr("MATCH (match:X) RETURN match");
-    try expectParseErr("MATCH (n) RETURN n AS count");
-    try expectParseErr("MATCH path = (a)-->(b) RETURN 1");
+    try expectParseErr("MATCH (n) RETURN n AS sum");
+    try expectParseErr("MATCH list = (a)->(b) RETURN 1");
 }
 
 test "ISO 21.3: the case-normal form decides (SR 17)" {
@@ -632,7 +634,7 @@ test "ISO 21.3: the case-normal form decides (SR 17)" {
 
 test "ISO 21.3: a delimited identifier may be a reserved word" {
     try expectParseOk("MATCH (`match`:X) RETURN `match`");
-    try expectParseOk("MATCH (n) RETURN n AS `count`");
+    try expectParseOk("MATCH (n) RETURN n AS `sum`");
 }
 
 test "ISO 21.3: a reserved word still begins its own construct" {

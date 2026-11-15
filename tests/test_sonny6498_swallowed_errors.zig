@@ -86,7 +86,7 @@ fn subst(comptime s: []const u8, comptime from: []const u8, comptime to: []const
 /// value that read another chain's variable matched nothing).
 const valid = [_]Case{
     .{ .q = "MATCH (n:S6498), (t:S6498T {k: n.k}) RETURN t.k AS k", .want = &.{"1"} },
-    .{ .q = "MATCH (n:S6498) WITH n WITH n.g AS g, sum(n.k * 1.5) AS s RETURN g, s > 1.0 AS big", .want = &.{ "'a', true", "'b', true" } },
+    .{ .q = "MATCH (n:S6498) WITH n WITH n.g AS g, sum(n.k * 1.5) AS s RETURN g, s > 1.0 AS `big`", .want = &.{ "'a', true", "'b', true" } },
     .{ .q = "MATCH (n:S6498) WITH n WITH n.g AS g, max(n.g) AS m RETURN g, m", .want = &.{ "'a', 'a'", "'b', 'b'" } },
 };
 

@@ -202,7 +202,7 @@ test "GAP-0193: GQL - ISO compliance" {
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-INTEGRATION; FEATURE="GQLTypes"; ASPECT=Integration; STATUS=IMPL; OWNER=testing; UPDATED=2026-11-12
 test "GAP-0193: GQL - Advanced types integration" {
-    var result = try geode.parse(testing.allocator, "RETURN [1, 2, 3] AS list, {a: 1} AS map", .{});
+    var result = try geode.parse(testing.allocator, "RETURN [1, 2, 3] AS `list`, {a: 1} AS map", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

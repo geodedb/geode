@@ -10,6 +10,7 @@ const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
+const identifier_words = @import("identifier_words.zig");
 const stack_guard = @import("../stack_guard.zig");
 
 // CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
@@ -431,10 +432,21 @@ pub const Parser = struct {
         return out;
     }
 
-    // Helper function to accept identifiers or keywords as identifiers (for aliases, etc.)
-    // CANARY: REQ=REQ-GQL-001; FEATURE="KeywordsAsIdentifiers"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
-    // Per ISO/IEC 39075:2024, keywords can be used as identifiers in most contexts (aliases, variable names, property names, labels)
+    // CANARY: REQ=REQ-GQL-001; FEATURE="KeywordsAsIdentifiers"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2026-11-15
+    /// A name in a position only a name can take: a label, a relationship
+    /// type, a property or record field name, a property key. SONNY-6564:
+    /// Geode accepts any word here, a 21.3 <reserved word> included (a
+    /// documented extension, docs/GQL_COMPLIANCE.md: ISO/IEC 39075:2024 21.3
+    /// SR 18 refuses a reserved word in these <identifier>s too), and a
+    /// delimited identifier (`...`). Names that bind or reference a variable,
+    /// an alias or a parameter go through `expectBindingName`.
     fn expectIdentifierOrKeyword(self: *Parser) !tok.Token {
+        if (self.cur.kind == .quoted_identifier) {
+            var out = self.cur;
+            out.lexeme = try self.delimitedName(out);
+            self.advance();
+            return out;
+        }
         if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             const out = self.cur;
             self.advance();
@@ -446,6 +458,113 @@ pub const Parser = struct {
             .{ @tagName(self.cur.kind), self.cur.loc.line, self.cur.loc.column },
         ) catch "identifier";
         return error.UnexpectedToken;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6564-BINDING-NAMES; FEATURE="GQLParser"; ASPECT=ReservedWordRefusal; STATUS=TESTED; TEST=tests/test_sonny6564_identifier_words.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6564: ISO/IEC 39075:2024 21.3 for a name that binds or references
+    /// something in the query's scope: a variable (16.x <binding variable>,
+    /// a <regular identifier>), an alias (<identifier>), a parameter
+    /// (<parameter name>). SR 18: a <non-delimited identifier> whose
+    /// case-normal form is a <reserved word> is not one, so `match`, `list`
+    /// or `sum` name nothing (except the five words Geode's own procedures
+    /// yield, `identifier_words.geode_binding_extension`: PATH, VALUE, COUNT,
+    /// AVG, TIMESTAMP, a documented non-conformance); a <non-reserved word> (TYPE, PROPERTY, NODE,
+    /// ...) and every word 21.3 does not list (Geode's MERGE, UNWIND, ...)
+    /// does. A delimited identifier (`match`) always does (a binding variable
+    /// written that way is a Geode extension: 21.3 makes it a <regular
+    /// identifier>). The parser took any keyword token, reserved or not, in
+    /// most of these positions and only plain identifiers in others (SET,
+    /// REMOVE, DELETE, FOR, UNWIND, LET): `MATCH (match:X) RETURN match`
+    /// parsed and `MATCH (type:T) SET type.x = 1` did not.
+    fn isBindingName(self: *Parser, t: tok.Token) bool {
+        return switch (t.kind) {
+            .quoted_identifier => true,
+            .identifier => !identifier_words.isRefusedBindingName(t.lexeme),
+            else => self.isKeyword(t.kind) and !identifier_words.isRefusedBindingName(t.lexeme),
+        };
+    }
+
+    /// A word token (an identifier or any keyword) that 21.3 reserves and
+    /// Geode does not keep as a binding name.
+    fn isReservedWordToken(self: *Parser, t: tok.Token) bool {
+        const word = t.kind == .identifier or self.isKeyword(t.kind) or
+            (@intFromEnum(t.kind) >= @intFromEnum(tok.TokenKind.MATCH) and @intFromEnum(t.kind) < @intFromEnum(tok.TokenKind.eof));
+        return word and identifier_words.isRefusedBindingName(t.lexeme);
+    }
+
+    /// SONNY-6564: a reserved word read where an expression starts begins one
+    /// of the constructs the 21.3 keyword list exists for, so it is not
+    /// taken as a variable reference: a built-in function call (20.x: ABS,
+    /// COUNT, UPPER, ... are keyword productions), a subquery or record
+    /// (`COUNT { }`, `EXISTS { }`, `VALUE { }`), a typed temporal literal
+    /// (`DURATION 'P1D'`), a list constructor (`LIST [1, 2]`), or a niladic
+    /// value function (`CURRENT_DATE`, `SESSION_USER`, ...).
+    fn reservedWordStartsExpression(self: *Parser, t: tok.Token) bool {
+        const next = self.peekKind();
+        if (next == .l_paren or next == .l_brace) return true;
+        const eq = std.ascii.eqlIgnoreCase;
+        if (next == .string_lit) {
+            for ([_][]const u8{ "DATE", "TIME", "DATETIME", "TIMESTAMP", "DURATION", "LOCAL_DATETIME", "LOCAL_TIME", "LOCAL_TIMESTAMP", "ZONED_DATETIME", "ZONED_TIME" }) |w| {
+                if (eq(t.lexeme, w)) return true;
+            }
+        }
+        if (next == .DATETIME or next == .TIME or next == .TIMESTAMP) {
+            if (eq(t.lexeme, "LOCAL") or eq(t.lexeme, "ZONED")) return true;
+        }
+        if (next == .l_bracket and (eq(t.lexeme, "LIST") or eq(t.lexeme, "ARRAY"))) return true;
+        for ([_][]const u8{
+            "CURRENT_DATE",        "CURRENT_TIME",           "CURRENT_TIMESTAMP", "LOCAL_TIME",   "LOCAL_TIMESTAMP",
+            "LOCAL_DATETIME",      "CURRENT_GRAPH",          "CURRENT_SCHEMA",    "HOME_GRAPH",   "HOME_SCHEMA",
+            "HOME_PROPERTY_GRAPH", "CURRENT_PROPERTY_GRAPH", "SESSION_USER",      "CURRENT_USER", "SYSTEM_USER",
+            "CURRENT_ROLE",
+        }) |w| {
+            if (eq(t.lexeme, w)) return true;
+        }
+        return false;
+    }
+
+    /// SONNY-6564: the 42000 refusal of a reserved word written where a name
+    /// binds or is referenced, naming the delimited form that is accepted.
+    fn refuseReservedName(self: *Parser, t: tok.Token, what: []const u8) ParserError {
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "`{s}` is a reserved word (ISO/IEC 39075:2024 21.3) and cannot be used as {s} at line {d} col {d}; write it as a delimited identifier: `{s}`",
+            .{ t.lexeme, what, t.loc.line, t.loc.column, t.lexeme },
+        ) catch "a reserved word (ISO/IEC 39075:2024 21.3) cannot be used as an identifier; write it as a delimited identifier";
+        return error.UnexpectedToken;
+    }
+
+    /// SONNY-6564: consume a name that binds or references something in
+    /// scope (see `isBindingName`); `what` names the position for the
+    /// refusal ("a variable", "an alias", "a parameter name").
+    fn expectBindingName(self: *Parser, what: []const u8) ParserError![]const u8 {
+        const t = self.cur;
+        if (self.isBindingName(t)) {
+            self.advance();
+            return if (t.kind == .quoted_identifier) try self.delimitedName(t) else t.lexeme;
+        }
+        if (self.isReservedWordToken(t)) return self.refuseReservedName(t, what);
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "expected {s}, got '{s}' at line {d} col {d}",
+            .{ what, @tagName(t.kind), t.loc.line, t.loc.column },
+        ) catch what;
+        return error.UnexpectedToken;
+    }
+
+    /// The name a delimited identifier stands for: its text with each doubled
+    /// accent undoubled (21.1 <accent quoted character sequence>).
+    fn delimitedName(self: *Parser, t: tok.Token) ParserError![]const u8 {
+        if (std.mem.indexOf(u8, t.lexeme, "``") == null) return t.lexeme;
+        const out = try self.arena.allocator().alloc(u8, t.lexeme.len);
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < t.lexeme.len) : (i += 1) {
+            out[n] = t.lexeme[i];
+            n += 1;
+            if (t.lexeme[i] == '`' and i + 1 < t.lexeme.len and t.lexeme[i + 1] == '`') i += 1;
+        }
+        return out[0..n];
     }
 
     // Parser operations can fail due to syntax or allocation issues.
@@ -705,8 +824,10 @@ pub const Parser = struct {
                 self.advance();
                 return .{ .value = null, .param = name.lexeme };
             }
-            const name = try self.expectIdentifierOrKeyword();
-            return .{ .value = null, .param = name.lexeme };
+            // SONNY-6564: a <parameter name> is a <separated identifier>
+            // (21.3), so a reserved word is refused: write $`limit`.
+            const name = try self.expectBindingName("a parameter name");
+            return .{ .value = null, .param = name };
         }
         const lim_tok = try self.expect(.integer_lit);
         return .{ .value = try std.fmt.parseInt(u64, lim_tok.lexeme, 10), .param = null };
@@ -1129,10 +1250,8 @@ pub const Parser = struct {
 
     /// Parse a single CTE: name [(col1, col2)] AS (query)
     fn parseSingleCTE(self: *Parser, is_recursive_context: bool) ParserError!ast.CommonTableExpression {
-        // Parse CTE name
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const cte_name = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the CTE name binds a table name in the query.
+        const cte_name = try self.expectBindingName("a CTE name");
 
         // Optional column list: (col1, col2, ...)
         var column_names: ?[]const []const u8 = null;
@@ -1326,8 +1445,7 @@ pub const Parser = struct {
                     var alias: ?[]const u8 = null;
                     if (self.cur.kind == .AS) {
                         self.advance();
-                        const al = try self.expectIdentifierOrKeyword();
-                        alias = al.lexeme;
+                        alias = try self.expectBindingName("an alias"); // SONNY-6564
                     }
                     try items.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
                     if (self.cur.kind != .comma) break;
@@ -1868,10 +1986,9 @@ pub const Parser = struct {
                             while (true) {
                                 if (self.cur.kind == .dollar) {
                                     self.advance();
-                                    if (self.cur.kind == .identifier) {
-                                        const var_name = self.cur.lexeme;
-                                        try imports.append(self.arena.allocator(), var_name);
-                                        self.advance();
+                                    // SONNY-6564: a <parameter name>.
+                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+                                        try imports.append(self.arena.allocator(), try self.expectBindingName("a parameter name"));
                                     }
                                 }
                                 if (self.cur.kind == .comma) {
@@ -2408,9 +2525,7 @@ pub const Parser = struct {
                 // Parse $variable
                 if (self.cur.kind != .dollar) return self.unexpected("expected $ parameter variable after LET");
                 self.advance();
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after $");
-                const var_name = self.cur.lexeme;
-                self.advance();
+                const var_name = try self.expectBindingName("a parameter name"); // SONNY-6564
                 _ = try self.expect(.eq);
                 const value_expr = try self.parseOrExpr();
                 try let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
@@ -2629,9 +2744,7 @@ pub const Parser = struct {
             self.advance();
             const list_expr = try self.parseOrExpr();
             _ = try self.expect(.AS);
-            if (self.cur.kind != .identifier) return self.unexpected("expected identifier after UNWIND ... AS");
-            const var_name = self.cur.lexeme;
-            self.advance();
+            const var_name = try self.expectBindingName("a variable"); // SONNY-6564
             unwind_clause = .{ .list_expr = list_expr, .variable = var_name };
         }
 
@@ -2985,9 +3098,7 @@ pub const Parser = struct {
             self.advance();
             while (true) {
                 // Parse variable name (no $ prefix for inline LET)
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after LET");
-                const var_name = self.cur.lexeme;
-                self.advance();
+                const var_name = try self.expectBindingName("a variable"); // SONNY-6564
                 _ = try self.expect(.eq);
                 const value_expr = try self.parseOrExpr();
                 try inline_let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
@@ -3482,9 +3593,10 @@ pub const Parser = struct {
             // Optional path alias: ident '=' before a node pattern or shortestPath function
             // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
-            if ((self.cur.kind == .identifier or self.cur.kind == .PATH or self.isKeyword(self.cur.kind)) and self.peekKind() == .eq) {
-                chain_name = self.cur.lexeme;
-                self.advance(); // ident, PATH, or keyword
+            // SONNY-6564: a path variable is a binding name (PATH, a 21.3
+            // reserved word, is one of the five Geode keeps).
+            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .eq) {
+                chain_name = try self.expectBindingName("a path variable");
                 _ = try self.expect(.eq);
 
                 // Check if this is a shortestPath or allShortestPaths function call
@@ -3554,6 +3666,10 @@ pub const Parser = struct {
                         try self.appendAbbreviatedHop(&hops, &left, .undirected);
                         continue;
                     }
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
                 } else if (self.cur.kind == .arrow_l) {
                     const arrow = self.cur;
                     self.advance();
@@ -3574,6 +3690,10 @@ pub const Parser = struct {
                     if (self.cur.kind == .minus and adjacentTokens(arrow, self.cur)) {
                         return self.unexpected("`<--` is not GQL (ISO/IEC 39075:2024 16.7: `--` begins a comment): write `<-` for an edge pointing left, `<-[ ]-` with a filler, or `-` / `<->` for either direction");
                     }
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .left);
+                        continue;
+                    }
                     // Check for bracketless left-directed relationship (<-() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .left;
@@ -3593,6 +3713,10 @@ pub const Parser = struct {
                     dir = .left;
                 } else if (self.cur.kind == .arrow_r) {
                     self.advance();
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .right);
+                        continue;
+                    }
                     // Check for bracketless right-directed relationship (->() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .right;
@@ -3633,6 +3757,7 @@ pub const Parser = struct {
                 } else if (self.atUndirectedEdge()) {
                     return self.undirectedEdge(); // SONNY-6433: `-[ ]~`
                 }
+                if (self.atGraphPatternQuantifier()) try self.parseGraphPatternQuantifier(&rel);
                 const right = try self.parseNodePattern();
                 try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
                 left = right; // chain continues from the right node
@@ -3657,13 +3782,91 @@ pub const Parser = struct {
         return .{ .chains = try chains.toOwnedSlice(self.arena.allocator()) };
     }
 
+    // CANARY: REQ=REQ-SONNY-6564-PATH-QUANTIFIER; FEATURE="GQLParser"; ASPECT=GraphPatternQuantifier; STATUS=TESTED; TEST=tests/test_sonny6564_identifier_words.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6564: an ISO/IEC 39075:2024 16.11 <graph pattern quantifier>
+    /// follows: `{`, or `*` / `+` before a node pattern.
+    fn atGraphPatternQuantifier(self: *Parser) bool {
+        return switch (self.cur.kind) {
+            .l_brace => true,
+            .star, .plus => self.peekKind() == .l_paren,
+            else => false,
+        };
+    }
+
+    /// SONNY-6564: read a 16.11 <graph pattern quantifier> after an edge
+    /// pattern (Feature G036, quantified edges) into the edge's length
+    /// bounds, the ones the Cypher-style `-[*m..n]->` sets, so both run on
+    /// the same variable-length expansion. 16.11 SR 2: `*` is `{0,}`, `+` is
+    /// `{1,}`, `{n}` is `{n,n}`, and a <general quantifier> without a lower
+    /// bound has 0; SR 3 a: an upper bound is greater than 0 and not below
+    /// the lower bound. An edge whose brackets already carry `*` takes none.
+    fn parseGraphPatternQuantifier(self: *Parser, rel: *ast.RelPattern) ParserError!void {
+        if (rel.min_len != null or rel.max_len != null) {
+            return self.unexpected("an edge pattern takes one quantifier: write `-[:R*1..2]->` or `-[:R]->{1,2}`, not both (ISO/IEC 39075:2024 16.11)");
+        }
+        var lower: ?u32 = null;
+        var upper: ?u32 = null;
+        switch (self.cur.kind) {
+            .star => {
+                self.advance();
+                lower = 0;
+            },
+            .plus => {
+                self.advance();
+                lower = 1;
+            },
+            .l_brace => {
+                self.advance();
+                var general = false;
+                if (self.cur.kind == .integer_lit) {
+                    lower = std.fmt.parseInt(u32, self.cur.lexeme, 10) catch return self.unexpected("graph pattern quantifier bound out of range");
+                    self.advance();
+                }
+                if (self.cur.kind == .comma) {
+                    general = true;
+                    self.advance();
+                    if (self.cur.kind == .integer_lit) {
+                        upper = std.fmt.parseInt(u32, self.cur.lexeme, 10) catch return self.unexpected("graph pattern quantifier bound out of range");
+                        self.advance();
+                    }
+                }
+                if (self.cur.kind != .r_brace) return self.unexpected("expected `}` closing the graph pattern quantifier (ISO/IEC 39075:2024 16.11: {n}, {m,n}, {m,} or {,n})");
+                self.advance();
+                if (!general) {
+                    if (lower == null) return self.unexpected("a fixed quantifier needs its count: {n} (ISO/IEC 39075:2024 16.11)");
+                    upper = lower;
+                } else if (lower == null) {
+                    lower = 0;
+                }
+                if (upper) |u| {
+                    if (u == 0) return self.unexpected("a graph pattern quantifier's upper bound must be greater than 0 (ISO/IEC 39075:2024 16.11 SR 3)");
+                    if (lower.? > u) return self.unexpected("a graph pattern quantifier's lower bound must not exceed its upper bound (ISO/IEC 39075:2024 16.11 SR 3)");
+                }
+            },
+            else => return,
+        }
+        rel.min_len = lower;
+        rel.max_len = upper;
+    }
+
+    /// SONNY-6564: an abbreviated edge (`-`, `<-`, `->`) with a quantifier,
+    /// `(a)->{1,2}(b)`, then the node pattern it reaches.
+    fn appendQuantifiedAbbreviatedHop(self: *Parser, hops: *std.ArrayList(ast.Hop), left: *ast.NodePattern, dir: ast.RelDir) ParserError!void {
+        var rel = ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = dir, .min_len = null, .max_len = null };
+        try self.parseGraphPatternQuantifier(&rel);
+        const right = try self.parseNodePattern();
+        try hops.append(self.arena.allocator(), .{ .left = left.*, .rel = rel, .right = right });
+        left.* = right;
+    }
+
     fn parseNodePattern(self: *Parser) ParserError!ast.NodePattern {
         _ = try self.expect(.l_paren);
         var name: ?[]const u8 = null;
-        // Accept keywords as variable names (e.g., MATCH (create:Person))
-        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
-            name = self.cur.lexeme;
-            self.advance();
+        // SONNY-6564: a node variable is a binding name (21.3 SR 18): a
+        // non-reserved word (`(type:T)`) or a delimited identifier names it,
+        // a reserved word (`(match:X)`) is refused.
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+            name = try self.expectBindingName("a node variable");
         }
         var labels = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
@@ -3683,10 +3886,9 @@ pub const Parser = struct {
     fn parseRelPattern(self: *Parser, dir: ast.RelDir) ParserError!ast.RelPattern {
         _ = try self.expect(.l_bracket);
         var name: ?[]const u8 = null;
-        // Accept keywords as variable names (e.g., MATCH ()-[property:KNOWS]->())
-        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
-            name = self.cur.lexeme;
-            self.advance();
+        // SONNY-6564: an edge variable is a binding name, as a node's.
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+            name = try self.expectBindingName("an edge variable");
         }
         var types = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
@@ -3760,13 +3962,14 @@ pub const Parser = struct {
                 // Accept identifier, string_lit, or any keyword as property keys
                 // This allows {name: 'value'}, {'name': 'value'}, and {value: 1} syntax
                 // Keywords like VALUE, RETURN, etc. are valid property names
+                // SONNY-6564: a property key is a name only, so any word is
+                // taken (docs/GQL_COMPLIANCE.md), and a delimited identifier.
                 const key = if (self.cur.kind == .string_lit)
                     try self.expect(.string_lit)
-                else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token;
-                } else return self.unexpected("property key");
+                else if (self.cur.kind == .identifier or self.cur.kind == .quoted_identifier or self.isKeyword(self.cur.kind))
+                    try self.expectIdentifierOrKeyword()
+                else
+                    return self.unexpected("property key");
                 _ = try self.expect(.colon);
                 const expr = try self.parseOrExpr();
                 const a = self.arena.allocator();
@@ -3783,16 +3986,13 @@ pub const Parser = struct {
     }
 
     fn parseProjectionItems(self: *Parser, out: *std.ArrayList(ast.ReturnItem)) ParserError!void {
-        // Handle RETURN NO BINDINGS to return 0 rows
-        if (self.cur.kind == .NO) {
+        // Handle RETURN NO BINDINGS to return 0 rows. SONNY-6564: NO is a
+        // 21.3 non-reserved word, so `RETURN no` returns a variable `no`.
+        if (self.cur.kind == .NO and self.peekKind() == .BINDINGS) {
             self.advance();
-            if (self.cur.kind == .BINDINGS) {
-                self.advance();
-                // Return empty list of items - this signals no rows should be returned
-                return;
-            } else {
-                return error.UnexpectedToken;
-            }
+            self.advance();
+            // Return empty list of items - this signals no rows should be returned
+            return;
         }
 
         // Handle RETURN * to return all bound variables
@@ -3812,13 +4012,13 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                // Accept either identifier/keyword or quoted string literal for alias
-                const a = if (self.cur.kind == .string_lit) blk: {
+                // A quoted string literal, or a binding name (SONNY-6564:
+                // a reserved word is refused, ISO/IEC 39075:2024 21.3).
+                alias = if (self.cur.kind == .string_lit) blk: {
                     const token = self.cur;
                     self.advance();
-                    break :blk token;
-                } else try self.expectIdentifierOrKeyword();
-                alias = a.lexeme;
+                    break :blk token.lexeme;
+                } else try self.expectBindingName("an alias");
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
             if (self.cur.kind != .comma) break;
@@ -4317,11 +4517,8 @@ pub const Parser = struct {
         while (true) : (try self.countExprLink()) {
             if (self.cur.kind == .dot) {
                 self.advance();
-                const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token;
-                } else try self.expect(.identifier);
+                // SONNY-6564: a property name; any word, or `...`.
+                const field = try self.expectIdentifierOrKeyword();
                 const a = self.arena.allocator();
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
@@ -4415,7 +4612,7 @@ pub const Parser = struct {
                 if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or
                     std.ascii.eqlIgnoreCase(base.Ident.orig, "any") or
                     std.ascii.eqlIgnoreCase(base.Ident.orig, "none") or
-                    std.ascii.eqlIgnoreCase(base.Ident.orig, "single")) and self.cur.kind == .identifier)
+                    std.ascii.eqlIgnoreCase(base.Ident.orig, "single")) and self.isBindingName(self.cur))
                 {
                     // Check if this is a list comprehension: identifier IN ...
                     const saved_idx = self.lx.idx;
@@ -4673,8 +4870,10 @@ pub const Parser = struct {
                     self.advance();
                     break :blk_param .{ .Param = name.lexeme };
                 }
-                const name = try self.expectIdentifierOrKeyword();
-                break :blk_param .{ .Param = name.lexeme };
+                // SONNY-6564: a <parameter name> (21.3): a reserved word
+                // is refused, a delimited one ($`limit`) is not.
+                const name = try self.expectBindingName("a parameter name");
+                break :blk_param .{ .Param = name };
             },
             .date_lit => blk_dt: {
                 const tkn = self.cur;
@@ -4737,6 +4936,10 @@ pub const Parser = struct {
             },
             .identifier => blk: {
                 const tkn = self.cur;
+                // SONNY-6564: a reserved word is no variable reference.
+                if (identifier_words.isRefusedBindingName(tkn.lexeme) and !self.reservedWordStartsExpression(tkn)) {
+                    return self.refuseReservedName(tkn, "a variable");
+                }
                 self.advance();
                 // Create CNF representation for identifiers
                 const unicode = @import("../unicode/unicode_tables.zig");
@@ -4918,16 +5121,16 @@ pub const Parser = struct {
                 // literal whose first element is negative) from the expression parser.
                 self.advance();
                 var starts_pattern = false;
-                if (self.cur.kind == .l_paren or ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq)) {
+                if (self.cur.kind == .l_paren or ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .eq)) {
                     starts_pattern = true;
                 }
                 if (!starts_pattern) {
                     // Check for list comprehension: [x IN list WHERE cond | expr]
                     // Detected by: identifier IN ...
-                    if (self.cur.kind == .identifier and self.peekKind() == .IN) {
-                        // Parse list comprehension
-                        const var_name = self.cur.lexeme;
-                        self.advance(); // consume identifier
+                    if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .IN) {
+                        // Parse list comprehension; SONNY-6564: its variable
+                        // is a binding name.
+                        const var_name = try self.expectBindingName("a variable");
                         self.advance(); // consume IN
 
                         // Parse source expression
@@ -5034,11 +5237,29 @@ pub const Parser = struct {
                 // Implement simpler form: allow after comprehension an optional 'AS ident' alias; or embed none. We'll stick to none here; aliasing can be carried by outer ReturnItem alias.
                 break :blk_pc .{ .PatternComp = .{ .pattern = pat_ptr, .where = where_expr, .map = mp, .alias = null } };
             },
+            // SONNY-6564: a delimited identifier references a variable of any
+            // name (`match`).
+            .quoted_identifier => blk_q: {
+                const tkn = self.cur;
+                const name = try self.delimitedName(tkn);
+                self.advance();
+                const unicode = @import("../unicode/unicode_tables.zig");
+                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), name) catch |fold_err| switch (fold_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => name,
+                };
+                break :blk_q .{ .Ident = .{ .orig = name, .cnf = cnf } };
+            },
             else => blk: {
-                // Accept keywords as identifiers (ISO/IEC 39075:2024 compliance)
-                // This handles cases like: MATCH (create:Person) RETURN create
+                // A keyword token: a non-reserved word (TYPE, PROPERTY, ...)
+                // references a variable of that name (`MATCH (type:T) RETURN
+                // type`); SONNY-6564: a reserved word (`RETURN match`) does
+                // not, unless it starts a construct (a call, COUNT { }, ...).
                 if (self.isKeyword(self.cur.kind)) {
                     const tkn = self.cur;
+                    if (identifier_words.isRefusedBindingName(tkn.lexeme) and !self.reservedWordStartsExpression(tkn)) {
+                        return self.refuseReservedName(tkn, "a variable");
+                    }
                     self.advance();
                     // Create CNF representation for identifiers
                     const unicode = @import("../unicode/unicode_tables.zig");
@@ -5705,10 +5926,8 @@ pub const Parser = struct {
     }
 
     fn parseDeleteItem(self: *Parser) ParserError!ast.DeleteItem {
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const name = self.cur.lexeme;
-        self.advance();
-        return .{ .Variable = name };
+        // SONNY-6564: the variable a DELETE names is a binding name.
+        return .{ .Variable = try self.expectBindingName("a variable") };
     }
 
     // Parse MERGE statement
@@ -5841,10 +6060,10 @@ pub const Parser = struct {
     }
 
     fn parseSetClause(self: *Parser) ParserError!ast.SetClause {
-        // Parse identifier (e.g., n)
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const object = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the target variable is a binding name. Only a plain
+        // identifier was taken, so `MATCH (type:T) SET type.x = 1` failed
+        // though MATCH bound `type` (a 21.3 non-reserved word).
+        const object = try self.expectBindingName("a variable");
 
         // Check what follows the identifier
         if (self.cur.kind == .colon) {
@@ -5908,10 +6127,8 @@ pub const Parser = struct {
     }
 
     fn parseRemoveClause(self: *Parser) ParserError!ast.RemoveClause {
-        // Parse identifier (e.g., n)
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const object = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the target variable is a binding name, as SET's.
+        const object = try self.expectBindingName("a variable");
 
         // Check if it's a label removal (n:Label) or property removal (n.property)
         if (self.cur.kind == .colon) {
@@ -6718,17 +6935,11 @@ pub const Parser = struct {
 
         var column_names = std.ArrayList([]const u8).empty;
 
-        // Parse first column name
-        if (self.cur.kind != .identifier) return self.unexpected("expected column name after AS (");
-        try column_names.append(self.arena.allocator(), self.cur.lexeme);
-        self.advance();
-
-        // Parse additional column names
+        // SONNY-6564: each column name binds a variable for what follows.
+        try column_names.append(self.arena.allocator(), try self.expectBindingName("a column name"));
         while (self.cur.kind == .comma) {
             self.advance();
-            if (self.cur.kind != .identifier) return self.unexpected("expected column name");
-            try column_names.append(self.arena.allocator(), self.cur.lexeme);
-            self.advance();
+            try column_names.append(self.arena.allocator(), try self.expectBindingName("a column name"));
         }
 
         _ = try self.expect(.r_paren);
@@ -6841,9 +7052,7 @@ pub const Parser = struct {
         _ = try self.expect(.FOR);
 
         // Parse iteration variable: FOR item IN ...
-        if (self.cur.kind != .identifier) return self.unexpected("expected identifier after FOR");
-        const variable = self.cur.lexeme;
-        self.advance();
+        const variable = try self.expectBindingName("a FOR variable"); // SONNY-6564
 
         // Expect IN keyword
         _ = try self.expect(.IN);
@@ -6859,16 +7068,10 @@ pub const Parser = struct {
             self.advance();
             if (self.cur.kind == .ORDINALITY) {
                 self.advance();
-                // Expect variable name after ORDINALITY
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after ORDINALITY");
-                ordinality_var = self.cur.lexeme;
-                self.advance();
+                ordinality_var = try self.expectBindingName("an ORDINALITY variable"); // SONNY-6564
             } else if (self.cur.kind == .OFFSET) {
                 self.advance();
-                // Expect variable name after OFFSET
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after OFFSET");
-                offset_var = self.cur.lexeme;
-                self.advance();
+                offset_var = try self.expectBindingName("an OFFSET variable"); // SONNY-6564
             } else {
                 return self.unexpected("expected ORDINALITY or OFFSET after WITH");
             }
@@ -8327,15 +8530,13 @@ pub const Parser = struct {
                 self.advance();
                 // Parse parameter specification (with $ prefix)
                 _ = try self.expect(.dollar); // Consume $
-                // Allow any keyword to be used as a parameter name (like count, name, etc.)
+                // SONNY-6564: a <parameter name> (ISO/IEC 39075:2024 21.3):
+                // a reserved word is refused unless delimited ($`count`).
                 const param_spec = if (self.cur.kind == .string_lit) blk: {
                     const spec = self.cur.lexeme;
                     self.advance();
                     break :blk spec;
-                } else blk: {
-                    const token = try self.expectIdentifierOrKeyword();
-                    break :blk token.lexeme;
-                };
+                } else try self.expectBindingName("a parameter name");
 
                 return .{ .SessionReset = .{
                     .arguments = .{ .Parameter = param_spec },
@@ -8493,16 +8694,13 @@ pub const Parser = struct {
         // Consume the $ token
         _ = try self.expect(.dollar);
 
-        // Parse parameter specification (identifier or keyword after the $)
-        // Allow any keyword to be used as a parameter name since it follows $
+        // SONNY-6564: a <parameter name> (ISO/IEC 39075:2024 21.3): a
+        // non-reserved word or a delimited identifier ($`count`).
         const specification = if (self.cur.kind == .string_lit) blk: {
             const spec = self.cur.lexeme;
             self.advance();
             break :blk spec;
-        } else blk: {
-            const token = try self.expectIdentifierOrKeyword();
-            break :blk token.lexeme;
-        };
+        } else try self.expectBindingName("a parameter name");
 
         return .{
             .if_not_exists = if_not_exists,

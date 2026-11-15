@@ -13,9 +13,11 @@
 //! 2. A reserved word does not: `MATCH (match:X) RETURN match` ran and
 //!    `RETURN MATCH` parsed. Refused (42000), naming the delimited form;
 //!    `match` (backquoted) names it. Variables, aliases and parameters
-//!    follow 21.3 strictly. Labels, relationship types, property names and
-//!    property keys keep accepting any word: a documented Geode extension
-//!    (docs/GQL_COMPLIANCE.md), a name is all those positions can hold.
+//!    follow 21.3, except five reserved words Geode's own procedures yield
+//!    as columns (PATH, VALUE, COUNT, AVG, TIMESTAMP), which stay names.
+//!    Labels, relationship types, property names and property keys keep
+//!    accepting any word. Both are documented non-conformances
+//!    (docs/GQL_COMPLIANCE.md).
 //! 3. 16.11 <graph pattern quantifier> after an edge pattern (Feature G036):
 //!    `-[:R]->{1,2}`, `{n}`, `{m,}`, `{,n}`, `+` and `*` read into the same
 //!    length bounds as `-[:R*1..2]->`, and run on the same expansion.
@@ -125,12 +127,12 @@ test "SONNY-6564: a non-reserved word names a variable in every position a varia
         "MATCH p = (c:Counter)-[:HAS_TYPE]->(type:TypeInfo) SET type.property = 1",
         // Every other binding position.
         "MATCH (a)-[type:R]->(b) RETURN type",
-        "MATCH type = (a)-->(b) RETURN type",
+        "MATCH type = (a)->(b) RETURN type",
         "MATCH (type:T) DETACH DELETE type",
         "MATCH (n) RETURN n.k AS type ORDER BY type",
         "FOR type IN [1, 2] RETURN type",
         "FOR node IN [1] WITH ORDINALITY edge RETURN node, edge",
-        "UNWIND [1] AS type RETURN type",
+        "WITH 1 AS one UNWIND [1] AS type RETURN type",
         "RETURN $type",
         "RETURN [type IN [1, 2] WHERE type > 1 | type * 2] AS l",
         "RETURN any(type IN [1] WHERE type = 1) AS b",
@@ -147,17 +149,22 @@ test "SONNY-6564: a non-reserved word names a variable in every position a varia
 
 test "SONNY-6564: a reserved word is refused wherever a variable, alias or parameter binds or is read, naming the delimited form" {
     var failed: usize = 0;
-    // Every 21.3 reserved and pre-reserved word as a node variable.
+    // Every 21.3 reserved and pre-reserved word as a node variable, but the
+    // five Geode keeps (the test below).
     try testing.expectEqual(@as(usize, 222), iso_reserved.len);
     try testing.expectEqual(@as(usize, 40), iso_pre_reserved.len);
+    var refused_words: usize = 0;
     for ([_][]const []const u8{ &iso_reserved, &iso_pre_reserved }) |list| {
         for (list) |w| {
+            if (isGeodeExtension(w)) continue;
+            refused_words += 1;
             var buf: [128]u8 = undefined;
             const lower = std.ascii.lowerString(buf[64..], w);
             const q = try std.fmt.bufPrint(buf[0..64], "MATCH ({s}:T) RETURN 1", .{lower});
             if (!try refusedAsReserved(q, lower)) failed += 1;
         }
     }
+    try testing.expectEqual(@as(usize, 257), refused_words);
     const Case = struct { q: []const u8, word: []const u8 };
     for ([_]Case{
         .{ .q = "RETURN MATCH", .word = "MATCH" },
@@ -165,25 +172,51 @@ test "SONNY-6564: a reserved word is refused wherever a variable, alias or param
         .{ .q = "MATCH (return:X) RETURN return", .word = "return" },
         .{ .q = "MATCH (n:X) RETURN match", .word = "match" },
         .{ .q = "MATCH ()-[match:R]->() RETURN 1", .word = "match" },
-        .{ .q = "MATCH path = (a)-->(b) RETURN 1", .word = "path" },
-        .{ .q = "MATCH (n) RETURN n AS count", .word = "count" },
-        .{ .q = "MATCH (n) RETURN n.k AS value ORDER BY value", .word = "value" },
+        .{ .q = "MATCH list = (a)->(b) RETURN 1", .word = "list" },
+        .{ .q = "MATCH (n) RETURN n AS sum", .word = "sum" },
+        .{ .q = "MATCH (n) RETURN n.k AS data ORDER BY data", .word = "data" },
         .{ .q = "MATCH (n) WITH n AS list RETURN 1", .word = "list" },
         .{ .q = "MATCH (n) SET match.x = 1", .word = "match" },
         .{ .q = "MATCH (n) REMOVE match.x", .word = "match" },
         .{ .q = "MATCH (n) DELETE match", .word = "match" },
-        .{ .q = "FOR value IN [1] RETURN 1", .word = "value" },
-        .{ .q = "FOR x IN [1] WITH ORDINALITY count RETURN x", .word = "count" },
-        .{ .q = "UNWIND [1] AS value RETURN 1", .word = "value" },
+        .{ .q = "FOR year IN [1] RETURN 1", .word = "year" },
+        .{ .q = "FOR x IN [1] WITH ORDINALITY size RETURN x", .word = "size" },
+        .{ .q = "WITH 1 AS one UNWIND [1] AS upper RETURN 1", .word = "upper" },
         .{ .q = "RETURN $limit", .word = "limit" },
         .{ .q = "MATCH (n) WHERE n.k > $from RETURN n", .word = "from" },
         .{ .q = "VALUES (1) AS (number) RETURN 1", .word = "number" },
-        .{ .q = "RETURN [count IN [1] | count] AS l", .word = "count" },
-        .{ .q = "CALL geode.ts.range(1, 'm', 0, 10) YIELD ts, value RETURN ts", .word = "value" },
+        .{ .q = "RETURN [min IN [1] | min] AS l", .word = "min" },
+        .{ .q = "CALL geode.ts.range(1, 'm', 0, 10) YIELD ts, value AS max RETURN ts", .word = "max" },
         // SR 17: the case-normal form decides, not the spelling's case.
         .{ .q = "MATCH (MaTcH:X) RETURN 1", .word = "MaTcH" },
     }) |c| {
         if (!try refusedAsReserved(c.q, c.word)) failed += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), failed);
+}
+
+const geode_extension = [_][]const u8{ "AVG", "COUNT", "PATH", "TIMESTAMP", "VALUE" };
+
+fn isGeodeExtension(w: []const u8) bool {
+    for (geode_extension) |e| if (std.ascii.eqlIgnoreCase(e, w)) return true;
+    return false;
+}
+
+test "SONNY-6564: the five reserved words Geode's procedures yield stay binding names (documented non-conformance)" {
+    var failed: usize = 0;
+    for ([_][]const u8{
+        // algo.* yield `path`; a path variable named path.
+        "MATCH (n:Person) CALL algo.bfs.stream(n, {maxDepth: 2}) YIELD path RETURN path",
+        "MATCH path = (a)->(b) RETURN length(path) AS hops",
+        "MATCH (path:Person) RETURN path.name",
+        // geode.ts.* yield `value` and `avg`.
+        "CALL geode.ts.range(1, 'm', 0, 10) YIELD ts, value RETURN ts, value",
+        "CALL geode.ts.bucket_avg(1, 'm', 0, 10, 5) YIELD bucket_ts, avg RETURN bucket_ts, avg",
+        // count and timestamp columns.
+        "MATCH (n) RETURN count(n) AS count ORDER BY count",
+        "RETURN 1 AS timestamp",
+    }) |q| {
+        if (!try parses(q)) failed += 1;
     }
     try testing.expectEqual(@as(usize, 0), failed);
 }
@@ -194,7 +227,7 @@ test "SONNY-6564: a delimited identifier names anything; reserved words keep the
         // Delimited identifiers (21.3 <accent quoted character sequence>).
         "MATCH (`match`:X) RETURN `match`",
         "MATCH (`path`)-[`count`:R]->(b) RETURN `path`, `count`",
-        "MATCH `path` = (a)-->(b) RETURN `path`",
+        "MATCH `path` = (a)->(b) RETURN `path`",
         "MATCH (n) RETURN n AS `count` ORDER BY `count`",
         "MATCH (`match`) SET `match`.x = 1 REMOVE `match`.y",
         "FOR `value` IN [1] RETURN `value`",
@@ -205,7 +238,7 @@ test "SONNY-6564: a delimited identifier names anything; reserved words keep the
         // A reserved word that starts a construct is that construct.
         "MATCH (n) RETURN count(*)",
         "RETURN abs(-1), upper('a'), size([1]), coalesce(NULL, 1)",
-        "MATCH (n) RETURN count { MATCH (n)-->() } AS c",
+        "MATCH (n) RETURN count { MATCH (n)->() } AS c",
         "RETURN CURRENT_DATE",
         // Labels, types, property names and keys: any word (extension).
         "MATCH (n:Order)-[r:VALUE]->(m:Product) RETURN n.value, n.count, m.data",
@@ -388,7 +421,7 @@ test "SONNY-6564: over QUIC and gRPC, non-reserved-word variables write and read
         }
         // 2. A reserved word is a syntax error (42000) naming the fix; the
         // delimited form runs.
-        for ([_][]const u8{ "MATCH (match:S6564T) RETURN match", "RETURN MATCH", "MATCH (n:S6564T) RETURN n.k AS count" }) |q| {
+        for ([_][]const u8{ "MATCH (match:S6564T) RETURN match", "RETURN MATCH", "MATCH (n:S6564T) RETURN n.k AS sum" }) |q| {
             var r = try s.exec(a, t, q);
             defer r.deinit(a);
             if (r.error_code == null or !std.mem.eql(u8, r.error_code.?, "42000") or std.mem.indexOf(u8, r.error_message orelse "", "reserved word") == null) {

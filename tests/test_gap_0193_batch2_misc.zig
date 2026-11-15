@@ -309,7 +309,7 @@ test "GAP-0193: QUIC - Congestion control" {
 
 // CANARY: REQ=REQ-BUILTIN-STRING-001; FEATURE="BuiltinFunctions"; ASPECT=String; STATUS=IMPL; OWNER=functions; UPDATED=2026-11-12
 test "GAP-0193: Builtin - String functions" {
-    var result = try geode.parse(testing.allocator, "RETURN toUpper('hello') AS upper, toLower('WORLD') AS lower, trim('  text  ') AS trimmed", .{});
+    var result = try geode.parse(testing.allocator, "RETURN toUpper('hello') AS `upper`, toLower('WORLD') AS `lower`, trim('  text  ') AS trimmed", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

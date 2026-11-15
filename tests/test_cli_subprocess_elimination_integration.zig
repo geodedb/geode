@@ -254,7 +254,7 @@ test "integration output format consistency" {
         expected_pattern: []const u8,
     }{
         .{ .query = "RETURN 'hello' AS greeting", .expected_pattern = "hello" },
-        .{ .query = "RETURN 42 AS number", .expected_pattern = "42" },
+        .{ .query = "RETURN 42 AS `number`", .expected_pattern = "42" },
         .{ .query = "RETURN 7 AS seven", .expected_pattern = "7" },
     };
 

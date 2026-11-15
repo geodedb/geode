@@ -69,7 +69,7 @@ const cases = [_]Case{
     .{ .q = "MATCH (n:S6496) WITH * WHERE n.k > 1 RETURN n.t AS t ORDER BY n.k", .want = &.{"'b'"} },
     .{ .q = "MATCH (n:S6496) WITH n.k AS k, n.t AS t RETURN t ORDER BY k DESC", .want = &.{ "'b'", "'a'" }, .ordered = true },
     .{ .q = "MATCH (n:S6496) WITH n.k AS k MATCH (n:S6496) WHERE n.k = k RETURN n.t AS t", .want = &.{ "'a'", "'b'" } },
-    .{ .q = "MATCH (n:S6496) WITH n.k AS k WHERE k > $min RETURN k", .params = &.{.{ .name = "min", .value = .{ .Int = 1 } }}, .want = &.{"2"} },
+    .{ .q = "MATCH (n:S6496) WITH n.k AS k WHERE k > $`min` RETURN k", .params = &.{.{ .name = "min", .value = .{ .Int = 1 } }}, .want = &.{"2"} },
     .{ .q = "MATCH (n:S6496) WITH collect(n.k) AS ks RETURN [x IN ks WHERE x > 1 | x * 10] AS l", .want = &.{"[20]"} },
     .{ .q = "MATCH (n:S6496) WITH n.k AS k RETURN all(x IN [k] WHERE x > 0) AS q", .want = &.{ "true", "true" } },
     .{ .q = "MATCH (n:S6496) WITH n.k AS k FOR x IN [k, k * 10] RETURN x", .want = &.{ "1", "10", "2", "20" } },

@@ -821,7 +821,7 @@ test "FN-DISPATCH-PARITY: datetime accepts a date-only literal and reports parse
     // part and the caller swallowed the parse failure with `catch return null`,
     // which fell through to error.UnknownFunction (42883) — a data exception
     // misreported as "no such function".
-    try testing.expectEqual(@as(i64, 2024), try h.scalarInt("RETURN datetime('2024-06-15').year AS year"));
+    try testing.expectEqual(@as(i64, 2024), try h.scalarInt("RETURN datetime('2024-06-15').year AS `year`"));
 
     // A malformed literal on a RESOLVED function is TimeParse, never 42883.
     try testing.expectError(error.TimeParse, h.exec("RETURN datetime('garbage') AS x"));

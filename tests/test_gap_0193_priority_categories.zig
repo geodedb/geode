@@ -391,14 +391,14 @@ test "GAP-0193: ListProperties - List literal creation" {
 
 // CANARY: REQ=REQ-LIST-002; FEATURE="ListProperties"; ASPECT=ListAccess; STATUS=IMPL; OWNER=engine; UPDATED=2026-11-14
 test "GAP-0193: ListProperties - List element access" {
-    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3] AS list RETURN list[0]", .{});
+    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3] AS `list` RETURN `list`[0]", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-LIST-003; FEATURE="ListProperties"; ASPECT=ListSlice; STATUS=IMPL; OWNER=engine; UPDATED=2026-11-14
 test "GAP-0193: ListProperties - List slicing" {
-    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3, 4, 5] AS list RETURN list[1..3]", .{});
+    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3, 4, 5] AS `list` RETURN `list`[1..3]", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
@@ -599,7 +599,7 @@ test "GAP-0193: MemorySafety - Defer-based cleanup" {
 // CANARY: REQ=REQ-MEM-003; FEATURE="MemorySafety"; ASPECT=BoundsChecking; STATUS=IMPL; OWNER=engine; UPDATED=2026-11-14
 test "GAP-0193: MemorySafety - Bounds checking on array access" {
     // List access should be bounds-checked at runtime
-    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3] AS list RETURN list[0]", .{});
+    var result = try geode.parse(testing.allocator, "WITH [1, 2, 3] AS `list` RETURN `list`[0]", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

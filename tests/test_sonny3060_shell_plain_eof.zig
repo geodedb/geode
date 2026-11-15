@@ -174,7 +174,7 @@ test "SONNY-3060 geode shell --plain runs piped statements and exits 0 at EOF" {
     defer server.deinit();
 
     // Here-doc shape: every line ends in a newline, no exit command.
-    const r = try runPlainShell(server.getAddr(), "RETURN 3060 AS first\nRETURN 3061 AS second\n");
+    const r = try runPlainShell(server.getAddr(), "RETURN 3060 AS first\nRETURN 3061 AS `second`\n");
     defer r.deinit();
     try expectCleanExit(r, "piped statements", 3);
     if (!r.has("3060") or !r.has("3061")) r.dump("piped statements results");

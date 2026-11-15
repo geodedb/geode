@@ -2467,6 +2467,47 @@
 
 ### Fixed
 
+- **The parser applies ISO/IEC 39075:2024 21.3's identifier rule the right
+  way round, and takes 16.11 edge quantifiers (SONNY-6564, BREAKING: queries
+  using reserved words as names).** 21.3 SR 18: an unquoted identifier whose
+  case-normal form is a reserved word is not one; a non-reserved word is; a
+  delimited identifier may be any word. The parser accepted reserved words
+  as variables (`MATCH (match:X) RETURN match` ran, `RETURN MATCH` parsed)
+  while SET, REMOVE, DELETE, FOR, UNWIND and LET took only plain
+  identifiers, so `MATCH (type:T) SET type.x = 1` (TYPE is non-reserved) was
+  a syntax error. Now one predicate decides every name that binds or is
+  referenced (variables, aliases, YIELD items, parameters and session
+  parameters, VALUES columns, CTE names, comprehension variables): a 21.3
+  non-reserved word or any word 21.3 does not list names it; a reserved word
+  is 42000 naming its delimited form; `` `match` `` (accent-quoted, newly
+  lexed) names anything. The two lists, verified word for word against the
+  standard, are in src/gql/identifier_words.zig. **BREAKING:** an unquoted
+  reserved word as a variable, alias or parameter (`RETURN sum(x) AS sum`,
+  `WITH [1] AS list`, `$limit`, `$from`, `AS year`, `AS data`, ...) is now
+  42000; write it delimited (`` AS `sum` ``, `` $`limit` ``). Decided with
+  evidence (docs/GQL_COMPLIANCE.md "Reserved Words and Identifiers"): of
+  14,410 queries in Geode's tests, docs and examples and the integration
+  specs, strict 21.3 refused 260; five reserved words stay names, a
+  documented non-conformance, because Geode's own procedures yield columns so
+  named (PATH from `algo.*`, VALUE and AVG from `geode.ts.*`, COUNT and
+  TIMESTAMP from RLS and storage procedures) and they are 123 of the 260;
+  labels, relationship types and property names and keys still take any
+  word. 141 queries are refused: 44 of Geode's own (35 test query
+  literals in 20 files, corrected here with delimited names; 8 doc examples
+  whose `$query` became `$query_vector`, with their source in
+  src/gql/language_metadata.zig; the rest expect the refusal or are not
+  queries) and 97 in 39 integration-harness specs. `RETURN no` returns a variable `no` (NO
+  BINDINGS needs both words). 16.11: `-[:R]->{1,2}`, `{2}`, `{1,}`, `{,3}`,
+  `+` and `*` (on full and abbreviated edges) read into the bounds
+  `-[:R*m..n]->` sets and run on the same expansion; SR 3 bounds (`{0}`,
+  `{3,1}`) and a second quantifier are 42000. docs/GQL_COMPLIANCE.md claimed
+  "full quantifier support" with only the Cypher form; it now lists both
+  and that quantified parenthesized paths (G035) are unsupported.
+  Regressions: `zig build test-sonny6564-identifier-words` (every reserved
+  and non-reserved word, every binding position; executed over QUIC and gRPC
+  with the ISO quantifier results compared to `*m..n`),
+  `test-sonny6548-gql-identifier-words` (now in the aggregate),
+  `test-iso-conformance` (120/120, 11 new 21.3 and 16.11 cases).
 - **Wire result metadata describes the result it is sent with (SONNY-6562,
   BREAKING: declared column types change).** Over QUIC and gRPC:
   (1) A decimal (`RETURN 1.25`, any fixed-point value) is declared `DECIMAL`,

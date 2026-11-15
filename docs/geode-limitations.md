@@ -62,10 +62,11 @@ const created = await geode.query(
 
 **Error:** `integer_lit` (Geode expects a literal integer token, not a parameter reference)
 
-**Reproduction:**
+**Reproduction** (LIMIT and FROM are ISO/IEC 39075 21.3 reserved words, so a
+parameter so named is written delimited, `` $`limit` ``; SONNY-6564):
 
 ```gql
-MATCH (n:User) RETURN n LIMIT $limit
+MATCH (n:User) RETURN n LIMIT $`limit`
 -- with params: { limit: 10 }
 -- Error: integer_lit
 ```
@@ -96,7 +97,7 @@ CREATE (x:CityNode {name: 'NYC'})
 CREATE (y:CityNode {name: 'LA'})
 
 -- This silently does nothing
-MATCH (x:CityNode {name: $from}), (y:CityNode {name: $to})
+MATCH (x:CityNode {name: $`from`}), (y:CityNode {name: $to})
 CREATE (x)-[:ROAD {distance: $dist}]->(y)
 -- Returns: [] and no relationship is created
 
@@ -108,7 +109,7 @@ MATCH ()-[r:ROAD]->() RETURN r
 **Variant — with RETURN also fails:**
 
 ```gql
-MATCH (x:CityNode {name: $from}), (y:CityNode {name: $to})
+MATCH (x:CityNode {name: $`from`}), (y:CityNode {name: $to})
 CREATE (x)-[:FLIGHT]->(y)
 RETURN x.name AS from_city, y.name AS to_city
 -- Returns: []

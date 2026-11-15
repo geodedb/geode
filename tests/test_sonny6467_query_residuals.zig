@@ -29,7 +29,7 @@ const Case = harness.Case;
 const not_paren = [_]Case{
     .{ .q = "MATCH (q:Q) WITH q.k AS k WHERE NOT (k = 1) RETURN k", .want = &.{ "0", "2", "3" } },
     .{ .q = "MATCH (q:Q) WITH q.k AS k WHERE NOT (k = 1 OR k = 2) RETURN k", .want = &.{ "0", "3" } },
-    .{ .q = "MATCH (q:Q) WITH q.k > 1 AS big WHERE NOT (big) RETURN count(*) AS c", .want = &.{"2"} },
+    .{ .q = "MATCH (q:Q) WITH q.k > 1 AS `big` WHERE NOT (`big`) RETURN count(*) AS c", .want = &.{"2"} },
     .{ .q = "MATCH (q:Q) WITH q.k AS k WHERE NOT (k IN [0, 3]) RETURN k", .want = &.{ "1", "2" } },
     .{ .q = "MATCH (q:Q) LET k = q.k FILTER NOT (k < 2) RETURN k AS k", .want = &.{ "2", "3" } },
     // The pattern forms keep working.
