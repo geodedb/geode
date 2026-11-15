@@ -5313,6 +5313,7 @@ REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,,,index,2026
 REQ-SONNY-6596-APPROXIMATE-ARITHMETIC,NumericValueExpression,ApproximateOperands,TESTED,,,eval,2026-11-15,src/eval.zig,691
 REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,,,parser,2026-11-15,src/gql/parser.zig,5032
 REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,,,parser,2026-11-15,tests/test_sonny6596_approximate_literal.zig,11
+REQ-SONNY-6596-DOC-EXAMPLES-PARSE,Documentation,GqlExamplesParse,TESTED,,,docs,2026-11-15,tests/test_sonny6596_doc_examples_parse.zig,11
 REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,,,parser,2026-11-15,src/gql/parser.zig,566
 REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,,,parser,2026-11-15,tests/test_sonny6596_double_quoted_identifiers.zig,17
 REQ-SONNY-6596-NO-SPILL-PLUMBING,ServerConfig,NoDeadSpillLimit,TESTED,,,server,2026-11-15,tests/test_sonny6596_spill_plumbing.zig,12
