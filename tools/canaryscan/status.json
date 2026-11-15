@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:20:13.452827179Z",
+  "generated_at": "2026-11-15T13:37:58.50861414Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -2875,17 +2875,17 @@
       "features": [
         {
           "feature": "ApiKeyCLI",
-          "aspect": "CLI",
+          "aspect": "RefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/apikey_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/api_key_auth.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -5096,11 +5096,11 @@
             "src/cli/security/session_storage.zig"
           ],
           "tests": [
-            "tests/test_sonny6551_saved_session.zig"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-14"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6735,11 +6735,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6754,11 +6754,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6773,11 +6773,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6792,11 +6792,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6806,16 +6806,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6825,16 +6823,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "Pause",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6844,16 +6840,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "Resume",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6863,16 +6857,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "SetGuardrail",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6887,11 +6879,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6906,11 +6898,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6920,16 +6912,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetWatermark",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6939,16 +6929,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetPendingEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6958,16 +6946,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "ConfigureAdaptiveFlush",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6977,16 +6963,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetFlushMetrics",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -6996,16 +6980,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetMalformedRecords",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7015,16 +6997,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetCorruptionAnalysis",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7034,16 +7014,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetOrderedEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7053,16 +7031,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "CheckDuplicates",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7072,16 +7048,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetChangeStatus",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7091,16 +7065,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "ConfigureChangeStream",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7110,16 +7082,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "SetRetentionPolicy",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7129,16 +7099,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "CleanupExpiredEvents",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7148,16 +7116,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetTelemetryMetrics",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7167,16 +7133,14 @@
         {
           "feature": "CDCProcedures",
           "aspect": "GetPerformanceAlerts",
-          "status": "TESTED",
+          "status": "STUB",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7191,11 +7155,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7210,11 +7174,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_sonny6570_cdc_honesty.zig"
           ],
           "benches": [],
           "owner": "cdc",
-          "updated": "2026-01-15"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -7528,17 +7492,17 @@
       "features": [
         {
           "feature": "CLIAuthn",
-          "aspect": "ProviderConfig",
+          "aspect": "RefusedAsUnsupported",
           "status": "TESTED",
           "files": [
             "src/cli/authn_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/authn_provider.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -8675,25 +8639,11 @@
             "src/cli/session_cli.zig"
           ],
           "tests": [
-            "geodetestlab/specs/authn_provider.yml"
+            "tests/test_sonny6554_cli_honesty.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-02-04"
-        },
-        {
-          "feature": "CLISession",
-          "aspect": "Security",
-          "status": "TESTED",
-          "files": [
-            "src/cli/session_cli.zig"
-          ],
-          "tests": [
-            "tests/test_sec_sess_log.zig"
-          ],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-06-10"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -25019,50 +24969,6 @@
         },
         {
           "feature": "PathCache",
-          "aspect": "PathCacheStructuralKeySelectivityEnrichment",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig",
-            "src/planner/structural_key.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheStructuralKeyDegreeBucketEnrichment",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig",
-            "src/planner/structural_key.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
-          "aspect": "PathCacheDegreeBucketDiscrimination",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "PathCache",
           "aspect": "PathCacheStructuralKeyEnrichment",
           "status": "TESTED",
           "files": [
@@ -25084,6 +24990,34 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeySelectivityEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/structural_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding"
+          ],
+          "benches": [],
+          "owner": "planner",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "PathCache",
+          "aspect": "PathCacheStructuralKeyDegreeBucketEnrichment",
+          "status": "TESTED",
+          "files": [
+            "src/planner/structural_key.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding"
           ],
           "benches": [],
           "owner": "planner",
@@ -25317,39 +25251,10 @@
       "features": [
         {
           "feature": "Cost Based Optimizer",
-          "aspect": "PlanCostModelCalibration",
-          "status": "TESTED",
-          "files": [
-            "src/planner/cost_calibration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanCostModelCalibration"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanCostModelCalibrationVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "src/planner/cost_calibration.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Based Optimizer",
           "aspect": "PlanCostModelFactors",
           "status": "BENCHED",
           "files": [
-            "src/planner/cost_model.zig",
-            "tests/canary_planner_cost_model.zig"
+            "src/planner/cost_model.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_024_PlanCostModelFactors"
@@ -25375,35 +25280,6 @@
           ],
           "owner": "planner",
           "updated": "2025-09-26"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanSelectionPipelineAdoption",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig",
-            "tests/canary_planner_pipeline_selection.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanCostModelCalibrationRanking",
-          "status": "TESTED",
-          "files": [
-            "src/planner/pipeline.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
         },
         {
           "feature": "Cost Based Optimizer",
@@ -25436,50 +25312,6 @@
           ],
           "owner": "planner",
           "updated": "2025-09-21"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanJoinReorderDiversity",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_planner_join_reorder.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanJoinReorderVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_planner_join_reorder.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2026-11-14"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanSelectionPipelineVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_planner_pipeline_selection.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
         },
         {
           "feature": "Cost Based Optimizer",
@@ -27979,34 +27811,6 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Query Optimizer",
-          "aspect": "AdvancedCostModel",
-          "status": "TESTED",
-          "files": [
-            "src/canary.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_AdvancedCostModel"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Query Optimizer",
-          "aspect": "AdvancedCostModelCalibrationVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "src/canary.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope"
           ],
           "owner": "planner",
           "updated": "2025-09-22"
@@ -38563,18 +38367,6 @@
       "id": "REQ-LIB-MIGRATION-CONFIG-001",
       "features": [
         {
-          "feature": "Config Library Migration",
-          "aspect": "ReplConfigXdg",
-          "status": "EXEMPT",
-          "files": [
-            "src/client/repl/repl_config.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "client",
-          "updated": "2026-01-25"
-        },
-        {
           "feature": "External Library Migration",
           "aspect": "ConfigManagement",
           "status": "EXEMPT",
@@ -43248,80 +43040,6 @@
           "benches": [],
           "owner": "ml",
           "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-HASEDGE-001",
-      "features": [
-        {
-          "feature": "GraphData.hasEdge",
-          "aspect": "EdgeLookup",
-          "status": "TESTED",
-          "files": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "tests": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-06-11"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-MODULARITY-001",
-      "features": [
-        {
-          "feature": "Louvain Modularity Gain",
-          "aspect": "Core",
-          "status": "TESTED",
-          "files": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "tests": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-MODULARITY-002",
-      "features": [
-        {
-          "feature": "Graph Modularity Calculation",
-          "aspect": "Graph",
-          "status": "TESTED",
-          "files": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "tests": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-01-25"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-NEIGHBORS-001",
-      "features": [
-        {
-          "feature": "GraphData.getNeighbors",
-          "aspect": "NeighborLookup",
-          "status": "IMPL",
-          "files": [
-            "src/ml/integration_enhanced.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-06-11"
         }
       ]
     },
@@ -77805,6 +77523,171 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6554-CLI-HONESTY",
+      "features": [
+        {
+          "feature": "CLI session honesty",
+          "aspect": "UnsupportedRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6554_cli_honesty.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6554_cli_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6554-DSN-PARAMS",
+      "features": [
+        {
+          "feature": "DSN parameters",
+          "aspect": "OneStrictParser",
+          "status": "TESTED",
+          "files": [
+            "src/client/dsn_params.zig",
+            "tests/test_sonny6554_dsn_params.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6554_dsn_params.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6555-FOR-CHAIN-STAGE",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "ReadBodyOverWholeTable",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig",
+            "src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_for_chain_stage.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "ChainedWithAggregation",
+          "aspect": "ForAndSubqueryStages",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6555_for_chain_stage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_for_chain_stage.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6555-FUNCTION-ARITY",
+      "features": [
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "WrongArgumentCount",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig",
+            "tests/test_sonny6555_function_arity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_function_arity.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6555-NULL-ARGUMENTS",
+      "features": [
+        {
+          "feature": "SizeFunction",
+          "aspect": "NullAndCharacterLength",
+          "status": "TESTED",
+          "files": [
+            "src/eval/call_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_null_arguments.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-14"
+        },
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "NullInNullOut",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6555_null_arguments.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_null_arguments.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6555-ORDERED-BUILD-PROBE",
+      "features": [
+        {
+          "feature": "OrderedIndex",
+          "aspect": "ColumnClassProbe",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig",
+            "tests/test_sonny6555_ordered_build_probe.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_ordered_build_probe.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6555-PAGE-CLAUSE-ORDER",
+      "features": [
+        {
+          "feature": "OrderByAndPage",
+          "aspect": "OffsetBeforeLimit",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6555_page_clause_order.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6555_page_clause_order.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6559-CLI-EXIT-PATHS",
       "features": [
         {
@@ -78171,6 +78054,148 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6569-HOST-NO-USERINFO",
+      "features": [
+        {
+          "feature": "Shared host:port parser",
+          "aspect": "NoCredentialInHost",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6569_host_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6569_host_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-AUDIT",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "AuditedChanges",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-REFUSED-PROCEDURES",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "RefuseNotImplemented",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-START-NO-LEAK",
+      "features": [
+        {
+          "feature": "CDC Engine",
+          "aspect": "StartFailureFreesEngine",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES",
+      "features": [
+        {
+          "feature": "CDCProcedures",
+          "aspect": "EngineStateOnly",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6571-TDE-RAFT-AT-REST",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "RaftStorage",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_tde_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "RaftStorageSealOpenRefuse",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_raft_tde_storage.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "NoPlaintextUnderDataDir",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6571_tde_at_rest.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6571_tde_at_rest.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -79484,11 +79509,11 @@
             "src/streaming/sinks/webhook_sink.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "tests/test_gap0855_webhook_sink.zig"
           ],
           "benches": [],
           "owner": "streaming",
-          "updated": "2025-12-30"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Webhook Sink Implementation",
@@ -83261,11 +83286,12 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 130,
+      "BENCHED": 126,
       "COMPLETE": 2,
-      "EXEMPT": 210,
-      "IMPL": 534,
-      "TESTED": 4127
+      "EXEMPT": 209,
+      "IMPL": 533,
+      "STUB": 18,
+      "TESTED": 4116
     },
     "by_aspect": {
       "2PC": 3,
@@ -83335,8 +83361,7 @@
       "AdmissionFutexWake": 1,
       "AdmissionFutexWakeBuild": 1,
       "AdoptStatementRecord": 1,
-      "AdvancedCostModel": 1,
-      "AdvancedCostModelCalibrationVarianceEnvelope": 2,
+      "AdvancedCostModelCalibrationVarianceEnvelope": 1,
       "AfterInlineLet": 1,
       "AggEndpointUnification": 1,
       "Aggregate": 1,
@@ -83431,6 +83456,7 @@
       "AuditSeedEpochsAndHmacStartup": 1,
       "AuditTrail": 1,
       "AuditTransports": 1,
+      "AuditedChanges": 1,
       "AuditedGrantRevokeConfigure": 1,
       "AuthCategories": 1,
       "AuthCommands": 2,
@@ -83585,7 +83611,7 @@
       "CDCWatermarkAdvanceVarianceEnvelope": 1,
       "CENTRALITY_ALGORITHMS": 1,
       "CI": 3,
-      "CLI": 4,
+      "CLI": 3,
       "CLIConfig": 1,
       "CLIFlag": 3,
       "CLIFramework": 1,
@@ -83756,6 +83782,7 @@
       "CollectStatements": 1,
       "CollectionFunctions": 1,
       "CollectionParsing": 1,
+      "ColumnClassProbe": 1,
       "ColumnEntriesAndNfc": 1,
       "ColumnIndexLookup": 1,
       "ColumnOrder": 1,
@@ -83880,7 +83907,7 @@
       "CoordinatorActiveShardTuning": 1,
       "CoordinatorMetricsHotPath": 1,
       "CoordinatorPhaseMetrics": 1,
-      "Core": 22,
+      "Core": 21,
       "CoreEngine": 1,
       "CoreFunctionality": 2,
       "CoreImplementation": 1,
@@ -84226,7 +84253,7 @@
       "EdgeGraphTag": 1,
       "EdgeLabelAngleBracketEscape": 1,
       "EdgeListBinding": 1,
-      "EdgeLookup": 3,
+      "EdgeLookup": 2,
       "EdgePersistence": 1,
       "EdgePropHeadWalImage": 1,
       "EdgePropertyEncryption": 1,
@@ -84280,6 +84307,7 @@
       "EndpointUnification": 1,
       "Engine": 14,
       "EngineBatch2": 1,
+      "EngineStateOnly": 1,
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
       "Entry": 1,
@@ -84517,6 +84545,7 @@
       "FloatSupport": 1,
       "FlowControl": 1,
       "FollowerRemovedTextRebuild": 1,
+      "ForAndSubqueryStages": 1,
       "ForkJoin": 1,
       "FormatString": 1,
       "ForwardToShard": 1,
@@ -84642,7 +84671,7 @@
       "GrantUserGraphPermission": 1,
       "GrantWidening": 1,
       "GrantWriteThrough": 1,
-      "Graph": 3,
+      "Graph": 2,
       "GraphBoundError": 1,
       "GraphBuilderThroughputVarianceEnvelope": 1,
       "GraphCheckpointRegistry": 1,
@@ -85262,7 +85291,6 @@
       "Negated": 1,
       "NegativeAuthMatrix": 1,
       "NeighborAggregation": 1,
-      "NeighborLookup": 1,
       "NestedAggregateAnywhere": 1,
       "NestedAggregateReject": 1,
       "NestedAggregates": 1,
@@ -85287,6 +85315,7 @@
       "NoAutoCreate": 1,
       "NoBorrowedReads": 1,
       "NoCatalog": 1,
+      "NoCredentialInHost": 1,
       "NoCredentialsInHistory": 1,
       "NoCredentialsNoUnsafePath": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
@@ -85323,6 +85352,7 @@
       "NoPerTableCacheOfRowVerdict": 1,
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,
+      "NoPlaintextUnderDataDir": 1,
       "NoPrincipalUnauthenticated": 1,
       "NoReboxing": 1,
       "NoReplayAfterSend": 1,
@@ -85384,6 +85414,7 @@
       "NoteInboundAppendEntriesAdvance": 1,
       "NotedFailure": 1,
       "Null": 1,
+      "NullAndCharacterLength": 1,
       "NullAndListKeys": 1,
       "NullCheck": 3,
       "NullComparison": 2,
@@ -85391,6 +85422,7 @@
       "NullFields": 1,
       "NullHandling": 2,
       "NullIf": 1,
+      "NullInNullOut": 1,
       "NullKeyRefused": 1,
       "NullOnNoRows": 1,
       "NullRemovesProperty": 1,
@@ -85413,6 +85445,7 @@
       "OfflineChangeThenCrash": 1,
       "OfflineCliWriter": 1,
       "OfflineSuperuserKeepsAdmin": 1,
+      "OffsetBeforeLimit": 1,
       "OldPasswordAlwaysChecked": 1,
       "OltpAuthClusterFleEvidence": 1,
       "OnCreateSetRelationship": 1,
@@ -85431,6 +85464,7 @@
       "OneRowPerPath": 1,
       "OneScanPerBatch": 1,
       "OneSetPath": 1,
+      "OneStrictParser": 1,
       "OneWriterOneReaderSafeFile": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
@@ -85545,7 +85579,6 @@
       "PasswordReset": 1,
       "PasswordValidation": 1,
       "Path": 1,
-      "PathCacheDegreeBucketDiscrimination": 1,
       "PathCacheDegreeBucketUtilizationVarianceEnvelope": 1,
       "PathCacheStructuralKeyCollisionEnvelope": 1,
       "PathCacheStructuralKeyCollisionTightened": 1,
@@ -85650,9 +85683,6 @@
       "PlainReturnPerRow": 1,
       "PlaintextSizeLimit": 1,
       "PlanCacheEviction": 1,
-      "PlanCostModelCalibration": 1,
-      "PlanCostModelCalibrationRanking": 1,
-      "PlanCostModelCalibrationVarianceEnvelope": 1,
       "PlanCostModelFactors": 1,
       "PlanDryRunIntegrity": 1,
       "PlanEnumerationCostPrune": 1,
@@ -85661,14 +85691,10 @@
       "PlanEnumerationVarianceEnvelope": 1,
       "PlanGeneration": 1,
       "PlanIndexSeek": 1,
-      "PlanJoinReorderDiversity": 1,
-      "PlanJoinReorderVarianceEnvelope": 1,
       "PlanMatchesExecutorSeek": 1,
       "PlanMatchesRunStart": 1,
       "PlanMissSingleFlight": 1,
       "PlanSelectionIntegration": 1,
-      "PlanSelectionPipelineAdoption": 1,
-      "PlanSelectionPipelineVarianceEnvelope": 1,
       "PlanSelectionVarianceEnvelope": 1,
       "PlannedFinalProjection": 1,
       "PlannedReadRows": 1,
@@ -85831,7 +85857,6 @@
       "ProtocolHandler": 1,
       "ProtocolHandling": 1,
       "ProtocolTests": 1,
-      "ProviderConfig": 1,
       "ProviderFallback": 1,
       "ProximityProc": 1,
       "ProximityRowFilter": 1,
@@ -85948,6 +85973,8 @@
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
       "RaftSenderReconnectsInProcess": 1,
+      "RaftStorage": 1,
+      "RaftStorageSealOpenRefuse": 1,
       "RandAlias": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
@@ -85962,6 +85989,7 @@
       "RawReadCoalescedFrames": 1,
       "ReEncryption": 1,
       "ReExport": 3,
+      "ReadBodyOverWholeTable": 1,
       "ReadBudgetOverGrpc": 1,
       "ReadBudgetPoll": 2,
       "ReadFallsBackDuringBuild": 1,
@@ -86024,8 +86052,10 @@
       "RefusalKeysHexEncoded": 1,
       "RefuseFabricated": 2,
       "RefuseInternal": 1,
+      "RefuseNotImplemented": 1,
       "RefuseReserved": 1,
       "RefuseWhatIsNotSupported": 1,
+      "RefusedAsUnsupported": 2,
       "RefusedCommitOnQuicWire": 1,
       "RefusedDropFailsApply": 1,
       "RegistryHeaderSkipsLostEntry": 1,
@@ -86073,7 +86103,6 @@
       "RepairThroughputBench": 1,
       "RepairsDerivableOldEnvelopeDamage": 1,
       "RepeatedTarget": 1,
-      "ReplConfigXdg": 1,
       "ReplDispatchRegression": 1,
       "ReplLoopError": 1,
       "ReplParseDelegation": 1,
@@ -86250,7 +86279,7 @@
       "SecondsPrecisionDeclaration": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
-      "Security": 47,
+      "Security": 46,
       "SecurityAudit": 3,
       "SecurityBatch2": 1,
       "SecurityBoundaries": 1,
@@ -86481,6 +86510,7 @@
       "StandaloneCallReturn": 1,
       "StandardCastMatrix": 1,
       "Start": 1,
+      "StartFailureFreesEngine": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,
       "Startup": 6,
@@ -86803,6 +86833,7 @@
       "UnsupportedAlgorithm": 2,
       "UnsupportedFormatRefused": 1,
       "UnsupportedImageRemoved": 1,
+      "UnsupportedRefused": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,
       "UnwindEach": 1,
@@ -86954,6 +86985,7 @@
       "WriterHashesWholeRecord": 1,
       "WriterOutsideUserStoreMutex": 1,
       "WrittenOnceAtOutput": 2,
+      "WrongArgumentCount": 1,
       "WrongUserExcluded": 1,
       "Wtf8LossyDecode": 1,
       "XSSPrevention": 1,

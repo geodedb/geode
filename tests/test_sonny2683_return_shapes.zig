@@ -293,12 +293,15 @@ fn checkMode(mode: Mode) !void {
     try expectFail(&s, &f, "MATCH (n:G) CALL db.labels() YIELD label RETURN label WHERE label = 'G'", error.UnsupportedGroupedReturn);
 
     // FOR: its RETURN does not filter, and its GROUP BY groups the loop's
-    // rows (each of the 25 G rows once per element), not the WITH's; a loop body
-    // groups and filters per element (two here).
+    // rows (each of the 25 G rows once per element), not the WITH's; a loop
+    // body that reads groups and filters the FOR's whole table, every
+    // element's rows (SONNY-6555 item 7, ISO/IEC 39075:2024 14.8: it grouped
+    // per element, a|10 twice and b|10 twice, and c's 5 per element missed
+    // the HAVING).
     try expectFail(&s, &f, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x HAVING c > 100", error.UnexpectedToken);
     try expectSet(&s, &f, .any, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x", &.{ "1|25", "2|25" });
     try expectFail(&s, &f, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x WHERE x > 1", error.UnexpectedToken);
-    try expectSet(&s, &f, .any, "FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING c > 7", &.{ "a|10", "a|10", "b|10", "b|10" });
+    try expectSet(&s, &f, .any, "FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING c > 7", &.{ "a|20", "b|20", "c|10" });
 
     if (f.items.items.len != 0) {
         std.debug.print("\n{d} failed check(s):\n", .{f.items.items.len});

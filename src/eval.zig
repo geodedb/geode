@@ -1693,12 +1693,23 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     args[i] = valueToExtValue(allocator, arg_value) catch |err| return builtinError(err);
                     initialized_args += 1;
                 }
+                // SONNY-6555 item 4: a NULL argument gives NULL, as the
+                // standard's own functions answer a null operand (ISO/IEC
+                // 39075:2024 20.22 GR 1 b, 5 a, 6 a); the extension
+                // functions raised 22G03 for one. The function still runs, so an operand
+                // count it refuses is refused whatever the operands hold.
+                var has_null = false;
+                for (args) |a| {
+                    if (a == .Null) has_null = true;
+                }
 
                 // Call the extended function and handle validation errors
                 if (func(allocator, args)) |result| {
+                    if (has_null) break :blk_call .{ .Null = {} };
                     // Convert result back to eval.Value
                     break :blk_call extValueToValue(result);
                 } else |err| {
+                    if (has_null and err != error.WrongArgumentCount and err != error.OutOfMemory) break :blk_call .{ .Null = {} };
                     // Propagate validation errors instead of converting to null
                     const err_name = @errorName(err);
                     if (std.mem.eql(u8, err_name, "InvalidIpAddress")) {
@@ -1823,6 +1834,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // silently yield NULL, which is what made every missing vector
             // function (distance/similarity/euclidean/knn) look "implemented but
             // returning null". Raise the undefined_function diagnostic instead.
+            // CANARY: REQ=REQ-SONNY-6555-FUNCTION-ARITY; FEATURE="BuiltinFunctions"; ASPECT=WrongArgumentCount; STATUS=TESTED; TEST=tests/test_sonny6555_function_arity.zig; OWNER=eval; UPDATED=2026-11-14
+            // SONNY-6555 item 5: a function Geode has (its catalogue, the
+            // one SHOW FUNCTIONS lists) that no handler took is called with
+            // a number of arguments it does not take (each one takes the
+            // arities it implements): 42000, not 42883.
+            if (@import("gql/language_metadata.zig").findFunction(lowercase_name) != null) return EvalError.WrongArgumentCount;
             return EvalError.UnknownFunction;
         },
         .In => |iv| {
@@ -3225,7 +3242,7 @@ fn evalVectorScalarFunction(
         .distance, .similarity => 3,
         .euclidean, .manhattan => 2,
     };
-    if (args.len < 2 or args.len > max_args) return error.InvalidArgs;
+    if (args.len < 2 or args.len > max_args) return error.WrongArgumentCount;
 
     const lhs_value = try evalExpr(allocator, args[0].*, env);
     const rhs_value = try evalExpr(allocator, args[1].*, env);
@@ -3296,7 +3313,7 @@ fn vectorCosineSimilarity(allocator: std.mem.Allocator, lhs_value: Value, rhs_va
 }
 
 fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
-    if (args.len != 4) return error.InvalidArgs;
+    if (args.len != 4) return error.WrongArgumentCount;
 
     const property_value = try evalExpr(allocator, args[0].*, env);
     const property_name = switch (property_value) {
@@ -3530,6 +3547,8 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     switch (arg) {
         .Node => {},
         .Int => |raw_id| if (std.math.cast(u64, raw_id) == null) return absent,
+        // SONNY-6555 item 4: NULL in is NULL out (it was 0).
+        .Null => return Value{ .Null = {} },
         else => return absent,
     }
     const store = graph_store.getGlobalStore(allocator);
@@ -3586,7 +3605,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle current_user() function - returns the current authenticated user
     if (std.ascii.eqlIgnoreCase(function_name, "current_user")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         // Check if we have a token-authenticated user in the environment
         if (env.get("__token_user__")) |user| {
             return user;
@@ -3622,7 +3641,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // error between incomparable operands — leaves the value unchanged, which
     // is the standard's "not equal" outcome.
     if (std.ascii.eqlIgnoreCase(function_name, "nullif")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const eq_expr = ast.Expr{ .Binary = .{ .op = .Eq, .left = args[0], .right = args[1] } };
         const eq = evalExpr(allocator, eq_expr, env) catch |err| switch (err) {
             EvalError.OutOfMemory => return err,
@@ -3635,7 +3654,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B05 Fix: Handle properties() function - returns property map of a node or edge
     if (std.ascii.eqlIgnoreCase(function_name, "properties")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Node => |node| {
@@ -3814,7 +3833,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle algo.asNode function - converts nodeId to node reference
     if (std.ascii.eqlIgnoreCase(function_name, "algo.asnode") or std.ascii.eqlIgnoreCase(function_name, "asnode")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // Just return the node ID for now
         return arg;
@@ -3833,7 +3852,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // path value (a path is a sequence, not a graph element), so there is no id
     // to return. `id(nodes(p)[0])` names the element identities inside it.
     if (std.ascii.eqlIgnoreCase(function_name, "id")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i }, // Already an integer ID
@@ -3847,7 +3866,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle exists() function - checks if a property exists on a node/edge (returns true/false)
     // This is different from EXISTS { ... } predicate which checks pattern matches
     if (std.ascii.eqlIgnoreCase(function_name, "exists")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // exists() returns true if the value is NOT null, false if it is null
         // When a property doesn't exist on a node, property access returns null
@@ -3859,7 +3878,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns relationship type for edges, type name for other values
     if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Edge => |e| return Value{ .Str = e.label },
@@ -3873,14 +3892,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // relationship label. Not ISO 39075 (the standard's surface is the
     // IS TYPED predicate); registered as a compatibility spelling.
     if (std.ascii.eqlIgnoreCase(function_name, "valuetype")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         return Value{ .Str = getTypeName(arg) };
     }
 
     // Handle labels() function - returns node labels as a list
     if (std.ascii.eqlIgnoreCase(function_name, "labels")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Node => |n| {
@@ -3900,7 +3919,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle indegree() function - returns number of incoming edges to a node
     if (std.ascii.eqlIgnoreCase(function_name, "indegree")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // PHASE 1 (edge-engine-direct): the in-degree IS the length of the node's
         // INCOMING adjacency (engine-backed, hydrate-on-miss). The old full
@@ -3914,7 +3933,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle outdegree() function - returns number of outgoing edges from a node
     if (std.ascii.eqlIgnoreCase(function_name, "outdegree")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // PHASE 1: out-degree IS the length of the node's OUTGOING adjacency
         // (engine-backed). See indegree above — replaces an O(all edges),
@@ -3925,7 +3944,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle nodes() function - returns list of nodes in a path
     if (std.ascii.eqlIgnoreCase(function_name, "nodes")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Path => |p| {
@@ -3941,7 +3960,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle relationships() function - returns list of edges in a path
     if (std.ascii.eqlIgnoreCase(function_name, "relationships")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Path => |p| {
@@ -3969,7 +3988,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const is_ends = std.ascii.eqlIgnoreCase(function_name, "endswith");
         const is_contains = std.ascii.eqlIgnoreCase(function_name, "contains");
         if (is_starts or is_ends or is_contains) {
-            if (args.len != 2) return null;
+            if (args.len != 2) return error.WrongArgumentCount;
             const str_arg = try evalExpr(allocator, args[0].*, env);
             const needle_arg = try evalExpr(allocator, args[1].*, env);
 
@@ -4005,24 +4024,24 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // SONNY-6540 item 7: `random()` itself is the math handler's
     // (`call_handlers.evalMathFunction`), which answers it first.
     if (std.ascii.eqlIgnoreCase(function_name, "rand")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.random_val(allocator) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     // Handle date/time functions which take no arguments
     if (std.ascii.eqlIgnoreCase(function_name, "current_date")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_date();
         return heapValueToEvalValue(result);
     }
     if (std.ascii.eqlIgnoreCase(function_name, "current_time")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_time();
         return heapValueToEvalValue(result);
     }
     if (std.ascii.eqlIgnoreCase(function_name, "current_timestamp")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_timestamp();
         return heapValueToEvalValue(result);
     }
@@ -4068,15 +4087,16 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = micros } };
             return Value{ .ExtValue = tz_ts };
         } else {
-            // datetime() takes zero or one argument.
-            return EvalError.InvalidArgs;
+            // datetime() takes zero or one argument (SONNY-6555 item 5:
+            // 42000, not 22023).
+            return EvalError.WrongArgumentCount;
         }
     }
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle timestamp() function - returns current timestamp as integer (epoch millis)
     if (std.ascii.eqlIgnoreCase(function_name, "timestamp")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const ts = blk: {
             var timespec: std.posix.timespec = undefined;
             if (comptime builtin.os.tag == .linux) {
@@ -4191,7 +4211,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // SONNY-6540 item 7: `interval()` is the advanced-type handler's
     // (`call_handlers.evalAdvancedTypeFunction`), which answers it first.
     if (std.ascii.eqlIgnoreCase(function_name, "duration")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
             .Str => |s| s,
@@ -4233,7 +4253,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // answered NULL) so bad input does not surface as a true/false answer;
     // a NULL argument gives NULL.
     if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps") or std.ascii.eqlIgnoreCase(function_name, "interval_contains")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const a_val = try evalExpr(allocator, args[0].*, env);
         const b_val = try evalExpr(allocator, args[1].*, env);
         const a_iv = switch (a_val) {
@@ -4272,7 +4292,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
     // Handle algo.similarity.jaccard(list1, list2) - Jaccard similarity coefficient
     if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.jaccard") or std.ascii.eqlIgnoreCase(function_name, "jaccard")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
 
@@ -4310,7 +4330,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle algo.similarity.cosine(vector1, vector2) - Cosine similarity
     // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2025-10-16
     if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.cosine") or std.ascii.eqlIgnoreCase(function_name, "cosine")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
 
@@ -4384,7 +4404,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // is answered above. Those branches were unreachable.
     if (std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);

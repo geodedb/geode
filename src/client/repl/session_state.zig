@@ -1,5 +1,4 @@
 const std = @import("std");
-const repl_config = @import("repl_config.zig");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
@@ -216,14 +215,6 @@ pub const SessionState = struct {
         }
 
         return state;
-    }
-
-    /// Get the default session file path
-    pub fn getDefaultPath(allocator: std.mem.Allocator) ![]const u8 {
-        const config_dir = try repl_config.getConfigDir(allocator);
-        defer allocator.free(config_dir);
-
-        return try std.fs.path.join(allocator, &.{ config_dir, "session.json" });
     }
 };
 

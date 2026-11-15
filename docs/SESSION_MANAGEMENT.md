@@ -2,6 +2,14 @@
 
 This document describes the session management features in Geode, including session parameters and transaction handling.
 
+A GQL session lives exactly as long as its connection. geode servers have
+no session tokens: a connection authenticates with a user name and
+password in its HELLO, no server keeps the session ids it issues, and a
+session cannot be resumed, validated, rotated or invalidated from another
+connection. The CLI's `geode session validate|rotate|invalidate-all|check-idle`
+and `geode auth validate` are refused as not supported by this server
+(SONNY-6554; docs/USER_AUTH.md, "Session and API-key commands").
+
 ## The session graph
 
 A session's graph is the graph its statements read and write. Every session

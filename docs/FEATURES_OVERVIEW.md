@@ -141,7 +141,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **Index Persistence**: R-tree, HNSW, Patricia, Domain, JSONB, Interval indexes
 - **Schema Catalogs**: Main catalog and FLE catalog encrypted
-- **Distributed State**: Raft consensus state, snapshots, and logs encrypted
+- **Distributed State**: the Raft log's entry data and snapshots are encrypted (SONNY-6571, `src/distributed/raft_tde_storage.zig`); the hard state (term, vote) is not
 - **Magic Header**: `GEOTDEFL` identifies encrypted files
 - **Key Management**: 256-bit key via `GEODE_TDE_KEY` environment variable
 - **Documentation**: [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md)

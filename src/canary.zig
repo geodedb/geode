@@ -22,8 +22,11 @@
 // NOTE: Original provisional IDs 070–073 conflicted with existing REQUIREMENTS.md (String Search, GreyCardinal, HyperledgerGraphMVCC, MvccAdvanced)
 // Re-seated strategic gap IDs to 074–077 to avoid collision.
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICMultiplexing; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICMultiplexing; OWNER=wire; UPDATED=2026-11-14
-// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_AdvancedCostModel; OWNER=planner; UPDATED=2025-09-22
-// CANARY: REQ=REQ-GQL-075; FEATURE="Query Optimizer"; ASPECT=AdvancedCostModelCalibrationVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
+// SONNY-6555 item 8: two REQ-GQL-075 "Query Optimizer" rows were removed
+// here: AdvancedCostModel claimed TESTED by TestCANARY_REQ_GQL_075_AdvancedCostModel,
+// a test that does not exist, for a cost model no query's plan is chosen by
+// (docs/SERVER_FEATURES.md 4); its variance envelope is a benchmark of a
+// local stand-in model that does not compile (tests/benchmark_advanced_cost_model_calibration_variance.zig).
 // CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=RefreshScheduler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_076_RefreshScheduler; OWNER=engine; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-076; FEATURE="Materialized Views"; ASPECT=MvRefreshLatencyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_076_MvRefreshLatencyVarianceEnvelope; OWNER=engine; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-077; FEATURE="Full-Text Search"; ASPECT=InvertedIndexCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_077_InvertedIndexCore; OWNER=engine; UPDATED=2025-09-22

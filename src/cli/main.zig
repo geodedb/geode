@@ -429,9 +429,9 @@ fn printAuthUsage() void {
         "Usage: geode auth <command> [args...]\n" ++
         "\n" ++
         "Commands:\n" ++
-        "  login                  Authenticate and optionally save session\n" ++
-        "  logout                 Clear saved credentials\n" ++
-        "  token                  Print saved credentials JSON (if present)\n" ++
+        "  login                  Check a user name and password against the server\n" ++
+        "  logout                 Remove the local saved session file\n" ++
+        "  token                  Print the local saved session file (if present)\n" ++
         "  init                   Bootstrap admin user into graph store (offline)\n" ++
         "  reseal                 Recompute HMAC chain (offline)\n" ++
         "  verify                 Check HMAC chain integrity (offline)\n" ++
@@ -441,16 +441,17 @@ fn printAuthUsage() void {
         "  -U, --user <username>  Username\n" ++
         "  --password <password>  Password (prompt if not provided)\n" ++
         "  --password-file <path> Read password from file\n" ++
-        "  --save-session         Save session token to ~/.geode/credentials.json\n" ++
+        "  --save-session         Save a record of the login to ~/.geode/credentials.json\n" ++
         "  --ca-cert <path>       Verify the server's TLS cert against this CA (release-safe)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Offline Options (init, reseal, verify):\n" ++
         "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR, else the server's default: $XDG_STATE_HOME/geode or ~/.local/state/geode)\n" ++
         "\n" ++
-        "Session Management:\n" ++
-        "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++
-        "  Use --save-session to persist credentials locally\n" ++
+        "Sessions:\n" ++
+        "  geode servers do not accept session tokens yet (no server keeps the session\n" ++
+        "  ids it issues): a saved session does not log later commands in. Pass -U and\n" ++
+        "  a password (or a DSN) to each command. 'geode auth validate' is not supported.\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode auth login -U alice --save-session\n" ++
@@ -664,36 +665,25 @@ const markActiveQuerySent = query_deadline.markActiveQuerySent;
 const DsnParseResult = struct {
     host_port: []const u8, // "host:port" string
     use_grpc: bool, // true if grpc:// scheme
-    /// SONNY-6544: embedded credentials, percent-decoded (owned; `deinit`).
-    credentials: ?dsn_credentials.Credentials = null,
-    /// SONNY-6551: `username`/`user` and `password`/`pass` query
-    /// parameters, percent-decoded (owned; `deinit`).
-    query_credentials: dsn_credentials.QueryCredentials = .{},
-    /// The graph name from the URL path, percent-decoded (owned; SONNY-6550).
-    graph: ?[]u8 = null,
+    /// SONNY-6554/6569: the DSN as `geode.dsn_params.parse` read it (owned;
+    /// `deinit`): credentials (userinfo over query parameter, per field),
+    /// graph (path or `graph=`) and every query parameter, all checked.
+    dsn: geode.dsn_params.Parsed,
 
-    /// SONNY-6551: per field, the userinfo wins over the query parameter
-    /// (docs/DSN.md); an empty userinfo user name counts as absent.
     fn username(self: *const DsnParseResult) ?[]const u8 {
-        if (self.credentials) |c| {
-            if (c.username.len > 0) return c.username;
-        }
-        return self.query_credentials.username;
+        return self.dsn.config.username;
     }
 
     fn password(self: *const DsnParseResult) ?[]const u8 {
-        if (self.credentials) |c| {
-            if (c.password) |p| return p;
-        }
-        return self.query_credentials.password;
+        return self.dsn.config.password;
+    }
+
+    fn graph(self: *const DsnParseResult) ?[]const u8 {
+        return self.dsn.config.graph;
     }
 
     fn deinit(self: *DsnParseResult, allocator: std.mem.Allocator) void {
-        if (self.credentials) |*c| c.deinit(allocator);
-        self.credentials = null;
-        self.query_credentials.deinit(allocator);
-        if (self.graph) |g| allocator.free(g);
-        self.graph = null;
+        self.dsn.deinit(allocator);
     }
 };
 
@@ -704,87 +694,87 @@ const home_dir = @import("security/home_dir.zig");
 const session_storage = @import("security/session_storage.zig");
 
 /// SONNY-6544: the userinfo ends at the LAST '@' of the authority and is
-/// percent-decoded (RFC 3986 §3.2, `dsn_credentials`); a first-'@' split
-/// cut a password holding '@' short and made its tail part of the address,
-/// which `geode shell` then printed.
+/// percent-decoded (RFC 3986 §3.2); a first-'@' split cut a password
+/// holding '@' short and made its tail part of the address.
+/// SONNY-6554/6569: parsed by `geode.dsn_params.parse`, the one strict
+/// parser the MCP endpoint uses too: an unknown parameter, a parameter
+/// without `=`, a bad boolean and a malformed or out-of-range number are
+/// refused (the CLI read the credentials and ignored the rest, including
+/// `insecure=true`). The caller applies the parameters (`applyDsnTls`,
+/// `refuseDsnParamsCliCannotApply`).
 fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
-    // Parse scheme
-    var use_grpc = false;
-    var rest: []const u8 = dsn;
-
-    if (std.mem.startsWith(u8, dsn, "quic://")) {
-        rest = dsn["quic://".len..];
-        use_grpc = false;
-    } else if (std.mem.startsWith(u8, dsn, "grpc://")) {
-        rest = dsn["grpc://".len..];
-        use_grpc = true;
-    } else if (dsn_credentials.schemeEnd(dsn) != null) {
-        // SONNY-6531: any other scheme (http, https, tcp, ...), in the
-        // MCP path's words; the DSN is not echoed (it may carry a password).
-        zig_quic_bridge.printEndpointError(error.UnsupportedScheme);
-        return null;
-    }
-    // else: no scheme, treat as host:port with QUIC default
-
-    if (rest.len == 0) {
-        zig_quic_bridge.printEndpointError(error.InvalidDSN);
-        return null;
-    }
-
-    // [userinfo@]host[:port] up to the first '/', '?' or '#'. Of the query
-    // parameters the CLI reads the credentials (SONNY-6551).
-    const authority = dsn_credentials.splitAuthority(rest) catch |err| {
+    var parsed = geode.dsn_params.parse(allocator, dsn) catch |err| {
         zig_quic_bridge.printEndpointError(err);
         return null;
     };
-    if (authority.host_port.len == 0) {
-        zig_quic_bridge.printEndpointError(error.InvalidDSN);
-        return null;
-    }
-    // SONNY-6550: a fragment is refused, as geode-client-zig refuses it (it
-    // was ignored here, and dialled).
-    if (std.mem.indexOfScalar(u8, authority.rest, '#') != null) {
-        zig_quic_bridge.printEndpointError(error.DsnFragment);
-        return null;
-    }
-
-    // Extract graph name from URL path (e.g. host:3141/mygraph -> graph =
-    // "mygraph"), percent-decoded like geode-client-zig's (SONNY-6550).
-    var graph: ?[]u8 = null;
-    if (authority.rest.len > 0 and authority.rest[0] == '/') {
-        const path_end = std.mem.indexOfScalar(u8, authority.rest, '?') orelse authority.rest.len;
-        const path = authority.rest[1..path_end];
-        if (path.len > 0) {
-            graph = dsn_credentials.percentDecode(allocator, path) catch |err| {
-                zig_quic_bridge.printEndpointError(err);
-                return null;
-            };
-        }
-    }
-
-    var credentials: ?dsn_credentials.Credentials = if (authority.userinfo) |userinfo|
-        dsn_credentials.decodeUserinfo(allocator, userinfo) catch |err| {
-            if (graph) |g| allocator.free(g);
-            zig_quic_bridge.printEndpointError(err);
-            return null;
-        }
-    else
-        null;
-    const query_credentials = dsn_credentials.decodeQueryCredentials(allocator, authority.rest) catch |err| {
-        if (credentials) |*c| c.deinit(allocator);
-        if (graph) |g| allocator.free(g);
+    // The host[:port] as written, for the --server logic.
+    const start = if (dsn_credentials.schemeEnd(dsn)) |sep| sep + 3 else 0;
+    const authority = dsn_credentials.splitAuthority(dsn[start..]) catch |err| {
+        parsed.deinit(allocator);
         zig_quic_bridge.printEndpointError(err);
         return null;
     };
-
-    // The host_port is passed directly to --server logic which expects "host:port"
     return DsnParseResult{
         .host_port = authority.host_port,
-        .use_grpc = use_grpc,
-        .credentials = credentials,
-        .query_credentials = query_credentials,
-        .graph = graph,
+        .use_grpc = parsed.config.transport == .grpc,
+        .dsn = parsed,
     };
+}
+
+/// SONNY-6554: the CLI command a DSN is applied to.
+const DsnCommand = enum { query, shell };
+
+/// SONNY-6554: refuse (exit 2) a DSN parameter the CLI cannot apply when
+/// ignoring it would change what is secured (tenant, TLS server name, TLS
+/// off, and for the shell an FLE role), and say which parameters have no
+/// effect here, so none is silently dropped. docs/DSN.md, "Parameters the
+/// CLI applies".
+fn refuseDsnParamsCliCannotApply(parsed: *const DsnParseResult, command: DsnCommand) void {
+    const present = parsed.dsn.present;
+    const cfg = &parsed.dsn.config;
+    const name = @tagName(command);
+    const Refusal = struct { param: geode.dsn_params.Param, what: []const u8, why: []const u8 };
+    const refusals = [_]Refusal{
+        .{ .param = .tenant, .what = "tenant", .why = "the CLI sends no tenant in its HELLO" },
+        .{ .param = .server_name, .what = "server_name", .why = "the CLI verifies the certificate against the host it dials" },
+        .{ .param = .role, .what = "role", .why = "use geode query --role" },
+    };
+    for (refusals) |r| {
+        if (!present.contains(r.param)) continue;
+        if (r.param == .role and command == .query) continue;
+        std.debug.print("Error: the DSN parameter '{s}' is not supported by geode {s}: {s} (docs/DSN.md)\n", .{ r.what, name, r.why });
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    if (present.contains(.tls) and !cfg.tls) {
+        std.debug.print("Error: the DSN parameter 'tls=false' is not supported by geode {s}: the CLI always uses TLS (docs/DSN.md)\n", .{name});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    const no_effect = [_]geode.dsn_params.Param{ .hello_name, .hello_ver, .conformance, .connect_timeout, .timeout_ms, .page_size };
+    for (no_effect) |p| {
+        if (!present.contains(p)) continue;
+        if (p == .page_size and command == .query) continue;
+        std.debug.print("Warning: the DSN parameter '{s}' has no effect in geode {s} (docs/DSN.md){s}\n", .{
+            @tagName(p),                                                                                                                               name,
+            if (p == .connect_timeout or p == .timeout_ms) "; use --timeout" else if (p == .page_size) "; the shell has no page size setting" else "",
+        });
+    }
+}
+
+/// SONNY-6554: a DSN `insecure=true` (`insecure_tls_skip_verify`,
+/// `skip_verify`) is `--insecure-tls-skip-verify`: the same warning, and
+/// the same refusal under production posture. It was ignored. A `ca=`,
+/// `cert=` or `key=` takes the place of --ca-cert, --client-cert or
+/// --client-key.
+fn applyDsnTls(parsed: *const DsnParseResult, insecure: *bool, ca_cert_path: *?[]const u8, client_cert_path: *?[]const u8, client_key_path: *?[]const u8) void {
+    const cfg = &parsed.dsn.config;
+    if (cfg.insecure and !insecure.*) {
+        std.debug.print("Note: the DSN sets insecure=true, which is --insecure-tls-skip-verify\n", .{});
+        insecure.* = true;
+        insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
+    }
+    if (cfg.ca_cert) |c| ca_cert_path.* = c;
+    if (cfg.client_cert) |c| client_cert_path.* = c;
+    if (cfg.client_key) |k| client_key_path.* = k;
 }
 
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -812,7 +802,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var use_grpc = false;
     var user: ?[]const u8 = null;
     var password: ?[]const u8 = null;
-    var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 30; // Default 30 second timeout (QUIC handshake can be slow)
     var retry_count: u32 = 0; // Default no retries
@@ -994,12 +983,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 i += 1;
             }
         } else if (std.mem.eql(u8, arg, "--token")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --token requires an API token\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            token = argv[i + 1];
-            i += 1;
+            // SONNY-6554: the token was parsed and never sent. geode servers
+            // authenticate a user name and a password (or a client
+            // certificate) in HELLO, and accept no token.
+            std.debug.print("Error: geode query: option '--token' is not supported by this server: geode servers accept no session or API token; authenticate with -U and --password, or --dsn (docs/USER_AUTH.md)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--param")) {
             if (i + 2 >= argv.len) {
                 std.debug.print("Error: --param requires name and value\n", .{});
@@ -1318,22 +1306,27 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
         const parsed = &dsn_parsed.?;
+        refuseDsnParamsCliCannotApply(parsed, .query);
         server = parsed.host_port;
         use_grpc = parsed.use_grpc;
         // DSN credentials override -U/-P flags
         if (parsed.username()) |u| user = u;
         if (parsed.password()) |p| password = p;
         // DSN graph path overrides --graph flag; server handles via HELLO (no USE GRAPH prepend)
-        if (parsed.graph) |g| {
+        if (parsed.graph()) |g| {
             graph = g;
             graph_for_prepend = null; // DSN graph handled by HELLO, not USE GRAPH prepend
         }
+        // SONNY-6554: the other parameters the CLI can apply (docs/DSN.md).
+        applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
+        if (parsed.dsn.present.contains(.page_size)) page_size = parsed.dsn.config.page_size;
+        if (parsed.dsn.config.role) |r| role = r;
     }
 
     // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
     // SONNY-6551: after --dsn, so the saved session is matched against the
     // server this query really goes to.
-    if (use_saved_session and token == null and user == null) {
+    if (use_saved_session and user == null) {
         const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
         noteSavedSession(allocator, server orelse (env_server_creds orelse "127.0.0.1:3141"));
     }
@@ -3399,6 +3392,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
         const parsed = &dsn_parsed.?;
+        refuseDsnParamsCliCannotApply(parsed, .shell);
         server = parsed.host_port;
         if (parsed.use_grpc) {
             std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {f}\n", .{dsn_credentials.redacted(parsed.host_port)});
@@ -3407,7 +3401,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (parsed.username()) |u| username = u;
         if (parsed.password()) |p| password = p;
         // DSN graph path for HELLO handshake
-        if (parsed.graph) |g| graph = g;
+        if (parsed.graph()) |g| graph = g;
+        // SONNY-6554: insecure=true and the TLS paths (docs/DSN.md).
+        applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
     }
 
     // SONNY-6531: refuse a malformed --server / --dsn address before the
@@ -3566,6 +3562,12 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
 }
 
 // ---- Credential Storage & Authentication ----
+
+/// SONNY-6554: what `auth login` says about the session after logging in.
+/// geode servers keep no record of the session ids they issue and the
+/// HELLO carries no token, so a session ends with its connection.
+const no_session_note = "Note: geode servers do not accept session tokens yet, so this login does not carry over to later commands; pass -U and --password (or --dsn) to each command\n";
+const saved_session_note = "Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, so it does not log later commands in; pass -U and --password (or --dsn) to each command\n";
 
 /// SONNY-6551: how long `auth login --save-session` keeps a session on offer.
 const saved_session_lifetime_secs: i64 = 24 * 60 * 60;
@@ -3940,11 +3942,14 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
             .expires_at = now + saved_session_lifetime_secs,
             .system_fingerprint = fingerprint,
         });
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Session token saved to ~/.geode/credentials.json\n") catch {};
+        // SONNY-6554: say what was saved: a local file, which no server
+        // accepts (it said "Session token saved").
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), saved_session_note) catch {};
     } else {
-        const token_msg = try std.fmt.allocPrint(allocator, "Session token: {s}\nUse --save-session to persist credentials locally\n", .{auth_result.session_token});
-        defer allocator.free(token_msg);
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), token_msg) catch {};
+        // SONNY-6554: the server's session id ended with this connection;
+        // it was printed as a reusable "Session token" with "Use
+        // --save-session to persist credentials locally".
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), no_session_note) catch {};
     }
 }
 
@@ -3952,65 +3957,65 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
-            std.debug.print("geode auth logout - Clear saved credentials\n" ++
+            std.debug.print("geode auth logout - Remove the local saved session file\n" ++
                 "\n" ++
                 "Usage: geode auth logout\n" ++
                 "\n" ++
-                "This command clears saved authentication credentials from ~/.geode/credentials.json\n" ++
+                "Removes ~/.geode/credentials.json, written by 'geode auth login --save-session'.\n" ++
+                "This is local only: geode servers keep no session to end.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return; // SONNY-6559: success returns through main
         }
-        // SONNY-6560: `--token` was documented and skipped (a no-op); it is
-        // refused as unknown (option_check).
+        // SONNY-6554 / SONNY-6560: `--token` was documented and skipped, and
+        // the command still said "Successfully logged out". No server keeps
+        // session tokens, so none can be invalidated: refused (exit 2) here,
+        // where the reason can be given (option_check lets it through).
+        if (std.mem.eql(u8, argv[i], "--token")) {
+            std.debug.print("Error: geode auth logout: option '--token' is not supported by this server: geode servers keep no record of session tokens, so none can be invalidated\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
     }
 
-    // Clear saved credentials (SONNY-6551: creates nothing; an unusable
-    // HOME has nothing to clear).
+    // Remove the saved session file (SONNY-6551: creates nothing; an
+    // unusable HOME has nothing to remove).
+    var removed = false;
     if (session_storage.CredentialStore.init(allocator)) |store_val| {
         var store = store_val;
         defer store.deinit();
-        store.delete() catch |err| {
-            std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
+        removed = store.delete() catch |err| {
+            std.debug.print("Error: Could not remove the local saved session file: {s}\n", .{@errorName(err)});
             logAuditEvent("auth", "logout", "failure");
-            return;
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     } else |_| {}
 
-    // Log successful logout
     logAuditEvent("auth", "logout", "success");
 
-    std.debug.print("Successfully logged out\n", .{});
-    std.debug.print("Credentials cleared from ~/.geode/credentials.json\n", .{});
+    // SONNY-6554: it said "Successfully logged out"; no server session ends.
+    if (removed) {
+        std.debug.print("Removed the local saved session file ~/.geode/credentials.json (local only: geode servers keep no session to end)\n", .{});
+    } else {
+        std.debug.print("No saved session file to remove (~/.geode/credentials.json)\n", .{});
+    }
 }
 
+/// SONNY-6554: `auth validate` said "Session token valid" for any non-empty
+/// string. No server can say whether a token is valid: none keeps the
+/// session ids it issues.
 fn cmdAuthValidate(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var token: ?[]const u8 = null;
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
-            std.debug.print("geode auth validate - Validate a session token\n" ++
+            std.debug.print("geode auth validate - not supported by this server\n" ++
                 "\n" ++
-                "Usage: geode auth validate --token <token>\n" ++
+                "geode servers keep no record of the session tokens they issue, so no\n" ++
+                "token can be validated. The command exits 1.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        } else if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-            token = argv[i + 1];
-            i += 1;
+            return; // SONNY-6559: success returns through main
         }
     }
-
-    if (token == null) {
-        std.debug.print("Error: --token is required\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    // Token validation: check format (non-empty session token)
-    if (token.?.len > 0) {
-        std.debug.print("Session token valid\n", .{});
-    } else {
-        std.debug.print("Session token invalid\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.auth_error));
-    }
+    std.debug.print("Error: geode auth validate is not supported by this server: geode servers keep no record of the session tokens they issue, so no token can be validated (docs/USER_AUTH.md, 'Saved sessions')\n", .{});
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14

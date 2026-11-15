@@ -47,6 +47,7 @@ const cluster_test_files = [_][]const u8{
     "tests/test_sonny6456_cluster_health_liveness.zig",
     "tests/test_sonny6453_cluster_peer_tls.zig",
     "tests/test_gap0838_cluster_tls_noloopback.zig",
+    "tests/test_sonny6571_tde_at_rest.zig",
     // SONNY-6467 item 6: the steps that bind a loopback address of their own
     // without a cluster.
     "tests/test_sonny6448_tls_fail_closed.zig",

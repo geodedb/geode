@@ -119,14 +119,16 @@ pub const commands = [_]Command{
         .names = &.{"auth"},
         .subs = &.{
             .{ .names = &.{"login"}, .options = &login_options },
-            .{ .names = &.{ "logout", "token" } },
+            // SONNY-6554: the handler refuses --token with the reason.
+            .{ .names = &.{"logout"}, .options = &.{v("--token")} },
+            .{ .names = &.{"token"} },
             .{ .names = &.{"validate"}, .options = &.{v("--token")} },
             .{ .names = &.{ "init", "verify" }, .options = &.{data_dir} },
             .{ .names = &.{"reseal"}, .options = &.{ data_dir, v("--accept-legacy-policy"), v("--drop-legacy-policy") } },
         },
     },
     .{ .names = &.{"login"}, .options = &login_options },
-    .{ .names = &.{"logout"} },
+    .{ .names = &.{"logout"}, .options = &.{v("--token")} },
     .{
         .names = &.{"fle"},
         .subs = &.{.{ .names = &.{ "rotate-key", "show-rotation", "show-policy", "grant-plaintext", "migrate-encrypt" } }},

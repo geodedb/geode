@@ -69,9 +69,10 @@ fn checkAll(s: *Session, f: *Failures) !void {
         try expectFail(s, f, try std.fmt.bufPrint(&buf, "RETURN {s}({s}) AS x", .{ c.func, c.arg }), &.{}, c.want);
         try expectFail(s, f, try std.fmt.bufPrint(&buf, "RETURN CAST({s} AS {s}) AS x", .{ c.arg, c.target }), &.{}, c.want);
     }
-    // Wrong arity: 22023 (it was NULL). (toString(1, 2) is refused by the
+    // Wrong arity: 42000 (it was NULL; SONNY-6555 item 5: an operand count
+    // is the program text's, not 22023). (toString(1, 2) is refused by the
     // parser.)
-    try expectFail(s, f, "RETURN toFloat() AS x", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN toFloat() AS x", &.{}, error.WrongArgumentCount);
 }
 
 test "SONNY-6518: toFloat, toInteger, toBoolean and toString answer as the CAST of their target" {

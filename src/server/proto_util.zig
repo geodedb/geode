@@ -544,7 +544,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // metric and passes a vector where a property NAME belongs) reached the
         // generic 58000 "internal error" fallback. It is a caller error:
         // 22023 = invalid_parameter_value.
-        error.InvalidArgs => .{ .code = "22023", .message = "Invalid arguments for function (wrong number of arguments, or an argument value the function does not accept)" },
+        error.InvalidArgs => .{ .code = "22023", .message = "Invalid arguments for function (an argument value the function does not accept) or procedure (a value, or a number of arguments, it does not accept)" },
+        // SONNY-6555 item 5: an operand count is decided by the program text
+        // (ISO/IEC 39075:2024 4.7.3 step 4).
+        error.WrongArgumentCount => .{ .code = "42000", .message = "Wrong number of arguments: the function does not take that many operands" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
         // GAP-0840: strict-tenancy rejected a tenant-scoped operation with no

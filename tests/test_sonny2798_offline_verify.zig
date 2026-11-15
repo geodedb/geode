@@ -190,7 +190,8 @@ fn commands(aa: std.mem.Allocator, dir: []const u8) ![]const []const []const u8 
     try list.append(aa, try argvOf(aa, &.{ binary_path, "policy", "delete", "orders-rls", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "geode", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "revoke", "read", "--from", "geode", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "apikey", "create", "--user", "geode", "--data-dir", dir }));
+    // SONNY-6554: `apikey create` is refused as not supported (no server
+    // accepts API keys) before it opens any store, so it signs nothing.
     try list.append(aa, try argvOf(aa, &.{ binary_path, "auth", "init", "--data-dir", dir }));
     return list.items;
 }

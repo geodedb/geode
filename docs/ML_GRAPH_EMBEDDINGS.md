@@ -357,11 +357,12 @@ Regression tests run via `zig build test-gap0879`:
 - Deterministic seeding: identical `config.seed` reproduces identical
   embeddings and loss trajectory
 
-In-module tests in `src/ml/integration_enhanced.zig` (same build step):
-
-- `GraphData.getNeighbors` caller-owned allocation contract
-- `RandomWalker` p/q transition bias
-- Node2Vec / PageRank / Louvain smoke tests on tiny graphs
+`src/ml/integration_enhanced.zig` (a second Node2Vec, a PageRank, a third
+Louvain, link prediction and `gds.*` procedure stubs) was removed with its
+in-module tests (SONNY-6555 item 8): no server path imported it, and no
+`gds.*` procedure was ever registered with the procedure dispatcher. The
+graph algorithms the server runs are `CALL algo.*`
+(`src/execution/algo_dispatch.zig`, `zig build test-gap0883`).
 
 > The previous version of the integration test file SIMULATED decreasing
 > training loss with fabricated numbers and ignored the p/q parameters in its

@@ -391,18 +391,21 @@ pub const CredentialStore = struct {
 
     /// Remove `credentials.json` (a symbolic link there is removed, not its
     /// target). Creates nothing.
-    pub fn delete(self: *CredentialStore) !void {
-        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+    /// Remove the saved session file; false when there was none
+    /// (SONNY-6554: `auth logout` says which).
+    pub fn delete(self: *CredentialStore) !bool {
+        // CANARY: REQ=REQ-AUTH-SESSION-004; FEATURE="DeleteSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6554_cli_honesty.zig; OWNER=security; UPDATED=2026-11-15
         const io = std.Io.Threaded.global_single_threaded.io();
         var dir = std.Io.Dir.openDirAbsolute(io, self.dir_path, .{ .follow_symlinks = false, .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound => return,
+            error.FileNotFound => return false,
             else => return err,
         };
         defer dir.close(io);
         dir.deleteFile(io, file_name) catch |err| switch (err) {
-            error.FileNotFound => {},
+            error.FileNotFound => return false,
             else => return err,
         };
+        return true;
     }
 };
 
@@ -754,7 +757,7 @@ test "SONNY-6551: CredentialStore.save and load round-trip every field, escaped"
         else => return error.NotLoaded,
     }
 
-    try store.delete();
+    _ = try store.delete();
     var gone = try store.load();
     defer gone.deinit();
     try std.testing.expect(gone == .none);
@@ -798,7 +801,7 @@ test "SONNY-6551: a load creates no ~/.geode, and a missing file is none" {
     var result = try store.load();
     defer result.deinit();
     try std.testing.expect(result == .none);
-    try store.delete();
+    _ = try store.delete();
     const io = std.Io.Threaded.global_single_threaded.io();
     try std.testing.expectError(error.FileNotFound, home.tmp.dir.statFile(io, ".geode", .{}));
 }

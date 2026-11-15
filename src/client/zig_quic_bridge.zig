@@ -66,7 +66,12 @@ fn initClientWithInsecureSetting(
 /// SONNY-6494: so is port 0 here. The grammar accepts it because a listener
 /// takes 0 as "any free port", but no server can be dialled on it (the send
 /// failed with a bare `Unexpected`).
-pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPort {
+/// SONNY-6569: an `@` is `error.UnencodedCredentialDelimiter`: a `--server
+/// pw@host:3141` (or REPL `\connect pw@host:3141`) dialled a host named
+/// `pw@host`, sending the credential to the resolver and the TLS server
+/// name. The grammar refuses any other byte a host name cannot hold.
+pub fn parseHostPort(addr: []const u8, default_port: u16) (host_port.Error || error{UnencodedCredentialDelimiter})!HostPort {
+    if (std.mem.indexOfScalar(u8, addr, '@') != null) return error.UnencodedCredentialDelimiter;
     const hp = try host_port.split(addr, default_port);
     if (hp.port == 0) return error.InvalidPort;
     return .{
@@ -83,8 +88,9 @@ pub fn parseHostPort(addr: []const u8, default_port: u16) host_port.Error!HostPo
 /// create`, `restore`, `migrate run`). It covers geode-client-zig's DSN
 /// errors (v0.3.17 parses with geode's grammar and credential rules,
 /// docs/DSN.md), the shared grammar's own (`parseHostPort`:
-/// `InvalidAddress`, and `InvalidPort` including port 0), `DsnFragment`
-/// (`dsnError`) and the dial-time refusals. The address itself is never
+/// `InvalidAddress`, and `InvalidPort` including port 0, and an `@` in a
+/// `--server` address), the strict parser's (`dsn_params.parse`: a
+/// fragment, an unknown or malformed parameter) and the dial-time refusals. The address itself is never
 /// part of the message: a DSN may carry a password.
 pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
     return switch (err) {
@@ -95,31 +101,21 @@ pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
         // SONNY-6544/6550: the userinfo, the graph path and every query
         // value are strictly percent-decoded (geode-client-zig config.redact).
         error.InvalidPercentEncoding => "Invalid Geode endpoint DSN: a % must start a %XX escape of two hex digits (in the user name, password, graph name or a parameter value); write a literal % as %25",
-        error.UnencodedCredentialDelimiter => "Invalid Geode endpoint DSN: an @ follows the host; a user name or password holding /, ? or # must percent-encode it (%2F, %3F, %23), and an @ in a graph name or parameter as %40",
+        error.UnencodedCredentialDelimiter => "Invalid Geode endpoint DSN: an @ follows the host; a user name or password holding /, ? or # must percent-encode it (%2F, %3F, %23), and an @ in a graph name or parameter as %40; a --server address takes no user name or password (use -U with --password, or --dsn)",
         // SONNY-6550: geode-client-zig refuses a fragment with its generic
-        // InvalidDSN; `dsnError` names it.
+        // InvalidDSN; `dsn_params.parse` names it.
         error.DsnFragment => "Invalid Geode endpoint DSN: a fragment (#...) is not allowed; a user name, password or graph name holding # must percent-encode it as %23",
         error.TimeoutOutOfRange => "Invalid Geode endpoint DSN: the timeout is out of range; connect_timeout takes 1-3600 seconds and timeout_ms 1-3600000",
+        // SONNY-6554/6569: dsn_params.parse, the one strict parser.
+        error.InvalidTimeout => "Invalid Geode endpoint DSN: a timeout must be a whole number; connect_timeout takes 1-3600 seconds and timeout_ms 1-3600000",
+        error.InvalidPageSize, error.PageSizeOutOfRange => "Invalid Geode endpoint DSN: page_size takes a whole number 1-100000",
+        error.UnknownDsnParameter => "Invalid Geode endpoint DSN: unknown query parameter; the parameters are page_size, hello_name, hello_ver, conformance, graph, username (user), password (pass), tls, insecure_tls_skip_verify (insecure, skip_verify), ca (ca_cert), cert (client_cert), key (client_key), server_name, connect_timeout (timeout), timeout_ms, tenant (tenant_id) and role (docs/DSN.md)",
+        error.MalformedDsnParameter => "Invalid Geode endpoint DSN: a query parameter must be name=value, joined by &",
+        error.InvalidDsnBoolean => "Invalid Geode endpoint DSN: a boolean parameter (insecure_tls_skip_verify, insecure, skip_verify, tls) takes true, false, 1, 0, yes, no, on or off",
         error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
         error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
         else => null,
     };
-}
-
-/// SONNY-6550: `dsn`'s text after its `scheme://` (all of it when it has no
-/// scheme) holds a `#`. The authority ends at the first `#`, so that is a
-/// fragment, which no Geode DSN may carry.
-pub fn dsnHasFragment(dsn: []const u8) bool {
-    const start = if (zig_client.config.redact.schemeEnd(dsn)) |sep| sep + 3 else 0;
-    return std.mem.indexOfScalar(u8, dsn[start..], '#') != null;
-}
-
-/// SONNY-6550: `err` from geode-client-zig's `parseDSN` on `dsn`, with its
-/// generic `InvalidDSN` for a fragment named `DsnFragment` (the parser
-/// checks the fragment before the host, so an `InvalidDSN` on a DSN with a
-/// fragment is the fragment).
-pub fn dsnError(err: anyerror, dsn: []const u8) anyerror {
-    return if (err == error.InvalidDSN and dsnHasFragment(dsn)) error.DsnFragment else err;
 }
 
 /// SONNY-6531: print `endpointErrorMessage(err)` as a CLI error line on

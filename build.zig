@@ -752,6 +752,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -5134,11 +5135,6 @@ pub fn build(b: *std.Build) void {
     const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
     planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_prune_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const planner_pipeline_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_pipeline_selection.zig"), .target = target, .optimize = optimize }) });
-    // Import shared geode root for planner + pipeline access
-    planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
-    planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
-    planner_pipeline_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
     phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const run_phantom_tests = b.addRunArtifact(phantom_tests);
@@ -5177,10 +5173,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_planner_prune_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_prune_tests_step = b.step("test-canary-planner-prune", "Run plan enumeration cost-prune CANARY tests (REQ-GQL-024)");
     planner_prune_tests_step.dependOn(&run_planner_prune_tests.step);
-    const run_planner_pipeline_selection_tests = b.addRunArtifact(planner_pipeline_selection_tests);
-    shardDep(test_step, &run_planner_pipeline_selection_tests.step, 1, test_shard_loads, test_shard_index);
-    const planner_pipeline_selection_tests_step = b.step("test-canary-planner-pipeline-selection", "Run plan selection pipeline adoption CANARY tests (REQ-GQL-024)");
-    planner_pipeline_selection_tests_step.dependOn(&run_planner_pipeline_selection_tests.step);
 
     // Variance auto-calibration tests (cost model & pagination)
     const cost_model_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_cost_model_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
@@ -6953,7 +6945,8 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
     // and an embedding-sign "community detection" hack) was dead code — no
-    // production importer; superseded by src/ml/integration_enhanced.zig.
+    // production importer (its successor integration_enhanced.zig went the
+    // same way in SONNY-6555).
     // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
@@ -7433,16 +7426,12 @@ pub fn build(b: *std.Build) void {
     const gap0879_tests = b.addTest(.{ .root_module = gap0879_test_mod });
     const run_gap0879_tests = b.addRunArtifact(gap0879_tests);
     shardDep(test_step, &run_gap0879_tests.step, 1, test_shard_loads, test_shard_index);
-    // Also compile+run the in-module tests of src/ml/integration_enhanced.zig
-    // (caller-owned getNeighbors allocation contract, p/q-biased RandomWalker).
-    const gap0879_ie_tests = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration_enhanced.zig"), .target = target, .optimize = optimize }),
-    });
-    const run_gap0879_ie_tests = b.addRunArtifact(gap0879_ie_tests);
-    shardDep(test_step, &run_gap0879_ie_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6555 item 8: src/ml/integration_enhanced.zig (a third Louvain,
+    // a Node2Vec/PageRank/link-prediction copy and stub gds.* procedures no
+    // server path registered) was compiled only by its own in-module tests
+    // here; removed with them.
     const gap0879_step = b.step("test-gap0879", "GAP-0879 regression (Node2Vec p/q bias + real training loss + ML allocator ownership)");
     gap0879_step.dependOn(&run_gap0879_tests.step);
-    gap0879_step.dependOn(&run_gap0879_ie_tests.step);
 
     // GAP-0891 regression suite (native-tenant write tagging + edge reads).
     const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
@@ -8153,7 +8142,7 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info/rotate, authn config and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory; a relative XDG_STATE_HOME is ignored and the state dir goes under HOME)").dependOn(&run_tests.step);
+        b.step("test-sonny6544-relative-home", "Run SONNY-6544 item 2 regression (the real geode query, auth token, session info and auth login --save-session with HOME=relhome, HOME=. or an empty HOME exit with a message naming HOME instead of panicking on an absolute-path assert, and create nothing under the working directory)").dependOn(&run_tests.step);
     }
     // SONNY-6551: the saved session file, REPL history, the server's default
     // data directory and DSN query-parameter credentials (real binaries).
@@ -8191,6 +8180,27 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6550-dsn-rules", "Run SONNY-6550 regression (geode.dsn_credentials is geode-client-zig's config.redact and decodes a credential into one exact-size allocation; a client Config built in code with port 0 is refused by connect; endpointErrorMessage names an out-of-range timeout and a DSN fragment; geode query --dsn percent-decodes the graph path against a real server)").dependOn(&run_tests.step);
+    }
+    // SONNY-6554 / SONNY-6569: no success line for a security operation that
+    // did not happen; one strict DSN parser for --dsn and the MCP endpoint;
+    // no credential in a --server host (real binaries, real server).
+    for ([_][3][]const u8{
+        .{ "tests/test_sonny6554_cli_honesty.zig", "test-sonny6554-cli-honesty", "Run SONNY-6554 items 1-4 regression (geode session invalidate-all/rotate/validate/check-idle, auth validate, authn and apikey create/list/revoke/revoke-all/check-scope exit 1 'not supported by this server' instead of printing success, and write no state file; rotate leaves the saved session untouched; query --token and auth logout --token exit 2; auth login, session info and auth logout say the saved session is a local file; help marks the unsupported commands)" },
+        .{ "tests/test_sonny6554_dsn_params.zig", "test-sonny6554-dsn-params", "Run SONNY-6554 item 5 / SONNY-6569 items 5-6 regression (geode query honours DSN insecure=true like --insecure-tls-skip-verify - same warning, refused under production posture - and ca=; an unknown parameter, a parameter without =, a bad boolean and a malformed or out-of-range page_size or timeout are refused with what is wrong by geode query and by the MCP endpoint, which parses strictly; tenant, server_name and tls=false are refused by the CLI, which cannot apply them; every documented DSN form still parses)" },
+        .{ "tests/test_sonny6569_host_credentials.zig", "test-sonny6569-host-credentials", "Run SONNY-6569 item 4 regression (host_port.split refuses a host with userinfo, a path, whitespace or control bytes and still takes names, IPv4, bracketed IPv6 and listener forms; parseHostPort names an @ as UnencodedCredentialDelimiter; geode query, shell, auth login, backup create and restore refuse --server pw@host without dialling or printing it)" },
+    }) |spec| {
+        const mod = b.createModule(.{ .root_source_file = b.path(spec[0]), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(spec[1], spec[2]).dependOn(&run_tests.step);
     }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig.
     // SONNY-6550: the file re-exports geode-client-zig's config.redact, so
@@ -8658,22 +8668,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0885_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0885_step = b.step("test-gap0885-lsp", "GAP-0885b: LSP/MCP hardening (URI percent-encoding, bind policy, .none-auth loopback assert)");
     gap0885_step.dependOn(&run_gap0885_tests.step);
-
-    // SEC-SESS-LOG-01: `session rotate` must never write the session token to
-    // stderr/stdout. All user-facing rotate output flows through
-    // session_cli.writeRotateResult, pinned token-free by tests/test_sec_sess_log.zig.
-    const sec_sess_log_cli_mod = b.createModule(.{ .root_source_file = b.path("src/cli/session_cli.zig"), .target = target, .optimize = optimize });
-    sec_sess_log_cli_mod.addImport("geode", root_mod);
-    sec_sess_log_cli_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
-    sec_sess_log_cli_mod.link_libc = true;
-    const sec_sess_log_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sec_sess_log.zig"), .target = target, .optimize = optimize });
-    sec_sess_log_test_mod.addImport("session_cli", sec_sess_log_cli_mod);
-    sec_sess_log_test_mod.link_libc = true;
-    const sec_sess_log_tests = b.addTest(.{ .root_module = sec_sess_log_test_mod });
-    const run_sec_sess_log_tests = b.addRunArtifact(sec_sess_log_tests);
-    shardDep(test_step, &run_sec_sess_log_tests.step, 1, test_shard_loads, test_shard_index);
-    const sec_sess_log_step = b.step("test-sec-sess-log", "SEC-SESS-LOG-01: session rotate must not print the token to stderr");
-    sec_sess_log_step.dependOn(&run_sec_sess_log_tests.step);
 
     // GAP-0885d: SEC-S3-SIGV2-01 + SEC-CLI-01. AWS SigV4 known-answer tests
     // against the published AWS documentation vectors (replacing the legacy
@@ -13302,7 +13296,7 @@ pub fn build(b: *std.Build) void {
     const sonny6518_builtin_tests = b.addTest(.{ .root_module = sonny6518_builtin_mod });
     const run_sonny6518_builtin_tests = b.addRunArtifact(sonny6518_builtin_tests);
     shardDep(test_step, &run_sonny6518_builtin_tests.step, 1, test_shard_loads, test_shard_index);
-    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 22023, a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
+    b.step("test-sonny6518-builtin-errors", "Run SONNY-6518 item 1 regression (numeric and character-string built-ins per ISO/IEC 39075 20.22 / 20.24: a NULL argument gives NULL; a wrong type is 22G03, a wrong arity 42000 (SONNY-6555), a domain error its data exception (2201E, 2201F, 22003, 22011, 22012); an extension function's or an argument's error is raised, never NULL; DOUBLE arguments are numbers)").dependOn(&run_sonny6518_builtin_tests.step);
     // SONNY-6518 item 3: the gql tool's ORDER BY orders as the server's full sort. See tests/test_sonny6518_exec_order.zig.
     const sonny6518_exec_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6518_exec_order.zig"), .target = target, .optimize = optimize });
     sonny6518_exec_mod.addImport("geode", root_mod);
@@ -13873,6 +13867,50 @@ pub fn build(b: *std.Build) void {
     const run_sonny6540_cws_tests = b.addRunArtifact(sonny6540_cws_tests);
     shardDep(test_step, &run_sonny6540_cws_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6540-chain-with-stage", "Run SONNY-6540 item 5 regression (an aggregating, DISTINCT or windowed WITH in a later part of a chain is computed over every row reaching it, with its WHERE, ORDER BY, SKIP and LIMIT, whatever parts come before it: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6540_cws_tests.step);
+    // SONNY-6555 item 4: a NULL argument gives NULL. See tests/test_sonny6555_null_arguments.zig.
+    const sonny6555_null_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_null_arguments.zig"), .target = target, .optimize = optimize });
+    sonny6555_null_mod.addImport("geode", root_mod);
+    sonny6555_null_mod.addImport("logging", logging_mod);
+    const sonny6555_null_tests = b.addTest(.{ .root_module = sonny6555_null_mod });
+    const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
+    shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6555 item 3: a column the ordered index cannot serve is declined before its build starts. See tests/test_sonny6555_ordered_build_probe.zig.
+    const sonny6555_obp_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_ordered_build_probe.zig"), .target = target, .optimize = optimize });
+    sonny6555_obp_mod.addImport("geode", root_mod);
+    sonny6555_obp_mod.addImport("logging", logging_mod);
+    sonny6555_obp_mod.link_libc = true;
+    const sonny6555_obp_tests = b.addTest(.{ .root_module = sonny6555_obp_mod });
+    const run_sonny6555_obp_tests = b.addRunArtifact(sonny6555_obp_tests);
+    shardDep(test_step, &run_sonny6555_obp_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-ordered-build-probe", "Run SONNY-6555 item 3 regression (an ORDER BY ... LIMIT on a mixed-class column, one holding a non-canonical string or a value of no ordered class starts no value-ordered index build; a single-class canonical column still builds; the rows are the full sort's: persisted sessions, bounded and unbounded node cache)").dependOn(&run_sonny6555_obp_tests.step);
+    // SONNY-6555 item 7: a WITH stage after a FOR or a CALL subquery reads every row reaching it. See tests/test_sonny6555_for_chain_stage.zig.
+    const sonny6555_fcs_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_for_chain_stage.zig"), .target = target, .optimize = optimize });
+    sonny6555_fcs_mod.addImport("geode", root_mod);
+    sonny6555_fcs_mod.addImport("logging", logging_mod);
+    sonny6555_fcs_mod.addImport("rls_types", rls_types_mod);
+    const sonny6555_fcs_tests = b.addTest(.{ .root_module = sonny6555_fcs_mod });
+    const run_sonny6555_fcs_tests = b.addRunArtifact(sonny6555_fcs_tests);
+    shardDep(test_step, &run_sonny6555_fcs_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-for-chain-stage", "Run SONNY-6555 item 7 regression (ISO/IEC 39075 14.3 / 14.8 / 14.11: a FOR whose body reads runs it over the FOR's whole table, at the start of a statement or after a part, so its aggregate, DISTINCT, ORDER BY and LIMIT read every element; a chain's last RETURN DISTINCT reads every row: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6555_fcs_tests.step);
+    // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
+    const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
+    sonny6555_arity_mod.addImport("geode", root_mod);
+    sonny6555_arity_mod.addImport("logging", logging_mod);
+    sonny6555_arity_mod.link_libc = true;
+    const sonny6555_arity_tests = b.addTest(.{ .root_module = sonny6555_arity_mod });
+    const run_sonny6555_arity_tests = b.addRunArtifact(sonny6555_arity_tests);
+    shardDep(test_step, &run_sonny6555_arity_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-function-arity", "Run SONNY-6555 item 5 regression (ISO/IEC 39075 4.7.3 step 4: a function called with the wrong number of arguments is WrongArgumentCount, GQLSTATE 42000, whether it is a built-in, an extension-registry function or one the dispatch resolved as unknown; an operand value stays its data exception)").dependOn(&run_sonny6555_arity_tests.step);
+    // SONNY-6555 item 6: OFFSET/SKIP before LIMIT in every page clause. See tests/test_sonny6555_page_clause_order.zig.
+    const sonny6555_page_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_page_clause_order.zig"), .target = target, .optimize = optimize });
+    sonny6555_page_mod.addImport("geode", root_mod);
+    sonny6555_page_mod.addImport("logging", logging_mod);
+    sonny6555_page_mod.link_libc = true;
+    const sonny6555_page_tests = b.addTest(.{ .root_module = sonny6555_page_mod });
+    const run_sonny6555_page_tests = b.addRunArtifact(sonny6555_page_tests);
+    shardDep(test_step, &run_sonny6555_page_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-page-clause-order", "Run SONNY-6555 item 6 regression (ISO/IEC 39075 14.9: a WITH, a leading WITH, a UNION's trailing page and FOR take OFFSET/SKIP before LIMIT; LIMIT before OFFSET stays a Geode extension; a repeated clause is 42000; the rows are paged in every session kind)").dependOn(&run_sonny6555_page_tests.step);
     // SONNY-6525 item 3: `*` followed by items is refused with a message naming the rule. See tests/test_sonny6525_star_items.zig.
     const sonny6525_star_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6525_star_items.zig"), .target = target, .optimize = optimize });
     sonny6525_star_mod.addImport("geode", root_mod);
@@ -17197,8 +17235,6 @@ pub fn build(b: *std.Build) void {
             "client.repl.spinner.test.",
             "performance.memory_mapped_io.test.",
             "ml.graph_embeddings.test.",
-            "planner.cost_calibration.test.",
-            "planner.pipeline.test.",
             "graph.containers.lfu.test.",
             // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
             "planner.test.",
@@ -18884,6 +18920,7 @@ pub fn build(b: *std.Build) void {
     // graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
+        .{ .file = "tests/test_sonny6571_raft_tde_storage.zig", .step = "test-sonny6571-raft-tde-storage", .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY, the cluster's Raft entry and snapshot data reach the raft library's FileStorage files only sealed and read back across reopens; a record moved to another term or a plaintext record fails closed; a Raft directory written without TDE is refused and left unchanged, an encrypted one without the key or under another key; a granted vote is still on disk before the grant is sent, SONNY-6563)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
         .{ .file = "tests/test_sonny6570_cdc_honesty.zig", .step = "test-sonny6570-cdc-honesty", .desc = "Run SONNY-6570 regression (every CALL cdc.* answers from the CDC engine or is refused 0A000; every CDC procedure and frame is Admin only on QUIC and gRPC; CDC changes are audited and the chain verifies; gRPC serves the .proto's GetCdcDiagnostics / ControlCdc; startCDC frees the engine when start() fails)", .weight = 2 },
@@ -18917,5 +18954,31 @@ pub fn build(b: *std.Build) void {
         const run_cli_query_tests = b.addRunArtifact(cli_query_tests);
         shardDep(test_step, &run_cli_query_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6548-cli-query-options", "Run SONNY-6548 / SONNY-6560 regression (geode query refuses --format txt and an unknown option with exit 2, and refuses --begin --rollback without writing)").dependOn(&run_cli_query_tests.step);
+    }
+    // SONNY-6571: with TDE on, no written graph data in plaintext under a
+    // single server's data directory or under any node's of a 3-node
+    // cluster (real `geode serve` processes; the cluster on 127.0.0.171-173).
+    // test-sonny6571-tde-at-rest runs in the aggregate (the Raft storage is
+    // encrypted under TDE, src/distributed/raft_tde_storage.zig).
+    // test-sonny6571-schema-names is intentionally red until the storage
+    // engine's schema-name files are encrypted: compiled by test-compile,
+    // registered through shardDep by the commit that fixes it
+    // (KNOWN_TEST_ISSUES).
+    {
+        const steps = [_]struct { name: []const u8, filters: []const []const u8, aggregate: bool, desc: []const u8 }{
+            .{ .name = "test-sonny6571-tde-at-rest", .filters = &.{ "single node: with TDE on", "cluster: with TDE on" }, .aggregate = true, .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY set, a written label, relationship type, property key, string value and integer value appear in no file under a single server's data directory nor under any node's of a 3-node cluster - Raft log, hard state and snapshots included - with the servers running and after a clean stop; names in the storage engine's schema-name files are test-sonny6571-schema-names)" },
+            .{ .name = "test-sonny6571-schema-names", .filters = &.{"single node schema names"}, .aggregate = false, .desc = "Run SONNY-6571 reproduction (intentionally red: with GEODE_TDE_KEY set, label and relationship type names are written in plaintext to every shard's labels.dict and property key names to props.idx (graph-storage) and prop_exact.idx / prop_rev.idx (geode's exact property index))" },
+        };
+        for (steps) |st| {
+            const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6571_tde_at_rest.zig"), .target = target, .optimize = optimize });
+            mod.link_libc = true;
+            const tests = b.addTest(.{ .root_module = mod, .filters = st.filters });
+            spawnsBuiltGeode(tests);
+            const run = b.addRunArtifact(tests);
+            if (st.aggregate) {
+                shardDep(test_step, &run.step, 2, test_shard_loads, test_shard_index);
+            } else if (g_test_compile_step) |c| c.dependOn(&tests.step);
+            b.step(st.name, st.desc).dependOn(&run.step);
+        }
     }
 }

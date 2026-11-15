@@ -173,7 +173,7 @@ REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,tests/test_aud
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,TESTED,src/cli/main.zig,TestCANARY_REQ_AUTH_001_RealLogin,,cli,2025-09-30
 REQ-AUTH-001,UserManagement,Authentication,TESTED,src/security/user_management.zig,tests/test_user_management_comprehensive.zig,,security,2026-11-14
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,TESTED,src/cli/main.zig,TestCANARY_REQ_AUTH_002_RealLogout,,cli,2025-09-30
-REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,TESTED,src/cli/apikey_cli.zig,geodetestlab/specs/api_key_auth.yml,,cli,2026-02-04
+REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,RefusedAsUnsupported,TESTED,src/cli/apikey_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-AUTH-CLI-HELLO-DECODE-001,CLI QUIC Authentication,HelloResponseOwnership,TESTED,src/client/hello_decode.zig,tests/test_bug731_cli_hello_leak.zig,,cli,2026-07-31
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,src/security/geode_auth_lib.zig,TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy,,security,2025-09-30
 REQ-AUTH-CONFIG-001,AuthConfig,PasswordPolicy,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
@@ -304,7 +304,7 @@ REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,src/security/user_managemen
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
 REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
-REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6551_saved_session.zig,,security,2026-11-14
+REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,tests/test_sonny6554_cli_honesty.zig,,security,2026-11-15
 REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
 REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
 REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,security,2026-11-14
@@ -401,32 +401,32 @@ REQ-BUILTIN-STRING-001,BuiltinFunctions,String,IMPL,tests/test_gap_0193_batch2_m
 REQ-C4-001,MemoryLeakFix,Environment,TESTED,src/value_types.zig,,,core,2025-10-17
 REQ-CAPABILITY-DISCOVERY-001,SHOW CAPABILITIES,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_show_capabilities.zig,,execution,2026-08-28
 REQ-CAPABILITY-DISCOVERY-001,SHOW CAPABILITIES,DiscoveryRows,TESTED,tests/test_show_capabilities.zig,,,execution,2026-08-28
-REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-005,CDCProcedures,GetEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-006,CDCProcedures,Pause,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-007,CDCProcedures,Resume,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-011,CDCProcedures,GetWatermark,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-02-04
-REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-02-04
-REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
-REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,src/execution/storage_dispatch.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,cdc,2026-01-15
+REQ-CDC-PROC-001,CDCProcedures,Enable,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-002,CDCProcedures,Disable,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-003,CDCProcedures,Status,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-004,CDCProcedures,ExportDiagnostics,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-005,CDCProcedures,GetEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-006,CDCProcedures,Pause,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-007,CDCProcedures,Resume,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-008,CDCProcedures,SetGuardrail,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-009,CDCProcedures,GetGuardrailStatus,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-010,CDCProcedures,ResetGuardrails,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-011,CDCProcedures,GetWatermark,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-012,CDCProcedures,GetPendingEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-013,CDCProcedures,ConfigureAdaptiveFlush,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-014,CDCProcedures,GetFlushMetrics,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-015,CDCProcedures,GetMalformedRecords,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-016,CDCProcedures,GetCorruptionAnalysis,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-017,CDCProcedures,GetOrderedEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-018,CDCProcedures,CheckDuplicates,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-019,CDCProcedures,GetChangeStatus,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-020,CDCProcedures,ConfigureChangeStream,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-021,CDCProcedures,SetRetentionPolicy,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-022,CDCProcedures,CleanupExpiredEvents,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-023,CDCProcedures,GetTelemetryMetrics,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-024,CDCProcedures,GetPerformanceAlerts,STUB,src/execution/storage_dispatch.zig,,,cdc,2026-11-15
+REQ-CDC-PROC-025,CDCProcedures,Stop,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
 REQ-CENTRALITY-001,Centrality,PageRank,IMPL,tests/test_gap_0193_final_batch.zig,,,engine,2026-11-14
 REQ-CENTRALITY-002,Centrality,Betweenness,IMPL,tests/test_gap_0193_final_batch.zig,,,engine,2026-11-14
 REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,.gitlab-ci.yml,scripts/ci/test_prune_zig_cache.py,,ci,2026-10-24
@@ -444,7 +444,7 @@ REQ-CIRC-DEP-004,CircularDependencyResolution,TypeSystemIsolation,IMPL,tests/tes
 REQ-CIRC-DEP-005,CircularDependencyResolution,StorageIsolation,IMPL,tests/test_gap_0193_priority_categories.zig,,,engine,2026-11-14
 REQ-CIRCULAR-DEP-001,Circular Dependency Resolution,ModuleImports,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,build,2026-01-15
 REQ-CLI-AUTH-HELPERS-001,CLI Auth Helpers,Offline,IMPL,src/cli/cli_auth_helpers.zig,,,cli,2026-02-24
-REQ-CLI-AUTHN-001,CLIAuthn,ProviderConfig,TESTED,src/cli/authn_cli.zig,geodetestlab/specs/authn_provider.yml,,cli,2026-02-04
+REQ-CLI-AUTHN-001,CLIAuthn,RefusedAsUnsupported,TESTED,src/cli/authn_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,tests/cli_gql_autodetection_basic_test.sh,TestCANARY_REQ_CLI_AUTO_002_BasicGqlAutoDetection,,cli,2025-10-04
 REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,src/cli/backup_cli.zig,tests/test_sonny6289_backup_cleanup_info.zig,,cli,2026-11-11
 REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,tests/test_sonny6289_backup_cleanup_info.zig,,,cli,2026-11-11
@@ -511,8 +511,7 @@ REQ-CLI-PORTABLE-ARGV-001,PortableProcessArgv,CrossPlatform,TESTED,tests/test_pr
 REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,TESTED,src/cli/main.zig,geodetestlab/specs/cli_flags_comprehensive.yml,,cli,2026-06-10
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,src/security/user_manager.zig,tests/test_user_management_comprehensive.zig,,security,2026-11-14
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,tests/query_option_autorouting_regression_test.sh,TestCANARY_REQ_CLI_ROUTE_001_OptionRouting,,cli,2025-10-04
-REQ-CLI-SESSION-001,CLISession,Management,TESTED,src/cli/session_cli.zig,geodetestlab/specs/authn_provider.yml,,cli,2026-02-04
-REQ-CLI-SESSION-001,CLISession,Security,TESTED,src/cli/session_cli.zig,tests/test_sec_sess_log.zig,,cli,2026-06-10
+REQ-CLI-SESSION-001,CLISession,Management,TESTED,src/cli/session_cli.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
 REQ-CLI-SHARED-QUERY-001,ShellQuerySharedPath,ParityTesting,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml,,cli,2026-11-14
 REQ-CLI-SHARED-QUERY-002,ShellQuerySharedPath,GraphScopingParity,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml,,cli,2026-11-14
 REQ-CLI-SHARED-QUERY-003,ShellQuerySharedPath,LargeOrderedStreamingParity,TESTED,tests/test_query_shell_shared_path.zig,../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml,,cli,2026-11-14
@@ -1648,13 +1647,10 @@ REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,src/distributed/cluster.zig,,
 REQ-GQL-021,Bench Variance Infra,VarianceConfigHelper,TESTED,src/benchmarks/variance_config.zig,TestCANARY_REQ_GQL_021_VarianceConfigHelper,,tooling,2025-09-22
 REQ-GQL-021,Cluster Message Handler,OnMessage,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-021,Query Planner,PlannerSubPhaseHooks,TESTED,src/planner.zig,TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyValueShapeEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation,,planner,2025-09-21
+REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding,,planner,2025-09-21
+REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,tests/benchmark_path_cache_degree_bucket_utilization.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionEnvelope,BENCHED,tests/benchmark_path_cache_structural_collision.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2026-11-14
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionTightened,BENCHED,tests/benchmark_path_cache_structural_collision.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2026-11-14
@@ -1670,19 +1666,10 @@ REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/range_
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,tests/canary_txn_phantom_anomaly.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-21
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,tests/canary_txn_phantom_range.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,,txn,2025-09-22
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2026-11-12
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,src/planner/cost_calibration.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibration,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,src/planner/cost_calibration.zig,,BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,BENCHED,src/planner/cost_model.zig,TestCANARY_REQ_GQL_024_PlanCostModelFactors,BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,BENCHED,tests/canary_planner_cost_model.zig,,,planner,2026-11-14
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationEngine,BENCHED,src/planner/enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-26
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,tests/canary_planner_pipeline_selection.zig,,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking,,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationEngine,BENCHED,tests/canary_planner_enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationVarianceEnvelope,BENCHED,tests/canary_planner_enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-21
-REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderDiversity,TESTED,tests/canary_planner_join_reorder.zig,TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity,,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderVarianceEnvelope,BENCHED,tests/canary_planner_join_reorder.zig,,BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineVarianceEnvelope,BENCHED,tests/canary_planner_pipeline_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionIntegration,BENCHED,tests/canary_planner_plan_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,tests/canary_planner_plan_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationCostPrune,BENCHED,tests/canary_planner_prune.zig,TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope,planner,2025-09-22
@@ -1869,8 +1856,6 @@ REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,tests/test_quic_slow_poll_w
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasVarianceEnvelope,BENCHED,benchmarks/benchmark_adaptive_estimator_variance.zig,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,benchmarks/benchmark_cost_model_seed_variance.zig,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,src/planner/cost_seed.zig,,,planner,2025-09-22
-REQ-GQL-075,Query Optimizer,AdvancedCostModel,TESTED,src/canary.zig,TestCANARY_REQ_GQL_075_AdvancedCostModel,,planner,2025-09-22
-REQ-GQL-075,Query Optimizer,AdvancedCostModelCalibrationVarianceEnvelope,BENCHED,src/canary.zig,,BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,CostModelVarianceAutoCalibration,AutoCalibrationLogic,TESTED,src/monitoring/variance_calibration.zig,TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration,,planner,2025-09-27
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration,TESTED,src/planner/calibration.zig,TestCANARY_REQ_GQL_075_AutoCalibrationAdjustsAlpha,,planner,2025-09-26
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration,TESTED,tests/canary_cost_model_variance_autocalib.zig,,,planner,2025-09-26
@@ -2514,7 +2499,6 @@ REQ-KMS-TLS-SAFETY-001,KMS TLS Production Guard,Security,TESTED,src/security/ext
 REQ-LABEL-TAXONOMY-001,GitLab Label Setup,Core,IMPL,tools/setup_gitlab_labels.sh,,,ci,2026-01-14
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,src/cli/cli_dispatcher.zig,,,core,2026-01-24
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,TESTED,src/cli/cli_dispatcher.zig,test_completion_scripts_use_external_cli_library,,cli,2026-04-01
-REQ-LIB-MIGRATION-CONFIG-001,Config Library Migration,ReplConfigXdg,EXEMPT,src/client/repl/repl_config.zig,,,client,2026-01-25
 REQ-LIB-MIGRATION-CONFIG-001,External Library Migration,ConfigManagement,EXEMPT,src/server/cli_args.zig,,,core,2026-01-24
 REQ-LIB-MIGRATION-CONFIG-TEST-001,External Library Migration,ConfigTesting,TESTED,tests/test_config_integration.zig,,,test,2026-01-24
 REQ-LIB-MIGRATION-JSON-005,External Library Migration,SecurityAudit,EXEMPT,src/security/audit.zig,,,core,2026-01-24
@@ -2811,10 +2795,6 @@ REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,src/ml/graph_embeddin
 REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_001,,ml,2026-11-14
 REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_002,,ml,2026-11-14
 REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_003,,ml,2026-11-14
-REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-06-11
-REQ-ML-MODULARITY-001,Louvain Modularity Gain,Core,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-01-25
-REQ-ML-MODULARITY-002,Graph Modularity Calculation,Graph,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-01-25
-REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,IMPL,src/ml/integration_enhanced.zig,,,ml,2026-06-11
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
@@ -4934,6 +4914,19 @@ REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6554-CLI-HONESTY,CLI session honesty,UnsupportedRefused,TESTED,tests/test_sonny6554_cli_honesty.zig,tests/test_sonny6554_cli_honesty.zig,,cli,2026-11-15
+REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,src/client/dsn_params.zig,tests/test_sonny6554_dsn_params.zig,,cli,2026-11-15
+REQ-SONNY-6554-DSN-PARAMS,DSN parameters,OneStrictParser,TESTED,tests/test_sonny6554_dsn_params.zig,,,cli,2026-11-15
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/query_execution.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/statement_handlers.zig,,,engine,2026-11-14
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ChainedWithAggregation,ForAndSubqueryStages,TESTED,tests/test_sonny6555_for_chain_stage.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
+REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,src/eval.zig,tests/test_sonny6555_function_arity.zig,,eval,2026-11-14
+REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,tests/test_sonny6555_function_arity.zig,,,eval,2026-11-14
+REQ-SONNY-6555-NULL-ARGUMENTS,SizeFunction,NullAndCharacterLength,TESTED,src/eval/call_handlers.zig,tests/test_sonny6555_null_arguments.zig,,eval,2026-11-14
+REQ-SONNY-6555-NULL-ARGUMENTS,BuiltinFunctions,NullInNullOut,TESTED,tests/test_sonny6555_null_arguments.zig,tests/test_sonny6555_null_arguments.zig,,eval,2026-11-14
+REQ-SONNY-6555-ORDERED-BUILD-PROBE,OrderedIndex,ColumnClassProbe,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6555_ordered_build_probe.zig,,storage,2026-11-15
+REQ-SONNY-6555-ORDERED-BUILD-PROBE,OrderedIndex,ColumnClassProbe,TESTED,tests/test_sonny6555_ordered_build_probe.zig,,,storage,2026-11-15
+REQ-SONNY-6555-PAGE-CLAUSE-ORDER,OrderByAndPage,OffsetBeforeLimit,TESTED,tests/test_sonny6555_page_clause_order.zig,tests/test_sonny6555_page_clause_order.zig,,parser,2026-11-14
 REQ-SONNY-6559-CLI-EXIT-PATHS,CliExitPaths,ReturnThroughMain,TESTED,tests/test_sonny6559_cli_exit_paths.zig,tests/test_sonny6559_cli_exit_paths.zig,,cli,2026-11-14
 REQ-SONNY-6559-COMPLETION-STDOUT,CliExitPaths,CompletionOnStdout,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6559_cli_exit_paths.zig,,cli,2026-11-14
 REQ-SONNY-6559-MCP-BACKEND,MCPBackendTools,EveryToolAndResourceSucceeds,TESTED,tests/test_sonny6559_mcp_backend.zig,tests/test_sonny6559_mcp_backend.zig,,mcp,2026-11-14
@@ -4954,6 +4947,14 @@ REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,GrpcRefusalStatus,TESTED,src/t
 REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,tests/test_sonny6563_vote_persist_before_send.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
+REQ-SONNY-6569-HOST-NO-USERINFO,Shared host:port parser,NoCredentialInHost,TESTED,tests/test_sonny6569_host_credentials.zig,tests/test_sonny6569_host_credentials.zig,,transport,2026-11-15
+REQ-SONNY-6570-CDC-AUDIT,CDCProcedures,AuditedChanges,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6570-CDC-REFUSED-PROCEDURES,CDCProcedures,RefuseNotImplemented,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6570-CDC-START-NO-LEAK,CDC Engine,StartFailureFreesEngine,TESTED,src/streaming/cdc_enhanced.zig,tests/test_sonny6570_cdc_honesty.zig,,streaming,2026-11-15
+REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES,CDCProcedures,EngineStateOnly,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6570_cdc_honesty.zig,,cdc,2026-11-15
+REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
+REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
+REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
@@ -5028,7 +5029,7 @@ REQ-STREAMING-005,StreamingDataGenerator,EventSimulation,IMPL,tests/test_gap_019
 REQ-STREAMING-KAFKA-001,Kafka Sink Implementation,ProducerSending,TESTED,src/streaming/sinks/kafka_sink.zig,tests/test_gap0855_kafka_sink.zig,,streaming,2026-06-10
 REQ-STREAMING-KAFKA-002,Kafka Sink Real Implementation,Test,TESTED,src/streaming/sinks/kafka_sink.zig,,,streaming,2026-06-10
 REQ-STREAMING-KEYROT-REENCRYPT-001,Page Re-encryption,ReEncryption,IMPL,src/security/key_rotation.zig,,,security,2026-11-12
-REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,TESTED,src/streaming/sinks/webhook_sink.zig,geodetestlab/specs/geode_cdc_comprehensive.yml,,streaming,2025-12-30
+REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPSending,TESTED,src/streaming/sinks/webhook_sink.zig,tests/test_gap0855_webhook_sink.zig,,streaming,2026-11-15
 REQ-STREAMING-WEBHOOK-001,Webhook Sink Implementation,HTTPTransport,TESTED,src/streaming/sinks/webhook_sink.zig,tests/test_gap0855_webhook_sink.zig,,streaming,2026-06-10
 REQ-STRING-FUNC-001,StringFunctions,ToUpper,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15
 REQ-STRING-FUNC-002,StringFunctions,ToLower,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,eval,2026-01-15

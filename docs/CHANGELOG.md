@@ -40,6 +40,81 @@
   as well as `/CdcDiag` / `/CdcCtrl`. `cdc_enhanced.startCDC` frees the
   engine when `start()` fails (it leaked it). Regression:
   `zig build test-sonny6570-cdc-honesty`.
+- **Cluster mode: the Raft log and snapshots are encrypted under TDE
+  (SONNY-6571).** With `GEODE_TDE_KEY` set, the storage engine encrypted its
+  pages and WAL, but every cluster node's Raft log
+  (`<data_dir>/raft/entries.wal`, written by the raft library's
+  `FileStorage`) held each replicated write in plaintext: labels, property
+  keys, string and integer values (a doc credited `raft_persistent.zig`,
+  which nothing reached; removed by SONNY-6563). The Raft storage is now
+  `FileStorage` behind a geode `Storage` (`src/distributed/raft_tde_storage.zig`)
+  that seals every entry's and the snapshot's data with AES-256-GCM under a
+  per-open key derived by HKDF-SHA256 from `GEODE_TDE_KEY` and a random salt,
+  with a counter nonce; each entry is authenticated with its index, term and
+  kind. The hard state (term and vote) holds no graph data and is written as
+  before, so the vote is still durable before a reply leaves (SONNY-6563).
+  `<data_dir>/raft/tde.marker` records that the directory is encrypted and
+  under which key (a key check value, not the key). **BREAKING:** a cluster
+  node with `GEODE_TDE_KEY` set refuses to start when its `<data_dir>/raft`
+  holds Raft state written without TDE (`RaftStoragePlaintextUnderTde`; the
+  directory is left as it was): rebuild the node from the cluster with an
+  empty data directory (docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Distributed
+  Consensus (Raft)"). An encrypted Raft directory refuses to start without
+  `GEODE_TDE_KEY` (`RaftStorageNeedsTdeKey`) or under another key
+  (`RaftStorageTdeKeyMismatch`). Single-server data directories are
+  unaffected. Not yet encrypted (found by the same scan, single server and
+  cluster): label and relationship type NAMES in every shard's
+  `labels.dict` and property key names in `props.idx` (graph-storage) and in
+  geode's `prop_exact.idx` / `prop_rev.idx`; property values were found in
+  none of them. Regressions: `zig build test-sonny6571-tde-at-rest` (real
+  single server and 3-node cluster, every file under every data directory),
+  `test-sonny6571-raft-tde-storage`; red until the names are encrypted:
+  `test-sonny6571-schema-names` (docs/KNOWN_TEST_ISSUES.md).
+- **The CLI no longer prints success for session, API-key and authn
+  operations no server performs (SONNY-6554).** geode servers have no
+  session-token authentication (the HELLO carries a user name and password
+  only and no server keeps the session ids it issues) and read none of the
+  CLI's API-key or authn state files. `geode session invalidate-all` said
+  "invalidated" and did nothing; `geode auth validate --token` called any
+  non-empty string valid; `geode session rotate` replaced the saved token
+  with client-made random bytes; `session validate` / `check-idle`,
+  `authn config|test-access|stepup-check|stepup-mark` and `apikey
+  create|list|revoke|revoke-all|check-scope` reported results from local
+  files or hard-coded rules. Each now exits 1 with `Error: ... is not
+  supported by this server: <what>` and writes nothing (`--help` says so).
+  `geode query --token` (parsed, never sent) and `geode auth logout
+  --token` exit 2. `auth login`, `auth logout` and `session info` say the
+  saved session is a local file no server accepts. **BREAKING:** exit codes
+  and output of the commands above; scripts that relied on the old success
+  lines (e.g. geodetestlab `authn_provider.yml`, `api_key_auth.yml`) must be
+  updated. See docs/USER_AUTH.md, "Session and API-key commands".
+- **One strict DSN parser for `--dsn` and the MCP endpoint (SONNY-6554,
+  SONNY-6569).** `geode query` / `geode shell --dsn` ignored every query
+  parameter but the credentials, including `insecure=true` (passed by the
+  documented and test-harness DSNs) and `ca=`; `geode mcp --endpoint` used
+  geode-client-zig's lenient `parseDSN`, so an out-of-range
+  `connect_timeout` or a malformed `page_size` silently became the default.
+  Both now parse with `geode.dsn_params.parse` (`parseDSNStrict` plus the
+  docs/DSN.md parameter and boolean checks). The CLI applies `insecure=true`
+  exactly like `--insecure-tls-skip-verify` (same warning, refused under
+  production posture unless `GEODE_ALLOW_INSECURE_TLS=1`), `ca`/`cert`/`key`,
+  `page_size` and `role`; refuses `tenant`, `server_name` and `tls=false`
+  (exit 2), which it cannot apply; and warns that `hello_name`, `hello_ver`,
+  `conformance` and the timeouts have no effect. **BREAKING (`--dsn` and
+  MCP endpoint):** an unknown parameter, a parameter without `=`, a boolean
+  other than `true/false/1/0/yes/no/on/off`, and a malformed or
+  out-of-range `page_size` or timeout are refused; `--dsn` with a `:port`
+  host (no host name) is refused, as the MCP endpoint refused it.
+- **A credential in a `--server` host is refused, never resolved
+  (SONNY-6569).** `host_port.split` accepted any byte in a host name, so
+  `--server pw@host:3141` (and the REPL's `\connect pw@host:3141`) dialled a
+  host named `pw@host`, sending the password to the resolver and the TLS
+  server name. An `@` in a client address is now
+  `UnencodedCredentialDelimiter`, and an unbracketed host must be ASCII
+  letters, digits, `-`, `.`, `_` or `~` on every address path (client,
+  `--listen`, peers). `geode restore` validates `--server` before printing
+  it. **BREAKING:** such addresses are refused.
+
 - **geode-client-zig v0.3.17: one set of DSN rules on every client path
   (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
   geode-client-zig, which split the userinfo at the first `@` anywhere in
@@ -2611,6 +2686,93 @@
   followed by a subcommand no longer takes the subcommand as the event
   source. Regression: `zig build test-sonny6559-cli-exit-paths`.
 
+- **An ORDER BY on a column the ordered index cannot serve no longer starts
+  its build (SONNY-6555 item 3, SONNY-6518 item 6).** `orderedScanFastPath`
+  started the value-ordered index's background build (and its persisting
+  checkpoint) for a `(label, key)` before anything knew the column's class,
+  then declined that index forever when the column mixed order classes
+  (INTEGER, DOUBLE, STRING), held a string that is not its own NFC form, or
+  a value of no ordered class (SONNY-6499). The new
+  `StorageAdapter.probeOrderedColumnClass` reads the column's values first
+  (stopping at the first one that breaks it) and such a column is declined
+  before the build starts. A single-class canonical column still builds; the
+  probe reads the label's values once on the query path before that build
+  (the heap fallback serving the same query reads them too). Regression:
+  `zig build test-sonny6555-ordered-build-probe`.
+- **The statements after a FOR read its whole table, and a chain's last
+  RETURN DISTINCT reads every row (SONNY-6555 item 7, BREAKING: results
+  change).** ISO/IEC 39075:2024 14.8: a FOR extends the working table, a
+  record per element of each incoming record's list, and the statements
+  after it read that table as a whole (14.3, 14.11, 14.9). A FOR whose body
+  reads ran the body once per element (`statement_handlers.executeForBody`),
+  so `FOR x IN [1, 1, 2] MATCH (z) WHERE z.k = x RETURN count(*)` gave one
+  count per element and the body's WITH DISTINCT, WITH ... ORDER BY ...
+  LIMIT, RETURN DISTINCT and RETURN ... ORDER BY ... LIMIT each read one
+  element's rows; after a part (`MATCH (z) WITH z FOR x IN z.l MATCH ...`)
+  the chain ran the FOR part per row binding nothing and returned one empty
+  row per row. Such a body now runs as the rest of a chain whose part before
+  it is the FOR's table (`query_execution.runReadForBody`, through
+  `continueChain`, the SONNY-6540 stage logic). A body that writes still
+  runs once per element (geode#876). Also: a chain's last RETURN DISTINCT
+  after a part run per row (`MATCH (z) WITH z MATCH (z)-->(y) RETURN
+  DISTINCT z.g`) was applied to each row's rows alone; it now reads every
+  row, before the ORDER BY and window. A CALL subquery reaches no later
+  stage (`CALL { } WITH` does not parse; `CALL { } MATCH ... WITH` is
+  0A000). `test-sonny2683-return-shapes` pinned the per-element grouping
+  (`FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) ... HAVING c > 7` as
+  a|10, a|10, b|10, b|10); it now expects a|20, b|20, c|10, the tenant-scoped
+  session included (the FOR statement makes its context the active one, as
+  `executeQueryWithContext` does, so the per-row parts read its tenant
+  scope). Regression: `zig build test-sonny6555-for-chain-stage`.
+- **A function called with the wrong number of arguments is 42000 (SONNY-6555
+  item 5, BREAKING: GQLSTATE changes).** ISO/IEC 39075:2024 4.7.3 step 4: a
+  source that matches no production, or violates a Syntax Rule, fails with
+  "syntax error or access rule violation" (42000); an operand count is
+  decided by the program text, as SONNY-6540 item 9 pinned for `abs(1,
+  2)`. The parser checks only a few functions, and the rest answered as
+  their handler happened to: 22023 (`sqrt()`, `upper('a', 'b')`,
+  `ipaddr()`, `toFloat()`, `datetime('a', 'b')`), NULL (`tail()`, `head([1],
+  2)`, `url_host('a', 'b')`, `smallint(1, 2)`, `range(1)`) or 42883 "unknown
+  function" (`nullif(1)`, `properties()`, `date(1, 2)`, `startsWith('a')`).
+  Every arity refusal of the function dispatch (built-ins, timeseries
+  functions, the extension registry) is now the new `WrongArgumentCount`,
+  mapped to 42000 on QUIC and gRPC, and a function Geode lists (SHOW
+  FUNCTIONS) that no handler took is that too, not 42883; it fails the
+  statement in a grouped projection as well. `InvalidArgs` (22023) is left
+  for an argument value a function refuses and for procedures (`CALL`),
+  whose arity is unchanged. The check stays in the dispatch, which owns
+  the function catalogue the parser does not (extension registry,
+  timeseries flag): a call no row reaches is not refused. Regression: `zig
+  build test-sonny6555-function-arity`.
+- **A WITH takes SKIP / OFFSET before LIMIT (SONNY-6555 item 6).** ISO/IEC
+  39075:2024 14.9 `<order by and page statement>` puts the offset clause
+  (`OFFSET` or `SKIP`, 16.19) before the limit clause (16.18). A RETURN
+  accepted `ORDER BY s SKIP 1 LIMIT 2`, but a WITH, a leading WITH, a
+  UNION's trailing page and a FOR's RETURN refused it with 42000: each read
+  LIMIT, then OFFSET, and nothing after. Every page clause now goes through
+  one parser routine that takes the standard order. `LIMIT n OFFSET m` is
+  kept as a documented Geode extension (the same page; docs/GQL_COMPLIANCE.md
+  now shows the standard order); a repeated LIMIT or OFFSET is 42000. The
+  ISO conformance case named "17.4: OFFSET" was written in the extension
+  order; it now reads the standard order and the extension has its own
+  case. Regression: `zig build test-sonny6555-page-clause-order`,
+  `zig build test-iso-conformance`.
+- **`length(NULL)` and `size(NULL)` are NULL, and a string's length counts
+  characters (SONNY-6555 item 4, BREAKING: results change).** ISO/IEC
+  39075:2024 20.22 GR 1 b), 3 b) and 4 e): the length or cardinality of the
+  null value is the null value; GR 1 a) with NOTE 331: a character string's
+  length is its number of characters. `length(NULL)`, `size(NULL)` and
+  `size(n.missing)` answered 0, `length('héllo')` 6 (bytes), and
+  `length(1)` / `size(true)` 0; they now answer NULL, 5 and 22G03. A sweep
+  of every function the dispatch knows, called with NULL arguments, found
+  the same defect in `tail(NULL)` (`[]`; a non-list is now 22G03 too),
+  `indegree(NULL)` / `outdegree(NULL)` (0), `xml_is_well_formed(NULL)`
+  (false), and every extension-registry function (`ipaddr`, `st_x`,
+  `currency`, `hash`, `latlon`, ...) and the `url_*`, `domain_*`,
+  `uuid_equal`, `to_hex`, `from_hex`, `array_*`, `bit_*`, `range_contains` /
+  `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
+  22G03 for a NULL argument: each now answers NULL. Regression: `zig build
+  test-sonny6555-null-arguments`.
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine
   directory with a file on purpose (`bootstrapDefaultAdmin fails CLOSED when
@@ -6962,6 +7124,15 @@
 
 ### Removed
 
+- **`src/client/repl/repl_config.zig` `Config.load` / `save` (SONNY-6554):**
+  written against removed Zig APIs and never compiled (no caller), with
+  `getConfigPath` and `shouldUseColor`; and `session_state.getDefaultPath`,
+  which called a function that does not exist. The CLI state-directory
+  resolver (`cli_auth_helpers.resolveStatePath`) went with its last users
+  (`session`, `authn`, `apikey` state files), and `tests/test_sec_sess_log.zig`
+  with the `session rotate` output seam it pinned (rotate is refused; the
+  no-token-in-output check moved to `tests/test_sonny6554_cli_honesty.zig`).
+
 - **Distributed modules the server never reached (SONNY-6563, SONNY-6567
   item 7).** Each had no reference chain from the server root (`lib.zig`
   exported some as unreferenced `distributed.*` decls; the rest were
@@ -7039,6 +7210,25 @@
   collision benchmark is compiled by no step) and annotated
   `docs/performance/2026-04-20-query-bench/FINAL.md` (the AST cache does not
   use `structural_key.zig`).
+- **Dead code: `src/ml/integration_enhanced.zig`, `src/planner/pipeline.zig`
+  and `src/planner/cost_calibration.zig` (SONNY-6555 item 8).** No server
+  path reaches any of them (the server binary builds without them):
+  `integration_enhanced.zig` (a second Node2Vec, a PageRank, a third
+  Louvain, link prediction and `gds.node2vec/pageRank/louvain/linkPrediction`
+  procedure stubs that no dispatcher registered) was compiled only by its own
+  in-module tests in `test-gap0879` and `tests/e2e_ml_integration.zig`
+  (compiled by nothing); `pipeline.zig` (the synthetic plan-selection runner)
+  and `cost_calibration.zig` (with `cost_model.estimateWithCalibration`, its
+  only user) only by `lib.zig`'s inline-test roots and three canary tests
+  (`canary_planner_pipeline_selection`, `canary_planner_cost_model`,
+  `canary_planner_join_reorder`). Removed with those tests, their build.zig
+  registrations, the `test-canary-planner-pipeline-selection` step (and its
+  perf-gate CI entry), and their allowlist rows. `src/canary.zig` claimed
+  REQ-GQL-075 "Query Optimizer / AdvancedCostModel" TESTED by
+  `TestCANARY_REQ_GQL_075_AdvancedCostModel`, which does not exist, and a
+  BENCHED envelope of a benchmark that does not compile; both rows removed.
+  Docs corrected: ML_GRAPH_EMBEDDINGS.md, CURRENT_ARCHITECTURE.md,
+  SERVER_FEATURES.md, kb/PROFILING.md, kb/VARIANCE_ENVELOPES.md.
 - **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
   `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
   no query: nothing outside `planner.zig` named them except 17 test and

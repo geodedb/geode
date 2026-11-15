@@ -6,9 +6,29 @@
 
 ## Overview
 
-Geode implements Transparent Data Encryption (TDE) at the file level for all persistent storage components. When enabled, all data written to disk is encrypted using AES-256-GCM, ensuring data at rest is protected against unauthorized access.
+Geode implements Transparent Data Encryption (TDE) with AES-256-GCM. When
+enabled, the storage engine's pages and WAL, the schema catalogs and, in
+cluster mode, the Raft log and snapshots are encrypted. Not everything is:
+see [What TDE does not cover yet](#what-tde-does-not-cover-yet).
 
-This document covers the file-level encryption implementation that protects index files, schema catalogs, distributed consensus state, and other persistent data structures.
+This document covers the file-level encryption of index files, schema
+catalogs, the cluster's Raft storage and other persistent data structures.
+
+### What TDE does not cover yet
+
+Found by `zig build test-sonny6571-schema-names` (SONNY-6571), which writes
+through a real server with `GEODE_TDE_KEY` set and reads every file under
+the data directory:
+
+- Label and relationship type **names** are written in plaintext to every
+  shard's `labels.dict` (graph-storage), and property key names to
+  `props.idx` (graph-storage) and to geode's exact property index
+  `prop_exact.idx` / `prop_rev.idx`. No property value was found in any of
+  them, nor anywhere else under the data directory.
+- The Raft hard state (`<data_dir>/raft/hard_state`: the current term and
+  vote, two integers) is not encrypted; it holds no graph data.
+- Time-series data is encrypted only with `GEODE_TS_TDE=1` as well
+  (docs/TIMESERIES.md).
 
 ## Enabling TDE
 
@@ -79,11 +99,66 @@ fuzz target; no server code path calls it.
 
 ### Distributed Consensus (Raft)
 
-Not encrypted. The cluster's Raft hard state, log and snapshots are written
-by the pinned raft library's `FileStorage` (`hard_state`, `entries.wal`,
-snapshot files) in the node's raft directory, in plaintext. The
-`src/distributed/raft_persistent.zig` wrapper this table named was reached by
-nothing in the server and was removed (SONNY-6563).
+Encrypted since SONNY-6571 (before it, the Raft log held every replicated
+write in plaintext; the `src/distributed/raft_persistent.zig` wrapper an
+earlier version of this page credited was reached by nothing in the server
+and was removed by SONNY-6563).
+
+The raft library's `FileStorage` keeps a node's Raft state under
+`<data_dir>/raft`: `entries.wal` (the log), `hard_state`, `snapshot.meta` and
+`snapshot.data`. With `GEODE_TDE_KEY` set, geode puts its own `Storage` in
+front of it (`src/distributed/raft_tde_storage.zig`):
+
+| File | Under TDE |
+| --- | --- |
+| `entries.wal` | each entry's data sealed (AES-256-GCM), authenticated with the entry's index, term and kind; the index and term themselves are in clear |
+| `snapshot.data` | sealed |
+| `snapshot.meta` | in clear: index, term, voter ids |
+| `hard_state` | in clear: current term and vote (no graph data) |
+| `tde.marker` | marks the directory encrypted; holds a salt and a key check value derived from `GEODE_TDE_KEY`, never the key |
+
+Keys and nonces: nothing is sealed with `GEODE_TDE_KEY` itself. Each time the
+directory is opened, geode draws a random 16-byte salt and derives a session
+key with HKDF-SHA256 (`GEODE_TDE_KEY`, the salt, a Raft-specific label). The
+nonce is a counter from 0 within the session, so a (key, nonce) pair repeats
+only if two opens draw the same 128-bit salt. The derived keys are used for
+nothing else, so their nonces cannot collide with the storage engine's.
+Each record carries its salt, so records written in earlier sessions stay
+readable. Durability is `FileStorage`'s unchanged: the log is appended and
+fdatasync'ed by the wal library, the hard state and snapshots are written
+to a temp file, fsync'ed, renamed and the directory fsync'ed, and a vote is
+durable before the reply granting it is sent (SONNY-6563).
+
+On start, a cluster node with a data directory:
+
+| `GEODE_TDE_KEY` | `<data_dir>/raft` | Result |
+| --- | --- | --- |
+| set | new, or empty | writes `tde.marker`, then encrypts |
+| set | encrypted under this key | starts |
+| set | encrypted under another key | refuses: `RaftStorageTdeKeyMismatch` |
+| set | Raft state written without TDE | refuses: `RaftStoragePlaintextUnderTde`, and leaves the directory as it was |
+| unset | encrypted | refuses: `RaftStorageNeedsTdeKey` |
+| unset | written without TDE, or new | starts, plaintext (as before) |
+
+**Enabling TDE on an existing cluster** (or upgrading a cluster that already
+set `GEODE_TDE_KEY` from a build before SONNY-6571, whose Raft logs are
+plaintext): a plaintext Raft directory is refused, not migrated; rewriting a
+live log in place is not crash-safe, and the plaintext would remain in freed
+disk blocks. Rebuild one node at a time while the others keep a leader: stop
+the node, move its whole data directory aside, start it with
+`GEODE_TDE_KEY` set and an empty data directory so it catches up from the
+leader, check that it has (`SHOW CLUSTER STATUS`, a read of recent data),
+then destroy the old directory and repeat on the next node. Moving only
+`<data_dir>/raft` aside would replay the log onto the graph that is already
+there.
+
+**Changing `GEODE_TDE_KEY`** on a cluster node is refused by the Raft
+directory as above; rebuild the node the same way.
+
+**Downgrading** below SONNY-6571: an older build does not know
+`tde.marker` and would hand the sealed entries to the apply path as if they
+were commands. Do not start one on an encrypted Raft directory; rebuild the
+node with an empty data directory instead.
 
 ## Technical Implementation
 
@@ -221,7 +296,9 @@ string; a malformed value refuses startup, see Key Requirements):
 
 - Files are written **unencrypted** (plaintext)
 - Files can be read regardless of encryption state
-- Mixed environments supported (encrypted + unencrypted files)
+- Mixed environments supported (encrypted + unencrypted files), except the
+  cluster's Raft directory, which is either encrypted or not and refuses to
+  start under the other setting (see Distributed Consensus (Raft))
 - Warning logged when loading unencrypted files with TDE enabled
 
 ## CANARY Governance
@@ -457,7 +534,9 @@ There is no automated key rotation: no command or KMS provider rotates
 ### January 28, 2026
 
 - Added TDE encryption to all index persistence files
-- Added TDE encryption to Raft consensus state
+- Added TDE encryption to Raft consensus state (not delivered: the wrapper
+  was never reached by the server; the Raft log and snapshots are encrypted
+  since SONNY-6571, 2026-11-15)
 - Added TDE encryption to FLE catalog
 - Created comprehensive geodetestlab spec
 - Fixed Zig 0.15 ArrayList API compatibility

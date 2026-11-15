@@ -144,13 +144,14 @@ test "SONNY-6544: geode query with a relative or empty HOME says so and does not
     }
 }
 
-test "SONNY-6544: auth token, session info/rotate and the authn state dir refuse a relative HOME" {
+// SONNY-6554: `session rotate` and `authn config` are refused as not
+// supported before they read HOME, and no command uses the CLI state
+// directory any more (its relative-XDG_STATE_HOME case went with it).
+test "SONNY-6544: auth token and session info refuse a relative HOME" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const commands = [_][]const []const u8{
         &.{ geode_test_bin.geode_exe, "auth", "token" },
         &.{ geode_test_bin.geode_exe, "session", "info" },
-        &.{ geode_test_bin.geode_exe, "session", "rotate" },
-        &.{ geode_test_bin.geode_exe, "authn", "config", "--allow-anonymous-path", "/health" },
     };
     for (commands) |argv| {
         for ([_][]const u8{ "relhome", "" }) |home| {
@@ -161,28 +162,6 @@ test "SONNY-6544: auth token, session info/rotate and the authn state dir refuse
             try expectRefused(cwd.path(), r, argv[1]);
         }
     }
-}
-
-test "SONNY-6544: a relative XDG_STATE_HOME is ignored; the state dir goes under HOME" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var cwd = try test_scratch.ScratchDir.create("sonny6544-home-cwd");
-    defer cwd.remove();
-    var home = try test_scratch.ScratchDir.create("sonny6544-home");
-    defer home.remove();
-    const r = try runGeode(cwd.path(), &.{ geode_test_bin.geode_exe, "authn", "config", "--allow-anonymous-path", "/health" }, &.{
-        .{ .name = "HOME", .value = home.path() },
-        .{ .name = "XDG_STATE_HOME", .value = "relstate" },
-    });
-    defer r.deinit();
-    if (r.code == null or r.code.? != 0 or r.has("panic")) {
-        r.dump("authn config, relative XDG_STATE_HOME");
-        return error.TestUnexpectedResult;
-    }
-    try expectCwdUntouched(cwd.path(), "authn config, relative XDG_STATE_HOME");
-    const state = try std.fmt.allocPrint(testing.allocator, "{s}/.local/state/geode/geode_authn_state.db", .{home.path()});
-    defer testing.allocator.free(state);
-    const file = try std.Io.Dir.cwd().openFile(fsIo(), state, .{});
-    file.close(fsIo());
 }
 
 test "SONNY-6544: auth login --save-session with a relative HOME refuses to write the token" {
