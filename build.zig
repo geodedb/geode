@@ -753,6 +753,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6632-hydration-followups", .reason = "intentionally red TDD reproduction (SONNY-6632): a rebuilt open-failed graph stays quarantined, a relationship-type count is dropped on OOM, retired entries of a not-built graph are never reclaimed; compiled by test-compile; registered through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10902,6 +10903,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6605_grpc_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6605_grpc_step = b.step("test-sonny6605-grpc-shutdown", "Run SONNY-6605 item 3 regression (a real geode serve with --listen and --listen-grpc, both answering, exits 0 within 20 s of SIGTERM with no thread-pool deinit timeout and no teardown watchdog exit: the shutdown tail stops the gRPC accept loop)");
     sonny6605_grpc_step.dependOn(&run_sonny6605_grpc_tests.step);
+    // SONNY-6632: a rebuilt open-failed graph is readable, a relationship-type
+    // count that cannot be allocated fails the hydration, and a checkpoint
+    // reclaims the retired entries of a graph that is not being built.
+    const sonny6632_hyd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6632_hydration_followups.zig"), .target = target, .optimize = optimize });
+    sonny6632_hyd_test_mod.link_libc = true;
+    sonny6632_hyd_test_mod.addImport("geode", root_mod);
+    const sonny6632_hyd_tests = b.addTest(.{ .root_module = sonny6632_hyd_test_mod });
+    const run_sonny6632_hyd_tests = b.addRunArtifact(sonny6632_hyd_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6632_hyd_tests.step);
+    const sonny6632_hyd_step = b.step("test-sonny6632-hydration-followups", "Run SONNY-6632 regression (a graph whose registration failed at open answers reads once its first touch rebuilt it; a relationship-type count whose key cannot be allocated fails the hydration with OutOfMemory and the retry counts every edge; a checkpoint frees the retired node bodies of a graph whose hydration failed transiently)");
+    sonny6632_hyd_step.dependOn(&run_sonny6632_hyd_tests.step);
 
     // SONNY-6492 (3): a replicated data write never creates a dropped graph
     // again; an unlocked createNode never writes into a graph dropped under it.
