@@ -24,7 +24,9 @@
 // apply entry point (`raft_apply.applyCommand`) called by a thread that holds
 // the graph's read lock: the apply must fail (`ObjectInUse`: the Raft node
 // counts and logs it as a committed entry not applied), not report the graph
-// dropped.
+// dropped. SONNY-6567 (6a): the node then stops applying committed entries
+// (`raft_apply.applyHalted`) until it is restarted, rather than go on
+// without the drop every other node applied.
 //
 // CANARY: REQ=REQ-SONNY-6547-REPLICATED-DROP-IN-USE; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-14
 
@@ -167,6 +169,13 @@ test "SONNY-6547 (3): a drop_graph apply refused because its thread holds the gr
     }
     try testing.expectError(error.ObjectInUse, result);
     try testing.expect(f.st.graphExists(G));
+    // SONNY-6567 (6a): and the node stops applying, so it cannot go on
+    // without the drop: every later entry is refused until a restart (whose
+    // log replay applies the drop with nothing open).
+    try testing.expect(raft_apply.applyHalted());
+    try testing.expectError(error.ReplicatedApplyHalted, raft_apply.applyCommand(testing.allocator, f.st, .noop, 8));
+    try testing.expect(f.st.graphExists(G));
+    raft_apply.resetApplyHaltForTesting(); // what a restart does
     // Without the lock, the same entry drops it.
     const again = try raft_apply.applyCommand(testing.allocator, f.st, .{ .schema_change = .{ .operation = .drop_graph, .graph = G, .schema = "" } }, 7);
     testing.allocator.free(again);

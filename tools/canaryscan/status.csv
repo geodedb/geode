@@ -5039,6 +5039,9 @@ REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,Regression,TESTED,tests/test_sonny6
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,SnapshotCopiesEvictedEdges,TESTED,src/graph_store.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-15
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,CheckedHydratedGetters,TESTED,src/graph_store.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-15
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6567_hydrated_getter_errors.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-14
+REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,FollowerPrehydratesBeforeStep,TESTED,src/distributed/cluster.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
+REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,RefusedReplicatedDropHaltsApply,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6547_single_voter_drop.zig,,distributed,2026-11-15
+REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,ApplyThreadNeverPersistsHydration,TESTED,src/graph_store.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
 REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,Regression,TESTED,tests/test_sonny6567_raft_apply_hydration.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
 REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantLifecycle,DropFailsLoudlyRetryable,TESTED,src/execution/tenant_dispatch.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-15
 REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantRegistry,PersistOrRestore,TESTED,src/security/tenant_registry.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-15

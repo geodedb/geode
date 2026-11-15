@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:13:22.00743836Z",
+  "generated_at": "2026-11-15T13:13:34.673577312Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79465,6 +79465,48 @@
       "features": [
         {
           "feature": "DistributedCluster",
+          "aspect": "FollowerPrehydratesBeforeStep",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RefusedReplicatedDropHaltsApply",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6547_single_voter_drop.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyThreadNeverPersistsHydration",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -84629,7 +84671,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4198
+      "TESTED": 4201
     },
     "by_aspect": {
       "2PC": 3,
@@ -84764,6 +84806,7 @@
       "ApplySetGroups": 1,
       "ApplySnapshotPointer": 1,
       "ApplyStatementBatch": 1,
+      "ApplyThreadNeverPersistsHydration": 1,
       "ApplyTxnDecide": 1,
       "ApplyTxnPrepare": 1,
       "ApplyUnderTenant": 1,
@@ -85895,6 +85938,7 @@
       "FloatEncoding": 1,
       "FloatSupport": 1,
       "FlowControl": 1,
+      "FollowerPrehydratesBeforeStep": 1,
       "FollowerRemovedTextRebuild": 1,
       "ForkJoin": 1,
       "FormatString": 1,
@@ -87428,6 +87472,7 @@
       "RefuseReserved": 1,
       "RefusedCommitOnQuicWire": 1,
       "RefusedDropFailsApply": 1,
+      "RefusedReplicatedDropHaltsApply": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,

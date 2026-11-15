@@ -2438,6 +2438,38 @@
 
 ### Fixed
 
+- **Startup refuses to run with part of its auth state; per-graph grants
+  load under the right graph (SONNY-6567 item 5).** **BREAKING (operator):**
+  a server whose stored custom roles, per-graph grants, FLE role grants, GPS
+  policies, or tenant hierarchy / quotas cannot all be loaded at startup now
+  refuses to start (it logged a warning and ran with part of them: a missing
+  grant or role changed authorization outcomes, and a deny policy not loaded
+  hid nothing). `auth_dispatch.hydrateCustomRolesFromGraph` returns its
+  error; the grant and FLE grant loads moved into the named module
+  `auth_startup_hydration`. Found on the way: the startup grant load
+  captured each stored grant BY VALUE and kept `getGraphName()`, a slice of
+  that per-iteration stack copy, so a grant could be loaded under another
+  graph's name after a restart. Regression: `zig build
+  test-sonny6567-auth-hydration`.
+
+- **Raft apply: no hydration persist under the Raft mutex, a follower
+  hydrates before it steps, and a refused replicated drop halts the apply
+  (SONNY-6567 item 6).** A statement batch whose entry wrote a graph not
+  hydrated yet hydrated it WITH its completion persist under
+  `inner_mutex`; with a reader holding that graph's lock the apply took
+  3.2 s (now 0.2 s): every hydration on a thread applying an entry skips
+  the persist (`GraphStore.enterReplicatedApply`). A follower now hydrates
+  the graphs of an AppendEntries' entries on its receiving thread before
+  `handleMessage` takes `inner_mutex` (measured: the scan of a 20,000-node
+  graph held `inner_mutex` 0.23 s, linear in graph size). Log replay at
+  restart still scans under `inner_mutex` (bounded by the scan; the node is
+  not serving yet). A replicated DROP GRAPH refused on a node because a
+  session transaction changed the graph now **halts that node's apply**
+  (`raft_apply.applyHalted`, every later entry `ReplicatedApplyHalted`,
+  an operator error to restart it) instead of going on without the drop;
+  unreachable today (nothing proposes `schema_change`). Regression: `zig
+  build test-sonny6567-raft-apply-hydration`, `test-sonny6547-single-voter-drop`.
+
 - **A node or edge body that cannot be read is an error, not "absent"; read
   snapshots list evicted edges (SONNY-6567 item 2).** The hydrated getters
   turned a failed rebuild of an evicted body (out of memory, an engine read

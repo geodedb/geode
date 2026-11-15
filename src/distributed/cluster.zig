@@ -2154,6 +2154,19 @@ pub const ClusterCoordinator = struct {
             }
         }
 
+        // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=FollowerPrehydratesBeforeStep; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
+        // SONNY-6567 (6b): a follower applies the entries an AppendEntries
+        // commits under the Raft node's `inner_mutex` (`handleMessage` ->
+        // `drainReady`); the first touch of a graph not hydrated yet then
+        // scanned it there (measured: the scan of a 20,000-node graph). Its
+        // graphs are hydrated here first, on the receiving thread, outside
+        // `inner_mutex` and without the persist, as the leader does before it
+        // proposes (`prehydrateForApply`). An entry not committed yet only
+        // builds the resident indexes any first read builds.
+        switch (frame_res.body) {
+            .append_entries => |ae| for (ae.entries) |entry| raft_apply.prehydrateForApply(entry.command),
+            else => {},
+        }
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{
                 Attr.string("error", @errorName(e)),

@@ -21,6 +21,9 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const fle_integration = @import("fle_integration.zig");
 // SONNY-3348 (round 18): the statement undo record the write methods fill.
 const statement_undo = @import("statement_undo.zig");
+
+/// SONNY-6567 (6c): depth of `GraphStore.enterReplicatedApply` on this thread.
+threadlocal var t_replicated_apply_depth: u32 = 0;
 const txn_undo = @import("txn_undo_log.zig");
 // GAP (write-path OOM, 2026-07-04): working-set budget hooks for the legacy
 // write executor. `chargeStoreBytes` is a no-op unless the query dispatcher
@@ -13277,7 +13280,9 @@ pub const GraphStore = struct {
     /// per-graph load: the resident IdMap re-insert is idempotent and the
     /// deferred indexes are built from the engine scan.
     pub fn ensureGraphHydrated(self: *GraphStore, graph_name: []const u8) void {
-        self.ensureGraphHydratedImpl(graph_name, true);
+        // SONNY-6567 (6c): on a thread applying a Raft entry, the completion
+        // persist is skipped too (see `enterReplicatedApply`).
+        self.ensureGraphHydratedImpl(graph_name, t_replicated_apply_depth == 0);
     }
 
     // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrateWithoutCompletionPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
@@ -13291,6 +13296,23 @@ pub const GraphStore = struct {
     /// touch, as before the completion persist existed).
     pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) void {
         self.ensureGraphHydratedImpl(graph_name, false);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=ApplyThreadNeverPersistsHydration; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6567 (6c): this thread is applying a Raft entry (under the Raft
+    /// node's `inner_mutex`), until `leaveReplicatedApply`. Every hydration it
+    /// triggers, through ANY store method, skips the completion persist (a
+    /// checkpoint of the graph that waits up to 5 s for the graph's lock),
+    /// as `ensureGraphHydratedForReplicatedApply` does for the entry's own
+    /// graph: a statement batch whose entry wrote another graph hydrated it
+    /// through `createNodeWithId` WITH the persist, and a reader holding that
+    /// graph's lock stopped the whole Raft node meanwhile. Nests.
+    pub fn enterReplicatedApply() void {
+        t_replicated_apply_depth += 1;
+    }
+
+    pub fn leaveReplicatedApply() void {
+        if (t_replicated_apply_depth > 0) t_replicated_apply_depth -= 1;
     }
 
     fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) void {
