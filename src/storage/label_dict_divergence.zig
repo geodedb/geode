@@ -138,6 +138,61 @@ pub fn classify(allocator: std.mem.Allocator, data_dir: []const u8, graph_uuid: 
     return .shift;
 }
 
+// CANARY: REQ=REQ-SONNY-6527-LABEL-DICT-REPORT; FEATURE="CrashRecovery"; ASPECT=StructuredDivergenceDetail; STATUS=TESTED; TEST=tests/test_sonny6524_label_dict_split.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6527: the receiver geode installs as `GraphConfig.label_dict_report`.
+/// graph-storage 0.4.16 hands every shard label-dictionary finding of
+/// `ShardedGraphEngine.open` and `getOrAssignLabel` to it (kind, action,
+/// shard, id, the shard's and shard 0's names, record and name counts) on the
+/// calling thread; its own `std.log.warn` of the same detail is compiled out
+/// of a release server. A refusal is logged at ERROR, a repair at WARN, both
+/// through the structured logger and with the graph's name. Heap-allocated
+/// before the graph's engine opens and owned by its `ManagedGraph` (freed
+/// after the engine is closed): `getOrAssignLabel` reports through it for
+/// the engine's whole life.
+pub const ReportCtx = struct {
+    name_buf: [256]u8 = undefined,
+    name_len: usize = 0,
+
+    pub fn create(allocator: std.mem.Allocator, graph_name: []const u8) !*ReportCtx {
+        const self = try allocator.create(ReportCtx);
+        self.* = .{ .name_len = @min(graph_name.len, 256) };
+        @memcpy(self.name_buf[0..self.name_len], graph_name[0..self.name_len]);
+        return self;
+    }
+
+    pub fn report(self: *ReportCtx) gs.config.LabelDictReport {
+        return .{ .ctx = self, .func = onDiagnostic };
+    }
+
+    fn name(self: *const ReportCtx) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
+fn onDiagnostic(ctx: ?*anyopaque, d: *const gs.config.LabelDictDiagnostic) void {
+    const self: *const ReportCtx = @ptrCast(@alignCast(ctx orelse return));
+    const attrs = [_]SAttr{
+        SAttr.string("graph", self.name()),
+        SAttr.string("kind", @tagName(d.kind)),
+        SAttr.string("action", @tagName(d.action)),
+        SAttr.uint("shard", d.shard),
+        SAttr.uint("label_id", d.label_id),
+        SAttr.uint("shard_label_id", d.shard_label_id),
+        SAttr.string("label", d.label),
+        SAttr.string("shard0_label", d.shard0_label orelse "(none)"),
+        SAttr.string("shard_other_label", d.shard_label orelse "(none)"),
+        SAttr.uint("nodes", d.nodes),
+        SAttr.uint("edges", d.edges),
+        SAttr.uint("indexes", d.indexes),
+        SAttr.uint("shard_names", d.shard_names),
+        SAttr.uint("shard0_names", d.shard0_names),
+    };
+    switch (d.action) {
+        .refused => slog.err("shard label dictionary disagrees with shard 0's; refused (LabelDictionaryDiverged) and nothing was changed (SONNY-6527)", &attrs),
+        .renamed_from_shard0, .rewritten, .rewritten_in_memory => slog.warn("shard label dictionary disagreed with shard 0's and was repaired from it (SONNY-6527)", &attrs),
+    }
+}
+
 /// The operator named `graph_name` in `GEODE_LABEL_DICT_ADOPT_SHARD0`.
 pub fn adoptRequested(graph_name: []const u8) bool {
     const raw = std.c.getenv(adopt_env) orelse return false;
@@ -151,6 +206,9 @@ pub fn adoptRequested(graph_name: []const u8) bool {
 // CANARY: REQ=REQ-SONNY-6524-LABEL-DICT-SPLIT; FEATURE="CrashRecovery"; ASPECT=DivergedLabelDictOpen; STATUS=TESTED; TEST=tests/test_sonny6524_label_dict_split.zig; OWNER=storage; UPDATED=2026-11-13
 /// `ShardedGraphEngine.open`, and for a graph refused with
 /// `LabelDictionaryDiverged`: log which shape it is and what to do, and open
+/// (SONNY-6527: graph-storage reports each shard's finding itself, through
+/// `cfg.label_dict_report`; the shape below decides the repair, which needs
+/// every name of every shard, so the dictionaries are still read here)
 /// it adopting shard 0's dictionary only for a shift the operator named in
 /// `GEODE_LABEL_DICT_ADOPT_SHARD0`. Otherwise the error is returned.
 pub fn openShardedEngine(

@@ -1520,13 +1520,20 @@ pub fn leaveEntryPoint() void {
     t_entry_depth -= 1;
     if (t_entry_depth != 0) return;
     // CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=ProgramEndAbort; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
-    // SONNY-3135 (N7b): a program that failed in its transaction
-    // (`failEntryPoint`) has its session engine transaction aborted: the
-    // transaction is rolled back (GAP-0917, by the executor or the handler),
-    // and a commit here made the failed changes durable until the rollback
-    // undid them (the SONNY-2979 crash window).
+    // SONNY-6529: a failed statement's transaction kept for its undo replay
+    // (`StatementTxn.fail`) does not outlive the program.
+    storage_adapter.settleFailedStatementTxn();
+    // SONNY-3135 (N7b) aborted the session engine transaction of a program
+    // that failed in its transaction (`failEntryPoint`): the transaction is
+    // rolled back (GAP-0917, by the executor or the handler), and a commit
+    // here made the failed changes durable until the rollback undid them
+    // (the SONNY-2979 crash window). SONNY-6529: committed as well.
+    // graph-storage 0.4.16's abort undoes the writes, which the store's
+    // in-memory copy keeps, and the handler's rollback then undid them a
+    // second time (`storage_adapter.endThreadSessionTxn`). The window is the
+    // one every committed request of an explicit transaction has.
     if (storage_adapter.sessionTxnFailed()) {
-        storage_adapter.abortThreadSessionTxn();
+        storage_adapter.endThreadSessionTxn();
         return;
     }
     commitSessionEngineTxn();
@@ -1927,9 +1934,10 @@ pub fn beginStatementScope(owns: bool) void {
     statement_proposals.begin(owns);
 }
 
-/// SONNY-3348 (round 19, m1): failed statements of an explicit transaction
-/// whose session engine transaction was aborted before their replay (tests).
-pub var session_txn_aborted_before_replay_total: std.atomic.Value(u64) = .init(0);
+/// SONNY-3348 (round 19, m1), SONNY-6529: failed statements of an explicit
+/// transaction replayed with the session's engine transaction open, so the
+/// replay's changes joined it (tests).
+pub var session_txn_replay_joined_total: std.atomic.Value(u64) = .init(0);
 
 /// The errors a failed statement's scope can answer instead of its own.
 pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIncomplete };
@@ -1943,20 +1951,24 @@ pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIn
 ///     rest twice);
 ///   * `error.WriteQueryBudgetExceeded` (53200) when a write was refused
 ///     because the undo record would not fit the write budget (I2).
-/// Inside an explicit transaction the session's engine transaction is
-/// aborted before the replay (m1, the SONNY-2823 order): the transaction is
-/// rolled back next, and the replay's compensations commit on their own
-/// instead of joining the aborted engine transaction (a stolen page of the
-/// failed write was recovered after a crash, with no redo record for its
-/// compensation).
+/// SONNY-6529: the replay runs with the statement's and the session's engine
+/// transactions open, and its compensations join them: the failed writes and
+/// their undo commit as one unit (a crash before that commit loses both, so
+/// no page of the failed write is recovered without its compensation, the
+/// m1 concern). m1 aborted the session's engine transaction before the
+/// replay (the SONNY-2823 order); graph-storage 0.4.16's abort undoes the
+/// transaction's writes, which the store's in-memory copy keeps, and the
+/// replay then undid them a second time (NodeNotFound, 40003, and the
+/// store kept a node the engine no longer had). The failed statement's own
+/// transaction, which `StatementTxn.fail` kept open for the replay, is
+/// committed once it is done.
 pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementScopeError) {
     statement_proposals.finishFailed(owns);
-    if (owns and statement_undo.pendingCount() > 0 and txn_undo_log.threadInTxn()) {
-        if (storage_adapter.hasThreadSessionTxn()) _ = session_txn_aborted_before_replay_total.fetchAdd(1, .monotonic);
-        storage_adapter.abortThreadSessionTxn();
-    }
+    if (owns and statement_undo.pendingCount() > 0 and txn_undo_log.threadInTxn() and storage_adapter.hasThreadSessionTxn())
+        _ = session_txn_replay_joined_total.fetchAdd(1, .monotonic);
     const over_budget = owns and statement_undo.budgetExceeded();
     const undone = statement_undo.finishFailed(owns);
+    if (owns) storage_adapter.settleFailedStatementTxn();
     flushFulltextRebuilds(owns, null); // SONNY-6368
     if (!undone) return error.StatementUndoIncomplete;
     if (over_budget) return error.WriteQueryBudgetExceeded;
@@ -2182,9 +2194,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         else => error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
                         mut_context.transaction_state = .None;
-                        // SONNY-2823: the engine transaction first, so the
-                        // undo's own changes commit on their own.
-                        storage_adapter.abortThreadSessionTxn();
+                        // SONNY-6529: the undo's changes join the session's
+                        // engine transaction (and a failed statement's), and
+                        // the program's end commits them with the writes
+                        // they undo. SONNY-2823 aborted it first, which
+                        // graph-storage 0.4.16 makes an undo of its own.
                         undo_log.rollback(body_store) catch |rb_err| {
                             log.err("Failed to roll back a transaction body", &.{
                                 Attr.string("error", @errorName(rb_err)),
@@ -2306,10 +2320,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // the undo went into the snapshot.
                 const store = graph_store.getWritableGlobalStore(allocator);
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                // SONNY-2823: the session's engine transaction first (as
-                // QUIC's ROLLBACK message does), so the undo's own changes
-                // commit on their own. A ROLLBACK statement never aborted it.
-                storage_adapter.abortThreadSessionTxn();
+                // SONNY-6529: the undo's changes join the session's engine
+                // transaction, which the program's end commits with the
+                // writes they undo (SONNY-2823 aborted it first; graph-storage
+                // 0.4.16's abort undoes the writes, and the undo then undid
+                // them a second time).
                 // SONNY-3348 (round 19, m3): the undo continues past a
                 // change it cannot undo, and ROLLBACK then fails with
                 // 40003: the transaction is over, and partly applied.

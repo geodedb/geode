@@ -1044,7 +1044,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             }
         }
     }
-    errdefer if (batch_stmt_txn_open) batch_stmt_txn.abort();
+    errdefer if (batch_stmt_txn_open) batch_stmt_txn.fail();
 
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -1546,7 +1546,7 @@ pub fn executeCreateQuery(
             }
         }
     }
-    errdefer if (stmt_txn_open) stmt_txn.abort();
+    errdefer if (stmt_txn_open) stmt_txn.fail();
 
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
     var created_nodes = std.StringHashMap(u64).init(allocator);
@@ -2672,7 +2672,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             }
         }
     }
-    errdefer if (stmt_txn_open) stmt_txn.abort();
+    errdefer if (stmt_txn_open) stmt_txn.fail();
 
     // Statement-atomicity pre-pass: refuse an unstorable property entry
     // ANYWHERE in the pattern before the first node/edge is created. GAP-0930
@@ -3989,7 +3989,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             }
         }
     }
-    errdefer if (stmt_txn_open) stmt_txn.abort();
+    errdefer if (stmt_txn_open) stmt_txn.fail();
 
     // Statement-atomicity pre-pass — see `executeCreate`. MERGE is the shape
     // that hurt most: `MERGE (n:L {k}) ON CREATE SET n.big = ...` minted the

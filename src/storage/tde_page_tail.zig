@@ -37,6 +37,7 @@ const gs = @import("graph_storage");
 const graph_storage_adapter = @import("graph_storage_adapter.zig");
 
 const Allocator = std.mem.Allocator;
+const slog = @import("logging").scoped("storage");
 const PAGE_HEADER_SIZE: usize = gs.page.PAGE_HEADER_SIZE;
 const TAG_SIZE: usize = gs.encryption.TAG_SIZE;
 const NodeRec = gs.node.NodeRec;
@@ -508,6 +509,20 @@ pub fn repair(allocator: Allocator, adapter: *graph_storage_adapter.StorageAdapt
     return summary;
 }
 
+/// SONNY-6529: abort a repair transaction after the repair failed. The
+/// repair's writes are ones graph-storage 0.4.16 cannot undo (a node record
+/// rewritten with another `label_count`, an incoming entry rewritten through
+/// `logPagePublic`), so the abort fails with `AbortNotUndone` and the shard
+/// refuses every later write, commit and checkpoint: the repair's error is
+/// returned, the offline repair's adapter closes the store without a
+/// checkpoint, and the next open recovers the committed state. Logged, not
+/// ignored.
+fn abortRepairTxn(shard: *gs.GraphEngine, txn: u64) void {
+    shard.abortTxn(txn) catch |err| slog.err("TDE page-tail repair: aborting the failed repair transaction left the shard refusing writes until the store is reopened; nothing uncommitted was made durable (SONNY-6529)", &.{
+        @import("logging").Attr.err("error", err),
+    });
+}
+
 // CANARY: REQ=REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR; FEATURE="Storage CLI"; ASPECT=RestoresAdjacencyEntriesFromMirror; STATUS=TESTED; TEST=tests/test_sonny6452_tde_page_tail_repair.zig; OWNER=storage; UPDATED=2026-11-13
 fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardReport, summary: *RepairSummary) !void {
     // 1. Adjacency entries, first: graph_storage's operations guide asks for
@@ -537,7 +552,7 @@ fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardRepo
         rec.label_count = @intCast(labels.len);
         rec.txn_stamp = geode_node_txn_stamp;
         const txn = try shard.beginTxn();
-        errdefer shard.abortTxn(txn) catch {};
+        errdefer abortRepairTxn(shard, txn);
         try shard.putNodeTxn(id, rec, txn);
         try shard.commitTxn(txn);
         summary.nodes_repaired += 1;
@@ -554,7 +569,7 @@ fn repairShard(allocator: Allocator, shard: *gs.GraphEngine, s: *const ShardRepo
             if (id == lost) continue;
             const rec = (try shard.getNode(id)) orelse continue;
             const txn = try shard.beginTxn();
-            errdefer shard.abortTxn(txn) catch {};
+            errdefer abortRepairTxn(shard, txn);
             try shard.putNodeTxn(id, rec, txn);
             try shard.commitTxn(txn);
             break true;
@@ -598,7 +613,7 @@ fn realignInMirrorPropHeads(shard: *gs.GraphEngine, s: *const ShardReport) !u64 
     if (s.adjacencyIn(.adj_out) == 0) return 0;
     try shard.ensureDerivedHydrated();
     var txn: ?u64 = null;
-    errdefer if (txn) |t| shard.abortTxn(t) catch {};
+    errdefer if (txn) |t| abortRepairTxn(shard, t);
     var rewritten: u64 = 0;
     for (s.adjacency.items) |e| {
         if (e.file != .adj_out) continue;

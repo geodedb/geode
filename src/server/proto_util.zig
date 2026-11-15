@@ -713,6 +713,18 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // shards' label dictionaries disagree on what a label id used by
         // records means; serving it could return wrong labels.
         error.LabelDictionaryDiverged => .{ .code = "58000", .message = "LabelDictionaryDiverged: the graph's shard label dictionaries disagree, so it is not opened and refuses reads and writes; other graphs are unaffected. The server log names the graph and says whether GEODE_LABEL_DICT_ADOPT_SHARD0 can repair it or it needs a manual repair" },
+        // CANARY: REQ=REQ-SONNY-6527-LABEL-ID-SPACE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6527: graph-storage 0.4.16 refuses a new label or
+        // relationship-type name once ids 0..maxInt(u32)-1 are taken (it
+        // used to wrap and reuse ids). 54000 = SQLSTATE program_limit_exceeded.
+        error.LabelIdSpaceExhausted => .{ .code = "54000", .message = "LabelIdSpaceExhausted: the graph has used every label id (4,294,967,295 label and relationship-type names), so no new name can be created; statements using existing labels and types still run. Nothing was written" },
+        // CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6529: graph-storage could not undo an aborted transaction
+        // (its writes stay in the shard's pages, which then refuse every
+        // write and checkpoint), or a commit failed after the store's
+        // in-memory copy took the writes. Nothing uncommitted reached disk.
+        error.AbortNotUndone => .{ .code = "58000", .message = "AbortNotUndone: the storage engine could not undo a transaction that was rolled back, so the graph refuses reads and writes until it is reopened; other graphs are unaffected. Committed data on disk is intact and the rolled-back writes were not made durable: restart the server to reopen the graph at its committed state. The server log names the graph and the operation" },
+        error.CommitFailed => .{ .code = "58000", .message = "CommitFailed: a transaction of the graph could not be committed to storage and was undone there, but the server's in-memory copy of the graph still held its writes, so the graph refuses reads and writes until it is reopened; other graphs are unaffected. Committed data on disk is intact: check the storage (disk full, I/O errors), then restart the server to reopen the graph at its committed state. The server log names the graph and the error" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }
@@ -734,6 +746,8 @@ pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
         error.DataCorruption,
         error.InvalidData,
         error.LabelDictionaryDiverged,
+        error.AbortNotUndone,
+        error.CommitFailed,
         => mapError(err),
         else => null,
     };

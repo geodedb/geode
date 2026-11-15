@@ -172,15 +172,15 @@ const Harness = struct {
     }
 
     /// Explicit transaction, driven the way the QUIC handler drives it: the
-    /// engine session txn is aborted before the undo log replays.
+    /// engine session txn is ended after the undo log replays (SONNY-6529).
     fn begin(self: *Harness) !void {
         try self.run("BEGIN");
         self.in_txn = true;
     }
 
     fn rollback(self: *Harness) !void {
-        if (graph_store.getGlobalAdapter()) |ad| ad.abortSessionTxn();
         try self.run("ROLLBACK");
+        if (graph_store.getGlobalAdapter()) |ad| ad.endSessionTxn();
         self.in_txn = false;
     }
 

@@ -24,6 +24,7 @@ const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
 const label_dict_divergence = @import("label_dict_divergence.zig");
+const statement_undo = @import("../statement_undo.zig");
 // GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
 // executor's cancel flags so a client disconnect / stall-watchdog abort frees a
 // handler wedged inside the O(graph) first-access rebuild. `read_budget` is a
@@ -1789,12 +1790,19 @@ pub const Quarantine = enum(u8) {
     checksum_mismatch,
     data_corruption,
     invalid_data,
+    /// SONNY-6529: graph-storage could not undo an aborted transaction.
+    abort_not_undone,
+    /// SONNY-6529: a commit failed after the store's in-memory copy took
+    /// the transaction's writes, and the engine undid them.
+    commit_failed,
 
     fn of(err: anyerror) Quarantine {
         return switch (err) {
             error.ChecksumMismatch => .checksum_mismatch,
             error.DataCorruption => .data_corruption,
             error.InvalidData => .invalid_data,
+            error.AbortNotUndone => .abort_not_undone,
+            error.CommitFailed => .commit_failed,
             else => .quarantined,
         };
     }
@@ -1806,9 +1814,136 @@ pub const Quarantine = enum(u8) {
             .checksum_mismatch => error.ChecksumMismatch,
             .data_corruption => error.DataCorruption,
             .invalid_data => error.InvalidData,
+            .abort_not_undone => error.AbortNotUndone,
+            .commit_failed => error.CommitFailed,
         };
     }
 };
+
+// CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=QuarantineOnFailedAbort; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: an engine transaction of `mg` could not be ended cleanly
+/// (`cause`: `.abort_not_undone` or `.commit_failed`): log it at ERROR with
+/// the graph and the operation (`site`), and refuse the graph's writes
+/// (`refuseQuarantinedWrite`) and reads (`GraphStore.quarantineGraphReads`)
+/// with a 58000 error until the server restarts.
+///
+/// Not reopened in place. graph-storage returns a store to its committed
+/// state when it is reopened, but geode keeps the graph's nodes,
+/// relationships, label counts, the MERGE and exact property indexes and
+/// the full-text and advanced indexes in memory beside the engine, has no
+/// path that rebuilds them for one graph while the server runs, and its
+/// writers hold shard pointers of the graph's engine between lock
+/// acquisitions. A restart reopens every graph from disk.
+///
+/// Nothing keeps writing to the shard: graph-storage refuses its writes,
+/// commits and checkpoints after `AbortNotUndone`, and geode refuses every
+/// write to the graph before it reaches the engine. The security graph's
+/// reads stay exempt, as for a failed hydration.
+pub fn quarantineAfterTxnFailure(mg: *ManagedGraph, cause: Quarantine, err: anyerror, site: []const u8) void {
+    slog.err("graph quarantined: an engine transaction could not be ended cleanly; its reads and writes fail with 58000 until the server restarts and reopens it at its committed state (SONNY-6529)", &.{
+        SAttr.string("graph", mg.name),
+        SAttr.string("operation", site),
+        SAttr.string("cause", @tagName(cause)),
+        SAttr.err("error", err),
+    });
+    mg.quarantine.store(@intFromEnum(cause), .release);
+    if (graph_store.getCurrentGlobalStore()) |store| {
+        if (cause.toError()) |qerr| store.quarantineGraphReads(mg.name, qerr);
+    }
+}
+
+/// SONNY-6529: abort `txn`, an engine transaction the adapter opened on
+/// `shard` for one write call that failed before it changed the store's
+/// in-memory copy (the adapter's write methods return the error, and the
+/// store applies a write to memory only after its engine write returned):
+/// graph-storage undoes the transaction, which is exactly the state the
+/// store holds. `AbortNotUndone` quarantines the graph; it is never ignored.
+fn abortUnmirroredTxn(mg: *ManagedGraph, shard: *gs.GraphEngine, txn: gs.TxnId, site: []const u8) void {
+    abortCounted(shard, txn) catch |err| noteAbortFailure(mg, err, site);
+}
+
+/// SONNY-6529: as `abortUnmirroredTxn`, for a transaction id of the sharded
+/// engine (`mg.engine.beginTxn`, `encodeShardedTxn`).
+fn abortUnmirroredShardedTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8) void {
+    abortShardedCounted(mg, txn) catch |err| noteAbortFailure(mg, err, site);
+}
+
+// CANARY: REQ=REQ-SONNY-6529-ABORT-METRICS; FEATURE="Observability"; ASPECT=EngineAbortCounters; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: graph-storage's `Metrics.txn_aborts_undone` and
+/// `txn_aborts_not_undone`, summed over every graph's shards, for the
+/// aborts geode issues (every engine abort of the server goes through
+/// `abortCounted`). Exported as `geode.runtime.storage_txn_aborts_undone_total`
+/// and `geode.runtime.storage_txn_aborts_not_undone_total`
+/// (`registerCheckpointMetrics`). The shard's own counters are plain fields
+/// written under its single-writer contract, so they are read here, by the
+/// writer, around its abort, never by the metrics scrape.
+pub var storage_txn_aborts_undone_total: std.atomic.Value(u64) = .init(0);
+pub var storage_txn_aborts_not_undone_total: std.atomic.Value(u64) = .init(0);
+
+fn abortCounted(shard: *gs.GraphEngine, txn: gs.TxnId) anyerror!void {
+    const undone0 = shard.metrics.txn_aborts_undone;
+    const not_undone0 = shard.metrics.txn_aborts_not_undone;
+    defer {
+        _ = storage_txn_aborts_undone_total.fetchAdd(shard.metrics.txn_aborts_undone -% undone0, .monotonic);
+        _ = storage_txn_aborts_not_undone_total.fetchAdd(shard.metrics.txn_aborts_not_undone -% not_undone0, .monotonic);
+    }
+    return shard.abortTxn(txn);
+}
+
+fn abortShardedCounted(mg: *ManagedGraph, txn: gs.TxnId) anyerror!void {
+    const si = shardedTxnShard(txn);
+    if (si >= mg.engine.shards.len) return mg.engine.abortTxn(txn);
+    return abortCounted(mg.engine.shards[si], shardedTxnLocal(txn));
+}
+
+fn noteAbortFailure(mg: *ManagedGraph, err: anyerror, site: []const u8) void {
+    switch (err) {
+        error.AbortNotUndone => quarantineAfterTxnFailure(mg, .abort_not_undone, err, site),
+        else => slog.err("an engine transaction abort failed (SONNY-6529)", &.{
+            SAttr.string("graph", mg.name),
+            SAttr.string("operation", site),
+            SAttr.err("error", err),
+        }),
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=CommitWhatTheStoreHolds; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: end `txn` (a statement's or a session's engine transaction,
+/// sharded id) whose writes the store's in-memory copy holds: commit it.
+///
+/// Such a transaction is never aborted. graph-storage 0.4.16 `abortTxn`
+/// undoes its writes, but the store keeps them in memory, and geode's own
+/// undo (`statement_undo`, `txn_undo_log`) undoes them through the store's
+/// write methods, which write to the engine too: an abort before that replay
+/// undid every write on the transaction's shard twice (a node it created was
+/// gone, so deleting it failed, and the store kept it). geode's undo is the
+/// rollback, as it must be: a statement transaction covers one of the graph's
+/// 16 shards, the writes on the others commit on their own. Where the replay
+/// runs while the transaction is open, its writes join it and commit with
+/// it, so the failed writes and their undo reach the WAL as one unit.
+///
+/// A commit that fails leaves the engine and the store's copy disagreeing:
+/// the transaction is aborted (graph-storage undoes it) and the graph is
+/// quarantined (`quarantineAfterTxnFailure`, `.commit_failed`). The commit
+/// error is returned.
+fn commitMirroredTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8) !void {
+    mg.engine.commitTxn(txn) catch |err| {
+        failMirroredTxn(mg, txn, err, site);
+        return err;
+    };
+}
+
+/// SONNY-6529: the commit of a transaction whose writes the store's
+/// in-memory copy holds failed with `err` (see `commitMirroredTxn`).
+fn failMirroredTxn(mg: *ManagedGraph, txn: gs.TxnId, err: anyerror, site: []const u8) void {
+    abortShardedCounted(mg, txn) catch |abort_err| switch (abort_err) {
+        // TxnNotFound: the failed commit ended it.
+        error.TxnNotFound => {},
+        else => noteAbortFailure(mg, abort_err, site),
+    };
+    if (mg.quarantine.load(.acquire) == @intFromEnum(Quarantine.none))
+        quarantineAfterTxnFailure(mg, .commit_failed, err, site);
+}
 
 // CANARY: REQ=REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION; FEATURE="GQL Auth DDL Persistence"; ASPECT=SecurityGraphWriteLock; STATUS=TESTED; TEST=tests/test_sonny6528_security_write_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
 /// SONNY-6528 (2): what `StorageAdapter.holdSecurityGraphForWrite` took;
@@ -1828,6 +1963,13 @@ pub const SecurityWriteHold = struct {
 /// Called by every adapter write entry point once it has the graph.
 fn refuseQuarantinedWrite(mg: *const ManagedGraph) graph_store.GraphQuarantineError!void {
     const q: Quarantine = @enumFromInt(mg.quarantine.load(.acquire));
+    // SONNY-6529: a graph quarantined after a failed commit still takes the
+    // compensating writes of the rollback that follows it (the undo log's
+    // and a statement's replay run with capture suspended): its engine is
+    // sound (the failed transaction was undone there), and the rollback
+    // undoes the transaction's earlier, committed requests, which would
+    // otherwise stay durable.
+    if (q == .commit_failed and statement_undo.suspended()) return;
     if (q.toError()) |err| return err;
 }
 
@@ -1845,6 +1987,9 @@ pub const ManagedGraph = struct {
     /// `markGraphQuarantined`, never cleared for the process lifetime. Every
     /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
     quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
+    /// SONNY-6527: the receiver of the engine's label-dictionary findings
+    /// (`GraphConfig.label_dict_report`); freed after the engine is closed.
+    label_report: ?*label_dict_divergence.ReportCtx = null,
     /// SONNY-6528 (1): held by a Raft apply for each replicated write to this
     /// graph (`beginReplicatedApply`) and by a checkpoint of it right after
     /// it takes `rwlock` EXCLUSIVE (`checkpointOneGraph`). The apply cannot
@@ -2455,6 +2600,7 @@ pub const ManagedGraph = struct {
         } else {
             self.engine.close() catch {};
         }
+        if (self.label_report) |r| allocator.destroy(r); // SONNY-6527: after the engine
         self.exact_node_property_index.deinit();
         allocator.free(self.merge_tuple_locks);
         self.label_dict.deinit();
@@ -2487,73 +2633,37 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     return try mg.engine.getOrAssignLabel(label);
 }
 
-// CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-13
-// CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=EdgePropHeadWalImage; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-13
-/// SONNY-6266: point both adjacency copies of edge `edge_id` and the edge
-/// index at its new property chain `new_head`, as graph_storage's own
-/// `engine_edge_props.setEdgeProperty` does. Since edge co-location (Phase
-/// A) the incoming copy lives in the SOURCE shard's `adj_in_remote`, keyed
-/// by `to` through `in_head_dir`, and that is what an incoming walk reads
-/// (`expandInIter`). The adapter updated the target shard's legacy `adj_in`
-/// chain instead, which a co-located edge is never in, so an edge walked
-/// from its target had no properties: `MATCH (a)<-[{w: 2}]-(b)` and every
-/// undirected match taken backwards lost the edge on the planned read.
-///
-/// SONNY-6471: and WAL-image, in `txn` (the txn the property pages were
-/// written in), every page this rewrites, page for page as graph_storage's
-/// `setEdgeProperty` does: the outgoing adjacency page, the source's node
-/// page (it puts the source in recovery's tail-affected set, so the edge
-/// index is re-derived from its adjacency on first access after a crash)
-/// and the incoming adjacency page. graph_storage has no variant of its
-/// `setEdgeProperty` that joins a caller's txn, so the adapter's writers
-/// (which join the statement or session engine txn) do it here. Without
-/// the images the property pages reached the WAL with nothing that
-/// pointed at them, and a crash lost the properties.
-/// SONNY-6492 (5) measurement only: test binaries can skip the three page
-/// images below to time and size them against the shipped path
-/// (test-sonny6492-edge-prop-image-cost). Compiled out of every other build.
-pub var bench_skip_edge_prop_head_images: bool = false;
-
-fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
-    const log_images = !(@import("builtin").is_test and bench_skip_edge_prop_head_images);
-    if (try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head)) |page| {
-        if (log_images) {
-            try shard.logPagePublic(txn, .adj_out, page);
-            try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
-        }
-    }
-    const in_head = try shard.in_head_dir.getHead(to_id);
-    if (try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head)) |page| {
-        if (log_images) try shard.logPagePublic(txn, .in_idx, page);
-    }
-    // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
-    // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
-    try shard.edge_index.updatePropHead(edge_id, new_head);
-    shard.edge_index_dirty = true;
-}
-
 // CANARY: REQ=REQ-SONNY-6523-FAILED-CREATE-COUNT; FEATURE="StorageIntegrity"; ASPECT=FailedCreateGivesSlotBack; STATUS=TESTED; TEST=tests/test_sonny6523_failed_create_count.zig; OWNER=storage; UPDATED=2026-11-13
 /// SONNY-6523 (2): give back the node slot `allocNode` handed a create that
-/// then failed. `allocNode` counts the node in the shard manifest at once,
-/// and an aborted engine transaction neither returns the slot nor restores
-/// the pages it wrote (graph-storage's abort only drops the transaction's WAL
-/// records): the count stayed one ahead of the live records, or a
-/// half-written record with no geode node over it stayed in the page, and the
-/// next checkpoint persisted either. The live-count check (REQ-GQL-028) then
-/// failed the graph with DataCorruption after a restart.
+/// then failed. `allocNode` counts the node in the shard manifest at once
+/// and is not part of any transaction, so without this the count stayed one
+/// ahead of the live records and the next checkpoint persisted it; the
+/// live-count check (REQ-GQL-028) then failed the graph with DataCorruption
+/// after a restart.
 ///
 /// `txn`: the transaction the record would have been written in, still
-/// active. A record in the slot is deleted in it (`deleteNodeTxn`: the
-/// tombstone is logged and the count taken back), so the slot reads the
-/// same whether the transaction then commits (a joined statement
-/// transaction) or aborts. With no record (or no transaction yet), only the
-/// count is taken back, and the id too when it is still the last one the
-/// shard issued. The caller holds what serializes its `allocNode` on the
-/// shard (the graph's write lock, or its shard lock), so neither is another
-/// writer's.
-fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId) void {
+/// active. `aborting`: the caller aborts `txn` right after this (it opened
+/// it itself). The caller holds what serializes its `allocNode` on the
+/// shard (the graph's write lock, or its shard lock), so neither the count
+/// nor the id is another writer's.
+///
+/// SONNY-6529: graph-storage 0.4.16 `abortTxn` undoes a record written into
+/// the empty slot (`putNodeTxn`): it empties the slot and gives the count
+/// back, and the id when it is still the last one the shard issued. So:
+///   * a record in the slot, `aborting`: nothing here; the abort gives it
+///     all back (deleting it here as well was undone by the same abort, a
+///     wasted write);
+///   * a record in the slot, joined transaction (it commits, a statement's
+///     or a session's): the record is deleted in it (`deleteNodeTxn`: the
+///     tombstone is logged and the count taken back), so the slot reads the
+///     same once it commits;
+///   * no record (the create failed before it wrote one, or before it had a
+///     transaction): only the count is taken back, and the id too when it is
+///     still the last one the shard issued; the abort has nothing to undo.
+fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId, aborting: bool) void {
     if (txn) |t| {
         if (shard.node_store.getRawSlot(node_id) catch null) |rec| {
+            if (aborting) return;
             if (!gs.node.isDeleted(&rec)) {
                 if (shard.deleteNodeTxn(node_id, t)) |_| return else |err| {
                     log.err("SONNY-6523: could not delete the record of failed node create {d} ({s}); the shard's live-node count may be off by one", .{ node_id, @errorName(err) });
@@ -2564,60 +2674,8 @@ fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId) v
         }
     }
     if (shard.manifest.node_count > 0) shard.manifest.node_count -= 1;
-    const stride: u64 = if (shard.config.base_shard_index != null) gs.sharded_engine.SHARD_COUNT else 1;
+    const stride: u64 = shard.idStride();
     if (shard.manifest.next_node_id == node_id + stride) shard.manifest.next_node_id = node_id;
-}
-
-/// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
-/// node's label var_store page inside the mutating txn so it commits (and, on
-/// the security graph's `sync_each_commit` engines, fsyncs) with the mutation.
-///
-/// HISTORY: this began as a workaround for an upstream graph-storage WAL
-/// mis-log — `GraphEngine.addLabelTxn` used to log the label block with
-/// `logPage(txn, .var_store, result.head)`, imaging a bogus page id instead of
-/// the real label-block page, so labels written since the last checkpoint
-/// vanished on crash recovery. That upstream defect is FIXED as of gs v0.3.2:
-/// `addLabelTxn` now images the var page via `logVarChain`, which correctly
-/// decodes both encodings (see below). This re-log is therefore redundant with
-/// the engine's own WAL image, but is retained as defensive durability.
-///
-/// SLAB-HEAD DECODE (the crash this function itself caused before the fix):
-/// a var head is EITHER a legacy page-chain ref `first_page << 16` (page id =
-/// `head >> 16`) OR a slab-packed head with bit 63 set (`TAG | page<<24 | slot`,
-/// page id = `slabHeadPageId(head)`). The previous `head >> 16` decode was
-/// correct ONLY for the legacy form; for a slab head it produced a ~2^47 page
-/// id (e.g. 0x800000000100). Recovery replayed that bogus page image into a
-/// dirty buffer-pool frame, and `flushAll` then issued a `pwrite` at an ~1.15 EB
-/// offset → `EFBIG` → `error.FileTooBig`, so the ENTIRE `__geode_security`
-/// engine failed to reopen after a crash of a never-checkpointed security graph
-/// (a real durability loss: the acknowledged security mutation became
-/// unrecoverable). Decode slab-aware — exactly as `gs`'s own `logVarChain` does.
-///
-/// Scoped to `__geode_security`; no-op for non-security graphs and label-less
-/// nodes.
-fn relogSecurityLabelPageTxn(mg: *ManagedGraph, node_shard: anytype, node_id: u64, txn: gs.TxnId) !void {
-    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
-    const rec = (try node_shard.getNode(node_id)) orelse return;
-    const head = rec.label_head;
-    if (head == 0) return;
-    const page_id = if (gs.var_store.isSlabHead(head))
-        gs.var_store.slabHeadPageId(head)
-    else
-        head >> 16;
-    try node_shard.logPagePublic(txn, .var_store, page_id);
-}
-
-/// Auto-commit variant of `relogSecurityLabelPageTxn` for the
-/// `mg.engine.addLabel` (self-committing) call sites: the label add has
-/// already committed, so the corrected page image is logged in its own tiny
-/// follow-up txn. Security-graph only; the second commit is one extra WAL
-/// fsync on an admin-rare path.
-fn relogSecurityLabelPageAutoCommit(mg: *ManagedGraph, node_shard: anytype, node_id: u64) !void {
-    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
-    const txn = try node_shard.beginTxn();
-    errdefer node_shard.abortTxn(txn) catch {};
-    try relogSecurityLabelPageTxn(mg, node_shard, node_id, txn);
-    try node_shard.commitTxn(txn);
 }
 
 /// Security-graph durability (gap 0026): crash-recovery self-heal for the
@@ -3274,7 +3332,7 @@ fn ensureExactIndex(adapter: *StorageAdapter, mg: *ManagedGraph, comptime mode: 
 // pair) so the whole statement commits with a single fsync:
 //
 //   const txn = try adapter.beginStatementTxn(graph_name);
-//   errdefer txn.abort();
+//   errdefer txn.fail();
 //   // adapter.createNode / adapter.setNodeProperty etc. now join `txn`
 //   try txn.commit();                  // ONE WAL fsync
 //
@@ -3285,10 +3343,12 @@ fn ensureExactIndex(adapter: *StorageAdapter, mg: *ManagedGraph, comptime mode: 
 //     graph — the thread-local is safe.
 //   - Mutations on a DIFFERENT graph than the active StatementTxn fall
 //     back to the regular auto-commit path (per-sub-op fsync).
-//   - `abort()` / `commit()` clear the thread-local.  If neither is
+//   - `fail()` / `commit()` clear the thread-local.  If neither is
 //     called before the guarded scope exits, the engine will keep the
 //     txn record as "begin without commit" until replay rolls it back,
-//     which is correct but wasteful — use `errdefer txn.abort()`.
+//     which is correct but wasteful — use `errdefer txn.fail()`.
+//     SONNY-6529: `fail()` commits (after the statement's undo replay when
+//     one runs): see `StatementTxn.fail`.
 // ============================================================================
 
 /// Per-statement engine transaction handle returned by
@@ -3298,23 +3358,68 @@ pub const StatementTxn = struct {
     txn_id: gs.TxnId,
     graph_name: []const u8, // non-owning — adapter's engines map owns the storage
 
-    /// Commit the statement txn → exactly one WAL fsync.
+    /// Commit the statement txn → exactly one WAL fsync. SONNY-6529: a
+    /// commit that fails aborts it and quarantines the graph
+    /// (`commitMirroredTxn`).
     pub fn commit(self: *StatementTxn) !void {
         t_current_statement_txn = null;
-        try self.mg.engine.commitTxn(self.txn_id);
+        try commitMirroredTxn(self.mg, self.txn_id, "statement commit");
     }
 
-    /// Abort the statement txn (no fsync beyond the ABORT record append).
-    /// Safe to call from `errdefer`.
-    pub fn abort(self: *StatementTxn) void {
-        t_current_statement_txn = null;
-        // error-policy: A — abort() is documented errdefer-safe; a failed
-        // engine abort is superseded by WAL recovery.
-        self.mg.engine.abortTxn(self.txn_id) catch {};
+    // CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=FailedStatementTxn; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+    /// The statement failed: end its transaction. Safe to call from
+    /// `errdefer`.
+    ///
+    /// SONNY-6529: never an engine abort (see `commitMirroredTxn`): the
+    /// store's in-memory copy holds the statement's writes, and its undo
+    /// record (`statement_undo`) undoes them. When that record is being kept
+    /// (`statement_undo.capturing`), the transaction is handed over to the
+    /// record's replay (`settleFailedStatementTxn`): it stays this thread's
+    /// statement transaction, the replay's writes join it, and the replay's
+    /// end commits it, so the failed writes and their undo commit together
+    /// (a crash before that commit loses both). Otherwise it is committed
+    /// now. graph-storage 0.4.15 `abortTxn` kept the writes in memory too
+    /// (and the next checkpoint made them durable); 0.4.16 undoes them, and
+    /// the replay then undid the same writes a second time.
+    pub fn fail(self: *StatementTxn) void {
+        if (t_current_statement_txn == self) t_current_statement_txn = null;
+        if (t_failed_statement_txn == null and statement_undo.capturing()) {
+            t_failed_statement_txn_storage = self.*;
+            t_failed_statement_txn = &t_failed_statement_txn_storage;
+            if (t_current_statement_txn == null) t_current_statement_txn = &t_failed_statement_txn_storage;
+            return;
+        }
+        commitMirroredTxn(self.mg, self.txn_id, "failed statement") catch {};
+    }
+
+    /// The statement wrote nothing in its transaction (a MERGE that found
+    /// its node): abort it. With nothing to undo it is an ABORT record only.
+    pub fn discard(self: *StatementTxn) void {
+        if (t_current_statement_txn == self) t_current_statement_txn = null;
+        abortUnmirroredShardedTxn(self.mg, self.txn_id, "unused statement txn");
     }
 };
 
 threadlocal var t_current_statement_txn: ?*StatementTxn = null;
+
+/// SONNY-6529: a failed statement's engine transaction kept open for the
+/// replay of the statement's undo record (`StatementTxn.fail`), and its
+/// storage (the statement's own frame has returned by then).
+threadlocal var t_failed_statement_txn: ?*StatementTxn = null;
+threadlocal var t_failed_statement_txn_storage: StatementTxn = undefined;
+
+/// SONNY-6529: commit the failed statement's transaction `StatementTxn.fail`
+/// kept open, if there is one: its writes and the replay's undo of them.
+/// Called by the executor when the statement's undo record has been replayed
+/// (`execution.endStatementFailed`) and when its program ends, and before a
+/// new statement or session transaction opens on the thread. No-op without
+/// one.
+pub fn settleFailedStatementTxn() void {
+    const txn = t_failed_statement_txn orelse return;
+    t_failed_statement_txn = null;
+    if (t_current_statement_txn == txn) t_current_statement_txn = null;
+    commitMirroredTxn(txn.mg, txn.txn_id, "failed statement after its undo") catch {};
+}
 
 // R9 (2026-04-22): session-scoped engine txn — spans an entire Geode
 // BEGIN TX / COMMIT block.  The msft-graph client sends batches of the
@@ -3406,21 +3511,30 @@ pub var session_txn_backstop_total: std.atomic.Value(u64) = .init(0);
 /// session, would join it.
 ///
 /// SONNY-3027: true when the backstop ran: the session's engine transaction
-/// was still open. The request's write lock is released by now, so it is
-/// aborted, never committed (a commit here, outside the lock, overlapped the
-/// transactions of the graph's next writer: the SONNY-2978 class), and the
+/// was still open. The request's write lock is released by now, and the
 /// caller fails the session's transaction.
+/// SONNY-6529: the transaction is committed under its graph's write lock,
+/// taken again here (a commit outside the lock overlapped the transactions
+/// of the graph's next writer: the SONNY-2978 class); the caller's rollback
+/// then undoes its writes. It was aborted, which graph-storage 0.4.16 makes
+/// a write too (the undo), and which the rollback then undid a second time.
 pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) bool {
     if (scope.nested) return false;
     var backstop = false;
+    settleFailedStatementTxn(); // SONNY-6529: never outlives the request either
     if (slot.open and t_session_engine_txn == &slot.txn) {
         // The executor commits it when the program that opened it returns,
         // and the handler before it releases the program's write lock; one
         // still open is a bug. A warning: the failure is handled, and the
         // client sees it (its transaction fails); the counter tells.
-        log.warn("a session engine txn outlived its request's write lock; aborting it and failing its transaction", .{});
+        log.warn("a session engine txn outlived its request's write lock; committing it under the lock and failing its transaction", .{});
         _ = session_txn_backstop_total.fetchAdd(1, .monotonic);
-        abortThreadSessionTxn();
+        if (takeThreadSessionTxn()) |txn| {
+            defer unpinTaken(txn);
+            const lock = graph_store.acquireGraphWriteLock(txn.graph_name);
+            defer graph_store.releaseGraphLock(lock);
+            commitMirroredTxn(txn.mg, txn.txn_id, "session txn backstop") catch {};
+        }
         backstop = true;
     }
     if (t_session_commit_failure) |err| {
@@ -3463,7 +3577,7 @@ pub fn settleThreadSessionTxn() error{SessionCommitFailed}!void {
     if (t_session_commit_failure) |err| {
         t_session_commit_failure = null;
         log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
-        abortThreadSessionTxn();
+        // SONNY-6529: the failed commit ended it (`commitThreadSessionTxn`).
         return error.SessionCommitFailed;
     }
     commitThreadSessionTxn() catch |err| {
@@ -3518,18 +3632,21 @@ fn takeInjectedCommitFault() bool {
 /// counted and logged.
 ///
 /// CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=SettleAtWriteRelease; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
-/// SONNY-3135 (N7b): the transaction of a request that failed
-/// (`noteSessionTxnFailed`) is aborted instead: the handler rolls it back
-/// once the lock is released, and a commit made the failed changes durable
-/// until then (the SONNY-2979 crash window).
+/// SONNY-3135 (N7b) aborted the transaction of a request that failed
+/// (`noteSessionTxnFailed`) instead. SONNY-6529: committed as well: the
+/// store's in-memory copy holds its writes, the handler's rollback undoes
+/// them once the lock is released, and graph-storage 0.4.16's abort undid
+/// them first, so the rollback undid them twice (see `endThreadSessionTxn`).
+/// The failed changes are durable until that rollback, as every committed
+/// request of an explicit transaction is (the SONNY-2979 crash window).
 pub fn settleAtWriteRelease() void {
     if (t_session_engine_txn == null) return;
     _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
     if (sessionTxnFailed()) {
         // The structured logger, at error level: the path is a handled
         // failure, and std.log's error level fails a test that drives it.
-        slog.err("a graph write lock was released with a failed request's session engine txn open; aborting it under the lock", &.{});
-        abortThreadSessionTxn();
+        slog.err("a graph write lock was released with a failed request's session engine txn open; committing it under the lock for the rollback to undo", &.{});
+        endThreadSessionTxn();
         return;
     }
     log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
@@ -3588,6 +3705,9 @@ fn unpinTaken(txn: *StatementTxn) void {
 ///
 /// SONNY-3031: a commit that fails aborts the transaction, so the engine
 /// forgets it: it stayed in the shard's `active_txns` forever.
+/// SONNY-6529: and quarantines the graph (`failMirroredTxn`): graph-storage
+/// 0.4.16 undoes the aborted transaction, whose writes the store's
+/// in-memory copy keeps, so the two disagree until the graph is reopened.
 pub fn commitThreadSessionTxn() !void {
     const txn = takeThreadSessionTxn() orelse return;
     defer unpinTaken(txn);
@@ -3596,9 +3716,7 @@ pub fn commitThreadSessionTxn() !void {
     else
         txn.mg.engine.commitTxn(txn.txn_id);
     result catch |err| {
-        txn.mg.engine.abortTxn(txn.txn_id) catch |abort_err| {
-            log.err("session engine txn abort after a failed commit failed: {s}", .{@errorName(abort_err)});
-        };
+        failMirroredTxn(txn.mg, txn.txn_id, err, "session commit");
         return err;
     };
 }
@@ -3609,15 +3727,22 @@ pub fn hasThreadSessionTxn() bool {
     return t_session_engine_txn != null;
 }
 
-/// SONNY-2823: abort this thread's session engine transaction, if it has
-/// one. Callers abort BEFORE the undo log replays, so the replay's own
-/// changes commit on their own and do not join the aborted transaction.
-pub fn abortThreadSessionTxn() void {
+// CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=SessionTxnEnd; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: end this thread's session engine transaction, if it has one,
+/// keeping its writes: commit it (`commitMirroredTxn`; a failure aborts it
+/// and quarantines the graph). For the paths that roll the Geode
+/// transaction back: they call it AFTER the undo log replays, so the
+/// replay's changes join it and commit with the writes they undo.
+///
+/// It was `abortThreadSessionTxn`, called before the replay so the replay's
+/// changes committed on their own (SONNY-2823). graph-storage 0.4.16's abort
+/// undoes the transaction's writes, which the store's in-memory copy keeps,
+/// and the replay then undid them a second time: deleting a node the abort
+/// had removed failed (NodeNotFound), and the store kept the node.
+pub fn endThreadSessionTxn() void {
     const txn = takeThreadSessionTxn() orelse return;
     defer unpinTaken(txn);
-    // error-policy: A — best-effort session rollback; WAL recovery
-    // supersedes a failed abort.
-    txn.mg.engine.abortTxn(txn.txn_id) catch {};
+    commitMirroredTxn(txn.mg, txn.txn_id, "session txn end") catch {};
 }
 
 /// SONNY-3028: does this thread have an engine transaction open on `mg` (its
@@ -4720,7 +4845,7 @@ pub const StorageAdapter = struct {
         const node_shard = mg.shardEngineForNode(node_id);
         // SONNY-6523 (2): a failure from here on gives the slot back.
         var slot_txn_open = false;
-        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null);
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null, false);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -4735,12 +4860,12 @@ pub const StorageAdapter = struct {
             try node_shard.beginTxn();
         slot_txn_open = true;
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        // SONNY-6529: graph-storage undoes the failed create: the slot, the
+        // shard's live-node count and the id (when it is the last one
+        // issued) go back with the record.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node create");
         // SONNY-6523 (2): runs before the abort above, in the live txn.
-        errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn);
+        errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn, own_txn);
 
         // Write an initial node record.  The txn_stamp must be non-zero so
         // that getNode() does not treat the slot as empty (isEmpty checks all
@@ -4763,9 +4888,6 @@ pub const StorageAdapter = struct {
             const label_id = try resolvePersistedLabelId(mg, lbl);
             try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
-        // gap 0026: WAL-log the node's REAL label page (see
-        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-        try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
         // SONNY-6492 (3): dropped while this create ran (its pin kept the
         // graph): the node is not reported created in a graph that is gone.
@@ -4860,7 +4982,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const node_id = try store.createNodeWithGraph(labels, graph_name);
@@ -5069,7 +5191,7 @@ pub const StorageAdapter = struct {
         if (node_slot_allocated_hook) |hook| hook(mg);
         // SONNY-6523 (2): a failure from here on gives the slot back.
         var slot_txn_open = false;
-        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, slot_id, null);
+        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, slot_id, null, false);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, slot_id)
@@ -5078,14 +5200,13 @@ pub const StorageAdapter = struct {
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
         slot_txn_open = true;
         const own_txn = stmt_local == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        // SONNY-6529: graph-storage undoes the failed insert (slot, count,
+        // id) while the store's in-memory copy does not hold the node.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "bulk node insert");
         // SONNY-6523 (2): before the abort above; not once the node is in
         // the in-memory store (a later failure leaves it, as before).
         var slot_kept = false;
-        errdefer if (!slot_kept) releaseFailedNodeSlot(node_shard, slot_id, local_txn);
+        errdefer if (!slot_kept) releaseFailedNodeSlot(node_shard, slot_id, local_txn, own_txn);
 
         var rec = gs.node.NodeRec{
             .out_head = 0,
@@ -5117,9 +5238,6 @@ pub const StorageAdapter = struct {
         for (label_ids) |label_id| {
             try node_shard.addLabelTxn(slot_id, label_id, local_txn);
         }
-        // gap 0026: WAL-log the node's REAL label page (see
-        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-        try relogSecurityLabelPageTxn(mg, node_shard, slot_id, local_txn);
 
         rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
         var id_buf: [16]u8 = undefined;
@@ -5181,7 +5299,13 @@ pub const StorageAdapter = struct {
             try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
         }
         slot_kept = true;
-        if (own_txn) try node_shard.commitTxn(local_txn);
+        // SONNY-6529: the store's in-memory copy holds the node now; a failed
+        // commit is aborted (graph-storage undoes the node) and the graph
+        // quarantined, as for any transaction whose writes it holds.
+        if (own_txn) node_shard.commitTxn(local_txn) catch |err| {
+            quarantineAfterTxnFailure(mg, .commit_failed, err, "bulk node insert commit");
+            return err;
+        };
 
         if (props.len > 0) {
             var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
@@ -6160,7 +6284,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         // Create the edge — `createEdgeWithGraph` routes through the
         // adapter vtable (which joins the statement txn internally via
@@ -6386,7 +6510,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         const edge_id = try store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
 
@@ -6634,7 +6758,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         // Re-probe under the txn.  For ON-CREATE-SET-only callers this
         // catches the narrow Phase-1-miss/Phase-2-hit race; for
@@ -6651,7 +6775,7 @@ pub const StorageAdapter = struct {
                 if (stmt_txn_open) try stmt_txn.commit();
                 return .{ .id = existing_id, .wrote = true };
             }
-            if (stmt_txn_open) stmt_txn.abort();
+            if (stmt_txn_open) stmt_txn.discard();
             // Task 4 review Finding 1: a concurrent writer won the race
             // between our Phase-1 miss and this re-probe — still a pure
             // hit with no write from THIS call's perspective.
@@ -6748,9 +6872,10 @@ pub const StorageAdapter = struct {
         // are skipped.
         const shard_count = gs.sharded_engine.SHARD_COUNT;
         var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
+        // SONNY-6529: graph-storage undoes each shard's part of the failed
+        // batch (the store takes the nodes only once this returns).
         errdefer for (mg.engine.shards, 0..) |shard, si| {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
+            if (shard_txns[si]) |t| abortUnmirroredTxn(mg, shard, t, "node batch create");
         };
 
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
@@ -6760,7 +6885,7 @@ pub const StorageAdapter = struct {
         var allocated: usize = 0;
         errdefer for (out[0..allocated]) |id| {
             const si = gs.shard_count.shardOfNode(id);
-            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si]);
+            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si], true);
         };
         var i: usize = 0;
         while (i < n) : (i += 1) {
@@ -6775,9 +6900,6 @@ pub const StorageAdapter = struct {
             for (label_ids) |label_id| {
                 try node_shard.addLabelTxn(node_id, label_id, local_txn);
             }
-            // gap 0026: WAL-log the node's REAL label page (see
-            // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-            try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
             out[i] = node_id;
         }
 
@@ -6817,8 +6939,8 @@ pub const StorageAdapter = struct {
         // are lost to a crash) together, as setNodeProperty's do.
         const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
         const txn = joined orelse try shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer if (joined == null) shard.abortTxn(txn) catch {};
+        // SONNY-6529: graph-storage undoes the failed delete.
+        errdefer if (joined == null) abortUnmirroredTxn(mg, shard, txn, "node delete");
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
         try shard.deleteNodeTxn(node_id, txn);
@@ -7156,10 +7278,9 @@ pub const StorageAdapter = struct {
         else
             try node_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        // SONNY-6529: graph-storage undoes the failed write (the store's
+        // in-memory copy takes it only once this returns).
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property set");
 
         const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, key, storage_val, local_txn) catch |err|
             return mapPropertyEntryError(err, key);
@@ -7231,10 +7352,8 @@ pub const StorageAdapter = struct {
         else
             try node_shard.beginTxn();
         const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        // SONNY-6529: graph-storage undoes the failed batch.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property batch");
 
         // RC-4: every exact-index mutation of the batch is DEFERRED until the
         // last fallible step has succeeded. The old shape mutated the index
@@ -7318,8 +7437,8 @@ pub const StorageAdapter = struct {
         // same-shard changes commit, and are lost to a crash, together.
         const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
         const txn = joined orelse try node_shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer if (joined == null) node_shard.abortTxn(txn) catch {};
+        // SONNY-6529: graph-storage undoes the failed removal.
+        errdefer if (joined == null) abortUnmirroredTxn(mg, node_shard, txn, "node property remove");
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
@@ -9060,90 +9179,34 @@ pub const StorageAdapter = struct {
 
         // Edges live on the source node's shard.
         const from_shard = mg.shardEngineForNode(from_id);
-        // ENG-3983: both branches below reach into the DEFERRED `edge_index`
-        // directly; on a cold reopen it is empty until materialized, so an
-        // unhydrated lookup would report `error.EdgeNotFound` for a live edge.
-        // Mirrors `GraphEngine.getEdge`'s own hydrate-then-read contract.
+        // ENG-3983: graph-storage reads the DEFERRED `edge_index`; on a cold
+        // reopen it is empty until materialized (it hydrates on its own, but
+        // a failed hydration is reported here, before a transaction opens).
         try from_shard.ensureDerivedHydrated();
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            // R12: manual setEdgeProperty using Txn variants, routed to the
-            // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
-            const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
-            if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
-            const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-            const found_prop_head = edge_entry.prop_head;
-
-            // Use shard-local txn from the statement txn if shards match.
-            const local_txn = shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn();
-            const own_txn = shardLocalTxnForNode(s.txn_id, from_id) == null;
-            // error-policy: A — best-effort rollback on an already-failing path.
-            errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
-
-            // GAP-0060: edge prop_heads are now a full u64 in both the
-            // adjacency entry (WIDE v3/slab-v3 record) and the edge index, so
-            // edge property chains slab-pack exactly like node props. Gated on
-            // the SAME shard config flag as gs `engine_edge_props.setEdgeProperty`
-            // (edge_prop_slab_packing, default ON) — a slab head is only ever
-            // produced for a store whose adjacency can hold it. When off, keep
-            // the legacy one-page-per-edge writer (still a u64 head, hi=0).
-            const new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-                from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, key)
-            else
-                from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, key);
-
-            if (new_head != found_prop_head) {
-                try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, new_head);
-            }
-
-            if (found_prop_head != 0 and found_prop_head != new_head) {
-                from_shard.property_index.removeChain(found_prop_head);
-            }
-            try from_shard.refreshPropertyChainIndex(new_head);
-            if (own_txn) try from_shard.commitTxn(local_txn);
-            return;
-        }
-
-        // No active statement txn — open a local txn on the source shard
-        // and replicate the same cross-shard-aware logic above.
-        // The fallback `mg.engine.setEdgeProperty(from_id, to_id, edge_id, ...)`
-        // routes to `shards[shardOfNode(from)].setEdgeProperty(...)`, whose
-        // `engine_edge_props.setEdgeProperty` does
-        // `engine.node_store.getNode(to)` against the SOURCE shard. For
-        // cross-shard edges (from and to on different shards) the to node
-        // does not exist on from_shard, so the call raises NodeNotFound and
-        // every inline `CREATE (a)-[:R]->(b) RETURN ...` (where the
-        // persistEdgePublicId post-hook is the only setter) crashes.
-        const fb_edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
-        if (fb_edge_entry.from != from_id or fb_edge_entry.neighbor != to_id) return error.EdgeNotFound;
-
-        const fb_from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const fb_found_prop_head = fb_edge_entry.prop_head;
-
-        const fb_local_txn = try from_shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer from_shard.abortTxn(fb_local_txn) catch {};
-
-        // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
-        // config — see the txn branch above.
-        const fb_new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-            from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
-                return mapPropertyEntryError(err, key)
-        else
-            from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
-                return mapPropertyEntryError(err, key);
-
-        if (fb_new_head != fb_found_prop_head) {
-            try publishEdgePropHead(from_shard, fb_local_txn, from_id, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
-        }
-
-        if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
-            from_shard.property_index.removeChain(fb_found_prop_head);
-        }
-        try from_shard.refreshPropertyChainIndex(fb_new_head);
-        try from_shard.commitTxn(fb_local_txn);
+        // CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-15
+        // CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=EdgePropHeadWalImage; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6529: graph-storage's `setEdgePropertyTxn`, in the statement
+        // or session engine txn when it is on the source's shard (R12: no
+        // extra WAL fsync per property), else in a txn of its own. It writes
+        // the property, points both adjacency copies (the outgoing entry and
+        // the co-located incoming one in the source shard's `adj_in_remote`,
+        // SONNY-6266) and the edge index at the new chain, and WAL-images
+        // every page it rewrote in that txn (SONNY-6471), so a crash keeps
+        // the property with the edge. The source's node page is not imaged:
+        // graph-storage 0.4.16's tail reconcile finds the owner of every tail
+        // `.adj_out` page through the edge index. The write is undone by
+        // `abortTxn`. geode rewrote the adjacency itself
+        // (`publishEdgePropHead`) and imaged the pages with `logPagePublic`,
+        // which 0.4.16 cannot undo: every aborted relationship-property
+        // write failed closed and refused the shard's writes until a
+        // restart. The node-page image cost 8 KiB of WAL per write.
+        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, from_id) else null;
+        const txn = joined orelse try from_shard.beginTxn();
+        errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, txn, "relationship property set");
+        from_shard.setEdgePropertyTxn(from_id, to_id, edge_id, key, storage_val, txn) catch |err|
+            return mapPropertyEntryError(err, key);
+        if (joined == null) try from_shard.commitTxn(txn);
     }
 
     /// Set or remove multiple properties on an edge under a single mutex
@@ -9161,11 +9224,13 @@ pub const StorageAdapter = struct {
     ///
     /// The batch collapses all of that to:
     ///   * one adapter mutex acquire,
-    ///   * N `putPropertyTxn` calls (each unavoidable),
-    ///   * exactly one `updateEdgePropHead(adj_out)` + one
-    ///     `updateEdgePropHead(adj_in_remote)` at the end for the terminal
-    ///     `prop_head` (intermediate heads are never read),
-    ///   * exactly one `refreshPropertyChainIndex` at the end.
+    ///   * N `setEdgePropertyTxn` calls in one engine txn.
+    /// SONNY-6529: each through graph-storage's `setEdgePropertyTxn` (see
+    /// `setEdgeProperty`), which rewrites the adjacency heads only when a
+    /// write moved the chain and keeps the property-chain index itself.
+    /// The batch wrote the chain with `putPropertyTxn` and rewrote the
+    /// heads once at the end through `logPagePublic`, which graph-storage
+    /// 0.4.16 cannot undo (an aborted batch failed closed).
     ///
     /// Joins an active `StatementTxn` on this graph (parity with
     /// `setNodePropertiesBatch` + `setEdgeProperty`) so the whole batch
@@ -9192,52 +9257,23 @@ pub const StorageAdapter = struct {
         const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
-        const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const orig_prop_head: u64 = edge_entry.prop_head;
-
         // R8/R12 parity: one txn on from_shard for all N property writes.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn()
-        else
-            try from_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, from_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            from_shard.abortTxn(local_txn) catch {};
-        };
+        const joined: ?gs.TxnId = if (stmt_txn) |s| shardLocalTxnForNode(s.txn_id, from_id) else null;
+        const local_txn = joined orelse try from_shard.beginTxn();
+        errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, local_txn, "relationship property batch");
 
-        var running_prop_head: u64 = orig_prop_head;
-        var last_new_head_u64: u64 = orig_prop_head;
         for (entries) |entry| {
             const storage_val: gs.PropertyValue = if (entry.value) |val|
                 try toStorageProperty(self.allocator, val)
             else
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
-
-            // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
-            // config — see setEdgeProperty.
-            const new_head_u64 = if (from_shard.config.edge_prop_slab_packing)
-                from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, entry.key)
-            else
-                from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, entry.key);
-            running_prop_head = new_head_u64;
-            last_new_head_u64 = new_head_u64;
+            from_shard.setEdgePropertyTxn(from_id, to_id, edge_id, entry.key, storage_val, local_txn) catch |err|
+                return mapPropertyEntryError(err, entry.key);
         }
 
-        if (running_prop_head != orig_prop_head) {
-            try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, running_prop_head);
-        }
-
-        if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
-            from_shard.property_index.removeChain(orig_prop_head);
-        }
-        try from_shard.refreshPropertyChainIndex(last_new_head_u64);
-
-        if (own_txn) try from_shard.commitTxn(local_txn);
+        if (joined == null) try from_shard.commitTxn(local_txn);
     }
 
     /// Get a property from an edge. Delegates to the engine's
@@ -9730,7 +9766,12 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        try mg.engine.abortTxn(txn_id);
+        // SONNY-6529: an abort graph-storage cannot undo quarantines the
+        // graph (and is returned).
+        abortShardedCounted(mg, txn_id) catch |err| {
+            noteAbortFailure(mg, err, "abortTransaction");
+            return err;
+        };
     }
 
     /// Run a checkpoint on every loaded graph engine.
@@ -11156,6 +11197,8 @@ pub const StorageAdapter = struct {
         reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
         reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
         reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
+        reg.register("storage_txn_aborts_undone_total", &storage_txn_aborts_undone_total) catch {}; // SONNY-6529
+        reg.register("storage_txn_aborts_not_undone_total", &storage_txn_aborts_not_undone_total) catch {}; // SONNY-6529
     }
 
     /// Bulk write ops applied since the last checkpoint.
@@ -11507,6 +11550,10 @@ pub const StorageAdapter = struct {
         // tests/test_security_wal_durability.zig.
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+        // SONNY-6527: shard label-dictionary findings, logged with the graph.
+        const label_report = try label_dict_divergence.ReportCtx.create(self.allocator, name);
+        errdefer self.allocator.destroy(label_report);
+        cfg.label_dict_report = label_report.report();
 
         const engine = gs.ShardedGraphEngine.create(
             self.allocator,
@@ -11547,6 +11594,7 @@ pub const StorageAdapter = struct {
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .label_report = label_report,
         };
 
         // Initialise per-graph FTS (fresh index for new graphs).
@@ -11609,6 +11657,10 @@ pub const StorageAdapter = struct {
         // `.deferred` (GEODE_WAL_SYNC=deferred bulk-load knob).
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+        // SONNY-6527: shard label-dictionary findings, logged with the graph.
+        const label_report = try label_dict_divergence.ReportCtx.create(self.allocator, name);
+        errdefer self.allocator.destroy(label_report);
+        cfg.label_dict_report = label_report.report();
 
         // SONNY-6524: a graph whose shard label dictionaries disagree is
         // refused (LabelDictionaryDiverged) unless the operator asked for the
@@ -11660,6 +11712,7 @@ pub const StorageAdapter = struct {
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .label_report = label_report,
         };
 
         // gap 0026: after a crash restart, advance the security graph's
@@ -12051,16 +12104,11 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
                 try node_shard.addLabelTxn(node_id, label_id, local);
-                // gap 0026: WAL-log the node's REAL label page (see
-                // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-                try relogSecurityLabelPageTxn(mg, node_shard, node_id, local);
             } else {
                 try mg.engine.addLabel(node_id, label_id);
-                try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
             }
         } else {
             try mg.engine.addLabel(node_id, label_id);
-            try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
         }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
@@ -12572,7 +12620,7 @@ pub const StorageAdapter = struct {
     ///
     /// Caller contract:
     ///   const txn = try adapter.beginStatementTxn(graph_name);
-    ///   errdefer txn.abort();
+    ///   errdefer txn.fail();
     ///   // …adapter mutation calls on `graph_name`…
     ///   try txn.commit();
     ///
@@ -12583,6 +12631,7 @@ pub const StorageAdapter = struct {
     /// operation.  We log and return `error.NestedStatementTxn` rather
     /// than silently overwriting the thread-local.
     pub fn beginStatementTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        settleFailedStatementTxn(); // SONNY-6529
         if (t_current_statement_txn != null) {
             log.err("adapter.beginStatementTxn called with an existing statement txn on this thread (graph={s})", .{graph_name});
             return error.NestedStatementTxn;
@@ -12630,6 +12679,7 @@ pub const StorageAdapter = struct {
         shard_idx: usize,
         out: *StatementTxn,
     ) !void {
+        settleFailedStatementTxn(); // SONNY-6529
         if (t_current_statement_txn != null) return error.NestedStatementTxn;
 
         const mg = blk: {
@@ -12663,6 +12713,7 @@ pub const StorageAdapter = struct {
     /// per-statement txns via `beginStatementTxn` (preferred) or simply
     /// lets the adapter's auto-batch (R7) path handle those sub-ops.
     pub fn beginSessionTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        settleFailedStatementTxn(); // SONNY-6529
         if (t_session_engine_txn != null) {
             log.err("adapter.beginSessionTxn called with an existing session txn on this thread (graph={s})", .{graph_name});
             return error.NestedSessionTxn;
@@ -12697,10 +12748,12 @@ pub const StorageAdapter = struct {
         try commitThreadSessionTxn();
     }
 
-    /// R9: abort the session-scoped engine txn (no data-durability fsync).
-    pub fn abortSessionTxn(self: *StorageAdapter) void {
+    /// R9: end the session-scoped engine txn. SONNY-6529: it commits (the
+    /// store's in-memory copy holds its writes; the undo log undoes them):
+    /// see `endThreadSessionTxn`. It was `abortSessionTxn`.
+    pub fn endSessionTxn(self: *StorageAdapter) void {
         _ = self;
-        abortThreadSessionTxn();
+        endThreadSessionTxn();
     }
 
     /// R9 (2026-04-22, lazy): open a session-scoped engine txn, for the

@@ -235,8 +235,11 @@ fn interleavedOnOneWorker(f: *Fixture) !void {
     try expectRequestClean();
 
     // A transaction in one program runs its changes in one engine
-    // transaction: the COMMIT statement commits it, the ROLLBACK statement
-    // aborts it.
+    // transaction: the COMMIT statement commits it. SONNY-6529: the ROLLBACK
+    // statement's undo joins it, and the program's end commits the CREATE
+    // and its undo together; it aborted it before the undo, which
+    // graph-storage 0.4.16 makes an undo of its own (the node was undone
+    // twice). Nothing is aborted either way; the node is gone (below).
     var before = engineTxns("g1");
     try expectRuns(ga, a, "START TRANSACTION; CREATE (:A {i: 20}); COMMIT");
     try expectRequestClean();
@@ -246,7 +249,8 @@ fn interleavedOnOneWorker(f: *Fixture) !void {
     try expectRuns(ga, a, "START TRANSACTION; CREATE (:A {i: 21}); ROLLBACK");
     try expectRequestClean();
     after = engineTxns("g1");
-    try testing.expectEqual(before.aborted + 1, after.aborted);
+    try testing.expectEqual(before.aborted, after.aborted);
+    try testing.expect(after.committed > before.committed);
 
     // A program that leaves its transaction open: its engine transaction
     // ends with the program, and the transaction goes on, until the ROLLBACK

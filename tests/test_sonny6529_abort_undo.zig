@@ -142,6 +142,10 @@ const Shape = enum {
     /// In a transaction: a MATCH ... CREATE that fails on its last row, then
     /// COMMIT (refused: the transaction failed), then ROLLBACK.
     fail_create_txn,
+    /// In a transaction: one request whose first statement (CREATE and SET)
+    /// succeeds and whose second fails on its last row, then ROLLBACK: the
+    /// handler rolls the first back after the request's program ended.
+    fail_second_txn,
     /// Auto-commit: a SET that fails on its last row.
     fail_set_auto,
     /// Auto-commit: a MATCH ... CREATE (nodes and relationships) that fails on
@@ -254,13 +258,18 @@ fn writes(buf: *[4][512]u8, c: Case) []const []const u8 {
             S.out[0] = fmt(&buf[0], "MATCH (a:{s})-[e:{s}R]->() SET e.p = 2, e.q = CASE WHEN a.k = {d} THEN 1 / 0 ELSE 1 END", .{ p, p, n - 1 });
             len = 1;
         },
+        .fail_second_txn => {
+            S.out[0] = fmt(&buf[0], "MATCH (a:{s}) SET a.v = 2 CREATE (a)-[:{s}N {{p: 1}}]->(:{s}x {{k: a.k}})", .{ p, p, p });
+            S.out[1] = fmt(&buf[1], "MATCH (a:{s}) SET a.w = CASE WHEN a.k = {d} THEN 1 / 0 ELSE 1 END", .{ p, n - 1 });
+            len = 2;
+        },
     }
     return S.out[0..len];
 }
 
 fn failing(c: Case) bool {
     return switch (c.shape) {
-        .fail_set_txn, .fail_create_txn, .fail_set_auto, .fail_create_auto, .fail_edge_set_auto => true,
+        .fail_set_txn, .fail_create_txn, .fail_second_txn, .fail_set_auto, .fail_create_auto, .fail_edge_set_auto => true,
         else => false,
     };
 }
@@ -301,6 +310,14 @@ fn run(client: *Client, allocator: std.mem.Allocator, c: Case) !void {
         .requests => {
             var b = try client.begin(allocator);
             b.deinit(allocator);
+            if (c.shape == .fail_second_txn) {
+                var prog: std.ArrayList(u8) = .empty;
+                defer prog.deinit(allocator);
+                try prog.print(allocator, "{s}; {s}", .{ stmts[0], stmts[1] });
+                _ = try quicFails(client, allocator, prog.items, &code_buf);
+                _ = client.rollback(allocator) catch false;
+                return;
+            }
             for (stmts) |s| {
                 if (failing(c)) {
                     _ = try quicFails(client, allocator, s, &code_buf);
