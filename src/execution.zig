@@ -1426,6 +1426,10 @@ fn windowValue(v: Value) !usize {
     };
 }
 
+/// SONNY-6613: the kept rows' list is made before any row is freed: a
+/// failure to make it left `result` holding the rows it had freed, which its
+/// `deinit` then freed again (any windowed statement, on an allocation
+/// failure).
 pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
     const total = result.rows.len;
     if (total == 0) return;
@@ -1436,14 +1440,17 @@ pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, st
     if (start_idx == 0 and end_idx == total) return;
 
     if (start_idx >= end_idx) {
+        const none = try allocator.alloc([]Value, 0);
         for (result.rows) |row| {
             freeRowValues(allocator, result, row);
         }
         allocator.free(result.rows);
-        result.rows = try allocator.alloc([]Value, 0);
+        result.rows = none;
         return;
     }
 
+    const new_len = end_idx - start_idx;
+    const new_rows = try allocator.alloc([]Value, new_len);
     for (result.rows[0..start_idx]) |row| {
         freeRowValues(allocator, result, row);
     }
@@ -1451,8 +1458,6 @@ pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, st
         freeRowValues(allocator, result, row);
     }
 
-    const new_len = end_idx - start_idx;
-    const new_rows = try allocator.alloc([]Value, new_len);
     for (result.rows[start_idx..end_idx], 0..) |row, i| {
         new_rows[i] = row;
     }

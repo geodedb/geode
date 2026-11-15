@@ -6151,6 +6151,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         fn clone(self: *const @This()) !@This() {
             // #557: Pre-size the cloned HashMap to avoid rehashing
             var new_binding = @This().init(self.alloc);
+            // SONNY-6613: a copy that cannot be finished is freed (it leaked).
+            errdefer new_binding.deinit();
             try new_binding.vars.ensureTotalCapacity(@intCast(self.vars.count() + 2));
             var iter = self.vars.iterator();
             while (iter.next()) |entry| {
@@ -6324,6 +6326,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 try expandVarLengthHop(allocator, store, &node_cache, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets);
                 for (targets.items) |target| {
                     var binding = MatchBinding.init(allocator);
+                    errdefer binding.deinit();
                     if (hop.left.name) |v| try binding.vars.put(v, left_node);
                     if (hop.right.name) |v| try binding.vars.put(v, target.node);
                     if (hop.rel.name) |rn| try binding.rel_list_vars.put(rn, target.edges);
@@ -6368,6 +6371,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the right pattern's inline property predicate.
                         if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6391,6 +6395,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the right pattern's inline property predicate.
                         if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6433,6 +6438,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the anchor's inline property predicate.
                         if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6455,6 +6461,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the anchor's inline property predicate.
                         if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6503,6 +6510,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // reversed orientation that may well satisfy the predicate.
                         if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and try nodeMatchesProps(allocator, from_node, left_props, prop_env) and try nodeMatchesProps(allocator, to_node, right_props, prop_env)) {
                             var binding = MatchBinding.init(allocator);
+                            errdefer binding.deinit();
                             if (hop.left.name) |v| try binding.vars.put(v, from_node);
                             if (hop.right.name) |v| try binding.vars.put(v, to_node);
                             if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
@@ -6518,6 +6526,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // guard — see the note on the .right/.undirected branch above.
                         if (hop_scope.edgeVisible(edge_ptr) and std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*) and try nodeMatchesProps(allocator, to_node, left_props, prop_env) and try nodeMatchesProps(allocator, from_node, right_props, prop_env)) {
                             var binding = MatchBinding.init(allocator);
+                            errdefer binding.deinit();
                             if (hop.left.name) |v| try binding.vars.put(v, to_node);
                             if (hop.right.name) |v| try binding.vars.put(v, from_node);
                             if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
@@ -6555,6 +6564,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the right pattern's inline property predicate.
                         if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6574,6 +6584,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         // BUG-731: honor the right pattern's inline property predicate.
                         if (!try nodeMatchesProps(allocator, right_node, right_props, prop_env)) continue;
                         var binding = MatchBinding.init(allocator);
+                        errdefer binding.deinit();
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
                         if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
@@ -6603,6 +6614,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                 if (!try nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
+                errdefer binding.deinit();
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
             }
@@ -6617,6 +6629,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                 if (!try nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
                 var binding = MatchBinding.init(allocator);
+                errdefer binding.deinit();
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
                 // LIMIT pushdown: stop full scan once we have enough bindings
