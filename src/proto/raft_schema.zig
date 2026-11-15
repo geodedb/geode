@@ -379,11 +379,18 @@ pub const AppendEntriesResponse = struct {
     term: u64 = 0,
     success: bool = false,
     match_index: u64 = 0,
+    /// SONNY-6622: a rejection's backtracking hint (raft v0.2.2). New
+    /// fields: a peer that does not send them reads as 0, a rejection
+    /// without a hint, which the leader backs off from as before.
+    conflict_index: u64 = 0,
+    conflict_term: u64 = 0,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
         .success = fd(2, .{ .scalar = .bool }),
         .match_index = fd(3, .{ .scalar = .uint64 }),
+        .conflict_index = fd(4, .{ .scalar = .uint64 }),
+        .conflict_term = fd(5, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *AppendEntriesResponse, allocator: std.mem.Allocator) void {

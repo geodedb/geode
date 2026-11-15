@@ -1494,6 +1494,25 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
     return .{ .key = key, .entries = entries };
 }
 
+/// SONNY-6631: call `f(ctx, graph)` for the graph each entry of a batch
+/// writes (borrowing into `data`), without allocating: the Raft receive
+/// paths hydrate them before the apply. Stops at the first malformed entry
+/// (its apply refuses the batch); a version this build does not know is
+/// `UnsupportedBatchVersion`.
+pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8) void) !void {
+    if (!isBatchPayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_BATCH.len };
+    if (try r.byte() != BATCH_VERSION) return BatchError.UnsupportedBatchVersion;
+    if (try r.byte() != 0) _ = try r.str16();
+    const count = try r.readU32();
+    if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
+    for (0..count) |_| {
+        _ = try r.byte();
+        f(ctx, try r.str16());
+        _ = try r.str32();
+    }
+}
+
 /// The number of entries a batch carries, or an error when it is not one
 /// this build applies (tests, diagnostics).
 pub fn batchEntryCount(allocator: std.mem.Allocator, data: []const u8) !usize {

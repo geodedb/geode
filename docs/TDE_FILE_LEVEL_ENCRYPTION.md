@@ -139,6 +139,7 @@ On start, a cluster node with a data directory:
 | set | Raft state written without TDE | refuses: `RaftStoragePlaintextUnderTde`, and leaves the directory as it was |
 | unset | encrypted | refuses: `RaftStorageNeedsTdeKey` |
 | unset | written without TDE, or new | starts, plaintext (as before) |
+| either | entry log with a damaged record (valid records after it), records that do not authenticate, or WAL-level encryption | refuses: `RaftStorageLogCorrupted` / `RaftStorageLogAuthFailed` / `RaftStorageLogEncryptionMismatch`, and leaves the directory as it was (SONNY-6622; it used to cut the log at the damage) |
 
 **Enabling TDE on an existing cluster** (or upgrading a cluster that already
 set `GEODE_TDE_KEY` from a build before SONNY-6571, whose Raft logs are

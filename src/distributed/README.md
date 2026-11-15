@@ -149,7 +149,17 @@ SONNY-6279.
   the entry and snapshot data. If the Raft storage write fails, the node
   pauses (no Raft input, nothing sent or applied, proposals refused with
   `RaftStoragePersistFailed`) and each tick retries the write with backoff
-  until it succeeds (`test-sonny6617-raft-persist-failure`).
+  until it succeeds (`test-sonny6617-raft-persist-failure`). raft v0.2.2:
+  a snapshot a follower installs is restored into the store before it is
+  persisted or anything after it applies, and a store that cannot take it
+  (the durable store, for now) pauses the node the same way; nothing in
+  the server takes Raft snapshots yet. A rejected AppendEntries carries the
+  follower's `conflict_index` / `conflict_term`. A Raft log with a damaged
+  record refuses startup (`RaftStorageLogCorrupted`, `...LogAuthFailed`,
+  `...LogEncryptionMismatch`) and is left as it is
+  (`test-sonny6622-raft-v022-adapt`). The graphs an entry's apply writes are
+  hydrated when the entry enters the log or before a restarted node
+  replays it, not under `inner_mutex` (`test-sonny6631-apply-hydration-off-mutex`).
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and

@@ -3915,6 +3915,38 @@ pub fn threadHoldsGraphAwaitedByReplicatedDrop() bool {
     return false;
 }
 
+/// SONNY-6622: Raft snapshot restores waiting for the store's write lock
+/// under a Raft node's `inner_mutex` (`beginReplicatedRestore`).
+var g_replicated_restore_waiters: std.atomic.Value(u32) = .init(0);
+
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=StoreHolderYieldsToRestore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6622: a Raft snapshot restore is about to take the store's write
+/// lock under the Raft node's `inner_mutex` (it replaces the whole store):
+/// a thread holding the store lock (every graph lock holds it shared) that
+/// would wait for Raft gives up instead (`threadMustYieldToReplicatedApply`),
+/// as for a replicated drop. Until `endReplicatedRestore`.
+pub fn beginReplicatedRestore() void {
+    _ = g_replicated_restore_waiters.fetchAdd(1, .acq_rel);
+}
+
+pub fn endReplicatedRestore() void {
+    _ = g_replicated_restore_waiters.fetchSub(1, .acq_rel);
+}
+
+/// SONNY-6541 (1), SONNY-6622: does this thread hold a lock a Raft apply
+/// waits for under `inner_mutex` (a replicated drop's graph, or the store
+/// during a snapshot restore)? Then it must not wait for `inner_mutex` or a
+/// commit: it gives up.
+pub fn threadMustYieldToReplicatedApply() bool {
+    if (threadHoldsGraphAwaitedByReplicatedDrop()) return true;
+    return g_replicated_restore_waiters.load(.acquire) > 0 and graph_store.storeLockHeldByCurrentThread();
+}
+
+/// Does this thread hold any graph's lock, or the store lock?
+pub fn threadHoldsAnyGraphOrStoreLock() bool {
+    return threadHoldsAnyGraphLock() or graph_store.storeLockHeldByCurrentThread();
+}
+
 /// SONNY-6375 test seam (test builds only): runs on the scanning thread
 /// between two batches of one `orderedScan`, when it holds no graph or shard
 /// lock — the window a concurrent write or ordered-index rebuild can use.

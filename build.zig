@@ -10777,7 +10777,7 @@ pub fn build(b: *std.Build) void {
     const sonny6567_rh_tests = b.addTest(.{ .root_module = sonny6567_rh_test_mod });
     const run_sonny6567_rh_tests = b.addRunArtifact(sonny6567_rh_tests);
     shardDep(test_step, &run_sonny6567_rh_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 regression (the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet is timed; a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, applies in under the 250 ms election timeout)");
+    const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 / SONNY-6631 regression (prehydrated as the Raft node does before inner_mutex, the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet, and a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, each take at most 50 ms, well under the 250 ms election timeout)");
     sonny6567_rh_step.dependOn(&run_sonny6567_rh_tests.step);
     // SONNY-6529: a rolled-back or failed write leaves nothing, in memory,
     // after a clean restart and after a SIGKILL restart. Real server.

@@ -29,7 +29,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
-const cluster_bootstrap = @import("cluster_bootstrap");
+const geode_test_bin = @import("geode_test_bin");
 
 const graph_store = geode.graph_store;
 const GraphStore = graph_store.GraphStore;
@@ -549,22 +549,35 @@ test "SONNY-6622: a damaged Raft log refuses startup with a named error and is l
     var no_peers = [_]Peer{};
     try testing.expectError(error.RaftStorageLogCorrupted, RaftNode.initWithStorageDirKey(a, 1, &no_peers, ELECTION_TIMEOUT_MS, raft_dir, null));
 
-    // The server's startup path names it.
-    graph_store.deinitGlobalStore();
-    defer graph_store.deinitGlobalStore();
+    // A real server started as a cluster node on the directory refuses to
+    // start and names it (cluster_bootstrap: RaftStorageLogCorrupted, not
+    // InvalidNodeId). `timeout` turns a server that started into exit 124.
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
-    try env.put("GEODE_CLUSTER_TOKEN", "tok-sonny6622");
+    try env.put("PATH", "/usr/bin:/bin");
+    try env.put("GEODE_LSP_PORT", "0");
+    try env.put("GEODE_CLUSTER_TOKEN", "tok-sonny6622-raft-damaged-log");
     try env.put("GEODE_NODE_ID", "1");
     try env.put("GEODE_CLUSTER_PORT", "14262");
-    const started = cluster_bootstrap.maybeStart(a, env, null, &.{}, null, null, data_dir);
-    if (started) |maybe| {
-        if (maybe) |bs| {
-            var b = bs;
-            b.deinit();
-        }
-    } else |_| {}
-    try testing.expectError(error.RaftStorageLogCorrupted, started);
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const r = try std.process.run(a, threaded.io(), .{
+        .argv = &.{ "timeout", "60", geode_test_bin.geode_exe, "serve", "--listen", "127.0.0.1:14263", "--data-dir", data_dir },
+        .environ_map = &env,
+    });
+    defer a.free(r.stdout);
+    defer a.free(r.stderr);
+    const code: ?u8 = switch (r.term) {
+        .exited => |c| c,
+        else => null,
+    };
+    const named = std.mem.indexOf(u8, r.stderr, "RaftStorageLogCorrupted") != null;
+    const explained = std.mem.indexOf(u8, r.stderr, "damaged entry log") != null;
+    std.debug.print("SONNY-6622 damaged log: geode serve exited {?d}; stderr names RaftStorageLogCorrupted={} explains it={}\n", .{ code, named, explained });
+    if (!(named and explained)) std.debug.print("--- stderr ---\n{s}\n", .{r.stderr});
+    try testing.expect(code != null and code.? != 0 and code.? != 124);
+    try testing.expect(named);
+    try testing.expect(explained);
 
     // Refused, never repaired or deleted: the log is byte for byte as it was.
     const after = try readAll(a, wal_path);

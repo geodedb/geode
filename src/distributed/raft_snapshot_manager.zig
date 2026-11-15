@@ -108,6 +108,26 @@ pub fn installSnapshotData(
     if (g_fts_snapshot_rebuild_hook) |hook| hook(store);
 }
 
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RaftSnapshotPayload; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6622: the state-machine snapshot a leader hands the raft library
+/// (`RaftNode.inner.reportSnapshot`): the CRC32 of the JSON-lines snapshot
+/// (4 bytes, big-endian), then the snapshot. The caller frees it.
+pub fn encodeRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore) ![]u8 {
+    const snap = try createSnapshotData(allocator, store);
+    defer allocator.free(snap.data);
+    const out = try allocator.alloc(u8, 4 + snap.data.len);
+    std.mem.writeInt(u32, out[0..4], snap.checksum, .big);
+    @memcpy(out[4..], snap.data);
+    return out;
+}
+
+/// SONNY-6622: install a payload `encodeRaftSnapshot` made into `store`,
+/// replacing its contents (`installSnapshotData`).
+pub fn installRaftSnapshot(allocator: std.mem.Allocator, store: *GraphStore, payload: []const u8) !void {
+    if (payload.len < 4) return error.InvalidJsonLine;
+    try installSnapshotData(allocator, store, payload[4..], std.mem.readInt(u32, payload[0..4], .big));
+}
+
 /// Parse a single JSON-lines entry and apply it to the store.
 fn parseLine(store: *GraphStore, line: []const u8) !void {
     var parsed = std.json.parseFromSlice(std.json.Value, store.allocator, line, .{}) catch {
