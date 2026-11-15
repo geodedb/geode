@@ -1274,9 +1274,9 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622: geode and raft v0.2.2 pin wal v0.1.24 (fail-closed
-    // recovery); graph-storage v0.4.16 and timeseries-storage v0.2.20 still
-    // pin v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
+    // SONNY-6622, SONNY-6628: geode pins wal v0.1.25 (fail-closed recovery,
+    // compaction and truncateAfter); raft v0.2.2 pins v0.1.24,
+    // graph-storage v0.4.16 and timeseries-storage v0.2.20 v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
     // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
     // both libraries compile against geode's wal module, as timeseries-storage
     // does for thread_pool below. Remove once both pin geode's wal version.
@@ -1288,6 +1288,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const raft_ext_mod = raft_dep.module("raft");
+    // SONNY-6628: raft v0.2.2 pins wal v0.1.24, geode v0.1.25 (truncateAfter
+    // fails closed); one wal per compilation (see graph_storage_mod above).
+    raft_ext_mod.addImport("wal", wal_ext_mod);
 
     // ==========================================================================
     // Phase 7 External Library Dependencies (Extracted Domain Libraries)
@@ -19680,6 +19683,7 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
         .{ .file = "tests/test_sonny6571_raft_tde_storage.zig", .step = "test-sonny6571-raft-tde-storage", .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY, the cluster's Raft entry and snapshot data reach the raft library's FileStorage files only sealed and read back across reopens; a record moved to another term or a plaintext record fails closed; a Raft directory written without TDE is refused and left unchanged, an encrypted one without the key or under another key; a granted vote is still on disk before the grant is sent, SONNY-6563)", .weight = 1 },
         .{ .file = "tests/test_sonny6622_raft_v022_adapt.zig", .step = "test-sonny6622-raft-v022-adapt", .desc = "Run SONNY-6622 regression (raft v0.2.2: a lagging follower restores its store from the leader's snapshot and applies the entries after it, and a snapshot its durable store cannot take stops it instead; a rejected AppendEntries carries the follower's conflict hint over geode's frame encoding and the new leader resumes there, a peer without the hint is still caught up; a damaged Raft log refuses startup with RaftStorageLogCorrupted and is left byte for byte as it was)", .weight = 1 },
+        .{ .file = "tests/test_sonny6633_snapshot_wire.zig", .step = "test-sonny6633-snapshot-wire", .desc = "Run SONNY-6633 item 1 regression (three Raft nodes exchanging geode Raft frames, encodeRaftFrame / decodeRaftFrame / RaftNode.handleMessage as the QUIC path does: a follower behind the leader's compacted log installs the snapshot, chunk data, BLAKE3 digest and configuration carried by the frames, restores its store from it and applies the entries after it; a refused snapshot reaches the leader as a refusal; the new fields round-trip and read as absent from an older peer)", .weight = 1 },
         .{ .file = "tests/test_sonny6631_apply_hydration_off_mutex.zig", .step = "test-sonny6631-apply-hydration-off-mutex", .desc = "Run SONNY-6631 regression (under one spinning thread per CPU, a follower applying a statement batch whose entries write a 20,000-node graph not hydrated yet, and a node replaying its committed log after a restart onto such a graph, hold the Raft inner_mutex at most 50 ms, well under the 250 ms election timeout; every entry applies)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
         .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 regression (RETURN 1.25 and a UNION mixing it with an integer are declared exact numeric; FOR ... ORDER BY reports ordered:true with its key; PROFILE reports no spill_reason without a spill; fixed by SONNY-6562)", .weight = 1 },

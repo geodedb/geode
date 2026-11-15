@@ -338,7 +338,9 @@ pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: 
     }
     graph_storage_adapter.beginReplicatedRestore();
     defer graph_storage_adapter.endReplicatedRestore();
-    try raft_snapshot_manager.installRaftSnapshot(allocator, store, data);
+    // SONNY-6633 (6): the idempotency table too (it would otherwise lose
+    // every key of the entries the snapshot covers).
+    try raft_snapshot_manager.installRaftSnapshot(allocator, store, data, g_idempotency_dedup);
 }
 
 // ---------------------------------------------------------------------------

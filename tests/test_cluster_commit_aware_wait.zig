@@ -80,6 +80,8 @@ const geode = @import("geode");
 const cluster = geode.distributed.cluster;
 const ClusterCoordinator = cluster.ClusterCoordinator;
 const raft_lib = geode.distributed.raft;
+// SONNY-6633 (5): every message with its real sender (it was guessed).
+const raft_net = @import("raft_inproc_net.zig");
 const raft_consensus = geode.distributed.raft_consensus;
 
 // ===========================================================================
@@ -200,7 +202,7 @@ fn sleepMs(ms: u64) void {
 fn driveUntil(
     a: std.mem.Allocator,
     coords: []*ClusterCoordinator,
-    ipt: *raft_lib.InProcessTransport,
+    ipt: *raft_net.RaftNet,
     deadline_ms: i64,
     done: *const fn (coords: []*ClusterCoordinator) bool,
 ) !void {
@@ -213,8 +215,9 @@ fn driveUntil(
             defer a.free(msgs);
             if (msgs.len == 0) continue;
             const target_idx = id - 1;
-            for (msgs) |msg| {
-                const inferred_from = inferSender(msg, @intCast(id));
+            for (msgs) |d| {
+                const msg = d.msg;
+                const inferred_from = d.from;
                 coords[target_idx].raft.stepInner(inferred_from, msg) catch |err| {
                     freeMsgPayload(a, msg);
                     return err;
@@ -316,11 +319,9 @@ test "RC-1 live: commit-aware wait returns success for a committed index" {
         }
         const coords: []*ClusterCoordinator = coords_storage[0..];
 
-        var ipt = raft_lib.InProcessTransport.init(a);
+        var ipt = raft_net.RaftNet.init(a);
         defer ipt.deinit();
-        for (1..4) |id| try ipt.register(id);
-        const transport = ipt.transport();
-        for (coords) |c| c.raft.setInnerTransport(transport);
+        for (coords, 1..) |c, id| c.raft.setInnerTransport(ipt.transportFor(id));
 
         try driveUntil(a, coords, &ipt, nowMillis() + 10_000, allHaveLeader);
 
@@ -351,25 +352,7 @@ test "RC-1 live: commit-aware wait returns success for a committed index" {
     }
 }
 
-fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
-    return switch (msg) {
-        .request_vote => |rv| rv.candidate_id,
-        .append_entries => |ae| ae.leader_id,
-        .install_snapshot => |is| is.leader_id,
-        .request_vote_response,
-        .append_entries_response,
-        .install_snapshot_response,
-        => blk: {
-            var i: u64 = 1;
-            while (i <= 3) : (i += 1) {
-                if (i != recipient_id) break :blk i;
-            }
-            break :blk recipient_id;
-        },
-    };
-}
-
 fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
     // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
-    raft_lib.InProcessTransport.freeMessage(allocator, msg);
+    raft_net.freeMessage(allocator, msg);
 }

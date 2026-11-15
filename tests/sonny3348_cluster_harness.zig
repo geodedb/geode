@@ -10,6 +10,7 @@ const geode = @import("geode");
 const schema = @import("schema");
 const grpc = @import("grpc_impl").impl;
 pub const fx = @import("sonny738_r12_grpc_fixture.zig");
+const raft_net = @import("raft_inproc_net.zig");
 
 const eval = geode.eval;
 const cluster_mod = geode.distributed.cluster;
@@ -25,13 +26,14 @@ pub const Cluster = struct {
     a: std.mem.Allocator,
     coords: [3]*ClusterCoordinator = undefined,
     alive: usize = 0,
-    ipt: raft_lib.InProcessTransport,
+    /// SONNY-6633 (5): every message with its real sender.
+    net: raft_net.RaftNet,
     running: std.atomic.Value(bool) = .init(true),
     driver: ?std.Thread = null,
     leader: *ClusterCoordinator = undefined,
 
     pub fn init(self: *Cluster, a: std.mem.Allocator) !void {
-        self.* = .{ .a = a, .ipt = raft_lib.InProcessTransport.init(a) };
+        self.* = .{ .a = a, .net = raft_net.RaftNet.init(a) };
         const port_base: u16 = 22400;
         const ports = [_]u16{ port_base, port_base + 1, port_base + 2 };
         var peer_lists: [3][2]ClusterCoordinator.PeerConfig = undefined;
@@ -61,9 +63,7 @@ pub const Cluster = struct {
             self.coords[i] = c;
             self.alive += 1;
         }
-        for (1..4) |id| try self.ipt.register(id);
-        const transport = self.ipt.transport();
-        for (self.coords) |c| c.raft.setInnerTransport(transport);
+        for (self.coords, 1..) |c, id| c.raft.setInnerTransport(self.net.transportFor(id));
 
         self.driver = try std.Thread.spawn(.{}, drive, .{self});
         const deadline = nowMs() + 15_000;
@@ -91,7 +91,7 @@ pub const Cluster = struct {
             self.a.destroy(c);
         }
         self.alive = 0;
-        self.ipt.deinit();
+        self.net.deinit();
     }
 
     /// Ticks every node and delivers its messages, until stopped. The
@@ -101,11 +101,11 @@ pub const Cluster = struct {
         while (self.running.load(.acquire)) {
             for (self.coords) |c| c.raft.tick() catch {};
             for (1..4) |id| {
-                const msgs = self.ipt.drain(@intCast(id), self.a) catch continue;
-                defer self.a.free(msgs);
-                for (msgs) |msg| {
-                    self.coords[id - 1].raft.stepInner(inferSender(msg, @intCast(id)), msg) catch {};
-                    freeMsgPayload(self.a, msg);
+                const ds = self.net.drain(id, self.a) catch continue;
+                defer self.a.free(ds);
+                for (ds) |d| {
+                    self.coords[id - 1].raft.stepInner(d.from, d.msg) catch {};
+                    raft_net.freeMessage(self.a, d.msg);
                 }
             }
             fx.sleepMs(5);
@@ -134,26 +134,6 @@ pub fn nowMs() i64 {
     else
         std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-}
-
-fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
-    return switch (msg) {
-        .request_vote => |rv| rv.candidate_id,
-        .append_entries => |ae| ae.leader_id,
-        .install_snapshot => |is| is.leader_id,
-        .request_vote_response, .append_entries_response, .install_snapshot_response => blk: {
-            var i: u64 = 1;
-            while (i <= 3) : (i += 1) {
-                if (i != recipient_id) break :blk i;
-            }
-            break :blk recipient_id;
-        },
-    };
-}
-
-fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
-    // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
-    raft_lib.InProcessTransport.freeMessage(allocator, msg);
 }
 
 // ---------------------------------------------------------------------------

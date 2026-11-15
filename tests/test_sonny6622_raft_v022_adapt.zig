@@ -207,7 +207,7 @@ fn leaveNode3Behind(net: *LibNet, leader_store: *GraphStore, writes: usize) !u64
     try net.untilTrue(all3, AppliedAtLeast{ .node = leader, .index = last }, AppliedAtLeast.done);
     try net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[1], .index = last }, AppliedAtLeast.done);
 
-    const payload = try snapshot_manager.encodeRaftSnapshot(net.a, leader_store);
+    const payload = try snapshot_manager.encodeRaftSnapshot(net.a, leader_store, null);
     defer net.a.free(payload);
     {
         leader.inner_mutex.lockUncancelable(io);

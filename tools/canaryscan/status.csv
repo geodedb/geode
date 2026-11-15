@@ -5131,6 +5131,9 @@ REQ-SONNY-6623-SHARED-MFA-LIMITER,MFA authentication,OneLimiterForEveryCodeCheck
 REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,ApplyCriticalSectionMeasured,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,PrehydrateWhereEntriesEnterTheLog,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,Regression,TESTED,tests/test_sonny6631_apply_hydration_off_mutex.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
+REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,DedupSerialized,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
+REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,SnapshotCarriesDedup,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
+REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6633_snapshot_wire.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
