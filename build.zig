@@ -10881,6 +10881,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6612_tr_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6612_tr_step = b.step("test-sonny6612-tenant-refusal", "Run SONNY-6612 item 2 regression (a durable tenant registry holding a tenant: a statement scoped to an unregistered tenant is refused with TenantNotRegistered and writes nothing; a registered tenant and an unscoped session run)");
     sonny6612_tr_step.dependOn(&run_sonny6612_tr_tests.step);
+    // SONNY-6612 (1): an auth record field that cannot be read is the read
+    // error, never a tamper verdict.
+    const sonny6612_af_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_auth_field_reads.zig"), .target = target, .optimize = optimize });
+    sonny6612_af_test_mod.link_libc = true;
+    sonny6612_af_test_mod.addImport("geode", root_mod);
+    sonny6612_af_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6612_af_tests = b.addTest(.{ .root_module = sonny6612_af_test_mod });
+    const run_sonny6612_af_tests = b.addRunArtifact(sonny6612_af_tests);
+    shardDep(test_step, &run_sonny6612_af_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_af_step = b.step("test-sonny6612-auth-field-reads", "Run SONNY-6612 item 1 regression (a durable store, a real AuthGraphManager, the k-th body rebuild on failing with an engine read error for every k: verifyChain succeeds or fails with the read error, never a tamper verdict)");
+    sonny6612_af_step.dependOn(&run_sonny6612_af_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.
