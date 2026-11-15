@@ -10587,6 +10587,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6590_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6590-tde-side-files", "Run SONNY-6590 regression (with an at-rest key: geode's prop_exact.idx / prop_rev.idx are sealed, hold no name or value, reload after a clean reopen and reconcile a crash tail exactly as a rebuild; plaintext ones from before are deleted at open and rebuilt sealed; one copied from another graph or modified is rebuilt, not served; a graph whose sealed labels.dict fails authentication, is plaintext or has no key is refused alone with 58000 SideFileAuthFailed / SideFileNotSealed / SideFileEncrypted; GEODE_TDE_KEY alone encrypts time-series; an empty plaintext time-series store is replaced, one with data refused (TimeseriesNotEncrypted) and kept; a real server upgrades a pre-0.4.17 TDE data directory and keeps nothing in plaintext, refuses a damaged graph while serving the other, and stops on plaintext time-series data unless GEODE_TS_TDE=0)").dependOn(&run_sonny6590_tests.step);
 
+    // SONNY-6616: TDE residuals - invalidating a graph's exact property index
+    // removes prop_rev.idx together with prop_exact.idx.
+    const sonny6616_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6616_tde_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6616_test_mod.link_libc = true;
+    sonny6616_test_mod.addImport("geode", root_mod);
+    sonny6616_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6616_tests = b.addTest(.{ .root_module = sonny6616_test_mod });
+    const run_sonny6616_tests = b.addRunArtifact(sonny6616_tests);
+    shardDep(test_step, &run_sonny6616_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6616-tde-residuals", "Run SONNY-6616 regression (invalidating a graph's exact property index removes prop_rev.idx with prop_exact.idx, with and without an at-rest key)").dependOn(&run_sonny6616_tests.step);
+
     // SONNY-6547 (1): a quarantined graph and a graph whose label
     // dictionaries diverged answer every read and write shape with the same
     // GQLSTATUS and message class over QUIC and gRPC (a real server).
