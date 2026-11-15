@@ -97,7 +97,7 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 | Method | Status | Use Case | Security Level | Implementation |
 |--------|--------|----------|----------------|----------------|
 | Username/Password | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
-| MFA (TOTP) | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
+| MFA (TOTP) | ❌ Not enforced at login (SONNY-6602) | Two-factor auth | — | `src/security/mfa.zig`; procedures only, see USER_AUTH.md |
 | Session Tokens | ✅ Implemented | Session continuity | High | `src/security/authn.zig` |
 | API Keys | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
 | mTLS (Certificate) | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
@@ -113,7 +113,7 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 
 1. **Authentication Methods**
    - Username/password with Argon2id hashing
-   - MFA support (TOTP, recovery codes)
+   - MFA (TOTP, recovery codes): library and procedures only, not enforced at login (SONNY-6604)
    - Session token management with rotation (`src/security/authn.zig`)
    - API Keys for programmatic access (`src/security/api_keys.zig`)
    - mTLS certificate-based authentication (`src/security/mtls_provider.zig`)

@@ -593,6 +593,9 @@ pub const AuthGraphManager = struct {
         // SONNY-6341: FLE role grant records
         try self.verifyFleRoleGrantRecords(hmac_key, &hmac_list);
 
+        // SONNY-6608: MFA recovery-code records
+        try self.verifyMfaRecoveryRecords(hmac_key, &hmac_list);
+
         // SONNY-6352: the records read must be the records counted. A
         // mismatch (the maps changed between the count and the reads) fails
         // the verification; it reached `computeChainHashChecked`'s
@@ -885,6 +888,9 @@ pub const AuthGraphManager = struct {
 
         // SONNY-6341: FLE role grant records
         try self.sealFleRoleGrantRecords(hmac_key, &hmac_list);
+
+        // SONNY-6608: MFA recovery-code records
+        try self.sealMfaRecoveryRecords(hmac_key, &hmac_list);
 
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
@@ -1264,7 +1270,8 @@ pub const AuthGraphManager = struct {
             @as(u64, self.storage.permission_cache.count()) +
             @as(u64, self.storage.policy_cache.count()) +
             @as(u64, self.storage.graph_grant_nodes.count()) +
-            @as(u64, self.storage.fle_role_grant_nodes.count());
+            @as(u64, self.storage.fle_role_grant_nodes.count()) +
+            @as(u64, self.storage.mfa_recovery_nodes.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
@@ -1931,6 +1938,53 @@ pub const AuthGraphManager = struct {
         if (try self.storage.revokeAllFleRoleGrants(user_id) > 0) try self.sealChain(hmac_key);
     }
 
+    // CANARY: REQ=REQ-SONNY-6608-MFA-WRITE-THROUGH; FEATURE="MFA authentication"; ASPECT=EnrollmentWriteThrough; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6608: `geode.auth.mfa_setup`'s write-through: `username`'s TOTP
+    /// secret (the user record's `mfa_secret`) and its recovery codes as
+    /// SHA-256 digests (`MfaRecoveryCodes`), with MFA turned off until a code
+    /// verifies against the new secret (`setMfaEnabledWriteThrough`). All
+    /// of it or none of it. The secret gets the protection every user record
+    /// field gets: integrity (the HMAC chain) and, with GEODE_TDE_KEY set,
+    /// page encryption at rest; there is no field-level encryption.
+    pub fn enrollMfaWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, secret_base32: []const u8, digests: []const [32]u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        const old_digests = try self.storage.mfaRecoveryDigests(self.allocator, uid);
+        defer if (old_digests) |d| self.allocator.free(d);
+        // Undone in reverse: the digests first, then the record (which seals).
+        errdefer self.restoreUserRecord(hmac_key, old);
+        errdefer self.storage.setMfaRecoveryDigests(uid, old_digests orelse @as([]const [32]u8, &.{})) catch |err| logRestoreFailure("MFA recovery codes", err);
+        try self.storage.updateUser(uid, null, null, null, false, secret_base32);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.storage.setMfaRecoveryDigests(uid, digests);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "MFA_ENROLL", uid, username, null);
+    }
+
+    /// SONNY-6608: `geode.auth.mfa_enable` / `mfa_disable`'s write-through:
+    /// the user's stored `mfa_enabled`. Turning it on needs a stored secret
+    /// (`error.MfaNotEnrolled`). All of it or none of it.
+    pub fn setMfaEnabledWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, enabled: bool) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        if (enabled and old.getMFASecret() == null) return error.MfaNotEnrolled;
+        errdefer self.restoreUserRecord(hmac_key, old);
+        try self.storage.updateUser(uid, null, null, null, enabled, null);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, if (enabled) "MFA_ENABLE" else "MFA_DISABLE", uid, username, null);
+    }
+
+    /// SONNY-6608: `user_id`'s stored MFA recovery-code digests (the caller
+    /// frees them), or null.
+    pub fn mfaRecoveryDigests(self: *Self, allocator: std.mem.Allocator, user_id: u64) !?[][32]u8 {
+        return self.storage.mfaRecoveryDigests(allocator, user_id);
+    }
+
     /// SONNY-6341: every stored FLE role grant (roles borrow from the store).
     pub fn listFleRoleGrants(self: *Self, allocator: std.mem.Allocator) ![]UserStorageBackend.FleRoleGrantRecord {
         return self.storage.listFleRoleGrants(allocator);
@@ -2312,6 +2366,36 @@ pub const AuthGraphManager = struct {
         }
     }
 
+    // -- MfaRecoveryCodes HMAC chain support (SONNY-6608) --
+
+    fn sealMfaRecoveryRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.mfa_recovery_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |uid| {
+            const node_id = self.storage.mfa_recovery_nodes.get(uid) orelse continue;
+            const computed = computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyMfaRecoveryRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.mfa_recovery_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
     // -- FleRoleGrant HMAC chain support (SONNY-6341) --
 
     fn sealFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -2566,6 +2650,24 @@ fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.Gr
         .{ .key = "user_id", .value = uid_str },
     };
 
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
+/// SONNY-6608: the HMAC of a MfaRecoveryCodes node, from its stored fields.
+fn computeMfaRecoveryHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) [32]u8 {
+    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else -1 else -1;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "-1";
+    const digests = if (store.getNodeProperty(node_id, "digests")) |v| if (v == .String) v.String else "" else "";
+    const created_val = if (store.getNodeProperty(node_id, "created_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    var created_buf: [20]u8 = undefined;
+    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{created_val}) catch "0";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "created_at", .value = created_str },
+        .{ .key = "digests", .value = digests },
+        .{ .key = "kind", .value = "MfaRecoveryCodes" },
+        .{ .key = "user_id", .value = uid_str },
+    };
     return computeRecordHmacChecked(hmac_key, &props);
 }
 

@@ -1321,6 +1321,15 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
     };
     if (fle_loaded > 0) log.info("Auth DDL startup: hydrated FLE role grants", &.{Attr.int("count", @intCast(fle_loaded))});
 
+    // 4c. SONNY-6608: MFA enrollments and the MFA on/off state, stored and
+    // loaded (every one, or startup fails).
+    auth_dispatch.setMfaPersistCallbacks(auth_startup_hydration.mfaPersistCallbacks(agm));
+    const mfa_loaded = auth_startup_hydration.hydrateMfaEnrollments(allocator, agm) catch |err| {
+        log.err("Auth DDL startup: the MFA enrollments could not be loaded; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+    if (mfa_loaded > 0) log.info("Auth DDL startup: hydrated MFA enrollments", &.{Attr.int("count", @intCast(mfa_loaded))});
+
     // 5. Per-graph grant check function for execution.zig fallback path.
     geode.execution.graph_grant_check_fn = &graphGrantCheck;
 

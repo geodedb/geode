@@ -3953,6 +3953,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // Deep-copy result to prevent use-after-free when AST is freed
                     // (gRPC streaming builds data pages after handleExecute returns)
+                    // SONNY-6602: `allocator` is not request-scoped. grpc_zig
+                    // calls every handler with `GrpcServer.allocator`
+                    // (server.zig, `handler.handler_fn(.., self.allocator)`),
+                    // the allocator `GeodeGrpcServer.init` passed it, which is
+                    // also the SessionStore's and so `state.allocator`: the
+                    // process allocator `geode serve` hands in (main.zig). The
+                    // retained result is freed by `resetResult` with the
+                    // allocator that made it.
                     var duped = try execution.duplicateResult(allocator, exec_result);
                     // SONNY-3385: the stored result outlives this request, and
                     // the nodes and relationships it holds may live in the

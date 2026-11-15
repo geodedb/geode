@@ -159,6 +159,25 @@ fails with 55000 (`mfa_not_enrolled`), a code that does not verify with
 28000 (`invalid token`), and a user locked out after five failed
 verifications with 53400. They answered 00000 with a status row
 (`rate_limited`, `mfa_not_enrolled`, `invalid token`, or an `error` column).
+A `mfa_verify` whose attempt record cannot be made (out of memory) fails
+with 53000 without checking the code (SONNY-6602; it was checked and not
+counted toward the lockout).
+
+MFA is not enforced at login (SONNY-6602; story SONNY-6604): HELLO never
+asks for a TOTP code or a recovery code. `mfa_setup` (every shape:
+`mfa_secret`, `recovery_codes`; or `provisioning_uri`, `secret` with
+`show-uri`) and `mfa_enable` (`status`, `username`) answer an extra last
+column, `warning`, that says so; no procedure redeems the recovery codes
+`mfa_setup` issues.
+
+`mfa_setup` stores the enrollment in `__geode_security` (the secret in the
+user record, the recovery codes as SHA-256 digests, MFA off until a code
+verifies), and `mfa_enable` / `mfa_disable` set the user's stored
+`mfa_enabled`; the server loads the enrollments back at startup and
+`DROP USER` removes them (SONNY-6608). A change that cannot be stored is
+refused with 58030 and not applied. See
+[USER_AUTH.md](USER_AUTH.md#mfa-is-not-enforced-at-login) for how the
+secret is protected at rest.
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
@@ -305,6 +324,11 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
   `GraphGrant` node `(user_id, graph_name, action)` is created/removed in
   `__geode_security`, and the in-memory `GraphRBACPolicy` is updated immediately.
   See [Per-graph grant semantics](#per-graph-grant-semantics).
+- **`CALL geode.auth.mfa_setup`** → the user record's `mfa_secret` is set and
+  `mfa_enabled` cleared, and a `MfaRecoveryCodes` node `(user_id, digests)`
+  holds the recovery codes as SHA-256 digests (SONNY-6608).
+  **`mfa_enable`** / **`mfa_disable`** → `mfa_enabled` on the `User` node.
+  Both bump `auth_version`. `DROP USER` removes the `MfaRecoveryCodes` node.
 
 ### When a save fails (SONNY-1333)
 

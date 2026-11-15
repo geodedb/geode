@@ -235,7 +235,10 @@ const MfaAttemptRecord = struct {
     lockout_until_ms: i64,
 };
 
-pub var g_mfa_attempts: std.StringHashMap(MfaAttemptRecord) = undefined;
+// SONNY-6602: unmanaged, so the allocations of a new record can be routed
+// through `mfaAttemptAllocator` (the test-only fault hook); everything is
+// freed with `g_mfa_store_alloc`.
+pub var g_mfa_attempts: std.StringHashMapUnmanaged(MfaAttemptRecord) = .empty;
 pub var g_mfa_attempts_init: bool = false;
 
 // CANARY: REQ=REQ-SONNY-6600-MFA-STORE-LIFETIME; FEATURE="MFA authentication"; ASPECT=StoreOwnsItsMemory; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
@@ -255,9 +258,33 @@ fn ensureMfaStoreInit() void {
         g_mfa_store_init = true;
     }
     if (!g_mfa_attempts_init) {
-        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(g_mfa_store_alloc);
+        g_mfa_attempts = .empty;
         g_mfa_attempts_init = true;
     }
+}
+
+/// SONNY-6602 test-only fault hook: the next `n` attempt records
+/// `reserveMfaAttemptRecord` makes are made with an allocator that fails
+/// every allocation, as under memory pressure. It can only make a
+/// verification be refused, never verify one. Not compiled outside tests.
+pub const mfa_attempt_fault_hook_available = @import("builtin").is_test;
+var mfa_attempt_alloc_faults = std.atomic.Value(u32).init(0);
+
+pub fn injectMfaAttemptAllocFailures(n: u32) error{FaultHookUnavailable}!void {
+    if (comptime !mfa_attempt_fault_hook_available) return error.FaultHookUnavailable;
+    mfa_attempt_alloc_faults.store(n, .release);
+}
+
+/// The allocator a new attempt record is made with: the store's, or (fault
+/// hook armed) one that fails.
+fn mfaAttemptAllocator() std.mem.Allocator {
+    if (comptime mfa_attempt_fault_hook_available) {
+        var n = mfa_attempt_alloc_faults.load(.acquire);
+        while (n > 0) {
+            n = mfa_attempt_alloc_faults.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return std.mem.Allocator.failing;
+        }
+    }
+    return g_mfa_store_alloc;
 }
 
 fn freeMfaCredential(key: []const u8, cred: MfaCredential) void {
@@ -282,22 +309,23 @@ pub fn deinitMfaStore() void {
     if (g_mfa_attempts_init) {
         var it = g_mfa_attempts.keyIterator();
         while (it.next()) |k| g_mfa_store_alloc.free(k.*);
-        g_mfa_attempts.deinit();
+        g_mfa_attempts.deinit(g_mfa_store_alloc);
+        g_mfa_attempts = .empty;
         g_mfa_attempts_init = false;
     }
 }
 
-/// Store MFA credentials for a user, replacing any existing ones.
-fn storeMfaCredential(username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
+/// Store MFA credentials for a user, replacing any existing ones. The
+/// recovery codes arrive as their digests (`mfa.hashRecoveryCode`).
+fn storeMfaCredential(username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) !void {
     const a = g_mfa_store_alloc;
     const secret_copy = try a.dupe(u8, secret_base32);
     errdefer {
         crypto_backend.secureZero(secret_copy);
         a.free(secret_copy);
     }
-    const digests = try a.alloc([32]u8, scratch_codes.len);
+    const digests = try a.dupe([32]u8, recovery_digests);
     errdefer a.free(digests);
-    for (scratch_codes, digests) |code, *d| d.* = mfa_mod.hashRecoveryCode(code);
     const key_copy = try a.dupe(u8, username);
     errdefer a.free(key_copy);
 
@@ -311,6 +339,47 @@ fn storeMfaCredential(username: []const u8, secret_base32: []const u8, scratch_c
         .secret_base32 = secret_copy,
         .recovery_codes = digests,
     });
+}
+
+// CANARY: REQ=REQ-SONNY-6608-MFA-PERSIST-CALLBACKS; FEATURE="MFA authentication"; ASPECT=EnrollmentWriteThrough; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6608: how the mfa_* procedures store what they change in
+/// `__geode_security` (`auth_startup_hydration.mfaPersistCallbacks`,
+/// installed by `server_init.wireAuthDDLCallbacks`). Each is all or nothing;
+/// an error means nothing was changed, and the procedure is refused. Unset
+/// (no auth graph, as in unit tests) the procedures change process memory
+/// only, as grants do.
+pub const MfaPersistCallbacks = struct {
+    ctx: ?*anyopaque = null,
+    /// Store `username`'s enrollment (secret, recovery-code digests) with
+    /// MFA turned off until a code verifies against it.
+    enroll_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) anyerror!void = null,
+    /// Set `username`'s stored `mfa_enabled`.
+    set_enabled_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, enabled: bool) anyerror!void = null,
+};
+
+var g_mfa_persist: MfaPersistCallbacks = .{};
+
+pub fn setMfaPersistCallbacks(cb: MfaPersistCallbacks) void {
+    g_mfa_persist = cb;
+}
+
+/// SONNY-6608: load a stored enrollment into the MFA store (startup,
+/// `auth_startup_hydration.hydrateMfaEnrollments`).
+pub fn loadMfaEnrollment(username: []const u8, secret_base32: []const u8, recovery_digests: []const [32]u8) !void {
+    try storeMfaCredential(username, secret_base32, recovery_digests);
+}
+
+/// SONNY-6608: forget `username`'s enrollment and attempt record (DROP
+/// USER): a user made again under the name is not enrolled.
+pub fn forgetMfaEnrollment(username: []const u8) void {
+    g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (g_mfa_store_init) {
+        if (g_mfa_store.fetchRemove(username)) |kv| freeMfaCredential(kv.key, kv.value);
+    }
+    if (g_mfa_attempts_init) {
+        if (g_mfa_attempts.fetchRemove(username)) |kv| g_mfa_store_alloc.free(kv.key);
+    }
 }
 
 // CANARY: REQ=REQ-SONNY-6600-MFA-SECRET-COPY; FEATURE="MFA authentication"; ASPECT=SecretCopiedUnderLock; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
@@ -338,46 +407,62 @@ fn checkMfaRateLimit(username: []const u8, now_ms: i64) bool {
     return now_ms < rec.lockout_until_ms;
 }
 
-/// Record a failed MFA attempt; lock out after MFA_MAX_ATTEMPTS.
-fn recordMfaFailure(username: []const u8, now_ms: i64) void {
-    const allocator = g_mfa_store_alloc;
+// CANARY: REQ=REQ-SONNY-6602-MFA-LIMITER-FAIL-CLOSED; FEATURE="MFA authentication"; ASPECT=AttemptRecordBeforeCheck; STATUS=TESTED; TEST=tests/test_sonny6602_mfa.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6602: make `username`'s attempt record, if it has none, before its
+/// code is checked. A record that cannot be made refuses the verification
+/// (AuthUnavailable, 53000): a check that could not be counted toward the
+/// lockout is not run. Counting the failure afterwards (`recordMfaFailure`)
+/// then allocates nothing. The record was made after a failed check, and an
+/// allocation failure there was logged and the attempt left uncounted: the
+/// limiter failed open. Caller holds `g_mfa_store_mu`.
+fn reserveMfaAttemptRecord(username: []const u8) error{AuthUnavailable}!void {
     ensureMfaStoreInit();
-    const existing = g_mfa_attempts.get(username);
-    if (existing) |rec| {
-        const new_count = rec.fail_count + 1;
-        const lockout = if (new_count >= MFA_MAX_ATTEMPTS) now_ms + MFA_LOCKOUT_MS else @as(i64, 0);
-        g_mfa_attempts.put(username, .{
-            .fail_count = new_count,
-            .last_attempt_ms = now_ms,
-            .lockout_until_ms = lockout,
-        }) catch {
-            // error-policy: B — losing this update fails the MFA rate limiter
-            // OPEN (attacker gets extra attempts); must be operator-visible.
-            log.warn("mfa rate-limit record update failed (fail-open)", &.{Attr.string("user", username)});
-        };
-    } else {
-        const key = allocator.dupe(u8, username) catch {
-            // error-policy: B — same fail-open consequence as above.
-            log.warn("mfa rate-limit record alloc failed (fail-open)", &.{Attr.string("user", username)});
-            return;
-        };
-        g_mfa_attempts.put(key, .{
-            .fail_count = 1,
-            .last_attempt_ms = now_ms,
-            .lockout_until_ms = 0,
-        }) catch {
-            // error-policy: B — same fail-open consequence as above.
-            allocator.free(key);
-            log.warn("mfa rate-limit record insert failed (fail-open)", &.{Attr.string("user", username)});
-        };
-    }
+    if (g_mfa_attempts.contains(username)) return;
+    const a = mfaAttemptAllocator();
+    const key = a.dupe(u8, username) catch return mfaAttemptRecordUnavailable(username);
+    // A key from the failing allocator is never made, so a key always
+    // belongs to `g_mfa_store_alloc`.
+    g_mfa_attempts.put(a, key, .{
+        .fail_count = 0,
+        .last_attempt_ms = 0,
+        .lockout_until_ms = 0,
+    }) catch {
+        g_mfa_store_alloc.free(key);
+        return mfaAttemptRecordUnavailable(username);
+    };
 }
 
-/// Clear rate limit record on successful verification.
+fn mfaAttemptRecordUnavailable(username: []const u8) error{AuthUnavailable} {
+    log.err("geode.auth.mfa_verify refused: the MFA attempt record could not be made, so the attempt could not be counted toward the lockout", &.{Attr.string("user", username)});
+    return error.AuthUnavailable;
+}
+
+/// Record a failed MFA attempt; lock out after MFA_MAX_ATTEMPTS. The record
+/// is the one `reserveMfaAttemptRecord` made before the check (SONNY-6602).
+/// Caller holds `g_mfa_store_mu`.
+fn recordMfaFailure(username: []const u8, now_ms: i64) error{AuthUnavailable}!void {
+    // The record is gone only if the store was torn down mid-check: make it
+    // again, or refuse.
+    try reserveMfaAttemptRecord(username);
+    const rec = g_mfa_attempts.getPtr(username).?;
+    const new_count = rec.fail_count +| 1;
+    rec.* = .{
+        .fail_count = new_count,
+        .last_attempt_ms = now_ms,
+        .lockout_until_ms = if (new_count >= MFA_MAX_ATTEMPTS) now_ms + MFA_LOCKOUT_MS else 0,
+    };
+}
+
+/// Reset the attempt record on successful verification. SONNY-6602: the
+/// record is kept (reset), so the user's next failure is counted without an
+/// allocation.
 fn clearMfaRateLimit(username: []const u8) void {
     if (!g_mfa_attempts_init) return;
-    // SONNY-6600: free the record's key (it leaked).
-    if (g_mfa_attempts.fetchRemove(username)) |kv| g_mfa_store_alloc.free(kv.key);
+    if (g_mfa_attempts.getPtr(username)) |rec| rec.* = .{
+        .fail_count = 0,
+        .last_attempt_ms = 0,
+        .lockout_until_ms = 0,
+    };
 }
 
 /// Build a space-separated string from recovery code slices.
@@ -748,6 +833,10 @@ fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         // (user_management.UnsavedRestriction). It was reported deleted.
         if (err == error.UserNotPersisted) return err;
     };
+    // SONNY-6608: the user's MFA enrollment goes with it (the stored one
+    // with the user record); a user made again under the name is not
+    // enrolled.
+    forgetMfaEnrollment(username);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");
@@ -1084,6 +1173,15 @@ fn handleUserResetPassword(allocator: std.mem.Allocator, _: []const u8, call_stm
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
+// CANARY: REQ=REQ-SONNY-6602-MFA-NOT-ENFORCED-WARNING; FEATURE="MFA authentication"; ASPECT=ProcedureWarning; STATUS=TESTED; TEST=tests/test_sonny6602_mfa.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6602: MFA is not enforced at login. HELLO (QUIC and gRPC) never
+/// asks for a TOTP code or a recovery code, and nothing redeems the recovery
+/// codes mfa_setup issues; wiring MFA into login is SONNY-6604. mfa_setup
+/// and mfa_enable answer this in a `warning` column, next to the secret and
+/// the codes, so no operator takes an enrollment for a protected login.
+pub const mfa_setup_not_enforced_warning = "MFA is not enforced at login yet (SONNY-6604): HELLO does not ask for a TOTP code or a recovery code, so this enrollment protects no login, and no procedure redeems these recovery codes. geode.auth.mfa_verify only checks a code when it is called.";
+pub const mfa_enable_not_enforced_warning = "MFA is not enforced at login yet (SONNY-6604): the code was checked against the user's TOTP secret, but HELLO does not ask for one, so the user's logins are not protected by MFA.";
+
 fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.mfa_setup(username, opts) -> MFA secret, recovery codes, provisioning URI
     var username: []const u8 = "";
@@ -1104,48 +1202,76 @@ fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt
     };
     defer mfa_mod.freeEnrollment(allocator, &enrollment);
 
+    const digests = try allocator.alloc([32]u8, enrollment.scratch_codes.len);
+    defer allocator.free(digests);
+    for (enrollment.scratch_codes, digests) |code, *d| d.* = mfa_mod.hashRecoveryCode(code);
+
+    // SONNY-6608: stored first (secret, recovery-code digests, MFA off until
+    // a code verifies), then the in-memory store; a store that fails refuses
+    // the enrollment and changes nothing.
+    if (g_mfa_persist.enroll_fn) |f| {
+        f(g_mfa_persist.ctx, username, enrollment.secret_base32, digests) catch |err| {
+            log.err("geode.auth.mfa_setup could not store the enrollment in the security graph; refused", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            return error.MfaChangeNotPersisted;
+        };
+    }
     // Store per-user secret and recovery codes for later TOTP verification
-    storeMfaCredential(username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
+    storeMfaCredential(username, enrollment.secret_base32, digests) catch |err| {
         log.warn("geode.auth.mfa_setup could not store the credential", &.{Attr.string("error", @errorName(err))});
         return err;
     };
 
     const secret = enrollment.secret_base32;
     const recovery_str = try buildRecoveryStr(allocator, enrollment.scratch_codes);
+    defer allocator.free(recovery_str);
     const show_uri = std.mem.indexOf(u8, opts, "show-uri") != null;
-    const show_recovery = std.mem.indexOf(u8, opts, "show-recovery") != null or std.mem.indexOf(u8, opts, "regenerate") != null;
     if (show_uri) {
-        const columns = try allocator.alloc([]const u8, 2);
-        columns[0] = try allocator.dupe(u8, "provisioning_uri");
-        columns[1] = try allocator.dupe(u8, "secret");
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try allocator.dupe(u8, enrollment.provisioning_uri) };
-        row[1] = Value{ .Str = try allocator.dupe(u8, secret) };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return ownedRow(allocator, &.{ "provisioning_uri", "secret", "warning" }, &.{ enrollment.provisioning_uri, secret, mfa_setup_not_enforced_warning });
     }
-    if (show_recovery) {
-        const columns = try allocator.alloc([]const u8, 2);
-        columns[0] = try allocator.dupe(u8, "mfa_secret");
-        columns[1] = try allocator.dupe(u8, "recovery_codes");
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-        row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // Default and show-recovery / regenerate: the secret and recovery codes.
+    const secret_text = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret});
+    defer allocator.free(secret_text);
+    const codes_text = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str});
+    defer allocator.free(codes_text);
+    return ownedRow(allocator, &.{ "mfa_secret", "recovery_codes", "warning" }, &.{ secret_text, codes_text, mfa_setup_not_enforced_warning });
+}
+
+// CANARY: REQ=REQ-SONNY-6608-MFA-RESULT-OWNERSHIP; FEATURE="MFA authentication"; ASPECT=ResultOwnsValues; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6608: a one-row result that owns everything in it (columns and
+/// values copied, `owns_value_memory` set), so the result's deinit frees it.
+/// The mfa_* results did not own their strings: over gRPC each call leaked
+/// them, and mfa_setup its recovery-code buffer.
+fn ownedRow(allocator: std.mem.Allocator, names: []const []const u8, values: []const []const u8) !ExecutionResult {
+    std.debug.assert(names.len == values.len);
+    var result: ExecutionResult = .{
+        .columns = try allocator.alloc([]const u8, names.len),
+        .rows = &.{},
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+    var made_cols: usize = 0;
+    errdefer {
+        for (result.columns[0..made_cols]) |c| allocator.free(c);
+        allocator.free(result.columns);
     }
-    // Default: show secret and recovery codes
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "mfa_secret");
-    columns[1] = try allocator.dupe(u8, "recovery_codes");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-    row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
+    for (names, 0..) |n, i| {
+        result.columns[i] = try allocator.dupe(u8, n);
+        made_cols = i + 1;
+    }
+    const row = try allocator.alloc(Value, values.len);
+    var made_vals: usize = 0;
+    errdefer {
+        for (row[0..made_vals]) |v| allocator.free(v.Str);
+        allocator.free(row);
+    }
+    for (values, 0..) |v, i| {
+        row[i] = .{ .Str = try allocator.dupe(u8, v) };
+        made_vals = i + 1;
+    }
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    result.rows = rows;
+    return result;
 }
 
 fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
@@ -1174,6 +1300,9 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
         defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
         ensureMfaStoreInit();
         if (checkMfaRateLimit(username, now_ms)) return error.MfaRateLimited;
+        // SONNY-6602: the record this attempt is counted in exists before
+        // the code is checked, or the attempt is refused.
+        try reserveMfaAttemptRecord(username);
     }
 
     // Look up the user's stored TOTP secret
@@ -1213,7 +1342,7 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
         if (is_valid) {
             clearMfaRateLimit(username);
         } else {
-            recordMfaFailure(username, now_ms);
+            try recordMfaFailure(username, now_ms);
         }
     }
 
@@ -1816,18 +1945,21 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
         // need to disable MFA for recovery without a valid TOTP).
         if (!isSixDigitCode(code)) return error.InvalidArgs;
     }
-    const columns = try allocator.alloc([]const u8, 2);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "username");
-    const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = if (is_enable)
-        try std.fmt.allocPrint(allocator, "MFA enabled for {s}", .{username})
-    else
-        try std.fmt.allocPrint(allocator, "MFA disabled for {s}", .{username}) };
-    row[1] = Value{ .Str = username };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // SONNY-6608: the change is stored (the user's `mfa_enabled`); a store
+    // that fails refuses it. It answered "MFA enabled / disabled" and
+    // changed nothing.
+    if (g_mfa_persist.set_enabled_fn) |f| {
+        f(g_mfa_persist.ctx, username, is_enable) catch |err| {
+            log.err("geode.auth.mfa_enable/mfa_disable could not store the change in the security graph; refused", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            if (err == error.MfaNotEnrolled) return err;
+            return error.MfaChangeNotPersisted;
+        };
+    }
+    const status = try std.fmt.allocPrint(allocator, "MFA {s} for {s}", .{ if (is_enable) "enabled" else "disabled", username });
+    defer allocator.free(status);
+    // SONNY-6602: enable answers the not-enforced warning as well.
+    if (is_enable) return ownedRow(allocator, &.{ "status", "username", "warning" }, &.{ status, username, mfa_enable_not_enforced_warning });
+    return ownedRow(allocator, &.{ "status", "username" }, &.{ status, username });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T17:52:59.76944982Z",
+  "generated_at": "2026-11-15T18:10:07.887637394Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79530,6 +79530,83 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6602-MFA-CLI-HONESTY",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "OfflineCliWarning",
+          "status": "TESTED",
+          "files": [
+            "src/cli/user_mgmt_cli.zig",
+            "tests/test_sonny6602_mfa_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6602_mfa_cli.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6602-MFA-HONESTY",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6602_mfa.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6602_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6602-MFA-LIMITER-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "AttemptRecordBeforeCheck",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6602_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6602-MFA-NOT-ENFORCED-WARNING",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "ProcedureWarning",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6602_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT",
       "features": [
         {
@@ -79645,6 +79722,158 @@
           ],
           "benches": [],
           "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-CLI-ENROLL",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "OfflineEnrollStored",
+          "status": "TESTED",
+          "files": [
+            "src/cli/user_mgmt_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_restart.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-HYDRATION",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "StartupLoadsEnrollments",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_startup_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-PERSIST",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-PERSIST-CALLBACKS",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "EnrollmentWriteThrough",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-RECOVERY-STORE",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "DurableRecoveryDigests",
+          "status": "TESTED",
+          "files": [
+            "src/storage/user_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-RESTART",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6608_mfa_restart.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_restart.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-RESULT-OWNERSHIP",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "ResultOwnsValues",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6608-MFA-WRITE-THROUGH",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "EnrollmentWriteThrough",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6608_mfa_persist.zig"
+          ],
+          "benches": [],
+          "owner": "security",
           "updated": "2026-11-15"
         }
       ]
@@ -84741,7 +84970,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4199
+      "TESTED": 4211
     },
     "by_aspect": {
       "2PC": 3,
@@ -84895,6 +85124,7 @@
       "AtomicNodeIdReservation": 1,
       "AtomicReadWrite": 1,
       "AtomicUpdatePolicy": 1,
+      "AttemptRecordBeforeCheck": 1,
       "AttributeEvaluation": 1,
       "AttributePolicyIdentifiers": 1,
       "AttributePolicyOomCleanup": 1,
@@ -85687,6 +85917,7 @@
       "DurableFleRoleGrants": 1,
       "DurableOrError": 1,
       "DurablePersistTestSuite": 1,
+      "DurableRecoveryDigests": 1,
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
       "DurationIsoWriter": 1,
@@ -85774,6 +86005,7 @@
       "EngineStateOnly": 1,
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
+      "EnrollmentWriteThrough": 2,
       "Entry": 1,
       "EntryPoint": 1,
       "EntryPointScratch": 1,
@@ -86925,7 +87157,9 @@
       "Offline": 1,
       "OfflineAuthManagement": 1,
       "OfflineChangeThenCrash": 1,
+      "OfflineCliWarning": 1,
       "OfflineCliWriter": 1,
+      "OfflineEnrollStored": 1,
       "OfflineSuperuserKeepsAdmin": 1,
       "OffsetBeforeLimit": 1,
       "OldPasswordAlwaysChecked": 1,
@@ -87286,6 +87520,7 @@
       "PrivateUserTmpDir": 1,
       "ProcedureGqlstatus": 1,
       "ProcedureGraphDeny": 1,
+      "ProcedureWarning": 1,
       "ProcessEnvironment": 1,
       "ProcessFlag": 1,
       "ProcessLifetimeIndexManager": 1,
@@ -87555,7 +87790,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 369,
+      "Regression": 372,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -87647,6 +87882,7 @@
       "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultBuilder": 1,
       "ResultGuard": 1,
+      "ResultOwnsValues": 1,
       "ResultSerialization": 1,
       "ResultStreaming": 1,
       "ResultUtils": 1,
@@ -88021,6 +88257,7 @@
       "StartupHydration": 2,
       "StartupHydrationFailsClosed": 1,
       "StartupLoad": 1,
+      "StartupLoadsEnrollments": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
       "StartupRefusal": 1,
