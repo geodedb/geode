@@ -10647,6 +10647,16 @@ pub fn build(b: *std.Build) void {
     const sonny6595_snap_step = b.step("test-sonny6595-fts-snapshot-restart", "Run SONNY-6595 item 4: a raft snapshot installed on a restarted node before any write rebuilds its fulltext indexes from the restored store (a node the snapshot restores under a tombstoned id is found again, one it drops is not)");
     sonny6595_snap_step.dependOn(&run_sonny6595_snap_tests.step);
 
+    // SONNY-6595 item 3: a DELETE with no MATCH is refused, and so is one in a
+    // CALL subquery (the context.bindings branch of executeDelete was unreachable).
+    const sonny6595_del_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_standalone_delete.zig"), .target = target, .optimize = optimize }) });
+    sonny6595_del_tests.root_module.addImport("geode", root_mod);
+    sonny6595_del_tests.root_module.link_libc = true;
+    const run_sonny6595_del_tests = b.addRunArtifact(sonny6595_del_tests);
+    shardDep(test_step, &run_sonny6595_del_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6595_del_step = b.step("test-sonny6595-standalone-delete", "Run SONNY-6595 item 3: a DELETE with no MATCH is refused (its variable is not in scope), and so is a DELETE in a CALL subquery inside MATCH ... CALL (the one statement context that carries bindings); nothing is deleted");
+    sonny6595_del_step.dependOn(&run_sonny6595_del_tests.step);
+
     // SONNY-6595 item 5: shard WALs drain after a crash restart (a real
     // server; intentionally red until graph-storage truncates the WAL it
     // replays, see docs/KNOWN_TEST_ISSUES.md).
