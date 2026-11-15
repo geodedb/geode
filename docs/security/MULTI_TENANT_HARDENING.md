@@ -348,6 +348,23 @@ dangling. The corrected semantics:
 > parent's children first and then fails on the parent leaves those children
 > dropped.
 
+> **Order and retry (SONNY-6567).** A cascade drop first **marks the tenant
+> as being dropped** (`active = false` in `geode.tenant.list` / `show`,
+> written to the registry file before anything is removed; no child tenant
+> can be created under it: `error.TenantDropping`), then drops each child
+> the same way, deletes the tenant's rows, removes it from the hierarchy,
+> and removes its registry record. **Every step's failure fails the drop**:
+> the registry's write of its file (it was logged and the drop reported
+> success, and the tenant came back at the next restart; `create` and
+> `set_quota` had the same defect and now fail and take the change back
+> too), the hierarchy removal, and a child's registry lookup. The drop does
+> **not** take part in the statement's undo: what it removed stays removed
+> (a failed drop used to roll a child's rows back after the child had left
+> the registry, orphaning them), and it is **refused inside an explicit
+> transaction** (`error.TenantDropInTransaction`). A tenant left marked by a
+> failed drop is still registered; re-run the drop (also after a restart,
+> which rebuilds the hierarchy from the registry) to finish it.
+
 `drop` returns a row with `tenant_id`, `dropped`, `nodes_deleted`,
 `edges_deleted`. Examples:
 

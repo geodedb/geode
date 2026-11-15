@@ -284,3 +284,18 @@ test "SONNY-6567 (4): a tenant drop whose statement allocations fail fails, cons
     defer user_mgmt.setAuthEnabled(true);
     try testing.expectEqual(@as(usize, 0), try sweep(.statement));
 }
+
+test "SONNY-6567 (4): no child tenant can be created under a tenant being dropped" {
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
+    user_mgmt.setAuthEnabled(false);
+    defer user_mgmt.setAuthEnabled(true);
+    var w: World = undefined;
+    try w.init();
+    defer w.deinit();
+    try w.reg.markDropping("acme");
+    try testing.expectError(error.TenantDropping, w.run(testing.allocator, "CALL geode.tenant.create('acme-late', 'acme')"));
+    try testing.expectEqual(@as(?bool, false), try onDisk(w.data_dir, "acme"));
+    try w.ok(testing.allocator, "CALL geode.tenant.drop('acme', true)");
+    try testing.expectEqual(@as(?bool, null), try onDisk(w.data_dir, "acme"));
+}

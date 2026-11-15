@@ -5037,6 +5037,8 @@ REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,SnapshotCopiesEvictedEdge
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,CheckedHydratedGetters,TESTED,src/graph_store.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-15
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6567_hydrated_getter_errors.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-14
 REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,Regression,TESTED,tests/test_sonny6567_raft_apply_hydration.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
+REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantLifecycle,DropFailsLoudlyRetryable,TESTED,src/execution/tenant_dispatch.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-15
+REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantRegistry,PersistOrRestore,TESTED,src/security/tenant_registry.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-15
 REQ-SONNY-6567-TENANT-DROP-FAILURES,TenantLifecycle,Regression,TESTED,tests/test_sonny6567_tenant_drop_failures.zig,tests/test_sonny6567_tenant_drop_failures.zig,,security,2026-11-14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

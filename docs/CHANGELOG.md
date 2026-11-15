@@ -2438,6 +2438,52 @@
 
 ### Fixed
 
+- **A node or edge body that cannot be read is an error, not "absent"; read
+  snapshots list evicted edges (SONNY-6567 item 2).** The hydrated getters
+  turned a failed rebuild of an evicted body (out of memory, an engine read
+  error) into null, the value that means "no such row", and their callers
+  skipped it: `CALL db.propertyKeys()` / `db.relationshipTypes()` answered
+  short lists, and an unreadable edge endpoint was taken for a hidden one.
+  New checked getters (`getNodePtrHydratedChecked`,
+  `getEdgePtrHydratedChecked`, `getEdgeHydratedChecked`) return the error;
+  `db.*`, the security-graph loaders and listings (`user_storage`), the
+  role resolver (an unreadable `HAS_ROLE` edge now resolves to no global
+  role instead of possibly an older, higher one), edge property writes (FLE
+  tenant identity) and the statement undo record use them and fail the
+  statement. Found on the way: rebuilding an evicted node or edge read a
+  tenant tag that could not be read as the `default` tenant's (fail open
+  across tenants; now an error); `hydrateEdgeCb` freed the label, graph name
+  and tenant twice on any error after the edge was built (heap corruption)
+  and leaked a property on failure; a key removed from a bounded cache and
+  inserted again left a stale FIFO entry that could evict the live key
+  during its own insert, so an existing body read as absent; and a read
+  snapshot (`QueryReadSession`, which serves top-level CALLs and server
+  reads) copied only the RESIDENT edges of a bounded edge cache (the
+  default, 1,000,000 entries), so every evicted edge was missing from its
+  answers with nothing failing at all. Regressions: `zig build
+  test-sonny6567-hydrated-getter-errors`, `test-bounded-node-cache`.
+
+- **A fulltext hit whose node cannot be read fails the search (SONNY-6567
+  item 3).** `geode.fts.search` / `phrase` / `proximity` skipped such a hit
+  as if the node were gone and reported the shorter result as complete. A
+  node deleted since indexing is still skipped and another tenant's node
+  still filtered. Regression: `zig build test-sonny6567-fts-unreadable-hit`.
+
+- **A tenant DROP that fails part-way fails, and can be retried (SONNY-6567
+  item 4).** **BREAKING:** `geode.tenant.drop` is refused inside an explicit
+  transaction (`TenantDropInTransaction`), and `geode.tenant.create` under a
+  tenant being dropped is refused (`TenantDropping`). A cascade drop now
+  marks the tenant (`active = false`, on disk) before removing anything,
+  and every failure fails it: the registry's own write of its file (logged
+  while the drop, and also `create` and `set_quota`, reported success; the
+  tenant came back at the next restart), the hierarchy removal (logged, or
+  `catch {}` for a child) and a child's registry lookup (`catch null`). The
+  drop no longer takes part in the statement's undo: a failed drop rolled a
+  child's rows back after the child had left the registry, orphaning them.
+  Regression: `zig build test-sonny6567-tenant-drop-failures` (registry and
+  statement allocation-failure sweeps, each followed by a restart and a
+  retry). See docs/security/MULTI_TENANT_HARDENING.md.
+
 - **gRPC client: every RPC on a connection gets its own HTTP/2 stream, and
   a pushed result is never cut short silently (SONNY-6567 item 1).** The
   client transport (`src/client/grpc_query_transport.zig`) sent every

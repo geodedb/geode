@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:00:22.73645173Z",
+  "generated_at": "2026-11-15T13:00:34.561222273Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79442,6 +79442,34 @@
       "features": [
         {
           "feature": "TenantLifecycle",
+          "aspect": "DropFailsLoudlyRetryable",
+          "status": "TESTED",
+          "files": [
+            "src/execution/tenant_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantRegistry",
+          "aspect": "PersistOrRestore",
+          "status": "TESTED",
+          "files": [
+            "src/security/tenant_registry.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TenantLifecycle",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -84559,7 +84587,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4193
+      "TESTED": 4195
     },
     "by_aspect": {
       "2PC": 3,
@@ -85451,6 +85479,7 @@
       "DropConstraintPersisted": 1,
       "DropDeleteFailure": 1,
       "DropDrainsWriters": 1,
+      "DropFailsLoudlyRetryable": 1,
       "DropGraph": 1,
       "DropGraphReset": 1,
       "DropInTransaction": 1,
@@ -86933,6 +86962,7 @@
       "PermissiveRestrictive": 1,
       "PermitGatedMutationRetry": 1,
       "PersistCallbacks": 1,
+      "PersistOrRestore": 1,
       "PersistPolicy": 1,
       "PersistRestriction": 1,
       "PersistSplitPhase": 1,
