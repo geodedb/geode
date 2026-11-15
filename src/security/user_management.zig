@@ -664,22 +664,66 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 /// takes does not tell an account with a legacy hash from one with an
 /// Argon2id hash (the BLAKE2b check alone takes microseconds).
 pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
+    // Use c_allocator for Argon2id scratch buffers in verification hot paths.
+    // This avoids untracked page allocator usage in production runtime paths.
+    return verifyPasswordWith(std.heap.c_allocator, password, stored_hash);
+}
+
+/// `verifyPassword` with `allocator` for the Argon2id work (SONNY-6598: the
+/// seam the allocation-failure tests and the fault hook below use).
+pub fn verifyPasswordWith(allocator: std.mem.Allocator, password: []const u8, stored_hash: []const u8) !bool {
     if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
-        if (hashPassword(std.heap.c_allocator, password)) |equaliser| {
-            std.heap.c_allocator.free(equaliser);
+        if (hashPassword(allocator, password)) |equaliser| {
+            allocator.free(equaliser);
         } else |_| {}
         return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash) catch |err| {
             if (err == error.FipsUnsupported) return err;
             return false;
         };
     }
-    // Use c_allocator for Argon2id scratch buffers in verification hot paths.
-    // This avoids untracked page allocator usage in production runtime paths.
-    const allocator = std.heap.c_allocator;
     return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch |err| {
         if (err == error.FipsUnsupported) return err;
         return false;
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6598-KDF-FAULT-HOOK; FEATURE="AuthOutcomeClassification"; ASPECT=TestOnlyKdfFaultHook; STATUS=TESTED; TEST=tests/test_sonny6598_kdf_error_hello.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: a fault hook for tests, compiled only into test and Debug
+/// builds (release builds are ReleaseSafe or ReleaseFast and have none of
+/// it). `injectKdfAllocFailures(username, n)`: the next `n` password
+/// verifications of `username` at login run Argon2id on an allocator that
+/// fails every allocation, as an allocation failure under memory pressure
+/// would. It can only make a verification fail, never succeed. A spawned
+/// Debug `geode serve` arms it from GEODE_TEST_AUTH_KDF_FAULT_USER and
+/// GEODE_TEST_AUTH_KDF_FAULT_COUNT. The name is written only while no
+/// fault is armed (the count is zero), so a reader that sees a count sees
+/// the name it was armed with.
+pub const kdf_fault_hook_available = @import("builtin").is_test or @import("builtin").mode == .Debug;
+var kdf_fault_user_buf: [64]u8 = undefined;
+var kdf_fault_user_len: usize = 0;
+var kdf_fault_remaining = std.atomic.Value(u32).init(0);
+
+pub fn injectKdfAllocFailures(username: []const u8, n: u32) error{ FaultHookUnavailable, NameTooLong }!void {
+    if (comptime !kdf_fault_hook_available) return error.FaultHookUnavailable;
+    if (username.len > kdf_fault_user_buf.len) return error.NameTooLong;
+    kdf_fault_remaining.store(0, .release);
+    @memcpy(kdf_fault_user_buf[0..username.len], username);
+    kdf_fault_user_len = username.len;
+    kdf_fault_remaining.store(n, .release);
+}
+
+/// The allocator `username`'s login verifies its password with: the C
+/// allocator, or (fault hook armed for `username`) one that fails.
+fn loginKdfAllocator(username: []const u8) std.mem.Allocator {
+    if (comptime kdf_fault_hook_available) {
+        var n = kdf_fault_remaining.load(.acquire);
+        if (n > 0 and std.mem.eql(u8, username, kdf_fault_user_buf[0..kdf_fault_user_len])) {
+            while (n > 0) {
+                n = kdf_fault_remaining.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return std.mem.Allocator.failing;
+            }
+        }
+    }
+    return std.heap.c_allocator;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-068; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlight; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-26
@@ -1103,15 +1147,16 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
             defer if (!published) finishAuthFlight(flight_key, flight, .{ .ok = false });
 
             // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
+            const kdf_allocator = loginKdfAllocator(username);
             if (!user_data.active) {
                 // Same timing-defense rationale: an inactive user should look the
                 // same as an active user with the wrong password.
-                _ = verifyPassword(password, user_data.password_hash) catch false;
+                _ = verifyPasswordWith(kdf_allocator, password, user_data.password_hash) catch false;
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 published = true;
                 return error.Unauthenticated;
             }
-            if (!(try verifyPassword(password, user_data.password_hash))) {
+            if (!(try verifyPasswordWith(kdf_allocator, password, user_data.password_hash))) {
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 published = true;
                 return error.Unauthenticated;
