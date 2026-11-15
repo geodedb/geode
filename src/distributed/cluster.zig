@@ -958,6 +958,15 @@ pub const ClusterCoordinator = struct {
         // before the raft node starts ticking.
         raft_apply.setGlobalStore(store);
         raft.apply_callback = &raft_apply.applyCallbackFn;
+        // SONNY-6622: a snapshot this node installs replaces the store's
+        // contents before any entry after it applies.
+        raft.snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
+        // SONNY-6631: the graphs an entry's apply writes are hydrated
+        // without `inner_mutex` when the entry enters the log, and here for
+        // the entries a restarted node replays (nothing received them in
+        // this process): the apply under `inner_mutex` then scans nothing.
+        raft.prehydrate_callback = &raft_apply.prehydrateForApply;
+        raft.prehydrateUnapplied();
 
         // GAP-0870: register the applied-membership view and the 2PC
         // coordinator so committed config_change / txn_prepare / txn_decide
@@ -2166,19 +2175,9 @@ pub const ClusterCoordinator = struct {
             }
         }
 
-        // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=FollowerPrehydratesBeforeStep; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
-        // SONNY-6567 (6b): a follower applies the entries an AppendEntries
-        // commits under the Raft node's `inner_mutex` (`handleMessage` ->
-        // `drainReady`); the first touch of a graph not hydrated yet then
-        // scanned it there (measured: the scan of a 20,000-node graph). Its
-        // graphs are hydrated here first, on the receiving thread, outside
-        // `inner_mutex` and without the persist, as the leader does before it
-        // proposes (`prehydrateForApply`). An entry not committed yet only
-        // builds the resident indexes any first read builds.
-        switch (frame_res.body) {
-            .append_entries => |ae| for (ae.entries) |entry| raft_apply.prehydrateForApply(entry.command),
-            else => {},
-        }
+        // SONNY-6567 (6b), SONNY-6631: `handleMessage` hydrates the graphs
+        // of the entries an AppendEntries carries before it takes
+        // `inner_mutex` (`RaftNode.prehydrate_callback`).
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{
                 Attr.string("error", @errorName(e)),
@@ -2617,9 +2616,10 @@ pub const ClusterCoordinator = struct {
                 // the node's `inner_mutex`, so no commit advances until this
                 // thread lets go. The outcome is unknown (Timeout); the entry
                 // comes after the drop, and its writes to the graph are
-                // refused when it applies.
+                // refused when it applies. SONNY-6622: likewise a thread
+                // holding the store lock while a snapshot restore waits for it.
                 .keep_waiting => {
-                    if (graph_storage_adapter.threadHoldsGraphAwaitedByReplicatedDrop()) return error.Timeout;
+                    if (graph_storage_adapter.threadMustYieldToReplicatedApply()) return error.Timeout;
                     compat_sleepNs(2 * std.time.ns_per_ms);
                 },
             }

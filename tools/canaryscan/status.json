@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T20:52:54.643412404Z",
+  "generated_at": "2026-11-15T22:16:38.315463901Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78579,20 +78579,6 @@
       "features": [
         {
           "feature": "DistributedCluster",
-          "aspect": "FollowerPrehydratesBeforeStep",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6567_raft_apply_hydration.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-15"
-        },
-        {
-          "feature": "DistributedCluster",
           "aspect": "RefusedReplicatedDropHaltsApply",
           "status": "TESTED",
           "files": [
@@ -80797,6 +80783,86 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "RestoreIntoStore",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "RestoreFromReadySnapshot",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "RaftSnapshotPayload",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_snapshot_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "StoreHolderYieldsToRestore",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6622-RAFT-V022",
+      "features": [
+        {
+          "feature": "Raft Consensus Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6622_raft_v022_adapt.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6623-MFA-ENABLE-LIMIT",
       "features": [
         {
@@ -80849,6 +80915,53 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyCriticalSectionMeasured",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "PrehydrateWhereEntriesEnterTheLog",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
           "updated": "2026-11-15"
         }
       ]
@@ -85945,7 +86058,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4263
+      "TESTED": 4270
     },
     "by_aspect": {
       "2PC": 3,
@@ -86061,6 +86174,7 @@
       "ApplyAbsoluteIdEdge": 1,
       "ApplyAfterAdvancePersist": 1,
       "ApplyConfigChange": 1,
+      "ApplyCriticalSectionMeasured": 1,
       "ApplyDelete": 1,
       "ApplyDeleteFailure": 1,
       "ApplyDoesNotRecreateDroppedGraph": 1,
@@ -87232,7 +87346,6 @@
       "FloatEncoding": 1,
       "FloatSupport": 1,
       "FlowControl": 1,
-      "FollowerPrehydratesBeforeStep": 1,
       "FollowerRemovedTextRebuild": 1,
       "ForAndSubqueryStages": 1,
       "ForkJoin": 1,
@@ -88502,6 +88615,7 @@
       "PredictiveVersionCheck": 1,
       "PrefixFilter": 1,
       "PrehydrateBeforePropose": 1,
+      "PrehydrateWhereEntriesEnterTheLog": 1,
       "PreparePhase": 1,
       "PrependUseGraph": 1,
       "Prevention": 1,
@@ -88695,6 +88809,7 @@
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
       "RaftSenderReconnectsInProcess": 1,
+      "RaftSnapshotPayload": 1,
       "RaftStorage": 1,
       "RaftStorageSealOpenRefuse": 1,
       "RandAlias": 1,
@@ -88789,7 +88904,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 392,
+      "Regression": 394,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -88878,6 +88993,8 @@
       "RestartApplyIdempotency": 1,
       "RestartSameMeaning": 1,
       "RestoreDataIntegrity": 1,
+      "RestoreFromReadySnapshot": 1,
+      "RestoreIntoStore": 1,
       "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultBuilder": 1,
       "ResultGuard": 1,
@@ -89327,6 +89444,7 @@
       "StoreConfig": 1,
       "StoreCount": 1,
       "StoreEnvelopeAuthenticated": 1,
+      "StoreHolderYieldsToRestore": 1,
       "StoreLockReentrancy": 1,
       "StoreOwnsItsMemory": 1,
       "StoreStats": 1,

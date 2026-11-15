@@ -22,6 +22,16 @@
 //       apply took ~3 s; it must stay under the in-process harness's
 //       election timeout (250 ms), and the entry must apply.
 //
+// SONNY-6631: (b) still scanned the graph under `inner_mutex` (220-262 ms,
+// at the 250 ms election timeout, flaky under load), and so did (c) for the
+// batch's own graph-of-entries. The Raft node now hydrates an entry's
+// graphs, a batch's included, before it takes `inner_mutex`
+// (`RaftNode.prehydrate_callback` = `raft_apply.prehydrateForApply`, on
+// receive, on replay and on propose). Both shapes run that sequence here:
+// prehydrate, then the apply, which is timed and must take at most 50 ms.
+// The creates use the graph's existing label: a label new to a graph costs
+// a durable label-dictionary write on first use, which is not hydration.
+//
 // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
 
 const std = @import("std");
@@ -36,6 +46,8 @@ const cr = geode.distributed.cluster_replication;
 const NODES: usize = 20_000;
 const HOLD_MS: i64 = 3_000;
 const ELECTION_TIMEOUT_MS: i64 = 250;
+/// SONNY-6631: the apply critical section's budget.
+const CRITICAL_SECTION_MS: i64 = 50;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -120,14 +132,17 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
     // (b) The follower / replay shape: the apply hydrates its own graph.
     try store.markPendingHydrationForTest("ga");
     {
-        const payload = try createCmd(allocator, "ga", "B6567");
+        const payload = try createCmd(allocator, "ga", "S6567");
         defer allocator.free(payload);
+        const cmd: geode.distributed.raft_consensus.Command = .{ .graph_mutation = .{ .graph = "ga", .mutation_type = .create, .data = payload, .txn_id = null } };
+        raft_apply.prehydrateForApply(cmd);
         const t0 = nowMs();
-        const out = try raft_apply.applyCommand(allocator, store, .{ .graph_mutation = .{ .graph = "ga", .mutation_type = .create, .data = payload, .txn_id = null } }, 1_000_001);
+        const out = try raft_apply.applyCommand(allocator, store, cmd, 1_000_001);
         allocator.free(out);
         const dt = nowMs() - t0;
-        std.debug.print("SONNY-6567 (6b) a follower's / replay's apply of a create on a {d}-node graph not hydrated yet held the apply (inner_mutex) for {d} ms\n", .{ NODES, dt });
-        try testing.expectEqual(@as(usize, 1), countLabel(store, "ga", "B6567"));
+        std.debug.print("SONNY-6567 (6b) a follower's / replay's apply of a create on a {d}-node graph not hydrated yet held the apply (inner_mutex) for {d} ms (budget {d} ms)\n", .{ NODES, dt, CRITICAL_SECTION_MS });
+        try testing.expectEqual(NODES + 1, countLabel(store, "ga", "S6567"));
+        try testing.expect(dt <= CRITICAL_SECTION_MS);
     }
 
     // (c) A batch for graph `ga` whose entry writes `gb`, `gb` not hydrated
@@ -136,26 +151,29 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
     var reader: Reader = .{ .graph = "gb" };
     const rt = try std.Thread.spawn(.{}, Reader.run, .{&reader});
     while (!reader.locked.load(.acquire)) sleepMs(1);
-    const t0 = nowMs();
+    var dt: i64 = 0;
     const applied = blk: {
-        const inner = try createCmd(allocator, "gb", "C6567");
+        const inner = try createCmd(allocator, "gb", "S6567");
         defer allocator.free(inner);
-        const inner2 = try createCmd(allocator, "gb", "C6567");
+        const inner2 = try createCmd(allocator, "gb", "S6567");
         defer allocator.free(inner2);
         const batch = try cr.serializeBatch(allocator, null, &.{
             .{ .mutation = .create, .graph = "gb", .data = inner },
             .{ .mutation = .create, .graph = "gb", .data = inner2 },
         });
         defer allocator.free(batch);
-        const out = raft_apply.applyCommand(allocator, store, .{ .graph_mutation = .{ .graph = "ga", .mutation_type = .create, .data = batch, .txn_id = null } }, 1_000_002);
+        const cmd: geode.distributed.raft_consensus.Command = .{ .graph_mutation = .{ .graph = "ga", .mutation_type = .create, .data = batch, .txn_id = null } };
+        raft_apply.prehydrateForApply(cmd);
+        const t0 = nowMs();
+        const out = raft_apply.applyCommand(allocator, store, cmd, 1_000_002);
+        dt = nowMs() - t0;
         break :blk out;
     };
-    const dt = nowMs() - t0;
     while (!reader.done.load(.acquire)) sleepMs(5);
     rt.join();
     const out = try applied;
     allocator.free(out);
-    std.debug.print("SONNY-6567 (6c) a batch entry writing another graph not hydrated yet, its lock held: the apply (inner_mutex) took {d} ms (election timeout {d} ms)\n", .{ dt, ELECTION_TIMEOUT_MS });
-    try testing.expectEqual(@as(usize, 2), countLabel(store, "gb", "C6567"));
-    try testing.expect(dt < ELECTION_TIMEOUT_MS);
+    std.debug.print("SONNY-6567 (6c) a batch entry writing another graph not hydrated yet, its lock held: the apply (inner_mutex) took {d} ms (budget {d} ms, election timeout {d} ms)\n", .{ dt, CRITICAL_SECTION_MS, ELECTION_TIMEOUT_MS });
+    try testing.expectEqual(NODES + 2, countLabel(store, "gb", "S6567"));
+    try testing.expect(dt <= CRITICAL_SECTION_MS);
 }

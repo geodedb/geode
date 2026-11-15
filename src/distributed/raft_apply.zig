@@ -35,6 +35,8 @@ const TxnCoordinator = @import("txn_coordinator.zig").TxnCoordinator;
 const graph_store_mod = @import("../graph_store.zig");
 const GraphStore = graph_store_mod.GraphStore;
 const cluster_replication = @import("cluster_replication.zig");
+const raft_snapshot_manager = @import("raft_snapshot_manager.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const fle_integration = @import("../fle_integration.zig");
 
 const logging = @import("logging");
@@ -283,12 +285,60 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anye
 /// checkpoint waits for); the next full checkpoint persists them. Ordering
 /// is unchanged: hydration builds resident indexes from the engine, as any
 /// first read of the graph does, and writes nothing.
+///
+/// SONNY-6631: also the graph of every entry of a statement batch (GBAT),
+/// inside a tenant wrapper or not: a batch for one graph may write
+/// another. The Raft node calls it (`RaftNode.prehydrate_callback`) for
+/// every entry a follower receives and every entry a restarted node
+/// replays.
 pub fn prehydrateForApply(cmd: Command) void {
     const store = g_store orelse return;
     switch (cmd) {
-        .graph_mutation => |gm| store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default"),
+        .graph_mutation => |gm| {
+            store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default");
+            const body = if (cluster_replication.isTenantPayload(gm.data))
+                (cluster_replication.splitTenant(gm.data) catch return).inner
+            else
+                gm.data;
+            if (!cluster_replication.isBatchPayload(body)) return;
+            // A malformed batch is refused by its apply; nothing to do here.
+            cluster_replication.forEachBatchGraph(body, store, hydrateBatchGraph) catch {};
+        },
         else => {},
     }
+}
+
+fn hydrateBatchGraph(store: *GraphStore, graph: []const u8) void {
+    store.ensureGraphHydratedForReplicatedApply(if (graph.len > 0) graph else "default");
+}
+
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6622: `RaftNode.snapshot_restore_callback`: replace the registered
+/// store's contents with the snapshot `data` (`raft_snapshot_manager.
+/// encodeRaftSnapshot` on the leader), under the Raft node's
+/// `inner_mutex`. The restore takes the store's write lock; a thread
+/// holding the store lock that would wait for Raft gives up meanwhile
+/// (`graph_storage_adapter.beginReplicatedRestore`).
+///
+/// Refused (`RaftSnapshotRestoreNotDurable`) for the server's durable
+/// store: `installSnapshotData` rebuilds the in-memory graph only and does
+/// not rewrite the storage engine, so the node would serve the snapshot
+/// until a restart and the engine's older contents after it. The Raft node
+/// then stops instead of applying past the snapshot. Nothing in the server
+/// takes Raft snapshots yet (no `reportSnapshot` caller), so a leader never
+/// sends one; a durable restore is future work.
+pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: u64, term: u64) anyerror!void {
+    const store = g_store orelse return error.StoreNotAvailable;
+    if (graph_store_mod.getGlobalAdapter() != null and graph_store_mod.getCurrentGlobalStore() == store) {
+        log.err("raft apply: a snapshot cannot be restored into the durable store (the storage engine is not rewritten); the node stops", &.{
+            Attr.uint("snapshot_index", index),
+            Attr.uint("snapshot_term", term),
+        });
+        return error.RaftSnapshotRestoreNotDurable;
+    }
+    graph_storage_adapter.beginReplicatedRestore();
+    defer graph_storage_adapter.endReplicatedRestore();
+    try raft_snapshot_manager.installRaftSnapshot(allocator, store, data);
 }
 
 // ---------------------------------------------------------------------------

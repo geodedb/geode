@@ -59,6 +59,15 @@ pub const Error = error{
     RaftStorageTdeKeyMismatch,
     /// SONNY-6571: `<data_dir>/raft/tde.marker` is malformed.
     RaftStorageCorrupt,
+    /// SONNY-6622: `<data_dir>/raft`'s entry log has a damaged record with
+    /// valid records after it (raft v0.2.2 refuses it; it used to be cut
+    /// at the damage). Left as it is.
+    RaftStorageLogCorrupted,
+    /// SONNY-6622: the entry log's records do not authenticate.
+    RaftStorageLogAuthFailed,
+    /// SONNY-6622: the entry log is encrypted at the WAL level, which
+    /// geode's Raft storage never writes.
+    RaftStorageLogEncryptionMismatch,
     OutOfMemory,
 };
 
@@ -384,6 +393,20 @@ pub fn maybeStart(
         error.RaftStorageCorrupt => {
             std.log.err("cluster: raft storage dir '{s}/raft' has a malformed tde.marker; refusing to start (SONNY-6571).", .{data_dir orelse "<unset>"});
             return Error.RaftStorageCorrupt;
+        },
+        // SONNY-6622: the Raft entry log cannot be read in full. Nothing in
+        // it is changed or deleted; never repair it by truncating.
+        error.RaftStorageLogCorrupted => {
+            std.log.err("cluster: raft storage dir '{s}/raft' has a damaged entry log (entries.wal: a record that does not decode, with valid records after it); refusing to start, and the directory is left as it is (SONNY-6622). Do not truncate it: rebuild this node's data from the cluster (stop it, move its data directory aside, start it with an empty one) and keep the old one for analysis.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageLogCorrupted;
+        },
+        error.RaftStorageLogAuthFailed => {
+            std.log.err("cluster: raft storage dir '{s}/raft' has an entry log whose records do not authenticate; refusing to start, and the directory is left as it is (SONNY-6622). Rebuild this node's data from the cluster.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageLogAuthFailed;
+        },
+        error.RaftStorageLogEncryptionMismatch => {
+            std.log.err("cluster: raft storage dir '{s}/raft' has an entry log encrypted at the WAL level, which this server never writes; refusing to start, and the directory is left as it is (SONNY-6622). Check that the directory belongs to this node.", .{data_dir orelse "<unset>"});
+            return Error.RaftStorageLogEncryptionMismatch;
         },
         // ClusterCoordinator.init can return errors from raft init,
         // graph_store init, nonce tracker init, etc.  We surface the

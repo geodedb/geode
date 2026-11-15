@@ -2958,6 +2958,51 @@
 
 ### Fixed
 
+- **Cluster Raft on raft v0.2.2 / wal v0.1.24: a lagging follower restores
+  the leader's snapshot, rejections carry the backtracking hint over the
+  wire, a damaged Raft log refuses startup by name, and a follower's or
+  replaying node's apply no longer hydrates graphs under the Raft lock
+  (SONNY-6622, SONNY-6628 item 4, SONNY-6631).** raft v0.2.2 delivers a
+  snapshot a follower installed in `Ready.snapshot`; `drainReady` ignored
+  it, so the raft log jumped to the snapshot point while the graph kept its
+  old contents and later entries applied on top. It is now restored first
+  (`RaftNode.snapshot_restore_callback`, wired to
+  `raft_apply.restoreSnapshotCallbackFn`), before the snapshot is persisted
+  or any entry after it applies; a restore that fails pauses the node as a
+  failed persist does (SONNY-6617), and `appliedIndex()` no longer reports
+  the snapshot as applied (the library moves its own applied index at
+  install). A snapshot cannot yet be restored into the durable store (the
+  in-memory rebuild does not rewrite the storage engine): such a node
+  refuses it and stops. Nothing in the server takes Raft snapshots yet, so
+  a leader never sends one. A rejected AppendEntries carries
+  `conflict_index` / `conflict_term` (new protobuf fields 4 and 5; an older
+  peer sends neither, reads as 0 and is backed off from as before) on both
+  receive paths, so a new leader resumes a short follower where its log
+  ends. `FileStorage` now refuses a log with a damaged record
+  (`LogCorrupted`, `LogAuthFailed`, `LogEncryptionMismatch`) instead of
+  cutting it there; startup fails with `RaftStorageLogCorrupted` /
+  `RaftStorageLogAuthFailed` / `RaftStorageLogEncryptionMismatch` and an
+  error naming the directory, which is left as it is (it reported
+  `InvalidNodeId`). A Raft apply runs under `inner_mutex`; a follower
+  applying a statement batch whose entries write a graph not hydrated yet,
+  and a restarted node replaying its log, scanned the graph there (220-262
+  ms for 20,000 nodes, at the 250 ms election timeout). The Raft node now
+  hydrates the graphs of every entry it receives (`handleMessage`,
+  `stepInner`), a batch's entries included, and of every entry it will
+  replay (`prehydrateUnapplied`, at coordinator start), before it takes
+  `inner_mutex`; `stats.apply_max_ns` records the longest apply. The leader
+  counts only persisted entries toward commit (a commit shows one Ready
+  later); no geode test needed to change for it. **BREAKING (operators):**
+  a node whose Raft log is damaged no longer starts with the log cut at the
+  damage; rebuild its data from the cluster. graph-storage and
+  timeseries-storage still pin wal v0.1.23; geode compiles them against its
+  wal v0.1.24 until they re-pin. Regressions: `zig build
+  test-sonny6622-raft-v022-adapt`, `zig build
+  test-sonny6631-apply-hydration-off-mutex` (under one spinning thread per
+  CPU: apply 1 ms and 0 ms, was 664 ms and 351 ms), `zig build
+  test-sonny6567-raft-apply-hydration` (now at most 50 ms; was under 250 ms
+  and flaky).
+
 - **A cluster node whose Raft storage write fails pauses and retries
   instead of stopping for good; `geode query` / `geode shell` apply a DSN
   timeout; `geode mcp` says what to do about a gRPC endpoint with TLS on

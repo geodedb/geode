@@ -1275,6 +1275,13 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
+    // SONNY-6622: geode and raft v0.2.2 pin wal v0.1.24 (fail-closed
+    // recovery); graph-storage v0.4.16 and timeseries-storage v0.2.20 still
+    // pin v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
+    // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
+    // both libraries compile against geode's wal module, as timeseries-storage
+    // does for thread_pool below. Remove once both pin geode's wal version.
+    graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
     const raft_dep = b.dependency("raft", .{
@@ -1325,6 +1332,8 @@ pub fn build(b: *std.Build) void {
     // instead of a lockstep timeseries-storage re-release. Remove once
     // timeseries-storage pins geode's thread-pool version.
     timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
+    // SONNY-6622: and geode's wal (see graph_storage_mod above).
+    timeseries_storage_ext_mod.addImport("wal", wal_ext_mod);
     const fts_storage_dep = b.dependency("fts_storage", .{ .target = target, .optimize = optimize });
     const fts_storage_ext_mod = fts_storage_dep.module("fts_storage");
     const fts_smoke_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -10768,7 +10777,7 @@ pub fn build(b: *std.Build) void {
     const sonny6567_rh_tests = b.addTest(.{ .root_module = sonny6567_rh_test_mod });
     const run_sonny6567_rh_tests = b.addRunArtifact(sonny6567_rh_tests);
     shardDep(test_step, &run_sonny6567_rh_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 regression (the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet is timed; a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, applies in under the 250 ms election timeout)");
+    const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 / SONNY-6631 regression (prehydrated as the Raft node does before inner_mutex, the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet, and a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, each take at most 50 ms, well under the 250 ms election timeout)");
     sonny6567_rh_step.dependOn(&run_sonny6567_rh_tests.step);
     // SONNY-6529: a rolled-back or failed write leaves nothing, in memory,
     // after a clean restart and after a SIGKILL restart. Real server.
@@ -19632,6 +19641,8 @@ pub fn build(b: *std.Build) void {
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
         .{ .file = "tests/test_sonny6571_raft_tde_storage.zig", .step = "test-sonny6571-raft-tde-storage", .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY, the cluster's Raft entry and snapshot data reach the raft library's FileStorage files only sealed and read back across reopens; a record moved to another term or a plaintext record fails closed; a Raft directory written without TDE is refused and left unchanged, an encrypted one without the key or under another key; a granted vote is still on disk before the grant is sent, SONNY-6563)", .weight = 1 },
+        .{ .file = "tests/test_sonny6622_raft_v022_adapt.zig", .step = "test-sonny6622-raft-v022-adapt", .desc = "Run SONNY-6622 regression (raft v0.2.2: a lagging follower restores its store from the leader's snapshot and applies the entries after it, and a snapshot its durable store cannot take stops it instead; a rejected AppendEntries carries the follower's conflict hint over geode's frame encoding and the new leader resumes there, a peer without the hint is still caught up; a damaged Raft log refuses startup with RaftStorageLogCorrupted and is left byte for byte as it was)", .weight = 1 },
+        .{ .file = "tests/test_sonny6631_apply_hydration_off_mutex.zig", .step = "test-sonny6631-apply-hydration-off-mutex", .desc = "Run SONNY-6631 regression (under one spinning thread per CPU, a follower applying a statement batch whose entries write a 20,000-node graph not hydrated yet, and a node replaying its committed log after a restart onto such a graph, hold the Raft inner_mutex at most 50 ms, well under the 250 ms election timeout; every entry applies)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
         .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 regression (RETURN 1.25 and a UNION mixing it with an integer are declared exact numeric; FOR ... ORDER BY reports ordered:true with its key; PROFILE reports no spill_reason without a spill; fixed by SONNY-6562)", .weight = 1 },
         .{ .file = "tests/test_sonny6562_wire_metadata.zig", .step = "test-sonny6562-wire-metadata", .desc = "Run SONNY-6562 regression (over QUIC and gRPC against a real geode serve: every declared column type is the ISO/IEC 39075 22.18/22.19 combination of the column's values - an exact numeric DECIMAL, not FLOAT; a UNION, ORDER BY, CASE, collect() or OPTIONAL MATCH column from all its rows; ANY across base types; a streamed node scan never declares a type its later rows contradict; ordered/order_keys exactly when the result's statement ends in an ORDER BY, FOR, chains, UNION and CALL included; PROFILE reports no spill under GEODE_SPILL_THRESHOLD_BYTES)", .weight = 2 },

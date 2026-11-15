@@ -4978,7 +4978,6 @@ REQ-SONNY-6567-GRPC-STREAM-IDS,GrpcTransport,Regression,TESTED,tests/test_sonny6
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,SnapshotCopiesEvictedEdges,TESTED,src/graph_store.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-15
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,CheckedHydratedGetters,TESTED,src/graph_store.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-15
 REQ-SONNY-6567-HYDRATED-GETTER-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6567_hydrated_getter_errors.zig,tests/test_sonny6567_hydrated_getter_errors.zig,,storage,2026-11-14
-REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,FollowerPrehydratesBeforeStep,TESTED,src/distributed/cluster.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
 REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,RefusedReplicatedDropHaltsApply,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6547_single_voter_drop.zig,,distributed,2026-11-15
 REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,ApplyThreadNeverPersistsHydration,TESTED,src/graph_store.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
 REQ-SONNY-6567-RAFT-APPLY-HYDRATION,DistributedCluster,Regression,TESTED,tests/test_sonny6567_raft_apply_hydration.zig,tests/test_sonny6567_raft_apply_hydration.zig,,distributed,2026-11-15
@@ -5114,9 +5113,17 @@ REQ-SONNY-6619-SERVER-LOCKOUT-STORED,MFA authentication,LockoutSurvivesRestart,T
 REQ-SONNY-6619-SM-FOLLOWS-MFA,MFA authentication,SecurityManagerMfaCurrent,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
 REQ-SONNY-6619-SM-REMOVE-USER,AuthGraphManager Integration,DroppedUserRemoved,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6619-TS-WAL-DIR-RELEASE,Timeseries,WalDirHandleClosed,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6619_offline.zig,,storage,2026-11-15
+REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreIntoStore,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreFromReadySnapshot,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RaftSnapshotPayload,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,StoreHolderYieldsToRestore,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-V022,Raft Consensus Persistence,Regression,TESTED,tests/test_sonny6622_raft_v022_adapt.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
 REQ-SONNY-6623-MFA-ENABLE-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6623_mfa_enable_limit.zig,tests/test_sonny6623_mfa_enable_limit.zig,,security,2026-11-15
 REQ-SONNY-6623-OFFLINE-MALFORMED,MFA authentication,Regression,TESTED,tests/test_sonny6623_offline.zig,tests/test_sonny6623_offline.zig,,security,2026-11-15
 REQ-SONNY-6623-SHARED-MFA-LIMITER,MFA authentication,OneLimiterForEveryCodeCheck,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6623_mfa_enable_limit.zig,,security,2026-11-15
+REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,ApplyCriticalSectionMeasured,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
+REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,PrehydrateWhereEntriesEnterTheLog,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
+REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX,DistributedCluster,Regression,TESTED,tests/test_sonny6631_apply_hydration_off_mutex.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
