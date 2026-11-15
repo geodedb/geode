@@ -33,7 +33,15 @@ What stays in clear:
   `edges.idx` / `edges_exist.idx` show which nodes are connected and by
   which relationship-type id (the graph's shape, not its names or values).
 - The Raft hard state (`<data_dir>/raft/hard_state`: the current term and
-  vote, two integers) and `snapshot.meta` (index, term, voter ids).
+  the node id voted for, two u64 and a CRC32, 20 bytes) and `snapshot.meta`
+  (index, term, voter ids). Deliberately not sealed (SONNY-6616): they hold
+  no graph data, and the term, vote and voter ids are what every node
+  already learns from the cluster's messages. Sealing them would mean
+  replacing the raft library's `FileStorage` write of the hard state, the
+  write the SONNY-6563 rule (no vote leaves before it is durable) rests on.
+  They are protected against corruption (CRC), not against tampering by
+  someone who can write the Raft directory; that person can equally roll
+  the whole directory back, which sealing one file would not prevent.
 - Plaintext copies written before an upgrade: replaced files are not
   scrubbed, so freed disk blocks, file-system snapshots and backups taken
   before the upgrade still hold what they held (see

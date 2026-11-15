@@ -405,6 +405,13 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **Invalidating a graph's exact property index removes `prop_rev.idx`
+  too (SONNY-6616).** A full checkpoint of a graph whose exact index was
+  never built and that has no nodes left deleted `prop_exact.idx` and left
+  `prop_rev.idx`: a node -> (label, property key, value hash) map of data
+  the graph no longer holds, with the property-key names in it (in
+  plaintext without a key). Both files go now. Regression:
+  `zig build test-sonny6616-tde-residuals`.
 - **graph-storage v0.4.17 (SONNY-6590): schema names and indexed values are
   sealed at rest. BREAKING: on-disk format change under TDE, no
   downgrade.** With an at-rest key (`GEODE_TDE_KEY`) graph-storage wrote

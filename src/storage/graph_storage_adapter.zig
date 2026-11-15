@@ -11616,14 +11616,20 @@ pub const StorageAdapter = struct {
     /// no staleness counter, so leaving an out-of-date copy would load wrong
     /// data after a crash. Best-effort: a missing file (already invalidated, or
     /// never written) is success.
+    ///
+    /// SONNY-6616: `prop_rev.idx` goes too. It was left behind: a reverse map
+    /// (node -> label, property key, value hash) of data the graph no longer
+    /// holds, with the property-key names in it (in plaintext without a key).
     fn invalidateExactPropertyIndexFile(allocator: Allocator, graph_dir_path: []const u8) void {
-        const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return;
-        defer allocator.free(idx_path);
         const inv_io = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.cwd().deleteFile(inv_io, idx_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => log.warn("failed to invalidate stale prop_exact.idx: {s}", .{@errorName(err)}),
-        };
+        for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+            const idx_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir_path, name }) catch return;
+            defer allocator.free(idx_path);
+            std.Io.Dir.cwd().deleteFile(inv_io, idx_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => log.warn("failed to invalidate stale {s}: {s}", .{ name, @errorName(err) }),
+            };
+        }
     }
 
     // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
