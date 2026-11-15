@@ -405,6 +405,23 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **graph-storage v0.4.17 (SONNY-6590): schema names and indexed values are
+  sealed at rest. BREAKING: on-disk format change under TDE, no
+  downgrade.** With an at-rest key (`GEODE_TDE_KEY`) graph-storage wrote
+  `labels.dict` (label and relationship-type names, every shard),
+  `props.idx` (property-key names, value hashes), `ordered_propidx.snap`
+  (key names and indexed values), `props.catalog` and `propidx_*.btree` in
+  plaintext beside the encrypted pages and WAL. 0.4.17 seals them
+  (AES-256-GCM under an HKDF side-file key, random nonce, associated data =
+  header + the shard's uuid + the file name); manifest format_version 5
+  marks a sealed store. A store written by <= 0.4.16 under a key is upgraded
+  in place when it is opened (crash-safe at every step). New open errors:
+  `SideFileEncrypted` (sealed, no key), `SideFileAuthFailed` (another key, a
+  modified file or one copied from another graph), `SideFileNotSealed`
+  (plaintext in a sealed store); `LabelDictionary.loadFromFile` refuses a
+  sealed file. Once a graph has been checkpointed by this build,
+  graph-storage <= 0.4.16 (any earlier geode) refuses it. Same transitive
+  dependencies as 0.4.16. The geode-side changes follow in the next entry.
 - **graph-storage v0.4.16 (SONNY-6529, SONNY-6527): an aborted transaction
   is undone.** `abortTxn` used to drop only the transaction's WAL records:
   the pages it had written stayed modified, its slots and counts stayed

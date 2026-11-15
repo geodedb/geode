@@ -647,8 +647,23 @@
             // `error.LabelIdSpaceExhausted`; `GraphConfig.label_dict_report`;
             // `Metrics.txn_aborts_undone`/`txn_aborts_not_undone`. No store
             // format change. Same transitive deps as v0.4.15 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.16#327893d8d0067e29e0703b70ac68451d7b2ea17a",
-            .hash = "graph_storage-0.4.16-9UyJS0AjMgDpk3ZrUPWwKfIlEkblrzsvT1bmdBTVShqs",
+            // v0.4.17 (2026-11-15, SONNY-6590): ON-DISK FORMAT CHANGE under
+            // `GraphConfig.encryption_key`. `labels.dict`, `props.idx`,
+            // `ordered_propidx.snap`, `props.catalog` and `propidx_*.btree`
+            // are sealed (AES-256-GCM, HKDF-SHA256 side-file key, random
+            // 96-bit nonce, AD = header + graph uuid + file name; envelope
+            // in `side_file_crypto`). Manifest format_version 5 marks a
+            // sealed store; a <= 0.4.16 store under a key is upgraded in
+            // place at open (crash-safe; 5 written by the next checkpoint or
+            // close). New open errors: `error.SideFileEncrypted` (sealed, no
+            // key), `error.SideFileAuthFailed` (wrong key, modified or foreign
+            // file), `error.SideFileNotSealed` (plaintext in a sealed store).
+            // `LabelDictionary.loadFromFile` refuses a sealed file (use
+            // `loadFromFileWith`). graph_storage <= 0.4.16 cannot open a
+            // store once it is sealed (no downgrade). Same transitive deps as
+            // v0.4.16 (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.17#1b209f7dfea6507e2ce9520848bafe069ed772bf",
+            .hash = "graph_storage-0.4.17-9UyJS4M5MwB-DwPibo9ANbK_BGhNnHS828idjRmre716",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
