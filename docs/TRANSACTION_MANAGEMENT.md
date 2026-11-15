@@ -278,11 +278,40 @@ OOM kill, power loss). What holds, as of the SONNY-738 sweep:
   are.
 - **No engine transaction outlives a request** (SONNY-2823). A transaction
   over several requests is committed in the engine request by request.
-- **A failed request's engine transaction is aborted**, not committed
-  (SONNY-3135), and the transaction is rolled back.
 - **ROLLBACK, a failed statement and a session's teardown** undo the
-  transaction through the in-memory undo log, which writes compensating
+  transaction through the in-memory undo log (`txn_undo_log`, and a
+  statement's own record, `statement_undo`), which writes compensating
   changes to the engine. The undo log is memory-only.
+- **The undo joins the open engine transaction** (SONNY-6529). A failed
+  statement's engine transaction, a transaction body's and the session's
+  are ended AFTER the undo replays, by a commit: the replay's compensating
+  writes join them, so the failed writes and their undo reach the WAL as
+  one unit, and a crash before that commit loses both. Where the undo runs
+  after the request (the handler's rollback of a request that failed in an
+  explicit transaction), the request's engine transaction is committed at
+  its end and the undo commits its compensations on its own, as for every
+  committed request of an open transaction (the window above). geode used to
+  abort the engine transaction first (SONNY-2823, SONNY-3135); graph-storage
+  0.4.16 makes `abortTxn` undo the transaction's writes, and the replay then
+  undid them a second time (a node it created was gone, its delete failed
+  with 40003, and the server kept the node in memory).
+- **The engine's own undo** is used for a transaction the adapter opened
+  for one write call that failed before the server's in-memory copy took
+  the write: graph-storage 0.4.16 `abortTxn` undoes it (node record, slot,
+  count and id, properties, labels, relationships). An abort it cannot undo
+  exactly (`AbortNotUndone`: a page the caller imaged itself, a property
+  change on a legacy chain, a chain pointer of an existing node moved, more
+  than 1,048,576 writes) leaves the writes in the shard's pages and makes the
+  shard refuse every write, commit and checkpoint; geode then refuses the
+  graph's reads and writes with 58000 `AbortNotUndone` until the server
+  restarts, which reopens the graph at its committed state (nothing
+  uncommitted reached disk). A commit that fails after the in-memory copy
+  took the writes aborts the transaction and refuses the graph the same way
+  (58000 `CommitFailed`). Neither is reopened in place: geode keeps the
+  graph's nodes, relationships, label counts and indexes in memory beside
+  the engine and has no path that rebuilds them for one graph while the
+  server runs. Counters: `geode.runtime.storage_txn_aborts_undone_total`,
+  `geode.runtime.storage_txn_aborts_not_undone_total`.
 - **COMMIT is durable.** Once COMMIT returns, every change of the
   transaction has been fsynced to the engine WAL (per-commit fsync), and a
   committed change made inside the transaction is never undone by recovery

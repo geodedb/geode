@@ -9481,21 +9481,21 @@ fn handleClientMessage(
                 const rb_lock = graph_store.acquireGraphWriteLock(rb_graph);
                 defer graph_store.releaseGraphLock(rb_lock);
 
-                // R9 (2026-04-22): abort the session-scoped engine txn
-                // first so any pending WAL page records are discarded
-                // before the undo-log replay re-mutates the store.
-                // SONNY-2823: none spans messages (the program that opened
-                // it committed it); a backstop.
-                if (graph_store.getGlobalAdapter()) |ad| {
-                    ad.abortSessionTxn();
-                }
-
                 const store = graph_store.getGlobalStore(gpa);
                 var rollback_complete = true;
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
                     rollback_complete = false;
                 };
+                // SONNY-2823: no session engine txn spans messages (the
+                // program that opened it committed it); a backstop.
+                // SONNY-6529: ended AFTER the undo-log replay, which joins it,
+                // so the replay's changes commit with the writes they undo
+                // (it was aborted first; graph-storage 0.4.16's abort undoes
+                // the writes, and the replay then undid them a second time).
+                if (graph_store.getGlobalAdapter()) |ad| {
+                    ad.endSessionTxn();
+                }
                 state.endTransaction();
                 // SONNY-3348 (round 19, m3): reported, not answered as a success.
                 if (!rollback_complete) {

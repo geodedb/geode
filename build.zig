@@ -5036,7 +5036,7 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         bench_step.dependOn(&run_tests.step);
-        b.step("test-sonny6492-edge-prop-image-cost", "Run SONNY-6492 item 5 measurement (time and WAL bytes per relationship-property SET with and without the SONNY-6471 head page images, one transaction per SET and 100 SETs in one transaction, interleaved perf_gate batches)").dependOn(&run_tests.step);
+        b.step("test-sonny6492-edge-prop-image-cost", "Run SONNY-6492 item 5 / SONNY-6529 measurement (time and WAL bytes per relationship-property SET through graph-storage setEdgePropertyTxn: a first property that moves the chain head against an in-place overwrite, one transaction per SET and 100 SETs in one transaction, interleaved perf_gate batches; and five properties per relationship in one setEdgePropertiesBatch call)").dependOn(&run_tests.step);
     }
 
     // SONNY-6435 / SONNY-6441: graph_storage up to 0.4.11 lost committed node
@@ -10766,6 +10766,30 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6567_rh_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 regression (the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet is timed; a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, applies in under the 250 ms election timeout)");
     sonny6567_rh_step.dependOn(&run_sonny6567_rh_tests.step);
+    // SONNY-6529: a rolled-back or failed write leaves nothing, in memory,
+    // after a clean restart and after a SIGKILL restart. Real server.
+    const sonny6529_au_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6529_abort_undo.zig"), .target = target, .optimize = optimize });
+    sonny6529_au_test_mod.link_libc = true;
+    sonny6529_au_test_mod.addImport("geode", root_mod);
+    sonny6529_au_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6529_au_test_mod.addImport("schema", schema_mod);
+    sonny6529_au_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6529_au_tests = b.addTest(.{ .root_module = sonny6529_au_test_mod });
+    const run_sonny6529_au_tests = b.addRunArtifact(sonny6529_au_tests);
+    spawnsBuiltGeode(sonny6529_au_tests);
+    shardDep(test_step, &run_sonny6529_au_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6529_au_step = b.step("test-sonny6529-abort-undo", "Run SONNY-6529 regression against a real server (ROLLBACK after CREATE, SET/REMOVE, DETACH DELETE, MERGE, relationship CREATE and SET, label add/remove, in one request and over several; a statement failing on its last row inside a transaction and in auto-commit: the graph holds exactly the state before, over another connection, after a clean restart and after a SIGKILL restart, and still takes committed writes)");
+    sonny6529_au_step.dependOn(&run_sonny6529_au_tests.step);
+    // SONNY-6529: an abort graph-storage cannot undo quarantines its graph
+    // until a reopen; abort counters; the 0.4.16 errors' operator messages.
+    const sonny6529_aq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6529_abort_quarantine.zig"), .target = target, .optimize = optimize });
+    sonny6529_aq_test_mod.addImport("geode", root_mod);
+    sonny6529_aq_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6529_aq_tests = b.addTest(.{ .root_module = sonny6529_aq_test_mod });
+    const run_sonny6529_aq_tests = b.addRunArtifact(sonny6529_aq_tests);
+    shardDep(test_step, &run_sonny6529_aq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6529_aq_step = b.step("test-sonny6529-abort-quarantine", "Run SONNY-6529 regression in process (an engine abort graph-storage 0.4.16 cannot undo - a caller-imaged page - fails with AbortNotUndone and quarantines its graph: reads and writes refused with the 58000 operator message, other graphs serve, the shard refuses writes, storage_txn_aborts_not_undone_total counts it; a reopen serves the graph at its committed state without the aborted record; an undone abort is counted in storage_txn_aborts_undone_total and leaves the graph serving; LabelIdSpaceExhausted answers 54000)");
+    sonny6529_aq_step.dependOn(&run_sonny6529_aq_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

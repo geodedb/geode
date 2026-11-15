@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T15:47:16.644935823Z",
+  "generated_at": "2026-11-15T16:46:20.376846429Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -68510,7 +68510,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-11-13"
+          "updated": "2026-11-15"
         },
         {
           "feature": "EdgeProperties",
@@ -75300,7 +75300,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-11-13"
+          "updated": "2026-11-15"
         },
         {
           "feature": "TransactionManagement",
@@ -75781,7 +75781,7 @@
             "tests/test_sonny6492_edge_prop_image_cost.zig"
           ],
           "owner": "storage",
-          "updated": "2026-11-13"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -76613,6 +76613,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6527-LABEL-DICT-REPORT",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "StructuredDivergenceDetail",
+          "status": "TESTED",
+          "files": [
+            "src/storage/label_dict_divergence.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6524_label_dict_split.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6527-LABEL-ID-SPACE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "OperatorMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION",
       "features": [
         {
@@ -76802,6 +76840,152 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6529-ABORT-METRICS",
+      "features": [
+        {
+          "feature": "Observability",
+          "aspect": "EngineAbortCounters",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6529-ABORT-NOT-UNDONE",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "QuarantineReads",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "OperatorMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "QuarantineOnFailedAbort",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6529-ABORT-UNDO",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6529-MIRRORED-TXN-END",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "CommitWhatTheStoreHolds",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "FailedStatementTxn",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "SessionTxnEnd",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_undo.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -84086,7 +84270,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4162
+      "TESTED": 4173
     },
     "by_aspect": {
       "2PC": 3,
@@ -84599,6 +84783,7 @@
       "CommitPhase": 1,
       "CommitStatement": 1,
       "CommitTransaction": 2,
+      "CommitWhatTheStoreHolds": 1,
       "CommittedIndexAccessor": 1,
       "CommittedRestoreIsTheArchive": 1,
       "Community": 3,
@@ -85109,6 +85294,7 @@
       "EndpointSideSetDestroyCleanup": 1,
       "EndpointUnification": 1,
       "Engine": 14,
+      "EngineAbortCounters": 1,
       "EngineBatch2": 1,
       "EngineStateOnly": 1,
       "EnhancedPolicy": 1,
@@ -85291,6 +85477,7 @@
       "FailedCreateGivesSlotBack": 1,
       "FailedLogin": 1,
       "FailedQueryExitsNonZero": 1,
+      "FailedStatementTxn": 1,
       "FailedTransactionSemantics": 1,
       "FailureLogBackpressure": 1,
       "FailuresAreErrors": 1,
@@ -86285,7 +86472,7 @@
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
-      "OperatorMessage": 1,
+      "OperatorMessage": 3,
       "Operators": 1,
       "Optimization": 2,
       "Optimizer": 1,
@@ -86718,6 +86905,8 @@
       "QualityAssurance": 1,
       "QuantifiedEdges": 1,
       "QuantifierCallHandlers": 1,
+      "QuarantineOnFailedAbort": 1,
+      "QuarantineReads": 1,
       "QuarantinedGraphFailClosed": 1,
       "QuarantinedGraphRefusesWrites": 1,
       "Query": 3,
@@ -86881,7 +87070,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 366,
+      "Regression": 368,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -87183,6 +87372,7 @@
       "SessionState": 2,
       "SessionTimeout": 1,
       "SessionToken": 1,
+      "SessionTxnEnd": 1,
       "Set": 2,
       "SetButUnusableKeyRefuses": 1,
       "SetClauses": 1,
@@ -87442,6 +87632,7 @@
       "StringsFuzzySearch": 1,
       "StructuralWriteGuard": 2,
       "StructureTests": 1,
+      "StructuredDivergenceDetail": 1,
       "StubImplAudit": 1,
       "Subnet": 1,
       "SubnetKey": 1,

@@ -550,13 +550,20 @@ pub const ServerState = struct {
                 defer graph_store_mod.releaseGraphLock(lock);
                 const scope = self.enterSessionTxn();
                 defer self.leaveSessionTxn(scope);
-                gsa.abortThreadSessionTxn();
                 txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
                     // SONNY-3348 (round 19, m3): reported to the client at
                     // its ROLLBACK or COMMIT (`txn_rollback_incomplete`).
                     @import("logging").scoped("server_state").err("transaction rollback could not undo every change", &.{@import("logging").Attr.string("error", @errorName(err))});
                     self.txn_rollback_incomplete = true;
                 };
+                // SONNY-6529: the session's engine transaction (open when a
+                // teardown ends the session mid-request) is ended AFTER the
+                // undo, under the lock: the undo's changes joined it and
+                // commit with the writes they undo. SONNY-2823 aborted it
+                // first; graph-storage 0.4.16's abort undoes the writes,
+                // which the store's in-memory copy keeps, and the undo then
+                // undid them a second time.
+                gsa.endThreadSessionTxn();
             } else {
                 txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
                 self.session_engine_txn.open = false;

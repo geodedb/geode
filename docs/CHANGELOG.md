@@ -405,6 +405,142 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **graph-storage v0.4.16 (SONNY-6529, SONNY-6527): an aborted transaction
+  is undone.** `abortTxn` used to drop only the transaction's WAL records:
+  the pages it had written stayed modified, its slots and counts stayed
+  taken, readers saw its writes and the next checkpoint made them durable.
+  It now undoes every write it recorded, logs the undo in the aborting
+  transaction and ends it with COMMIT (crash-safe). A transaction it cannot
+  undo exactly (a page the caller imaged itself with `logPagePublic` or
+  `zeroPageLogged`, a property change on a legacy chain or one that frees an
+  overflow value, a `putNodeTxn` moving a chain pointer of an existing node,
+  more than 1,048,576 writes) fails with `AbortNotUndone`, after which every
+  write, commit and checkpoint of that shard fails until the graph is
+  reopened (geode keeps the default `abort_undo = .fail_closed`). Also: the
+  first-access tail reconcile re-derives the owners of `.adj_out` pages, so
+  a relationship-property SET no longer needs the source node-page image
+  (`setEdgePropertyTxn` joins the caller's transaction); the persistence
+  dirty flag is atomic (a TSan-reported race between label naming and shard
+  writers); naming a label past the id space fails with
+  `LabelIdSpaceExhausted` instead of wrapping; shard label-dictionary
+  findings reach the caller as structured diagnostics
+  (`GraphConfig.label_dict_report`); `Metrics.txn_aborts_undone` /
+  `txn_aborts_not_undone`. No store format change; same transitive
+  dependencies as 0.4.15. The geode-side changes 0.4.16 requires follow in
+  the next entries.
+- **Rollback, failed statements and graph-storage 0.4.16's undoing abort
+  (SONNY-6529).** graph-storage 0.4.16 `abortTxn` undoes the transaction's
+  writes. geode aborted the engine transaction and then replayed its own
+  undo record (`statement_undo`, `txn_undo_log`) over it, which undid every
+  write on the transaction's shard a second time: on the bare 0.4.16 pin a
+  transaction whose MERGE created 20 nodes and whose next statement failed
+  kept all 20 after its rollback (the replay's deletes failed with
+  NodeNotFound and the server kept the nodes in memory; a clean restart
+  kept them too), and a failed CREATE inside and outside a transaction left
+  its node (`test-sonny6529-abort-undo`, green on 0.4.15).
+  Now an engine transaction whose writes the server's in-memory copy holds
+  is never aborted: a failed statement's transaction stays open for its
+  undo replay (`StatementTxn.fail`), the replay's compensating writes join
+  it and the session's, and both are committed when the replay is done, so
+  the failed writes and their undo reach the WAL as one unit (a crash
+  before that commit loses both). ROLLBACK (statement, QUIC message,
+  session teardown) and a transaction body's failure end the session's
+  engine transaction after the replay; a request that fails in an explicit
+  transaction commits its engine transaction at its end and the handler's
+  rollback undoes it right after (SONNY-3135 aborted it). The engine's own
+  undo serves the transactions the adapter opens for one write call that
+  fails before the in-memory copy takes it (node create, property set and
+  remove, delete, the bulk and batch creates, relationship properties).
+  `test-sonny6529-abort-undo`: twelve shapes (ROLLBACK after CREATE,
+  SET/REMOVE, DETACH DELETE, MERGE, relationship CREATE and SET, label
+  add/remove; a statement failing on its last row in a transaction, in a
+  request after a successful statement, and in auto-commit), the rollback in
+  the failing request and over separate requests, checked over another
+  connection, after a clean restart and after a SIGKILL restart.
+  **Operator-visible: an abort graph-storage cannot undo quarantines the
+  graph.** `AbortNotUndone` (a page the caller imaged itself, a property
+  change on a legacy chain or one freeing an overflow value, a chain
+  pointer of an existing node moved, more than 1,048,576 writes) leaves the
+  writes in the shard's pages and makes the shard refuse writes, commits
+  and checkpoints; geode logs it at ERROR with the graph and the operation
+  and refuses the graph's reads and writes with 58000 `AbortNotUndone`
+  ("committed data on disk is intact ... restart the server") until a
+  restart reopens it at its committed state. A commit that fails after the
+  in-memory copy took the writes aborts the transaction (graph-storage
+  undoes it) and quarantines the graph the same way (58000 `CommitFailed`);
+  it used to abort only, leaving the in-memory copy ahead of the engine.
+  The rollback that follows a failed commit may still write to the
+  quarantined graph, so the transaction's earlier requests are undone.
+  Tests whose contract changed: `test-sonny3031-session-commit-failure`
+  (the graph is quarantined after an injected session commit failure; the
+  session goes on on another graph), `test-sonny2823-session-engine-txn`
+  (a ROLLBACK statement commits the engine transaction its undo joined; no
+  abort), `test-sonny3348-round19-undo` (m1 counts replays that joined the
+  engine transaction: `session_txn_replay_joined_total`, was
+  `session_txn_aborted_before_replay_total`).
+  Not reopened in place: geode keeps each graph's nodes, relationships,
+  label counts and indexes in memory beside the engine and has no path that
+  rebuilds them for one graph. `abort_undo` stays `.fail_closed`. Counters
+  `geode.runtime.storage_txn_aborts_undone_total` and
+  `geode.runtime.storage_txn_aborts_not_undone_total`
+  (`test-sonny6529-abort-quarantine`).
+- **A relationship-property SET is written by graph-storage and logs one
+  8 KiB page image less (SONNY-6529).** The adapter wrote the property and
+  then rewrote the adjacency heads itself (`publishEdgePropHead`), imaging
+  the pages with `logPagePublic`, the source's node page included
+  (SONNY-6471). graph-storage 0.4.16 cannot undo a caller-imaged page, so
+  every aborted relationship-property write would have failed closed and
+  refused the shard's writes until a restart. `setEdgeProperty` and
+  `setEdgePropertiesBatch` now call `setEdgePropertyTxn` in the statement or
+  session engine transaction (or their own): property, both adjacency
+  copies and the edge index, every rewritten page imaged in that
+  transaction, undone by `abortTxn`; the source's node page is no longer
+  imaged (0.4.16's tail reconcile finds `.adj_out` page owners itself). The
+  adapter's own property-chain index upkeep went too (`putPropertyTxn` does
+  it). `test-sonny6492-edge-prop-image-cost` (reworked: a head-moving
+  first-property SET against an in-place overwrite, plus five properties
+  per relationship in one `setEdgePropertiesBatch`), the same bench run on
+  the tree before this change and after it, load average 6-10, medians:
+  a SET that moves the chain head logs 16,584 instead of 24,826 bytes of
+  WAL and takes 126 instead of 177 us with `GEODE_WAL_SYNC=deferred`; an
+  in-place overwrite is unchanged (8,342 bytes, about 69 us); five
+  properties on one relationship log 49,717 instead of 57,876 bytes and
+  take 408 instead of 468 us (the batch now moves the adjacency heads after
+  each property that moves the chain instead of once at its end, and no
+  longer images the node page); with fsync per commit every shape is
+  within noise (18.3-19.4 ms). The crash guarantees of SONNY-6471/6472/6492
+  hold (`test-sonny6471-edge-prop-crash`, `test-sonny6492-*`,
+  `test-edge-durability-churn-repro`).
+- **Measured: commit- and abort-heavy statements on 0.4.15 and on 0.4.16
+  with the changes above (SONNY-6529).** Two real `geode serve` Debug
+  binaries of this branch (before: the 0.4.15 tree; after: this change),
+  fsync per commit, 5 interleaved rounds of 100 operations, medians, load
+  average 8-10: CREATE 19.9 -> 20.0 ms, a node SET 21.6 -> 19.8 ms, a
+  relationship's first property SET 24.2 -> 24.9 ms, an auto-commit SET
+  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET
+  + ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
+  the commit path.
+- **The security graph's label-page re-log is gone (SONNY-6529).**
+  `relogSecurityLabelPageTxn` re-imaged a node's label page in the
+  mutating transaction (gap 0026), a workaround for a graph-storage label
+  imaging bug fixed in 0.3.2: `addLabelTxn` images the same slab-decoded
+  page, and the node page, in the same transaction. With 0.4.16 the re-log
+  (`logPagePublic`) made every aborted security-graph transaction fail
+  closed. The security graph's durability steps pass without it.
+- **A failed node create gives its slot back once (SONNY-6529,
+  SONNY-6523).** `releaseFailedNodeSlot` deleted the failed create's record
+  in the transaction it then aborted; 0.4.16's abort empties the slot and
+  gives the count and the id back itself, so that delete is skipped when the
+  transaction is aborted (kept for a joined transaction, which commits, and
+  the count is still taken back by hand when no record was written).
+- **Shard label-dictionary findings are logged with their detail
+  (SONNY-6527).** geode installs `GraphConfig.label_dict_report`: every
+  finding of `ShardedGraphEngine.open` and `getOrAssignLabel` (kind, action,
+  shard, id, the shard's and shard 0's names, record and name counts) is
+  logged with the graph's name through the structured logger, a refusal at
+  ERROR, a repair at WARN (graph-storage's own warning is compiled out of a
+  release server). A new label or relationship-type name past the label id
+  space answers 54000 `LabelIdSpaceExhausted`.
 - **graph-storage v0.4.15 (SONNY-6524): a new label name costs about a
   sixth of what it did, a failed label write is undone, and shard label
   dictionaries are compared at open.** `ShardedGraphEngine.getOrAssignLabel`

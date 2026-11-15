@@ -246,7 +246,7 @@ test "task34_regression: setEdgePropertiesBatch joins active StatementTxn instea
     var stmt_txn: adapter_mod.StatementTxn = undefined;
     try adapter.beginStatementTxn("default", &stmt_txn);
     var committed = false;
-    errdefer if (!committed) stmt_txn.abort();
+    errdefer if (!committed) stmt_txn.fail();
 
     const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
         .{ .key = "k1", .value = .{ .String = "v1" } },

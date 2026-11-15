@@ -319,8 +319,8 @@ fn addLabelRolledBack(id: u64, label: []const u8) !void {
     try adapter.beginSessionTxnLazy(G);
     try store.addNodeLabel(id, label);
     try undo.logAddNodeLabel(id, label);
-    adapter.abortSessionTxn();
     try undo.rollback(store);
+    adapter.endSessionTxn();
 }
 
 fn carriesLabel(id: u64, label: []const u8) bool {

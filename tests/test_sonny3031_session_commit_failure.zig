@@ -13,6 +13,12 @@
 // reports the failure. The engine's failure is injected
 // (`graph_storage_adapter.session_commit_fault_injections`).
 //
+// SONNY-6529: graph-storage 0.4.16's abort undoes the failed transaction's
+// writes, which the server's in-memory copy of the graph still holds, so
+// the graph is then quarantined (58000 CommitFailed) until a restart reopens
+// it at its committed state; the rollback's compensating writes are still
+// taken, so the transaction's earlier requests are undone.
+//
 // CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
 
 const std = @import("std");
@@ -49,20 +55,34 @@ test "SONNY-3031: over gRPC a session engine commit that fails at the end of a p
     _ = try fx.expectRefused(ga, s, "CREATE (:Lost {v: 1})", "40000");
     try testing.expectEqual(@as(u32, 0), gsa.session_commit_fault_injections.load(.monotonic));
 
-    // The engine forgot the transaction; the Geode transaction is over and
-    // its changes (this request's and the earlier one's) are undone.
+    // The engine forgot the transaction (it aborted it, which graph-storage
+    // 0.4.16 undoes); the Geode transaction is over, and the rollback undid
+    // the earlier request's change.
     try testing.expectEqual(@as(usize, 0), fx.engineActive("g1"));
     try testing.expect(engineAborted("g1") > aborted_before);
     try testing.expect(!entry.state.in_txn);
-    try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "Lost"));
     try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "Kept"));
     try testing.expect(!try fx.commit(ga, s));
 
-    // The session goes on.
+    // SONNY-6529: the server's in-memory copy of g1 still holds the failed
+    // request's writes, which the engine no longer has, so g1 refuses reads
+    // and writes (58000 CommitFailed) until a restart reopens it; the
+    // session goes on on another graph.
+    try expectQuarantined(ga, s, "g1");
+    try fx.expectRuns(ga, s, "USE GRAPH g2");
     try fx.begin(ga, s);
     try fx.expectRuns(ga, s, "CREATE (:After {v: 2})");
     try testing.expect(try fx.commit(ga, s));
-    try testing.expectEqual(@as(usize, 1), fx.countLabel(f.st, "g1", "After"));
+    try testing.expectEqual(@as(usize, 1), fx.countLabel(f.st, "g2", "After"));
+}
+
+/// SONNY-6529: `graph` refuses a read and a write with 58000 CommitFailed.
+fn expectQuarantined(ga: std.mem.Allocator, s: []const u8, graph: []const u8) !void {
+    var qb: [96]u8 = undefined;
+    for ([_][]const u8{ "MATCH (n) RETURN count(n) AS c", "CREATE (:Refused {v: 9})" }) |q| {
+        const e = try fx.expectRefused(ga, s, try std.fmt.bufPrint(&qb, "USE GRAPH {s}; {s}", .{ graph, q }), "58000");
+        try testing.expect(std.mem.startsWith(u8, e.message, "CommitFailed"));
+    }
 }
 
 test "SONNY-3031: over gRPC a COMMIT statement whose engine commit fails fails (40000) and rolls the transaction back" {
@@ -82,12 +102,14 @@ test "SONNY-3031: over gRPC a COMMIT statement whose engine commit fails fails (
     try testing.expectEqual(@as(usize, 0), fx.engineActive("g1"));
     try testing.expect(!entry.state.in_txn);
     try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "X"));
-    try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "Y"));
+    // SONNY-6529: quarantined (see the test above).
+    try expectQuarantined(ga, s, "g1");
 
-    // In one program: START TRANSACTION; CREATE; COMMIT.
+    // In one program: START TRANSACTION; CREATE; COMMIT (on g2).
+    try fx.expectRuns(ga, s, "USE GRAPH g2");
     gsa.session_commit_fault_injections.store(1, .monotonic);
     _ = try fx.expectRefused(ga, s, "START TRANSACTION; CREATE (:Z {v: 3}); COMMIT", "40000");
-    try testing.expectEqual(@as(usize, 0), fx.engineActive("g1"));
+    try testing.expectEqual(@as(usize, 0), fx.engineActive("g2"));
     try testing.expect(!entry.state.in_txn);
-    try testing.expectEqual(@as(usize, 0), fx.countLabel(f.st, "g1", "Z"));
+    try expectQuarantined(ga, s, "g2");
 }

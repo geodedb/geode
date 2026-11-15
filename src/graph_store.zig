@@ -2422,8 +2422,13 @@ pub fn dropGraphMapScans() u64 {
 /// re-registers the graph and retries the build. SONNY-6524: a graph the
 /// storage engine refused to open because its shard label dictionaries
 /// disagree is reported as `LabelDictionaryDiverged` (a restart does not
-/// clear it).
-pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged };
+/// clear it). SONNY-6529: a graph one of whose engine transactions could not
+/// be ended cleanly while the server runs is refused with `AbortNotUndone`
+/// (graph-storage could not undo an aborted transaction, whose writes are in
+/// its pages) or `CommitFailed` (a commit failed and the engine undid the
+/// transaction, whose writes the store's in-memory copy still holds); a
+/// restart reopens the graph at its committed state and clears both.
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed };
 
 const QuarantineCause = enum(u8) {
     unknown,
@@ -2431,6 +2436,8 @@ const QuarantineCause = enum(u8) {
     data_corruption,
     invalid_data,
     label_dictionary_diverged,
+    abort_not_undone,
+    commit_failed,
 
     fn of(err: anyerror) QuarantineCause {
         return switch (err) {
@@ -2438,6 +2445,8 @@ const QuarantineCause = enum(u8) {
             error.DataCorruption => .data_corruption,
             error.InvalidData => .invalid_data,
             error.LabelDictionaryDiverged => .label_dictionary_diverged,
+            error.AbortNotUndone => .abort_not_undone,
+            error.CommitFailed => .commit_failed,
             else => .unknown,
         };
     }
@@ -2449,6 +2458,8 @@ const QuarantineCause = enum(u8) {
             .data_corruption => error.DataCorruption,
             .invalid_data => error.InvalidData,
             .label_dictionary_diverged => error.LabelDictionaryDiverged,
+            .abort_not_undone => error.AbortNotUndone,
+            .commit_failed => error.CommitFailed,
         };
     }
 };
@@ -13387,6 +13398,45 @@ pub const GraphStore = struct {
         if (persist and outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=QuarantineReads; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6529: refuse every read of `graph_name` from now on with `err`
+    /// (`AbortNotUndone` or `CommitFailed`), as a graph whose hydration failed
+    /// is refused: the storage adapter refuses its writes
+    /// (`StorageAdapter.quarantineAfterTxnFailure`). Its in-memory copy and its
+    /// shard's pages no longer agree, so neither may answer a read. Its
+    /// hydration entry is created when the graph has none (a graph created
+    /// in this process) and marked built and failed: no build runs, and the
+    /// checkpoint writers skip its resident snapshots. DROP GRAPH clears it;
+    /// a restart reopens the graph at its committed state. The security
+    /// graph's reads are exempt, as for a failed hydration.
+    pub fn quarantineGraphReads(self: *GraphStore, graph_name: []const u8, err: GraphQuarantineError) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse blk: {
+            const e = self.allocator.create(HydrationEntry) catch break :blk null;
+            e.* = .{};
+            const key = self.allocator.dupe(u8, graph_name) catch {
+                self.allocator.destroy(e);
+                break :blk null;
+            };
+            self.pending_hydration.put(key, e) catch {
+                self.allocator.free(key);
+                self.allocator.destroy(e);
+                break :blk null;
+            };
+            break :blk e;
+        } orelse {
+            log.err("could not record the read quarantine of a graph (out of memory); its writes are refused, its reads are not", &.{
+                Attr.string("graph", graph_name),
+            });
+            return;
+        };
+        entry.failure.store(@intFromEnum(QuarantineCause.of(err)), .release);
+        entry.failed.store(true, .release);
+        entry.done.store(true, .release);
     }
 
     fn noteQuarantinedRead(graph_name: []const u8, entry: *HydrationEntry) void {
