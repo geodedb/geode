@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T13:37:58.50861414Z",
+  "generated_at": "2026-11-15T14:27:27.086394443Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78153,6 +78153,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6570-CDC-WORKER-SLEEPS",
+      "features": [
+        {
+          "feature": "CDC Engine",
+          "aspect": "IdleWorkerSleeps",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6570_cdc_honesty.zig"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6571-TDE-RAFT-AT-REST",
       "features": [
         {
@@ -83291,7 +83310,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4116
+      "TESTED": 4117
     },
     "by_aspect": {
       "2PC": 3,
@@ -84842,6 +84861,7 @@
       "IdentityById": 1,
       "IdentityContractDiagnostic": 1,
       "IdleReapDeadline": 1,
+      "IdleWorkerSleeps": 1,
       "IllegalOrderKeyPolicy": 1,
       "ImplDefined": 11,
       "Implementation": 12,

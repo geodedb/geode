@@ -38,8 +38,10 @@
   names `src/proto/geode.proto` declares and the clients' generated stubs
   call, `GetCdcDiagnostics` and `ControlCdc` (they answered UNIMPLEMENTED),
   as well as `/CdcDiag` / `/CdcCtrl`. `cdc_enhanced.startCDC` frees the
-  engine when `start()` fails (it leaked it). Regression:
-  `zig build test-sonny6570-cdc-honesty`.
+  engine when `start()` fails (it leaked it). A running CDC engine no
+  longer burns a full CPU core: its worker busy-waited between flushes
+  (it looked for Zig 0.15's `std.time.sleep`); it now sleeps, and notices a
+  stop within 50 ms. Regression: `zig build test-sonny6570-cdc-honesty`.
 - **Cluster mode: the Raft log and snapshots are encrypted under TDE
   (SONNY-6571).** With `GEODE_TDE_KEY` set, the storage engine encrypted its
   pages and WAL, but every cluster node's Raft log

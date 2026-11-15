@@ -559,15 +559,32 @@ pub const CDCEngine = struct {
         }
     }
 
+    /// SONNY-6570: the worker sleeps this long at a time between flushes, so
+    /// `stop()` (which joins it) waits at most about this long.
+    const processing_poll_ms: u64 = 50;
+
+    fn workerRunning(self: *Self) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.is_running;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6570-CDC-WORKER-SLEEPS; FEATURE="CDC Engine"; ASPECT=IdleWorkerSleeps; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=streaming; UPDATED=2026-11-15
     fn processingLoop(self: *Self) void {
-        while (self.is_running) {
-            // Sleep fallback for Zig 0.15: use std.time.sleep if available else busy-wait
-            if (@hasDecl(std.time, "sleep")) {
-                std.time.sleep(self.config.flush_interval_ms * 1_000_000);
-            } else {
-                const target = compat_milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
-                while (compat_milliTimestamp() < target) {}
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (self.workerRunning()) {
+            // SONNY-6570: sleep until the next flush, in short slices so a
+            // stop is noticed promptly. The loop looked for Zig 0.15's
+            // `std.time.sleep`, which 0.16 does not have, and otherwise
+            // busy-waited: a running engine burned a full core.
+            const target = compat_milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
+            while (self.workerRunning()) {
+                const left = target - compat_milliTimestamp();
+                if (left <= 0) break;
+                const slice: u64 = @min(@as(u64, @intCast(left)), processing_poll_ms);
+                io.sleep(.fromMilliseconds(@intCast(slice)), .awake) catch {};
             }
+            if (!self.workerRunning()) break;
 
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());

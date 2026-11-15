@@ -1839,13 +1839,13 @@ REQ-GQL-042,CDC Engine,ChangeStreamMalformedLogBufferWrap,IMPL,,,streaming,2026-
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedPayloadHash,IMPL,,,streaming,2026-11-14,src/streaming/cdc_enhanced.zig,95
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedSnapshotInterval,IMPL,,,streaming,2026-11-14,src/streaming/cdc_enhanced.zig,94
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedSnapshotIntervalEnv,IMPL,,,streaming,2026-11-14,src/streaming/cdc_enhanced.zig,100
-REQ-GQL-042,CDC Engine,CloudSinkFailLoud,TESTED,,,streaming,2026-06-11,src/streaming/cdc_enhanced.zig,1028
+REQ-GQL-042,CDC Engine,CloudSinkFailLoud,TESTED,,,streaming,2026-06-11,src/streaming/cdc_enhanced.zig,1045
 REQ-GQL-042,CDC Engine,CloudSinkFailLoud,TESTED,,,streaming,2026-06-11,tests/test_gap0872_cdc_sinks.zig,15
 REQ-GQL-042,CDC Engine,DiagnosticsExport,IMPL,,,streaming,2026-11-14,src/streaming/cdc_enhanced.zig,92
 REQ-GQL-042,CDC Engine,DiagnosticsExport,IMPL,,,streaming,2026-11-14,tests/canary_cdc_diagnostics_export.zig,4
 REQ-GQL-042,CDC Engine,EventCapture,IMPL,,,streaming,2026-11-14,src/streaming/cdc_enhanced.zig,88
 REQ-GQL-042,CDC Engine,GuardrailEpoch,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig,272
-REQ-GQL-042,CDC Engine,GuardrailReset,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig,807
+REQ-GQL-042,CDC Engine,GuardrailReset,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig,824
 REQ-GQL-042,CDC Engine,GuardrailReset,IMPL,,,streaming,2026-11-14,tests/cdc_guardrail_reset.zig,4
 REQ-GQL-042,CDC Engine,GuardrailTimestamps,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig,269
 REQ-GQL-042,CDC Engine,GuardrailTimestampsAbort,TESTED,,,streaming,2025-09-20,src/streaming/cdc_enhanced.zig,270
@@ -2702,9 +2702,9 @@ REQ-LIB-MIGRATION-JSON-049,JSON Library Migration,LSPValidation,TESTED,,,mcp,202
 REQ-LIB-MIGRATION-JSON-050,JSON Library Migration,LSPCompletions,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,609
 REQ-LIB-MIGRATION-JSON-051,JSON Library Migration,LSPHover,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,632
 REQ-LIB-MIGRATION-JSON-052,JSON Library Migration,CDCStreaming,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,59
-REQ-LIB-MIGRATION-JSON-053,JSON Library Migration,CDCEventSerialize,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,1264
-REQ-LIB-MIGRATION-JSON-054,JSON Library Migration,CDCSnapshots,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,819
-REQ-LIB-MIGRATION-JSON-055,JSON Library Migration,CDCDiagnostics,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,887
+REQ-LIB-MIGRATION-JSON-053,JSON Library Migration,CDCEventSerialize,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,1281
+REQ-LIB-MIGRATION-JSON-054,JSON Library Migration,CDCSnapshots,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,836
+REQ-LIB-MIGRATION-JSON-055,JSON Library Migration,CDCDiagnostics,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,904
 REQ-LIB-MIGRATION-JSON-068,JSON Library Migration,TestJsonOptimization,EXEMPT,,,performance,2026-01-25,src/performance/test_json_optimization.zig,7
 REQ-LIB-MIGRATION-MCP-001,External Library Migration,MCPIntegration,TESTED,,,core,2026-01-24,src/mcp/server.zig,4
 REQ-LIB-MIGRATION-MCP-002,External Library Migration,MCPTools,TESTED,,,core,2026-01-24,src/mcp/tools.zig,3
@@ -5266,8 +5266,9 @@ REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBe
 REQ-SONNY-6569-HOST-NO-USERINFO,Shared host:port parser,NoCredentialInHost,TESTED,,,transport,2026-11-15,tests/test_sonny6569_host_credentials.zig,21
 REQ-SONNY-6570-CDC-AUDIT,CDCProcedures,AuditedChanges,TESTED,,,cdc,2026-11-15,src/execution/storage_dispatch.zig,200
 REQ-SONNY-6570-CDC-REFUSED-PROCEDURES,CDCProcedures,RefuseNotImplemented,TESTED,,,cdc,2026-11-15,src/execution/storage_dispatch.zig,895
-REQ-SONNY-6570-CDC-START-NO-LEAK,CDC Engine,StartFailureFreesEngine,TESTED,,,streaming,2026-11-15,src/streaming/cdc_enhanced.zig,1308
+REQ-SONNY-6570-CDC-START-NO-LEAK,CDC Engine,StartFailureFreesEngine,TESTED,,,streaming,2026-11-15,src/streaming/cdc_enhanced.zig,1325
 REQ-SONNY-6570-CDC-TRUTHFUL-PROCEDURES,CDCProcedures,EngineStateOnly,TESTED,,,cdc,2026-11-15,src/execution/storage_dispatch.zig,880
+REQ-SONNY-6570-CDC-WORKER-SLEEPS,CDC Engine,IdleWorkerSleeps,TESTED,,,streaming,2026-11-15,src/streaming/cdc_enhanced.zig,572
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,,,security,2026-11-15,tests/test_sonny6571_tde_at_rest.zig,35
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,,,distributed,2026-11-15,src/distributed/raft_tde_storage.zig,55
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,,,distributed,2026-11-15,tests/test_sonny6571_raft_tde_storage.zig,19
