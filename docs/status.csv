@@ -5315,6 +5315,7 @@ REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,,,
 REQ-SONNY-6596-APPROXIMATE-LITERAL,GQLParser,ApproximateNumericLiteral,TESTED,,,parser,2026-11-15,tests/test_sonny6596_approximate_literal.zig,11
 REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,,,parser,2026-11-15,src/gql/parser.zig,566
 REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER,GQLParser,DelimitedIdentifier,TESTED,,,parser,2026-11-15,tests/test_sonny6596_double_quoted_identifiers.zig,17
+REQ-SONNY-6596-NO-SPILL-PLUMBING,ServerConfig,NoDeadSpillLimit,TESTED,,,server,2026-11-15,tests/test_sonny6596_spill_plumbing.zig,12
 REQ-SONNY-6596-PROFILE-V1-MEASURED,PROFILE,NoSyntheticOperators,TESTED,,,engine,2026-11-15,src/server/profile_payload.zig,48
 REQ-SONNY-6596-PROFILE-V1-MEASURED,PROFILE,NoSyntheticOperators,TESTED,,,engine,2026-11-15,tests/test_sonny6596_profile_v1_measured.zig,18
 REQ-SONNY-6598-AUTH-ERROR-AUDIT,AuthOutcomeClassification,LoginRefusalAudit,TESTED,,,security,2026-11-15,src/security/audit.zig,253
