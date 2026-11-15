@@ -2148,6 +2148,34 @@ pub const IndexManager = struct {
         return handled_any;
     }
 
+    // CANARY: REQ=REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE; FEATURE="VectorIndex"; ASPECT=IndexNamesCopied; STATUS=TESTED; TEST=tests/test_sonny6595_vector_write_paths.zig; OWNER=index; UPDATED=2026-11-15
+    /// SONNY-6595: the names of the advanced indexes registered for
+    /// (label, property), copied into `allocator` under `rebuild_mutex` (a
+    /// concurrent DROP INDEX frees the manager's own strings). Caller frees
+    /// each name and the slice. Empty when none is registered.
+    pub fn advancedIndexNamesForPropertyAlloc(
+        self: *IndexManager,
+        allocator: std.mem.Allocator,
+        label: []const u8,
+        property: []const u8,
+    ) ![][]u8 {
+        self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var names: std.ArrayListUnmanaged([]u8) = .empty;
+        errdefer {
+            for (names.items) |n| allocator.free(n);
+            names.deinit(allocator);
+        }
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
+            try names.ensureUnusedCapacity(allocator, 1);
+            names.appendAssumeCapacity(try allocator.dupe(u8, meta.name));
+        }
+        return names.toOwnedSlice(allocator);
+    }
+
     // =======================================================================
     // geode#875 RC-2b: the non-blocking (shadow) rebuild window.
     //

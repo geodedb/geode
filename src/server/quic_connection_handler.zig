@@ -563,6 +563,18 @@ fn executeBulkSimpleCreate(
         kvs[i] = .{ .key = prop.key, .value = pv };
     }
 
+    // CANARY: REQ=REQ-SONNY-6595-FAST-CREATE-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=FastPathCreateDimensionGuard; STATUS=TESTED; TEST=tests/test_sonny6595_vector_write_paths.zig; OWNER=index; UPDATED=2026-11-15
+    // SONNY-6595: the vector dimension guard the MERGE fast paths and the
+    // executor's chokepoint run (ENG-3922), before anything is written. This
+    // path ran none, so a wrong-dimension vector `$param` the executor
+    // refuses was stored (and, on an indexed property, made every knn() on
+    // it fail after the next restart).
+    checkBulkVectorDims(eval_allocator, query_graph_name, node_pattern.labels, kvs) catch |err| {
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return;
+    };
+
     // Statement-atomicity pre-pass. `bulkInsertNode` runs the same check at the
     // chokepoint, but doing it here as well means an unstorable value never
     // reaches the group-commit coordinator's queue — the caller gets a clean
@@ -694,6 +706,10 @@ fn executeBulkSimpleCreate(
             Attr.string("err", @errorName(err)),
         });
     };
+    // SONNY-6595: the dimension pin (ENG-3922(a), after the commit) and the
+    // vector (advanced) indexes on the node's labels, the same placement.
+    adoptBulkVectorDims(query_graph_name, node_pattern.labels, kvs);
+    maintainBulkAdvancedIndexes(eval_allocator, query_graph_name, node_pattern.labels, created_node_id, kvs);
 
     try sendEmptySuccessResult(gpa, stream);
 
@@ -1234,16 +1250,22 @@ fn bulkPropVectorDim(value: graph_store.PropertyValue) ?u16 {
 /// is not, so without this the fast path was a hole straight past the guard.
 ///
 /// Runs BEFORE any op is submitted, so a refusal costs no partial write.
+///
+/// SONNY-6595: every label of the node (the CREATE fast path writes several),
+/// and the guard is armed from the catalog first, as the chokepoint does
+/// (`statement_dispatcher.armVectorDimGuard`: an index this process has not
+/// seen built yet, e.g. after a restart).
 fn checkBulkVectorDims(
+    allocator: std.mem.Allocator,
     graph: []const u8,
-    label: []const u8,
+    labels: []const []const u8,
     kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
 ) !void {
-    const mgr = geode.index_manager.ensureGlobalIndexManagerForDimGuard() orelse return;
-    const labels = [_][]const u8{label};
     for (kvs) |kv| {
         const dim = bulkPropVectorDim(kv.value) orelse continue;
-        try mgr.checkVectorDimensionForWriteInGraph(graph, &labels, kv.key, dim);
+        try execution.statement_dispatcher.armVectorDimGuard(allocator, labels, kv.key);
+        const mgr = geode.index_manager.ensureGlobalIndexManagerForDimGuard() orelse return;
+        try mgr.checkVectorDimensionForWriteInGraph(graph, labels, kv.key, dim);
     }
 }
 
@@ -1252,14 +1274,67 @@ fn checkBulkVectorDims(
 /// `adoptVectorDimensionInGraph` call does.
 fn adoptBulkVectorDims(
     graph: []const u8,
-    label: []const u8,
+    labels: []const []const u8,
     kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
 ) void {
     const mgr = geode.index_manager.getGlobalIndexManager() orelse return;
-    const labels = [_][]const u8{label};
     for (kvs) |kv| {
         const dim = bulkPropVectorDim(kv.value) orelse continue;
-        mgr.adoptVectorDimensionInGraph(graph, &labels, kv.key, dim);
+        mgr.adoptVectorDimensionInGraph(graph, labels, kv.key, dim);
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE; FEATURE="VectorIndex"; ASPECT=FastPathNodeWriteMaintenance; STATUS=TESTED; TEST=tests/test_sonny6595_vector_write_paths.zig; OWNER=index; UPDATED=2026-11-15
+/// SONNY-6595: keep the advanced (vector, ...) indexes on `labels` current
+/// for a node a fast path has just written, as the executor's write
+/// chokepoint does (`property_mutation.maintainAdvancedIndexesForNodeWrite`).
+/// The node fast paths write through the storage adapter only, so their
+/// nodes were missing from every vector index until it was rebuilt, and
+/// knn() answers from a non-empty index without asking whether it is
+/// current.
+///
+/// Runs on the connection thread with NO graph lock held, after the write
+/// committed. Per (label, property) with an index: an incremental insert of
+/// the written value; when that declines (the index already holds the node,
+/// i.e. a SET replacing its vector or a concurrent write that indexed it
+/// first, or a non-vector index) every covering index is rebuilt from the
+/// store with `rebuildAdvancedVectorIndexNonBlocking`, which takes the
+/// graph's SHARED lock itself and never while it holds `rebuild_mutex`
+/// (CLAUDE.md lock order). A failure is logged: the write committed.
+fn maintainBulkAdvancedIndexes(
+    allocator: std.mem.Allocator,
+    graph: []const u8,
+    labels: []const []const u8,
+    node_id: u64,
+    kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
+) void {
+    const mgr = geode.index_manager.getGlobalIndexManager() orelse return;
+    for (labels) |label| {
+        for (kvs) |kv| {
+            const names = mgr.advancedIndexNamesForPropertyAlloc(allocator, label, kv.key) catch |err| {
+                log.warn("fast-path advanced index maintenance failed", &.{
+                    Attr.string("label", label),
+                    Attr.string("property", kv.key),
+                    Attr.string("err", @errorName(err)),
+                });
+                continue;
+            };
+            defer {
+                for (names) |n| allocator.free(n);
+                allocator.free(names);
+            }
+            if (names.len == 0) continue;
+            if (mgr.tryIncrementalInsertForProperty(label, kv.key, node_id, kv.value)) continue;
+            for (names) |name| {
+                _ = mgr.rebuildAdvancedVectorIndexNonBlocking(allocator, graph, name) catch |err| {
+                    log.warn("fast-path advanced index rebuild failed", &.{
+                        Attr.string("index", name),
+                        Attr.string("graph", graph),
+                        Attr.string("err", @errorName(err)),
+                    });
+                };
+            }
+        }
     }
 }
 
@@ -1361,12 +1436,13 @@ fn executeBulkSimpleMerge(
         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
     };
-    checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
+    const spec_labels = [_][]const u8{spec.label};
+    checkBulkVectorDims(eval_allocator, query_graph_name, &spec_labels, merge_kvs) catch |err| {
         const info = proto_util.mapError(err);
         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
     };
-    checkBulkVectorDims(query_graph_name, spec.label, kvs) catch |err| {
+    checkBulkVectorDims(eval_allocator, query_graph_name, &spec_labels, kvs) catch |err| {
         const info = proto_util.mapError(err);
         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
@@ -1567,8 +1643,12 @@ fn executeBulkSimpleMerge(
     // ENG-3922(a): establish the pin from what actually committed. Only when
     // this call wrote — a phase-1 hit changed nothing.
     if (fts_should_maintain) {
-        adoptBulkVectorDims(query_graph_name, spec.label, merge_kvs);
-        adoptBulkVectorDims(query_graph_name, spec.label, kvs);
+        adoptBulkVectorDims(query_graph_name, &spec_labels, merge_kvs);
+        adoptBulkVectorDims(query_graph_name, &spec_labels, kvs);
+        // SONNY-6595: the vector (advanced) indexes, on this thread with no
+        // graph lock held, as the FTS maintenance below.
+        maintainBulkAdvancedIndexes(eval_allocator, query_graph_name, &spec_labels, merged_node_id, merge_kvs);
+        maintainBulkAdvancedIndexes(eval_allocator, query_graph_name, &spec_labels, merged_node_id, kvs);
     }
 
     // Spec geode-vectorization-and-reranking + A4b §6: the bulk fast path
@@ -1713,12 +1793,13 @@ fn executeBatchSimpleMerge(
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return true;
         };
-        checkBulkVectorDims(query_graph_name, spec.label, merge_kvs) catch |err| {
+        const spec_labels = [_][]const u8{spec.label};
+        checkBulkVectorDims(ba, query_graph_name, &spec_labels, merge_kvs) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return true;
         };
-        checkBulkVectorDims(query_graph_name, spec.label, kvs) catch |err| {
+        checkBulkVectorDims(ba, query_graph_name, &spec_labels, kvs) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return true;
@@ -1823,8 +1904,12 @@ fn executeBatchSimpleMerge(
     for (outcomes, 0..) |o, i| {
         if (!o.ok or !o.wrote) continue;
         // ENG-3922(a): establish the pin from what committed, same condition.
-        adoptBulkVectorDims(query_graph_name, labels[i], all_merge_kvs[i]);
-        adoptBulkVectorDims(query_graph_name, labels[i], all_set_kvs[i]);
+        const op_labels = labels[i .. i + 1];
+        adoptBulkVectorDims(query_graph_name, op_labels, all_merge_kvs[i]);
+        adoptBulkVectorDims(query_graph_name, op_labels, all_set_kvs[i]);
+        // SONNY-6595: the vector (advanced) indexes, as in the single MERGE.
+        maintainBulkAdvancedIndexes(ba, query_graph_name, op_labels, o.id, all_merge_kvs[i]);
+        maintainBulkAdvancedIndexes(ba, query_graph_name, op_labels, o.id, all_set_kvs[i]);
         execution.fts_index_ops.maintainFulltextOnWrite(
             ba,
             query_graph_name,

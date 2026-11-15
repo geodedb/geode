@@ -78,10 +78,14 @@ different dimension (SQLSTATE 22000, `VectorDimensionMismatch`).
   dimension does **not** release the pin until the process restarts (or the
   graph is dropped) — re-deriving it from data on every write would cost a
   label scan per vector write. Known residual, not a defect.
-* The **bulk/batch MERGE fast paths** enforce the same guard. They bypass the
-  regular property-write chokepoint, and a vector *can* reach them as a bound
-  wire parameter, so the check runs there too — before any op is submitted, so
-  a refusal leaves the whole batch unapplied.
+* The **QUIC node write fast paths** (the simple `CREATE`, the bulk MERGE and
+  the `/*+BATCH*/` MERGE) enforce the same guard, armed from the catalog as the
+  chokepoint arms it. They bypass the regular property-write chokepoint, and a
+  vector *can* reach them as a bound wire parameter, so the check runs there
+  too — before any op is submitted, so a refusal leaves the whole batch
+  unapplied, with the executor's error. (SONNY-6595: the CREATE fast path ran
+  none and stored the vector; on an indexed property every `knn` on it then
+  failed with 22023 after the next restart.)
 
 A vector literal above **65535 dimensions** is a separate refusal: SQLSTATE
 54000 (`program_limit_exceeded`, `VectorTooLarge`), because the stored `dim` is
@@ -163,6 +167,22 @@ changed node (`IndexManager.tryIncrementalInsertForProperty`, reached from the
 single write chokepoint `execution/property_mutation.zig`
 `setNodePropertyFromValue`), not a full drop-and-rescan.
 
+**The QUIC node write fast paths (SONNY-6595).** The simple `CREATE`, bulk
+MERGE and `/*+BATCH*/` MERGE fast paths write through the storage adapter, not
+the chokepoint, and used to leave their nodes out of every vector index. They
+now maintain the indexes on the node's labels themselves, on the connection
+thread with no graph lock held, after the write commits: the same incremental
+insert, or, when the index already holds the node (a replaced vector, or a
+concurrent write that indexed it first), a non-blocking rebuild from the store
+(`rebuildAdvancedVectorIndexNonBlocking`). gRPC has no such fast path.
+
+**Freshness.** `knn` does not check that an index is current: it answers from
+any non-empty index whose label is the only one carrying the property in the
+session's graph and tenant (`GraphStore.labelSolelyCarriesProperty`), and scans
+otherwise (no index, an empty one, or a second label carrying the property).
+Every node write path therefore has to maintain the index; an omitted path
+shows up as a node `knn` does not rank, not as an error.
+
 RC-1b is the part that matters operationally: the deferral guard
 (`advancedIndexRebuildIsDeferred`) used to short-circuit on the mere **presence**
 of the transport's per-statement `pending_index_rebuilds` map — which the QUIC
@@ -195,11 +215,13 @@ Consequences you will observe:
 * `vector_knn` / `knn` fall back to a brute-force scan (`scanVectorKnn`) when no
   runtime index is registered for the property. Results stay correct, so a
   missing index is silent — measure, don't assume.
-* Advanced indexes are **not rebuilt at startup**. No call site rebuilds them on
-  catalog reload, so after a restart the catalog still lists the index and
-  `knn` silently uses the brute-force fallback until something triggers a
-  rebuild. (The vector *dimension guard* is re-armed on catalog reload —
-  ENG-3912 — but that is the validator, not the index.)
+* Advanced indexes are **not rebuilt at startup**: the first `knn` on an
+  indexed property after a restart rebuilds its vector index from the store
+  (`statement_dispatcher.ensureAdvancedVectorIndexForProperty`,
+  ADVANCED-INDEX-RESTART), so that query pays the build. Writes before it
+  are not lost: the rebuild reads them from the store. (The vector
+  *dimension guard* is re-armed on catalog reload — ENG-3912 — but that is
+  the validator, not the index.)
 
 Insert is closed (geode#875 RC-1/RC-1b) and readers now keep a consistent view
 across a backfill (RC-2b's shadow swap). **Update and delete against the live

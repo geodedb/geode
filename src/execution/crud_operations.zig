@@ -5083,11 +5083,6 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         .leader => return clusterReplicateDelete(allocator, d, current_graph, context),
     }
 
-    const store = graph_store.getWritableGlobalStore(allocator);
-    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
-    // adds O(total graph size) overhead without improving correctness under the
-    // graph write lock.
-    const read_store: *graph_store.GraphStore = store;
     // GAP-0840: strict mode rejects an unscoped/"default" tenant scope here. The
     // resolved graph/tenant values are no longer read directly — ENG-3913 routes
     // the match-set resolution through the match path, which applies both — but
@@ -5122,92 +5117,12 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
 
         // Persistence is handled by the background persistence loop (graph_store.zig)
         // which saves dirty graphs every second. No synchronous save needed here.
-    } else if (d.items.len > 0) {
-        // GAP #56: Delete specific items by variable name.
-        // Without a MATCH clause, items refer to variables bound in a preceding
-        // MATCH statement (query-level delete_items path). For standalone DELETE
-        // statements, attempt to resolve items via context bindings.
-        if (context.bindings) |bindings| {
-            if (!d.detach) {
-                for (d.items) |item| {
-                    const var_name = switch (item) {
-                        .Variable => |n| n,
-                        .Node => |n| n,
-                        .Relationship => |n| n,
-                    };
-                    if (bindings.get(var_name)) |binding| {
-                        switch (binding) {
-                            .node_id => |nid| {
-                                // ENG-3983: CHECKED reads (see the match-clause path above).
-                                const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(nid)).len > 0;
-                                const has_incoming = (try read_store.getIncomingEdgeIdsChecked(nid)).len > 0;
-                                if (has_outgoing or has_incoming) {
-                                    return error.NodeHasEdges;
-                                }
-                            },
-                            .edge_id => {},
-                        }
-                    }
-                }
-            }
-            for (d.items) |item| {
-                const var_name = switch (item) {
-                    .Variable => |n| n,
-                    .Node => |n| n,
-                    .Relationship => |n| n,
-                };
-                if (bindings.get(var_name)) |binding| {
-                    switch (binding) {
-                        .node_id => |nid| {
-                            if (d.detach) {
-                                // P8: DETACH — use adjacency indexes instead of full edge scan.
-                                // Collect edge IDs first since deleteEdgeNoSave mutates the
-                                // adjacency lists whose slices we are reading.
-                                var edges_to_remove = std.ArrayList(u64).empty;
-                                defer edges_to_remove.deinit(allocator);
-                                // ENG-3983: CHECKED reads — see the match-clause
-                                // DETACH path above for why a swallowed hydrate
-                                // failure here orphans every incident edge.
-                                for (try read_store.getOutgoingEdgeIdsChecked(nid)) |eid| {
-                                    try edges_to_remove.append(allocator, eid);
-                                }
-                                for (try read_store.getIncomingEdgeIdsChecked(nid)) |eid| {
-                                    var already = false;
-                                    for (edges_to_remove.items) |existing| {
-                                        if (existing == eid) {
-                                            already = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!already) {
-                                        try edges_to_remove.append(allocator, eid);
-                                    }
-                                }
-                                for (edges_to_remove.items) |eid| {
-                                    if (store.getEdgePtr(eid) == null) return error.IncidentEdgeUnresolvable;
-                                    try store.deleteEdgeChecked(eid);
-                                }
-                            }
-                            try store.deleteNodeChecked(nid);
-                            if (store.getNodePtr(nid) == null) {
-                                deleted_count += 1;
-                            }
-                        },
-                        .edge_id => |eid| {
-                            if (store.getEdgePtr(eid) != null) {
-                                try store.deleteEdgeChecked(eid);
-                            }
-                            if (store.getEdgePtr(eid) == null) {
-                                deleted_count += 1;
-                            }
-                        },
-                    }
-                }
-            }
-            // Persistence is handled by the background persistence loop (graph_store.zig)
-            // which saves dirty graphs every second. No synchronous save needed here.
-        }
     }
+    // SONNY-6595: a DELETE without a MATCH clause deletes nothing here. Its
+    // variables are in no scope, which `param_check` refuses before the
+    // statement runs; the branch that deleted what `context.bindings` named
+    // (set only for `MATCH ... CALL`, whose CALL subquery cannot hold a
+    // DELETE) was unreachable, and skipped `deleteElements`' hooks.
 
     // Note: The global store persists changes automatically
 

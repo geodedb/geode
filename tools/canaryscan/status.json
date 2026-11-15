@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T15:01:18.159533809Z",
+  "generated_at": "2026-11-15T15:31:31.267822649Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78738,6 +78738,116 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6595-FAST-CREATE-DIM-GUARD",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "FastPathCreateDimensionGuard",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_vector_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "IndexNamesCopied",
+          "status": "TESTED",
+          "files": [
+            "src/index/index_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_vector_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "VectorIndex",
+          "aspect": "FastPathNodeWriteMaintenance",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_vector_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "SnapshotRebuildArmsRegistry",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig",
+            "tests/test_sonny6595_fts_snapshot_restart.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_fts_snapshot_restart.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6595-STANDALONE-DELETE",
+      "features": [
+        {
+          "feature": "DeleteStatement",
+          "aspect": "UnboundDeleteDeletesNothing",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6595_standalone_delete.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_standalone_delete.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6595-VECTOR-WRITE-PATHS",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "WirePathMatrix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6595_vector_write_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6595_vector_write_paths.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83829,7 +83939,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4148
+      "TESTED": 4154
     },
     "by_aspect": {
       "2PC": 3,
@@ -85037,10 +85147,12 @@
       "FalsePositiveReduction": 1,
       "FanoutScaledServerDefaults": 1,
       "FastPath": 2,
+      "FastPathCreateDimensionGuard": 1,
       "FastPathCreateMaintenance": 1,
       "FastPathDecline": 1,
       "FastPathFence": 1,
       "FastPathGate": 1,
+      "FastPathNodeWriteMaintenance": 1,
       "FastPathsReturnFullSortPrefix": 1,
       "FeatureFlag": 2,
       "FeatureFlags": 1,
@@ -85416,6 +85528,7 @@
       "IndexKeyGate": 1,
       "IndexMaintenance": 4,
       "IndexMaintenanceRegression": 2,
+      "IndexNamesCopied": 1,
       "IndexOptimizer": 1,
       "IndexPathVisibility": 1,
       "IndexPerf": 1,
@@ -87036,6 +87149,7 @@
       "SnapshotInstallation": 1,
       "SnapshotOwnsLabels": 1,
       "SnapshotReadView": 1,
+      "SnapshotRebuildArmsRegistry": 1,
       "SnapshotRestore": 1,
       "SnapshotSegmentRecycleLatencyVarianceEnvelope": 1,
       "SnapshotSelection": 1,
@@ -87333,6 +87447,7 @@
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
+      "UnboundDeleteDeletesNothing": 1,
       "UnboundedWithoutLimit": 1,
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
@@ -87507,7 +87622,7 @@
       "WireCode": 1,
       "WireEncoding": 1,
       "WireField": 1,
-      "WirePathMatrix": 1,
+      "WirePathMatrix": 2,
       "WireProcedure": 1,
       "WireProtocolCompatibility": 1,
       "WireRegression": 2,

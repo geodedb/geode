@@ -2606,6 +2606,49 @@
   write and after SIGKILL and SIGTERM restarts; 264 of 592 cells failed
   before).
 
+- **Vector indexes are kept current by the QUIC node write fast paths, and
+  the CREATE fast path refuses a wrong-dimension vector (SONNY-6595).** Over
+  QUIC, a single-statement `CREATE (n:L {k: v})` with no RETURN, a simple
+  `MERGE (n:L {k: v}) [ON CREATE] SET ...` and a `/*+BATCH*/` bulk MERGE are
+  served by write fast paths that write through the storage adapter; they
+  never ran the advanced-index maintenance every executor write runs. A
+  vector reaches them as a `$param` (a `vectorf32(...)` call is not
+  fast-pathed), and knn() answers from a non-empty vector index without
+  asking whether it is current, so such a node was not ranked by knn() and a
+  replaced vector kept answering for its node until the index was rebuilt
+  (the first knn() after a restart rebuilds it from the store). The fast
+  paths now keep the indexes on the node's labels current on the connection
+  thread with no graph lock held, after the write commits: an incremental
+  insert, or, when the index already holds the node (a replaced vector), a
+  non-blocking rebuild from the store. The CREATE fast path also ran no
+  vector-dimension check (the MERGE fast paths and the executor do), so it
+  stored a wrong-dimension vector the executor refuses with 22000; on an
+  indexed property that made every knn() on it fail with 22023 after the
+  next restart. It now runs the same check, armed from the catalog, and
+  answers the executor's error. gRPC has no such fast path and was not
+  affected. Regression: `zig build test-sonny6595-vector-write-paths` (a
+  real server, QUIC and gRPC: every write path asked by knn() right after
+  its write and after SIGKILL and SIGTERM restarts, and a wrong-dimension
+  vector written by every path in every phase; 27 of 238 cells failed
+  before).
+- **A raft snapshot installed after a restart rebuilds the fulltext indexes
+  (SONNY-6595).** `fts_index_ops.rebuildAllFulltextIndexes`, which the
+  snapshot install runs, rebuilt the indexes in each graph's in-memory
+  label registry, which after a restart is filled by the first write. A
+  snapshot installed before any write rebuilt nothing, so a node it
+  restored under an id the engine had tombstoned stayed unsearchable. It
+  now fills the registry from the catalog first (`armLabelRegistry`,
+  SONNY-6591). (`installSnapshotData` has no production caller yet.)
+  Regression: `zig build test-sonny6595-fts-snapshot-restart`.
+- **Removed an unreachable DELETE branch (SONNY-6595).** `executeDelete`
+  deleted the elements `context.bindings` named for a DELETE without a
+  MATCH clause, skipping the hooks `deleteElements` runs (the fulltext
+  delete hook among them). The bindings are set only for `MATCH ... CALL`,
+  whose CALL subquery cannot hold a DELETE, and a DELETE with no MATCH is
+  refused before it runs (its variable is not in scope), so the branch never
+  ran. Behaviour is unchanged. Regression:
+  `zig build test-sonny6595-standalone-delete`.
+
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,
