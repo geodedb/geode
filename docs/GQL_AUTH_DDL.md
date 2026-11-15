@@ -157,7 +157,8 @@ under FIPS with 0A000. `mfa_setup` with MFA turned off on the server
 answer success only for a code that verifies: a user with no TOTP secret
 fails with 55000 (`mfa_not_enrolled`), a code that does not verify with
 28000 (`invalid token`), and a user locked out after five failed
-verifications with 53400. They answered 00000 with a status row
+verifications with 53400. `mfa_verify` and `mfa_enable` share one per-user
+attempt count and lockout (SONNY-6623). They answered 00000 with a status row
 (`rate_limited`, `mfa_not_enrolled`, `invalid token`, or an `error` column).
 A `mfa_verify` whose attempt record cannot be made (out of memory) fails
 with 53000 without checking the code (SONNY-6602; it was checked and not

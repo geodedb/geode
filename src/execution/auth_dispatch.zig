@@ -285,6 +285,17 @@ pub fn injectMfaAttemptAllocFailures(n: u32) error{FaultHookUnavailable}!void {
     mfa_attempt_alloc_faults.store(n, .release);
 }
 
+/// SONNY-6623 test-only: forget `username`'s in-memory attempt count, so a
+/// test that checks one wrong code many times (SONNY-6600's re-enrollment
+/// race) is not stopped by the lockout it is not testing. Not compiled
+/// outside tests.
+pub fn resetMfaAttemptsForTests(username: []const u8) error{FaultHookUnavailable}!void {
+    if (comptime !mfa_attempt_fault_hook_available) return error.FaultHookUnavailable;
+    g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    _ = clearMfaRateLimit(username);
+}
+
 /// The allocator a new attempt record is made with: the store's, or (fault
 /// hook armed) one that fails.
 fn mfaAttemptAllocator() std.mem.Allocator {
@@ -536,7 +547,7 @@ pub fn loadMfaAttempts(username: []const u8, fail_count: u32, lockout_until_ms: 
 fn storeMfaAttempts(username: []const u8, to_store: MfaAttemptsToStore) void {
     const f = g_mfa_persist.set_attempts_fn orelse return;
     f(g_mfa_persist.ctx, username, to_store.fail_count, to_store.lockout_until_ms) catch |err| {
-        log.err("geode.auth.mfa_verify: the MFA attempt state could not be stored in the security graph", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+        log.err("geode.auth.mfa_verify/mfa_enable: the MFA attempt state could not be stored in the security graph", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
     };
 }
 
@@ -1372,27 +1383,27 @@ fn ownedRow(allocator: std.mem.Allocator, names: []const []const u8, values: []c
     return result;
 }
 
-fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
-    // GAP-0502: geode.auth.mfa_verify(username, token) -> status
-    // Implements RFC 6238 TOTP validation with rate limiting.
-    var username: []const u8 = "";
-    var token: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-        if (args.len >= 2 and args[1].* == .String) token = args[1].String;
-    }
+// CANARY: REQ=REQ-SONNY-6623-SHARED-MFA-LIMITER; FEATURE="MFA authentication"; ASPECT=OneLimiterForEveryCodeCheck; STATUS=TESTED; TEST=tests/test_sonny6623_mfa_enable_limit.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6623: who checks a code (`limitedMfaCodeCheck`).
+const MfaCodeCheck = enum { verify, enable };
 
+/// Check `token` against `username`'s stored TOTP secret under the MFA
+/// attempt limiter (GAP-0502, SONNY-6602, SONNY-6619), for mfa_verify and
+/// mfa_enable alike (SONNY-6623: mfa_enable had no limit): one per-user
+/// count and lockout, the attempt record made before the check, the
+/// transitions into and out of a stored lockout written through.
+///
+/// - locked out: MfaRateLimited (53400), nothing checked;
+/// - not enrolled: MfaNotEnrolled (55000), not counted (no secret to guess
+///   against) - for mfa_enable a malformed code is still InvalidArgs (22023);
+/// - a malformed code (not six digits) is a wrong code, counted; mfa_enable
+///   answers it InvalidArgs (22023), mfa_verify false (28000);
+/// - a check that could not run (MFA turned off, an unusable secret, out of
+///   memory) is that error, not counted (SONNY-6598).
+///
+/// True when the code verifies.
+fn limitedMfaCodeCheck(allocator: std.mem.Allocator, username: []const u8, token: []const u8, who: MfaCodeCheck) !bool {
     const now_ms = compat_milliTimestamp();
-
-    // SONNY-6367: every outcome but "verified" is an error status: no such
-    // user (42704 for an Admin), locked out (53400), not enrolled (55000), a
-    // code that does not verify (28000). They answered 00000 with a status
-    // row ("rate_limited", "mfa_not_enrolled", "invalid token"), which a
-    // caller that checks the status read as a pass.
-    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
-
-    // Rate limit check: reject if user is locked out from too many failed attempts
     {
         g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -1403,40 +1414,31 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
         try reserveMfaAttemptRecord(username);
     }
 
-    // Look up the user's stored TOTP secret
-    const stored_secret = (try getMfaSecret(allocator, username)) orelse return error.MfaNotEnrolled;
+    const well_formed = isSixDigitCode(token);
+    const stored_secret = (try getMfaSecret(allocator, username)) orelse {
+        if (who == .enable and !well_formed) return error.InvalidArgs;
+        return error.MfaNotEnrolled;
+    };
     defer freeMfaSecret(allocator, stored_secret);
 
-    // Parse the 6-digit token string to u32 and validate via RFC 6238 TOTP
     var is_valid = false;
-    if (token.len == 6) {
-        const code = std.fmt.parseInt(u32, token, 10) catch 0xFFFFFFFF;
-        if (code <= 999999) {
-            // HMAC-SHA1 TOTP with +/-1 window (90s tolerance)
-            // CANARY: REQ=REQ-SONNY-6598-MFA-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=MfaVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
-            // SONNY-6598: a check the server could not run (MFA turned off,
-            // an unusable stored secret, out of memory) is that error, not
-            // counted toward the MFA lockout. It was `catch false`: 28000
-            // "invalid code", counted.
-            is_valid = mfa_mod.verifyCode(
-                allocator,
-                stored_secret,
-                @as(u64, @intCast(now_ms)),
-                code,
-                30, // step_seconds
-                6, // digits
-                1, // window (+/-1 = 90 second tolerance)
-            ) catch |err| {
-                log.err("geode.auth.mfa_verify: the TOTP check could not run; not counted as a failed attempt", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
-                return err;
-            };
-        }
+    if (well_formed) {
+        const code = std.fmt.parseInt(u32, token, 10) catch unreachable; // six digits
+        // HMAC-SHA1 TOTP with +/-1 window (90s tolerance)
+        // CANARY: REQ=REQ-SONNY-6598-MFA-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=MfaVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6598: a check the server could not run (MFA turned off, an
+        // unusable stored secret, out of memory) is that error, not counted
+        // toward the MFA lockout. It was `catch false`: 28000 "invalid
+        // code", counted.
+        is_valid = mfa_mod.verifyCode(allocator, stored_secret, @as(u64, @intCast(now_ms)), code, 30, 6, 1) catch |err| {
+            log.err("geode.auth.mfa_* : the TOTP check could not run; not counted as a failed attempt", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            return err;
+        };
     }
 
-    // Update rate limiter based on result. SONNY-6619: the transitions
-    // into lockout and out of a stored state are stored (after the lock is
-    // released); a failure below the limit is counted in memory only, so a
-    // guess does not cost a chain seal.
+    // SONNY-6619: the transitions into lockout and out of a stored state
+    // are stored (after the lock is released); a failure below the limit is
+    // counted in memory only, so a guess does not cost a chain seal.
     var to_store: ?MfaAttemptsToStore = null;
     {
         g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -1449,6 +1451,30 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
     }
     if (to_store) |st| storeMfaAttempts(username, st);
 
+    if (!well_formed and who == .enable) return error.InvalidArgs;
+    return is_valid;
+}
+
+fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+    // GAP-0502: geode.auth.mfa_verify(username, token) -> status
+    // Implements RFC 6238 TOTP validation with rate limiting.
+    var username: []const u8 = "";
+    var token: []const u8 = "";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        if (args.len >= 2 and args[1].* == .String) token = args[1].String;
+    }
+
+    // SONNY-6367: every outcome but "verified" is an error status: no such
+    // user (42704 for an Admin), locked out (53400), not enrolled (55000), a
+    // code that does not verify (28000). They answered 00000 with a status
+    // row ("rate_limited", "mfa_not_enrolled", "invalid token"), which a
+    // caller that checks the status read as a pass.
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
+
+    // SONNY-6623: the check is the limiter shared with mfa_enable.
+    const is_valid = try limitedMfaCodeCheck(allocator, username, token, .verify);
     if (!is_valid) return error.InvalidMfaCode;
 
     const columns = try allocator.alloc([]const u8, 2);
@@ -2028,20 +2054,11 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
     // against the user's stored TOTP secret — admins could "enable" MFA without
     // proving authenticator possession. Require a valid TOTP code on enable.
     if (is_enable) {
-        if (!isSixDigitCode(code)) return error.InvalidArgs;
-
-        // Verify the code against the user's stored TOTP secret.
-        const stored_secret = (try getMfaSecret(allocator, username)) orelse return error.MfaNotEnrolled;
-        defer freeMfaSecret(allocator, stored_secret);
-
-        const code_u32 = std.fmt.parseInt(u32, code, 10) catch 0xFFFFFFFF;
-        const now_ms = @as(u64, @intCast(compat_milliTimestamp()));
-        // SONNY-6598: a check that could not run is that error, not 28000.
-        const ok = mfa_mod.verifyCode(allocator, stored_secret, now_ms, code_u32, 30, 6, 1) catch |err| {
-            log.err("geode.auth.mfa_enable: the TOTP check could not run", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
-            return err;
-        };
-        if (!ok) return error.InvalidMfaCode;
+        // A missing code is an argument error, not a guess: not counted.
+        if (code.len == 0) return error.InvalidArgs;
+        // SONNY-6623: under the attempt limiter shared with mfa_verify (it
+        // had none): the same count, lockout and stored transitions.
+        if (!try limitedMfaCodeCheck(allocator, username, code, .enable)) return error.InvalidMfaCode;
     } else if (code.len > 0) {
         // Disable path still validates format if a code is provided, but
         // does NOT require HMAC verification (separate concern — admins may

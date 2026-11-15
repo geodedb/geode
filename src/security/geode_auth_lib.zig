@@ -2189,15 +2189,16 @@ pub const SecurityManager = struct {
             var roles = r.value;
             roles.deinit(self.allocator);
         }
-        // Its sessions (collected first: removing while iterating rehashes).
-        var doomed: std.ArrayList([]const u8) = .empty;
-        defer doomed.deinit(self.allocator);
-        var sit = self.sessions.iterator();
-        while (sit.next()) |e| {
-            if (e.value_ptr.user_id == id) doomed.append(self.allocator, e.key_ptr.*) catch break;
-        }
-        for (doomed.items) |key| {
-            const skv = self.sessions.fetchRemove(key) orelse continue;
+        // Its sessions, removed in place (SONNY-6623: they were collected
+        // into an allocated list first, and an allocation failure left them).
+        // A removal never grows or rehashes the map, so each pass finds the
+        // next one from the start, and nothing here can fail.
+        while (true) {
+            var sit = self.sessions.iterator();
+            const key = while (sit.next()) |e| {
+                if (e.value_ptr.user_id == id) break e.key_ptr.*;
+            } else break;
+            const skv = self.sessions.fetchRemove(key).?;
             if (skv.value.ip_address) |ip| self.allocator.free(ip);
             if (skv.value.user_agent) |ua| self.allocator.free(ua);
             self.allocator.free(skv.key);
