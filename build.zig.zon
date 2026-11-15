@@ -202,8 +202,8 @@
             // Native macOS transport and current-main paired UDP gate passed.
             // 2026-10-26: serialize FIN, RESET_STREAM and STOP_SENDING with
             // stream mutations. QUIC !51 and its main pipeline passed all checks.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.48#274109bd5a0a268b7e64cd00a406d00a61bd1de2",
-            .hash = "quic-0.1.48-gBIqUR_-QACpHwpcYcn4npRszy-RS-cTq-y3rH8KkknM",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.51#79cb4953a8e782547a8046060799281741bad786",
+            .hash = "quic-0.1.51-gBIqUWuERAAagBL8PeLquTGZ-RMwZiIl76ynriwU1huK",
         },
 
         // =======================================================================
@@ -279,8 +279,8 @@
             // thread_pool v0.2.7 + quic v0.1.38 + timeseries-storage v0.2.10
             // (each pin-aligned to the same thread_pool hash). A partial bump
             // fails with "expected '*pool.ThreadPool', found '*pool.ThreadPool'".
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.9#1d7275da020a43588c4f1885f7f725d5e8ce079e",
-            .hash = "thread_pool-0.2.9-11B1Bqf7eQDfHhrQAkHk0e2ABigRBFNkFEAmc8t9raZe",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.11#666b7ac0cc8b92d5773df5e79ea4fd421bd77e99",
+            .hash = "thread_pool-0.2.11-11B1Bk2GegC5mn18xNrkmF0lMrgrWqijO7PXmftrkuSe",
         },
 
         // =======================================================================
@@ -400,8 +400,8 @@
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
             // Includes main's be724ae transport/entropy pins, plus portable deadlines.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.13#9966a5a91600fc84176139662b22cb63d4b8b19b",
-            .hash = "geode_client_zig-0.3.13-8ysbV6mQCwBgwep5P2LawnvZYDYxjvam-f789sjPAM69",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.17#c33cf73375ce90712feaee70f2067da3daaf10a8",
+            .hash = "geode_client_zig-0.3.17-8ysbV8s7DQCWO_Vx2NGRxuhuKk6nDd-sGBKCPof1Au9s",
         },
 
         // =======================================================================
