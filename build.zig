@@ -10804,6 +10804,28 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6567_td_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6567_td_step = b.step("test-sonny6567-tenant-drop-failures", "Run SONNY-6567 item 4 regression (a durable tenant registry: CALL geode.tenant.drop(t, true) with the registry's, then the statement's, allocations failing from each one on either drops the tenant subtree or fails leaving the tenant registered and marked as being dropped; memory and the registry file always agree; after a restart (registry reopened, hierarchy rebuilt) a retry finishes the drop; no child tenant can be created under a tenant being dropped)");
     sonny6567_td_step.dependOn(&run_sonny6567_td_tests.step);
+    // SONNY-6567 (5): the startup hydration of the auth state (custom roles,
+    // per-graph grants, FLE role grants) loads every record or fails.
+    const sonny6567_ah_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_auth_hydration.zig"), .target = target, .optimize = optimize });
+    sonny6567_ah_test_mod.link_libc = true;
+    sonny6567_ah_test_mod.addImport("geode", root_mod);
+    sonny6567_ah_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6567_ah_tests = b.addTest(.{ .root_module = sonny6567_ah_test_mod });
+    const run_sonny6567_ah_tests = b.addRunArtifact(sonny6567_ah_tests);
+    shardDep(test_step, &run_sonny6567_ah_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_ah_step = b.step("test-sonny6567-auth-hydration", "Run SONNY-6567 item 5 regression (a real AuthGraphManager: the startup hydration of custom roles, per-graph grants and FLE role grants, with its allocations failing from each one on, either loads every stored record or fails; it never succeeds with part of them)");
+    sonny6567_ah_step.dependOn(&run_sonny6567_ah_tests.step);
+    // SONNY-6567 (6): a Raft apply's hydration of a graph not hydrated yet
+    // (follower / replay shape, measured) and a batch entry on another graph
+    // never wait on a graph lock under the Raft inner_mutex.
+    const sonny6567_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_raft_apply_hydration.zig"), .target = target, .optimize = optimize });
+    sonny6567_rh_test_mod.link_libc = true;
+    sonny6567_rh_test_mod.addImport("geode", root_mod);
+    const sonny6567_rh_tests = b.addTest(.{ .root_module = sonny6567_rh_test_mod });
+    const run_sonny6567_rh_tests = b.addRunArtifact(sonny6567_rh_tests);
+    shardDep(test_step, &run_sonny6567_rh_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 regression (the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet is timed; a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, applies in under the 250 ms election timeout)");
+    sonny6567_rh_step.dependOn(&run_sonny6567_rh_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

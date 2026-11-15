@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:45:33.79228697Z",
+  "generated_at": "2026-11-15T13:00:22.73645173Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79287,6 +79287,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6567-AUTH-HYDRATION",
+      "features": [
+        {
+          "feature": "AuthDDLPersistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_auth_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6567-FTS-UNREADABLE-HIT",
       "features": [
         {
@@ -79396,6 +79415,25 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-RAFT-APPLY-HYDRATION",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_raft_apply_hydration.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -84521,7 +84559,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4191
+      "TESTED": 4193
     },
     "by_aspect": {
       "2PC": 3,
@@ -87320,7 +87358,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 364,
+      "Regression": 366,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
