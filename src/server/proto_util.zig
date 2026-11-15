@@ -730,6 +730,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.SideFileEncrypted => .{ .code = "58000", .message = "SideFileEncrypted: the graph's storage files are encrypted at rest (TDE) but the server has no encryption key, so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart the server with the GEODE_TDE_KEY the graph was written with. The server log names the graph" },
         error.SideFileAuthFailed => .{ .code = "58000", .message = "SideFileAuthFailed: a file of the graph's encrypted storage did not authenticate under the server's encryption key (the key is not the one the graph was written with, or the file was modified or copied from another graph), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY the graph was written with, or restore the graph's directory from a backup. The server log names the graph" },
         error.SideFileNotSealed => .{ .code = "58000", .message = "SideFileNotSealed: a file of the graph's storage is in plaintext although the graph's files are encrypted at rest (it was replaced, possibly by an older geode or by hand), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restore the graph's directory from a backup. The server log names the graph" },
+        // SONNY-6616: graph-storage >= 0.4.20 reports a graph whose
+        // manifests or WAL do not authenticate under the key as itself (it
+        // was NoManifest, which read as a missing graph).
+        error.EncryptionKeyMismatch => .{ .code = "58000", .message = "EncryptionKeyMismatch: the graph's storage does not authenticate under the server's encryption key (GEODE_TDE_KEY is not the key the graph was written with, it was written without one, or its manifests or write-ahead log were modified), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY the graph was written with, or restore the graph's directory from a backup. The server log names the graph" },
         error.TimeseriesNeedsTdeKey => .{ .code = "58000", .message = "TimeseriesNeedsTdeKey: the graph's time-series data is encrypted at rest but the server runs without GEODE_TDE_KEY (or with GEODE_TS_TDE=0), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY it was written with and without GEODE_TS_TDE=0. The server log names the graph" },
         error.TimeseriesNotEncrypted => .{ .code = "58000", .message = "TimeseriesNotEncrypted: the graph holds time-series data written in plaintext before TDE covered time-series, and the server will not keep plaintext data under GEODE_TDE_KEY, so the graph is not opened and refuses reads and writes; other graphs are unaffected. See docs/TDE_FILE_LEVEL_ENCRYPTION.md: start with GEODE_TS_TDE=0 to read it as plaintext, export it, and remove the graph's timeseries directory. The server log names the graph" },
         // CANARY: REQ=REQ-SONNY-6527-LABEL-ID-SPACE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
@@ -772,6 +776,7 @@ pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
         error.SideFileNotSealed,
         error.TimeseriesNotEncrypted,
         error.TimeseriesNeedsTdeKey,
+        error.EncryptionKeyMismatch,
         => mapError(err),
         else => null,
     };

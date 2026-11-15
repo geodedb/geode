@@ -2434,8 +2434,10 @@ pub fn dropGraphMapScans() u64 {
 /// store (`SideFileNotSealed`), or whose time-series data was written in
 /// plaintext before TDE covered it (`TimeseriesNotEncrypted`) or is encrypted
 /// while the server runs without its key (`TimeseriesNeedsTdeKey`), is
-/// reported as itself (a restart does not clear it).
-pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed, SideFileEncrypted, SideFileAuthFailed, SideFileNotSealed, TimeseriesNotEncrypted, TimeseriesNeedsTdeKey };
+/// reported as itself (a restart does not clear it). SONNY-6616: so is a
+/// graph whose manifests or WAL do not authenticate under the key
+/// (`EncryptionKeyMismatch`, graph-storage >= 0.4.20; it was `NoManifest`).
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed, SideFileEncrypted, SideFileAuthFailed, SideFileNotSealed, TimeseriesNotEncrypted, TimeseriesNeedsTdeKey, EncryptionKeyMismatch };
 
 const QuarantineCause = enum(u8) {
     unknown,
@@ -2450,6 +2452,7 @@ const QuarantineCause = enum(u8) {
     side_file_not_sealed,
     timeseries_not_encrypted,
     timeseries_needs_tde_key,
+    encryption_key_mismatch,
 
     fn of(err: anyerror) QuarantineCause {
         return switch (err) {
@@ -2464,6 +2467,7 @@ const QuarantineCause = enum(u8) {
             error.SideFileNotSealed => .side_file_not_sealed,
             error.TimeseriesNotEncrypted => .timeseries_not_encrypted,
             error.TimeseriesNeedsTdeKey => .timeseries_needs_tde_key,
+            error.EncryptionKeyMismatch => .encryption_key_mismatch,
             else => .unknown,
         };
     }
@@ -2482,6 +2486,7 @@ const QuarantineCause = enum(u8) {
             .side_file_not_sealed => error.SideFileNotSealed,
             .timeseries_not_encrypted => error.TimeseriesNotEncrypted,
             .timeseries_needs_tde_key => error.TimeseriesNeedsTdeKey,
+            .encryption_key_mismatch => error.EncryptionKeyMismatch,
         };
     }
 };

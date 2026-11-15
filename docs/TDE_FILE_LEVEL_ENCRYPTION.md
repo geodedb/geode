@@ -49,6 +49,23 @@ What stays in clear:
 - With the `GEODE_TS_TDE=0` opt-out, time-series data (see
   [Time-series](#time-series)).
 
+### Graph names (SONNY-6616)
+
+`graph_registry.dat` (every graph's name, uuid, node and edge counts) and
+`dropped_graphs.dat` (the names of dropped graphs) are sealed under
+`GEODE_TDE_KEY` with the same envelope (graph-storage's
+`GraphRegistry.saveToFileWith`; geode's consumer kind for the dropped
+list), bound to graph-storage's `registry.SEAL_UUID`. A plaintext pair
+written by an earlier build is read under the key and rewritten sealed
+when the data directory is opened. Without the key, or under another key,
+the data directory is refused (`SideFileEncrypted` / `SideFileAuthFailed`).
+Requires graph-storage 0.4.20. An older geode cannot read a sealed
+registry and refuses the data directory: there is no downgrade.
+
+A graph whose manifests or WAL do not authenticate under the key is
+refused with `58000 EncryptionKeyMismatch` (graph-storage 0.4.20; it was
+`NoManifest`, which read as a missing graph).
+
 ### Sealed side files (SONNY-6590)
 
 graph-storage 0.4.17 seals the side files that held names or indexed values

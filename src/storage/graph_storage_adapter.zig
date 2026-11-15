@@ -328,16 +328,35 @@ const prop_exact_index_file_name = "prop_exact.idx";
 /// (`side_file_crypto.Cipher`: AES-256-GCM under the HKDF side-file key of the
 /// configured key, random nonce, associated data = header + the graph's uuid
 /// + the file name), the format graph-storage 0.4.17 seals its own side
-/// files with (docs/format-spec.md §1.6). `Kind` is graph-storage's closed
-/// enum, so geode's two files use `.prop_chain_index` (the property-key index
-/// kind); the file name in the associated data keeps them apart from
-/// graph-storage's `props.idx` and from each other. They are derived indexes:
+/// files with (docs/format-spec.md §1.6). SONNY-6616: with consumer kinds
+/// (graph-storage 0.4.20 opened kinds 128..255 to consumers): `prop_exact.idx`
+/// is `side_kind_prop_exact`, `prop_rev.idx` `side_kind_prop_rev` (until then
+/// both borrowed graph-storage's `.prop_chain_index`; such a file now fails
+/// authentication and is rebuilt). They are derived indexes:
 /// a file that is absent, plaintext, fails authentication (wrong key,
 /// modified, copied from another graph) or is stale is rebuilt from the
 /// pages, never served. A plaintext pair left by an earlier geode (a store
 /// written before 0.4.17) is deleted when the graph opens under a key
 /// (`dropPlaintextExactIndexFiles`), and the rebuilt index is saved sealed.
-const exact_index_seal_kind: gs.side_file_crypto.Kind = .prop_chain_index;
+pub const side_kind_prop_exact = gs.side_file_crypto.Kind.consumer(0);
+pub const side_kind_prop_rev = gs.side_file_crypto.Kind.consumer(1);
+/// SONNY-6616: `dropped_graphs.dat` (the names of dropped graphs).
+pub const side_kind_dropped_graphs = gs.side_file_crypto.Kind.consumer(2);
+
+fn exactIndexSealKind(name: []const u8) gs.side_file_crypto.Kind {
+    return if (std.mem.eql(u8, name, prop_rev_index_file_name)) side_kind_prop_rev else side_kind_prop_exact;
+}
+
+// CANARY: REQ=REQ-SONNY-6616-DATA-DIR-NAMES-SEALED; FEATURE="TDEFileLevelEncryption"; ASPECT=SealedGraphNames; STATUS=TESTED; TEST=tests/test_sonny6616_tde_residuals.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6616: the cipher for the data directory's own files under at-rest
+/// encryption - `graph_registry.dat` (every graph's name, uuid and counts)
+/// and `dropped_graphs.dat` (the names of dropped graphs) - bound to
+/// graph-storage's `registry.SEAL_UUID` (a data directory has no uuid of its
+/// own; the file name and kind in the associated data keep the files apart).
+/// Null without a key. The caller deinits it.
+fn dataDirCipher(encryption_key: ?[32]u8) ?gs.side_file_crypto.Cipher {
+    return gs.side_file_crypto.Cipher.forKey(encryption_key, gs.registry.SEAL_UUID);
+}
 
 /// SONNY-6590 test-only: write the exact-index files in the plaintext
 /// layout even under a key, as geode did before SONNY-6590, so a test can
@@ -370,7 +389,7 @@ fn readSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, 
     };
     defer allocator.free(raw);
     if (!gs.side_file_crypto.isSealed(raw)) return .unusable;
-    const plain = cipher.open(allocator, exact_index_seal_kind, name, raw) catch |err| {
+    const plain = cipher.open(allocator, exactIndexSealKind(name), name, raw) catch |err| {
         // Derived: rebuilt from the pages. Logged, because a sealed file that
         // fails authentication was modified, copied from another graph, or
         // written under another key.
@@ -386,7 +405,7 @@ fn readSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, 
 /// SONNY-6590: seal `plaintext` and write it to `dir/name` atomically (temp
 /// file, fsync, rename).
 fn writeSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, cipher: *const gs.side_file_crypto.Cipher, plaintext: []const u8) !void {
-    const sealed = try cipher.seal(allocator, exact_index_seal_kind, name, plaintext);
+    const sealed = try cipher.seal(allocator, exactIndexSealKind(name), name, plaintext);
     defer allocator.free(sealed);
     const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
     defer allocator.free(path);
@@ -4260,6 +4279,11 @@ pub const StorageAdapter = struct {
     registry_path: []const u8, // owned
     /// SONNY-6523 (5): `dropped_graph_names` on disk (`saveDroppedGraphNamesLocked`).
     dropped_graphs_path: []const u8, // owned
+    /// SONNY-6616: `init` found `graph_registry.dat` / `dropped_graphs.dat`
+    /// in the plaintext layout under a key (written before SONNY-6616); it
+    /// rewrites them sealed before returning.
+    registry_plaintext: bool = false,
+    dropped_names_plaintext: bool = false,
     mutex: std.Io.Mutex,
     /// SONNY-6472 (2): names of graphs dropped since this adapter opened
     /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
@@ -4417,6 +4441,19 @@ pub const StorageAdapter = struct {
             log.warn("cannot load the dropped-graph names {s}: {}; refusing to open the data directory", .{ self.dropped_graphs_path, err });
             return err;
         };
+        // SONNY-6616: graph names written in plaintext before SONNY-6616 are
+        // rewritten sealed now (the plaintext copies are replaced, not
+        // scrubbed: docs/TDE_FILE_LEVEL_ENCRYPTION.md).
+        if (self.registry_plaintext) {
+            try self.saveRegistryLocked();
+            self.registry_plaintext = false;
+            slog.info("rewrote the plaintext graph registry sealed under the TDE key (SONNY-6616)", &.{SAttr.string("file", self.registry_path)});
+        }
+        if (self.dropped_names_plaintext) {
+            try self.saveDroppedGraphNamesLocked();
+            self.dropped_names_plaintext = false;
+            slog.info("rewrote the plaintext dropped-graph names sealed under the TDE key (SONNY-6616)", &.{SAttr.string("file", self.dropped_graphs_path)});
+        }
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
         // BEFORE any graph is opened. Graphs open lazily (openGraphLocked) on
@@ -4706,12 +4743,19 @@ pub const StorageAdapter = struct {
             try buf.appendSlice(self.allocator, &len_bytes);
             try buf.appendSlice(self.allocator, k.*);
         }
+        // SONNY-6616: sealed under at-rest encryption (the names of dropped
+        // graphs were written in plaintext beside the encrypted stores).
+        var cipher = dataDirCipher(self.config.encryption_key);
+        defer if (cipher) |*c| c.deinit();
+        const disk = try gs.side_file_crypto.encode(self.allocator, if (cipher) |*c| c else null, side_kind_dropped_graphs, dropped_graphs_file_name, buf.items);
+        defer self.allocator.free(disk);
+        if (cipher != null) std.crypto.secureZero(u8, buf.items);
         const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.dropped_graphs_path});
         defer self.allocator.free(tmp_path);
         {
-            const file = try std.Io.Dir.cwd().createFile(sio, tmp_path, .{ .truncate = true });
+            const file = try std.Io.Dir.cwd().createFile(sio, tmp_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
             defer file.close(sio);
-            try file.writeStreamingAll(sio, buf.items);
+            try file.writeStreamingAll(sio, disk);
             try file.sync(sio);
         }
         try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), self.dropped_graphs_path, sio);
@@ -4724,11 +4768,23 @@ pub const StorageAdapter = struct {
     /// an error.
     fn loadDroppedGraphNames(self: *StorageAdapter) !void {
         const lio = std.Io.Threaded.global_single_threaded.io();
-        const data = std.Io.Dir.cwd().readFileAlloc(lio, self.dropped_graphs_path, self.allocator, .limited(64 << 20)) catch |err| switch (err) {
+        const raw = std.Io.Dir.cwd().readFileAlloc(lio, self.dropped_graphs_path, self.allocator, .limited(64 << 20)) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
         };
-        defer self.allocator.free(data);
+        // SONNY-6616: sealed under at-rest encryption. A plaintext file
+        // (written before SONNY-6616) is read under the key and rewritten
+        // sealed by the caller; a sealed one without the key, or one that
+        // fails authentication, refuses the open.
+        var cipher = dataDirCipher(self.config.encryption_key);
+        defer if (cipher) |*c| c.deinit();
+        const decoded = try gs.side_file_crypto.decode(self.allocator, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false }, side_kind_dropped_graphs, dropped_graphs_file_name, raw);
+        defer {
+            if (cipher != null) std.crypto.secureZero(u8, decoded.bytes);
+            self.allocator.free(decoded.bytes);
+        }
+        self.dropped_names_plaintext = cipher != null and decoded.was_plaintext;
+        const data = decoded.bytes;
         if (data.len < dropped_graphs_magic.len + 4 or !std.mem.eql(u8, data[0..dropped_graphs_magic.len], dropped_graphs_magic)) return error.InvalidData;
         var pos: usize = dropped_graphs_magic.len;
         const n = std.mem.readInt(u32, data[pos..][0..4], .little);
@@ -12316,7 +12372,10 @@ pub const StorageAdapter = struct {
 
     fn saveRegistryLocked(self: *StorageAdapter) !void {
         self.refreshRegistryHeaderNextIdsLocked();
-        try self.registry.saveToFile(self.registry_path);
+        // SONNY-6616: the registry names every graph; sealed under a key.
+        var cipher = dataDirCipher(self.config.encryption_key);
+        defer if (cipher) |*c| c.deinit();
+        try self.registry.saveToFileWith(self.registry_path, if (cipher) |*c| c else null);
     }
 
     fn loadRegistry(self: *StorageAdapter) !void {
@@ -12324,7 +12383,15 @@ pub const StorageAdapter = struct {
             if (err == error.FileNotFound) return err;
             return err;
         };
-        try self.registry.loadFromFile(self.registry_path);
+        // SONNY-6616: sealed under a key. A plaintext registry (written
+        // before SONNY-6616) is read under the key and rewritten sealed at
+        // the end of `init`; a sealed one without the key
+        // (SideFileEncrypted) or one that fails authentication refuses the
+        // open.
+        var cipher = dataDirCipher(self.config.encryption_key);
+        defer if (cipher) |*c| c.deinit();
+        const was_plaintext = try self.registry.loadFromFileWith(self.registry_path, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false });
+        self.registry_plaintext = cipher != null and was_plaintext;
     }
 
     // ------------------------------------------------------------------
@@ -14628,7 +14695,11 @@ test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity p
 /// `name`, read from its `graph_registry.dat` without opening, creating or
 /// locking anything (`StorageAdapter.init` creates the directory and the
 /// registry). False when the directory or the registry does not exist.
-pub fn graphRegisteredOnDisk(allocator: std.mem.Allocator, data_dir: []const u8, name: []const u8) !bool {
+///
+/// SONNY-6616: `encryption_key` is the store's at-rest key (the registry is
+/// sealed under it); a sealed registry read without it is
+/// `error.SideFileEncrypted`.
+pub fn graphRegisteredOnDisk(allocator: std.mem.Allocator, data_dir: []const u8, name: []const u8, encryption_key: ?[32]u8) !bool {
     const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
     defer allocator.free(registry_path);
     std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), registry_path, .{}) catch |err| switch (err) {
@@ -14637,6 +14708,8 @@ pub fn graphRegisteredOnDisk(allocator: std.mem.Allocator, data_dir: []const u8,
     };
     var registry = gs.registry.GraphRegistry.init(allocator);
     defer registry.deinit();
-    try registry.loadFromFile(registry_path);
+    var cipher = dataDirCipher(encryption_key);
+    defer if (cipher) |*c| c.deinit();
+    _ = try registry.loadFromFileWith(registry_path, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false });
     return registry.findByName(name) != null;
 }
