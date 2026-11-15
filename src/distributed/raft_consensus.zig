@@ -3477,7 +3477,16 @@ pub const RaftNode = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6592-START-ELECTION-LOCKED; FEATURE="DistributedCluster"; ASPECT=StartElectionHoldsInnerMutex; STATUS=TESTED; TEST=tests/test_sonny6592_start_election_lock.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6592 (2): drains under `inner_mutex`, as `tick` and `step` do
+    /// (it drained unlocked, racing them). A request: a thread holding a
+    /// graph's lock gives way to a Raft drop_graph apply
+    /// (`lockInnerForRequest`); the drain still holds outgoing messages
+    /// until `advance()` has persisted the hard state (SONNY-6563).
     pub fn startElection(self: *RaftNode) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (!self.lockInnerForRequest()) return;
+        defer self.inner_mutex.unlock(io);
         self.stats.elections_called += 1;
         self.drainReady();
     }

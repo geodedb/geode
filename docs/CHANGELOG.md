@@ -2619,6 +2619,13 @@
   Regressions: `zig build test-sonny6589-mcp-timeout`,
   `test-sonny6589-cli-messages`, `test-sonny6589-broken-graph-open`,
   `test-sonny6589-lsp-auth`.
+- **`RaftNode.startElection` drains under `inner_mutex` (SONNY-6592).** It
+  ran `drainReady` (apply committed entries, dispatch messages) without the
+  lock every other caller holds, racing a `tick` or `step` on another
+  thread. Outgoing messages are still held until `advance()` has persisted
+  the hard state (SONNY-6563). Docs that described distributed modules
+  deleted in SONNY-6279 and SONNY-6563 as delivered now say they were
+  removed. Regression: `zig build test-sonny6592-start-election-lock`.
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no
