@@ -279,9 +279,14 @@ const bypass_cases = [_]Case{
     .{ .write = "WITH [1, 2, 3] AS l UNWIND l AS u CREATE (:U {u: u})", .checks = &.{
         .{ .query = "MATCH (u:U) RETURN u.u", .want = &.{ "1", "2", "3" } },
     } },
-    // A statement cannot start with UNWIND (not GQL; FOR ... IN is): a syntax
-    // error, nothing written.
-    .{ .write = "UNWIND [1, 2, 3] AS u CREATE (:U {u: u})", .refused = error.UnexpectedToken, .checks = &unchanged },
+    // SONNY-6613: a statement may begin with UNWIND (a Geode extension), read
+    // as ISO/IEC 39075 14.8 `FOR u IN [1, 2, 3]`: it writes what that FOR
+    // writes, once per element, and answers no rows. (It was a syntax error,
+    // refused for that alone; tests/test_sonny6613_leading_unwind_write.zig.)
+    .{ .write = "UNWIND [1, 2, 3] AS u CREATE (:U {u: u})", .want = &.{}, .checks = &.{
+        .{ .query = "MATCH (u:U) RETURN u.u", .want = &.{ "1", "2", "3" } },
+    } },
+    .{ .write = "UNWIND [1, 2, 3] AS u CREATE (z:U {u: u}) DELETE z", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "FOR u IN [1, 2, 3] CREATE (:U {u: u})", .checks = &.{
         .{ .query = "MATCH (u:U) RETURN u.u", .want = &.{ "1", "2", "3" } },
     } },
