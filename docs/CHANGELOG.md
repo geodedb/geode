@@ -2958,6 +2958,31 @@
 
 ### Fixed
 
+- **Cluster Raft snapshots travel on the wire, carry the idempotency table,
+  and a new label no longer stalls a Raft apply; wal v0.1.25 (SONNY-6633,
+  SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
+  BLAKE3 digest and the configuration (a follower refused every snapshot),
+  and InstallSnapshotResponse had no outcome, so a refusal read as
+  success. New protobuf fields carry them (InstallSnapshot 8-11,
+  InstallSnapshotResponse `failed` 2; an older peer sends none and still
+  acknowledges). The snapshot payload is now `GRS2` with the
+  idempotency-key table: a follower restored from a snapshot kept no key
+  for the entries it covers, and a retried keyed statement created its
+  nodes again there. A label or relationship type new to a graph was
+  written to its label dictionary durably (two fsyncs per shard set, 40-80
+  ms) under the Raft `inner_mutex`; the names an entry writes are now
+  interned with its graphs' hydration, before it. The in-process cluster
+  tests delivered Raft responses from a guessed sender (node 3's acks
+  reached the leader as node 2's); they now carry the real one. wal v0.1.25
+  makes `truncateAfter` fail closed; raft v0.2.2 still pins v0.1.24 and
+  compiles against geode's wal. **Still blocked:** a snapshot cannot be
+  restored into the durable store, so the server takes no Raft snapshots
+  (design in `src/distributed/README.md`). Regressions: `zig build
+  test-sonny6633-snapshot-wire`, `zig build
+  test-sonny6631-apply-hydration-off-mutex` and `zig build
+  test-sonny6567-raft-apply-hydration` (new labels again: apply 1-2 ms, 76-88
+  ms without the interning).
+
 - **Cluster Raft on raft v0.2.2 / wal v0.1.24: a lagging follower restores
   the leader's snapshot, rejections carry the backtracking hint over the
   wire, a damaged Raft log refuses startup by name, and a follower's or
