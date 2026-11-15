@@ -10699,6 +10699,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6567_rh_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6567_rh_step = b.step("test-sonny6567-raft-apply-hydration", "Run SONNY-6567 item 6 regression (the apply a follower or a replaying node runs on a 20,000-node graph not hydrated yet is timed; a statement batch for one graph whose entries write another graph not hydrated yet, that graph's lock held by a reader for 3 s, applies in under the 250 ms election timeout)");
     sonny6567_rh_step.dependOn(&run_sonny6567_rh_tests.step);
+    // SONNY-6594 (1): a ROLLBACK (or a write's undo capture) that cannot read
+    // a body fails loudly instead of skipping the change. gRPC in process.
+    const sonny6594_undo_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6594_undo_read_failure.zig"), .target = target, .optimize = optimize });
+    sonny6594_undo_test_mod.link_libc = true;
+    sonny6594_undo_test_mod.addImport("geode", root_mod);
+    sonny6594_undo_test_mod.addImport("schema", schema_mod);
+    sonny6594_undo_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6594_undo_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6594_undo_test_mod.addImport("logging", logging_mod);
+    sonny6594_undo_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6594_undo_tests = b.addTest(.{ .root_module = sonny6594_undo_test_mod });
+    const run_sonny6594_undo_tests = b.addRunArtifact(sonny6594_undo_tests);
+    shardDep(test_step, &run_sonny6594_undo_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6594_undo_step = b.step("test-sonny6594-undo-read-failure", "Run SONNY-6594 item 1 regression (a durable store, gRPC in process, a body rebuild made to fail: ROLLBACK of a SET, REMOVE, label, edge SET or edge DELETE whose body cannot be read fails with 40003 or leaves the data as before the transaction, never reports success with the change in place; a write whose before-image cannot be read fails or is undone)");
+    sonny6594_undo_step.dependOn(&run_sonny6594_undo_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
