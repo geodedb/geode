@@ -374,6 +374,9 @@ const AuthFlightKey = [32]u8;
 
 const AuthFlightResult = struct {
     ok: bool = false,
+    /// SONNY-6598: the owner could not check the credentials (`ok` is
+    /// false): the waiters get this error, not a rejection.
+    err: ?anyerror = null,
     result: AuthResult = .{
         .role = .ReadOnly,
         .password_reset_required = false,
@@ -664,22 +667,67 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 /// takes does not tell an account with a legacy hash from one with an
 /// Argon2id hash (the BLAKE2b check alone takes microseconds).
 pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
-    if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
-        if (hashPassword(std.heap.c_allocator, password)) |equaliser| {
-            std.heap.c_allocator.free(equaliser);
-        } else |_| {}
-        return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash) catch |err| {
-            if (err == error.FipsUnsupported) return err;
-            return false;
-        };
-    }
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
-    const allocator = std.heap.c_allocator;
-    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash) catch |err| {
-        if (err == error.FipsUnsupported) return err;
-        return false;
-    };
+    return verifyPasswordWith(std.heap.c_allocator, password, stored_hash);
+}
+
+/// `verifyPassword` with `allocator` for the Argon2id work (SONNY-6598: the
+/// seam the allocation-failure tests and the fault hook below use).
+// CANARY: REQ=REQ-SONNY-6598-VERIFY-THREE-OUTCOMES; FEATURE="AuthOutcomeClassification"; ASPECT=LoginVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: `true` (match), `false` (mismatch), or an error the check
+/// could not get past: `error.InvalidHashFormat` (a stored hash in no
+/// format it can use), `error.OutOfMemory` and the KDF's other errors,
+/// `error.FipsUnsupported`. Every error but FipsUnsupported used to be
+/// `false`, so the login answered a server-side fault "Authentication
+/// failed" and counted it toward the lockout. The legacy check's Argon2id
+/// work (SONNY-6369) failing is an error too: under memory pressure a
+/// legacy account answers as an Argon2id one does.
+pub fn verifyPasswordWith(allocator: std.mem.Allocator, password: []const u8, stored_hash: []const u8) !bool {
+    if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
+        allocator.free(try hashPassword(allocator, password));
+        return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash);
+    }
+    return geode_auth.verifyPasswordArgon2id(allocator, password, stored_hash);
+}
+
+// CANARY: REQ=REQ-SONNY-6598-KDF-FAULT-HOOK; FEATURE="AuthOutcomeClassification"; ASPECT=TestOnlyKdfFaultHook; STATUS=TESTED; TEST=tests/test_sonny6598_kdf_error_hello.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: a fault hook for tests, compiled only into test and Debug
+/// builds (release builds are ReleaseSafe or ReleaseFast and have none of
+/// it). `injectKdfAllocFailures(username, n)`: the next `n` password
+/// verifications of `username` at login run Argon2id on an allocator that
+/// fails every allocation, as an allocation failure under memory pressure
+/// would. It can only make a verification fail, never succeed. A spawned
+/// Debug `geode serve` arms it from GEODE_TEST_AUTH_KDF_FAULT_USER and
+/// GEODE_TEST_AUTH_KDF_FAULT_COUNT. The name is written only while no
+/// fault is armed (the count is zero), so a reader that sees a count sees
+/// the name it was armed with.
+pub const kdf_fault_hook_available = @import("builtin").is_test or @import("builtin").mode == .Debug;
+var kdf_fault_user_buf: [64]u8 = undefined;
+var kdf_fault_user_len: usize = 0;
+var kdf_fault_remaining = std.atomic.Value(u32).init(0);
+
+pub fn injectKdfAllocFailures(username: []const u8, n: u32) error{ FaultHookUnavailable, NameTooLong }!void {
+    if (comptime !kdf_fault_hook_available) return error.FaultHookUnavailable;
+    if (username.len > kdf_fault_user_buf.len) return error.NameTooLong;
+    kdf_fault_remaining.store(0, .release);
+    @memcpy(kdf_fault_user_buf[0..username.len], username);
+    kdf_fault_user_len = username.len;
+    kdf_fault_remaining.store(n, .release);
+}
+
+/// The allocator `username`'s login verifies its password with: the C
+/// allocator, or (fault hook armed for `username`) one that fails.
+fn loginKdfAllocator(username: []const u8) std.mem.Allocator {
+    if (comptime kdf_fault_hook_available) {
+        var n = kdf_fault_remaining.load(.acquire);
+        if (n > 0 and std.mem.eql(u8, username, kdf_fault_user_buf[0..kdf_fault_user_len])) {
+            while (n > 0) {
+                n = kdf_fault_remaining.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return std.mem.Allocator.failing;
+            }
+        }
+    }
+    return std.heap.c_allocator;
 }
 
 // CANARY: REQ=REQ-QUIC-HC-068; FEATURE="QUIC High-Concurrency Requests"; ASPECT=AuthSingleFlight; STATUS=IMPL; TEST=test_quic_condition_timedwait_cadence; OWNER=security; UPDATED=2026-05-26
@@ -783,6 +831,7 @@ fn beginAuthFlight(key: AuthFlightKey) !AuthFlightStart {
             unregisterAuthFlight(key, flight);
             std.heap.c_allocator.destroy(flight);
         }
+        if (result.err) |err| return err;
         if (!result.ok) return error.Unauthenticated;
         return .{ .waited = result.result };
     }
@@ -1056,20 +1105,34 @@ fn cacheNewUser(allocator: std.mem.Allocator, change: UserChange, username: []co
 /// The normalisation is uniform across principals, so it does not reintroduce
 /// the #829 username-enumeration oracle: an unreachable store answers
 /// identically for existing and non-existing usernames.
+///
+/// SONNY-6598: the password check itself has the same third outcome. An
+/// Argon2id KDF that could not run (out of memory under load, ...) is
+/// `error.AuthUnavailable`, and a stored hash the check cannot use (not a
+/// PHC string or legacy hash it knows, unparseable or out-of-bounds
+/// parameters) is `error.AuthCredentialInvalid`: a server-side fault on
+/// that account, which a retry does not cure. Neither is counted toward a
+/// lockout; both are logged at ERROR with the user name. They were
+/// `error.Unauthenticated`, so a correct password under memory pressure
+/// was answered "Authentication failed" and locked the user out.
 /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-001; FEATURE="AuthOutcomeClassification"; ASPECT=Authenticate; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-28
+// CANARY: REQ=REQ-SONNY-6598-AUTH-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=AuthenticateVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     return authenticateChecked(username, password) catch |err| {
         if (err == error.Unauthenticated) return err;
-        log.warn("authentication could not be completed", &.{
+        log.err("authentication could not be completed: a server-side error, not counted as a failed login", &.{
+            Attr.string("user", username),
             Attr.string("error", @errorName(err)),
         });
+        if (err == error.InvalidHashFormat) return error.AuthCredentialInvalid;
         return error.AuthUnavailable;
     };
 }
 
 /// Credential-checking core of `authenticate`. Any error other than
 /// `error.Unauthenticated` escaping here means the credentials were never
-/// actually checked; `authenticate` maps those to `error.AuthUnavailable`.
+/// actually checked; `authenticate` maps those to `error.AuthUnavailable`
+/// (`error.AuthCredentialInvalid` for an unusable stored hash).
 fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
     const maybe_user_data = try getAuthSnapshot(username);
     if (maybe_user_data == null) {
@@ -1078,11 +1141,10 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
         // auth failure. Without this, the user-miss path returns ~95ms while
         // the wrong-password path takes ~275ms (full Argon2id), giving an
         // unauthenticated attacker a deterministic oracle to classify which
-        // usernames exist.
-        const dummy_hash = hashPassword(std.heap.c_allocator, password) catch {
-            return error.Unauthenticated;
-        };
-        std.heap.c_allocator.free(dummy_hash);
+        // usernames exist. SONNY-6598: that work failing is an error, as it
+        // is for an existing user, so under memory pressure an unknown user
+        // answers as a known one does (it was Unauthenticated, counted).
+        std.heap.c_allocator.free(try hashPassword(std.heap.c_allocator, password));
         return error.Unauthenticated;
     }
     const user_data = maybe_user_data.?;
@@ -1093,25 +1155,25 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
         .waited => |result| return result,
         .owner => |flight| {
             // ENG-3954 R-C: the owner MUST publish a result on every exit, or
-            // every later authentication for this key blocks on the flight. The
-            // `try verifyPassword` below is such an exit (an infrastructure
-            // error, e.g. error.FipsUnsupported, propagates straight out), and
-            // any fallible call added here later would be another. This guard
-            // publishes a failure for whichever exit did not publish one itself;
-            // `published` keeps it from double-finishing the explicit paths.
+            // every later authentication for this key blocks on the flight.
+            // Any fallible call added here later is such an exit. This guard
+            // publishes "could not check" for whichever exit did not publish
+            // one itself; `published` keeps it from double-finishing the
+            // explicit paths.
             var published = false;
-            defer if (!published) finishAuthFlight(flight_key, flight, .{ .ok = false });
+            defer if (!published) finishAuthFlight(flight_key, flight, .{ .err = error.AuthUnavailable });
 
             // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
-            if (!user_data.active) {
-                // Same timing-defense rationale: an inactive user should look the
-                // same as an active user with the wrong password.
-                _ = verifyPassword(password, user_data.password_hash) catch false;
-                finishAuthFlight(flight_key, flight, .{ .ok = false });
+            // An inactive user is verified too (timing defense: it looks the
+            // same as an active user with the wrong password).
+            // SONNY-6598: a check that could not run is published to the
+            // waiters as the error itself, not as a rejection.
+            const matches = verifyPasswordWith(loginKdfAllocator(username), password, user_data.password_hash) catch |err| {
+                finishAuthFlight(flight_key, flight, .{ .err = err });
                 published = true;
-                return error.Unauthenticated;
-            }
-            if (!(try verifyPassword(password, user_data.password_hash))) {
+                return err;
+            };
+            if (!user_data.active or !matches) {
                 finishAuthFlight(flight_key, flight, .{ .ok = false });
                 published = true;
                 return error.Unauthenticated;
@@ -2459,5 +2521,46 @@ test "auth_flight_normal_paths_leave_no_registered_flight" {
     try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
 
     try testing.expectError(error.Unauthenticated, authenticate("nobody", "Password1!"));
+    try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
+}
+
+// SONNY-6598: an owner whose check could not run publishes the error; a
+// waiter that joined its flight gets that error, not a rejection (which the
+// transports count toward the lockout).
+test "auth_flight_waiter_of_a_failed_check_gets_the_error_not_a_rejection" {
+    const key = try authFlightKey("alice", "Password1!", "$argon2id$v=19$stub", 1, authFlightLane());
+    const owner_flight = switch (try beginAuthFlight(key)) {
+        .owner => |f| f,
+        .waited => return error.UnexpectedWaiterOnFreshFlightKey,
+    };
+
+    const Waiter = struct {
+        key: AuthFlightKey,
+        outcome: anyerror = error.WaiterDidNotReturn,
+
+        fn run(ctx: *@This()) void {
+            if (beginAuthFlight(ctx.key)) |_| {
+                ctx.outcome = error.WaiterAuthenticated;
+            } else |err| ctx.outcome = err;
+        }
+    };
+    var ctx = Waiter{ .key = key };
+    var thread = try std.Thread.spawn(.{}, Waiter.run, .{&ctx});
+
+    // Wait until the waiter has joined the flight.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var joined = false;
+    var tries: usize = 0;
+    while (!joined and tries < 400) : (tries += 1) {
+        auth_flight_mutex.lockUncancelable(io);
+        joined = owner_flight.refs == 2;
+        auth_flight_mutex.unlock(io);
+        if (!joined) testSleepNs(5 * std.time.ns_per_ms);
+    }
+    finishAuthFlight(key, owner_flight, .{ .err = error.OutOfMemory });
+    thread.join();
+
+    try testing.expect(joined);
+    try testing.expectEqual(@as(anyerror, error.OutOfMemory), ctx.outcome);
     try testing.expectEqual(@as(usize, 0), authFlightCountForTest());
 }

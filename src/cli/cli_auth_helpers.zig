@@ -239,7 +239,7 @@ var g_verify_failure: ?anyerror = null;
 /// the server would use (`changeKey`).
 var g_empty_store: bool = false;
 
-pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
+pub const ChainCheckError = error{ AuthChainTampered, AuthChainUnverifiable, HmacKeyUnavailable };
 
 // CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=VerifyBeforeChange; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
 /// SONNY-2798: may an offline command change this auth store? Only when its
@@ -271,6 +271,8 @@ pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphMana
     };
     mgr.verifyChain(&kr.key) catch |err| {
         g_verify_failure = err;
+        // SONNY-6598: a verification that could not run is no tampering verdict.
+        if (!AuthGraphManager.isChainTamperVerdict(err)) return error.AuthChainUnverifiable;
         return error.AuthChainTampered;
     };
     g_verified_key = kr.key;
@@ -304,6 +306,11 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
                     "A security record was changed or added without the HMAC key, or the key is not the one the chain was sealed with\n" ++
                     "(set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the server does). Check the records ('geode auth verify', 'geode user list',\n" ++
                     "'geode auth policy list'); then accept them with 'geode auth reseal', or restore the data directory from a backup.\n",
+                .{ command, subcommand, why },
+            ),
+            error.AuthChainUnverifiable => std.debug.print(
+                "Error: refusing to run '{s} {s}': the __geode_security HMAC chain could not be verified ({s}); nothing was changed.\n" ++
+                    "This is not a tampering verdict (the check itself failed, e.g. out of memory or a store read error). Retry once the cause is fixed.\n",
                 .{ command, subcommand, why },
             ),
             error.HmacKeyUnavailable => std.debug.print(

@@ -905,6 +905,18 @@ the next source, so an operator typo can never disable brute-force protection.
   resolver reads are surfaced as the `geode_security_auth_store_unavailable_total`
   runtime metric so an operator can see a degraded store even though it never
   arms a lockout.)
+- **Only a password mismatch counts (SONNY-6598).** Every credential check has
+  three outcomes: match, mismatch, or an error. An error is a check the server
+  could not carry out: the Argon2id key derivation could not allocate its
+  memory (a loaded server), the stored hash cannot be used (not an Argon2id
+  PHC string or legacy BLAKE2b hash, unparseable or out-of-bounds parameters,
+  a salt or digest that is not hex), or the security store could not answer.
+  An error never authenticates, is not counted toward the lockout, is logged
+  at ERROR with the user name (never the password), and is audited as an
+  auth-system error rather than a failed login (below). Until SONNY-6598 an
+  Argon2id failure and a malformed stored hash read as a wrong password: a
+  correct password under memory pressure was answered "Authentication
+  failed" and counted, so server load could lock a user out.
 - **A correct credential does not clear an active lockout.** This is deliberate:
   verifying the password first would let an attacker force an unbounded number
   of Argon2id verifications from a locked principal (a CPU-amplification DoS).
@@ -922,3 +934,44 @@ the next source, so an operator typo can never disable brute-force protection.
   operator can see and release a misfiring lockout without restarting the server.
 
 CANARY: REQ=REQ-DOC-AUTH-LOCKOUT-CONFIG; FEATURE="AuthRateLimiting"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-08-29
+
+### What a client sees when a login is refused (SONNY-6598)
+
+A refused HELLO answers `success=false` with one of these `error_message`
+values, the same on QUIC and gRPC:
+
+| `error_message` | Meaning | Counted toward the lockout | Retry? |
+|---|---|---|---|
+| `Authentication failed` | The credentials were checked and rejected (wrong password, unknown or disabled user). | Yes | With the right credentials |
+| `Authentication temporarily unavailable` | The server could not check the credentials: the password key derivation could not run (e.g. out of memory under load) or the security store could not answer. | No | Yes, after a back-off |
+| `Authentication unavailable: the stored credential of this account cannot be used (server-side error; contact the administrator)` | The account's stored password hash is malformed (e.g. a bad `geode.auth.user_import`). No password logs this account in until an administrator resets it. | No | No: reset the password (`geode.auth.user_reset_password` / `ALTER USER ... SET PASSWORD`) |
+| `Too many failed authentication attempts. ...` | The principal (or the source IP) is locked out. | (already locked) | After the lockout window |
+| `Authentication required` | The HELLO carried no user name or password. | No | With credentials |
+
+The last answer of the table but one names the account's state, so it tells a
+caller that a user with a malformed stored hash exists; only an administrator
+can create such a hash, and the server logs each occurrence at ERROR.
+
+With the process audit log enabled (`GEODE_AUDIT_ENABLED=1`), every refused
+HELLO credential check writes a record whose `details.username` is the user
+name sent:
+
+- a rejected credential: `event_type` `authentication_failure`, `action`
+  `LOGIN`, `result` `failure`;
+- a check the server could not run: `event_type` `system_event`, `action`
+  `AUTH_ERROR`, `result` `error_`, severity error, with the error name in
+  `details.details` (e.g. `auth-system error, not a failed login: OutOfMemory`).
+
+The same three-outcome rule applies to the other credential checks:
+`geode.auth.mfa_verify` and `mfa_enable` answer a TOTP check the server cannot
+run (MFA turned off, an unusable stored secret) with that error (e.g. 0A000),
+not 28000 "invalid code", and mfa_verify does not count it toward the MFA
+lockout; the offline `geode user change-password --old-password` says the old password
+could not be checked instead of "old password is incorrect"; and a
+`__geode_security` HMAC chain verification that could not run (out of memory,
+a store read error) is reported as unverifiable, not as tampering: the server
+refuses to start with `AuthChainUnverifiable` (the reseal override does not
+apply), the offline CLI refuses with "could not be verified", and the periodic
+check logs it without the tampering alarm.
+
+CANARY: REQ=REQ-DOC-SONNY-6598-AUTH-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-15

@@ -109,6 +109,9 @@ pub const SecurityGraphEvent = struct {
     // GAP-0919: denials are audited too — a failure result raises severity to
     // warning and records result=failure instead of the success default.
     result_failure: bool = false,
+    // SONNY-6598: the operation could not be carried out (a server-side
+    // error, not a denial): severity err, result error_.
+    result_error: bool = false,
     // SONNY-2728: the graph the event is about, when it is a user graph (a
     // statement refused on it) rather than the security graph.
     resource_graph: ?[]const u8 = null,
@@ -220,7 +223,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
     var audit_event = AuditEvent{
         .timestamp = compat_milliTimestamp(),
         .event_type = event.event_type,
-        .severity = if (event.result_failure) .warning else .info,
+        .severity = if (event.result_error) .err else if (event.result_failure) .warning else .info,
         .tenant_id = getCurrentAuditTenantId(),
         .user_id = event.user_id,
         .session_id = "",
@@ -232,7 +235,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
             .table = null,
         },
         .action = event.action,
-        .result = if (event.result_failure) .failure else .success,
+        .result = if (event.result_error) .error_ else if (event.result_failure) .failure else .success,
         .details = detail_map,
     };
     logger.?.appendAuditEvent(&audit_event) catch |err| {
@@ -245,6 +248,38 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
         // bounded constant (the append error type, not user content).
         otel_metrics.recordAuditDropped(.append_error);
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6598-AUTH-ERROR-AUDIT; FEATURE="AuthOutcomeClassification"; ASPECT=LoginRefusalAudit; STATUS=TESTED; TEST=tests/test_sonny6598_kdf_error_hello.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: the audit record of a HELLO that did not log in (both
+/// transports), from `authenticate()`'s error. A rejected credential
+/// (`error.Unauthenticated`) is a failed login: authentication_failure,
+/// action LOGIN, result failure. Any other error is a check the server could
+/// not carry out (the password KDF out of memory, an unusable stored hash,
+/// the security store unavailable): system_event, action AUTH_ERROR, result
+/// error_, with the error name. The user name is the one the client sent
+/// (at most 256 bytes of it); the password is never recorded.
+pub fn logLoginRefusal(allocator: Allocator, username: []const u8, err: anyerror) void {
+    const name = username[0..@min(username.len, 256)];
+    if (err == error.Unauthenticated) {
+        logSecurityGraphEvent(allocator, .{
+            .event_type = .authentication_failure,
+            .action = "LOGIN",
+            .username = name,
+            .details = "credentials rejected",
+            .result_failure = true,
+        });
+        return;
+    }
+    var buf: [160]u8 = undefined;
+    const details = std.fmt.bufPrint(&buf, "auth-system error, not a failed login: {s}", .{@errorName(err)}) catch "auth-system error, not a failed login";
+    logSecurityGraphEvent(allocator, .{
+        .event_type = .system_event,
+        .action = "AUTH_ERROR",
+        .username = name,
+        .details = details,
+        .result_error = true,
+    });
 }
 
 pub const AuditLogger = struct {

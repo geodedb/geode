@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T15:01:18.159533809Z",
+  "generated_at": "2026-11-15T15:27:20.892049813Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78738,6 +78738,153 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6598-AUTH-ERROR-AUDIT",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "LoginRefusalAudit",
+          "status": "TESTED",
+          "files": [
+            "src/security/audit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_kdf_error_hello.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-AUTH-VERIFY-ERRORS",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "AuthenticateVerifyErrors",
+          "status": "TESTED",
+          "files": [
+            "src/security/user_management.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_verify_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-CHAIN-VERIFY-ERRORS",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "ChainTamperVerdict",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_verify_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-HELLO-AUTH-ERROR-ANSWER",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "HelloRefusalMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/auth_rate_limiter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_kdf_error_hello.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-KDF-FAULT-HOOK",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "TestOnlyKdfFaultHook",
+          "status": "TESTED",
+          "files": [
+            "src/security/user_management.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_kdf_error_hello.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-MFA-VERIFY-ERRORS",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "MfaVerifyErrors",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_verify_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6598-VERIFY-THREE-OUTCOMES",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "Argon2idVerifyErrors",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_verify_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "LoginVerifyErrors",
+          "status": "TESTED",
+          "files": [
+            "src/security/user_management.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6598_verify_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83829,7 +83976,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4148
+      "TESTED": 4156
     },
     "by_aspect": {
       "2PC": 3,
@@ -83968,6 +84115,7 @@
       "ApplyUpdate": 1,
       "ArgParsing": 1,
       "ArgReachability": 1,
+      "Argon2idVerifyErrors": 1,
       "ArgumentErrors": 1,
       "ArgumentErrorsEscape": 1,
       "ArithmeticRounding": 1,
@@ -84013,6 +84161,7 @@
       "AuthSingleFlightLaneCollapse": 1,
       "AuthValidation": 1,
       "AuthVersionZeroBypass": 1,
+      "AuthenticateVerifyErrors": 1,
       "Authentication": 1,
       "Authorization": 1,
       "AuthorizationTests": 1,
@@ -84224,6 +84373,7 @@
       "ChainOrder": 1,
       "ChainParts": 1,
       "ChainProcessing": 1,
+      "ChainTamperVerdict": 1,
       "ChainVariable": 1,
       "ChainVerification": 2,
       "ChainedFor": 1,
@@ -85338,6 +85488,7 @@
       "HelloInterrupt": 1,
       "HelloMessage": 1,
       "HelloOnce": 1,
+      "HelloRefusalMessage": 1,
       "HelloRequest": 1,
       "HelloResponseOwnership": 1,
       "HelloWithCredentials": 1,
@@ -85653,7 +85804,9 @@
       "LoggedUndo": 1,
       "LogicHelpers": 1,
       "LogicHelpersImport": 1,
+      "LoginRefusalAudit": 1,
       "LoginState": 2,
+      "LoginVerifyErrors": 1,
       "LongNameRemoverKeys": 1,
       "Lookup": 1,
       "LostAcknowledgement": 1,
@@ -85774,6 +85927,7 @@
       "MetricVocabulary": 1,
       "MetricsAcceptWake": 1,
       "MetricsPoolIsolation": 1,
+      "MfaVerifyErrors": 1,
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
       "Migration": 4,
@@ -87244,6 +87398,7 @@
       "TestKMSWrapUnwrap": 1,
       "TestKeyEscrow": 1,
       "TestModeFlag": 1,
+      "TestOnlyKdfFaultHook": 1,
       "TestSuite": 4,
       "TestTransparentEncryption": 1,
       "Testing": 13,

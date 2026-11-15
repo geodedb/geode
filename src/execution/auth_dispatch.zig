@@ -619,7 +619,9 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 /// beyond non-emptiness, exactly like the offline path. The login verifies an
 /// Argon2id PHC string or a legacy BLAKE2b hash (`user_management.verifyPassword`,
 /// SONNY-6367); a stored hash in neither format never authenticates, so an
-/// unusable import is fail-closed, never fail-open.
+/// unusable import is fail-closed, never fail-open. SONNY-6598: the login
+/// answers such a user a server-side credential error, not "Authentication
+/// failed", and does not count it toward the lockout.
 fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     var username: []const u8 = "";
     var hash: []const u8 = "";
@@ -1148,6 +1150,11 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
         const code = std.fmt.parseInt(u32, token, 10) catch 0xFFFFFFFF;
         if (code <= 999999) {
             // HMAC-SHA1 TOTP with +/-1 window (90s tolerance)
+            // CANARY: REQ=REQ-SONNY-6598-MFA-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=MfaVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+            // SONNY-6598: a check the server could not run (MFA turned off,
+            // an unusable stored secret, out of memory) is that error, not
+            // counted toward the MFA lockout. It was `catch false`: 28000
+            // "invalid code", counted.
             is_valid = mfa_mod.verifyCode(
                 allocator,
                 stored_secret.?,
@@ -1156,7 +1163,10 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
                 30, // step_seconds
                 6, // digits
                 1, // window (+/-1 = 90 second tolerance)
-            ) catch false;
+            ) catch |err| {
+                log.err("geode.auth.mfa_verify: the TOTP check could not run; not counted as a failed attempt", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+                return err;
+            };
         }
     }
 
@@ -1757,7 +1767,11 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
 
         const code_u32 = std.fmt.parseInt(u32, code, 10) catch 0xFFFFFFFF;
         const now_ms = @as(u64, @intCast(compat_milliTimestamp()));
-        const ok = mfa_mod.verifyCode(allocator, stored_secret, now_ms, code_u32, 30, 6, 1) catch false;
+        // SONNY-6598: a check that could not run is that error, not 28000.
+        const ok = mfa_mod.verifyCode(allocator, stored_secret, now_ms, code_u32, 30, 6, 1) catch |err| {
+            log.err("geode.auth.mfa_enable: the TOTP check could not run", &.{ Attr.string("user", username), Attr.string("error", @errorName(err)) });
+            return err;
+        };
         if (!ok) return error.InvalidMfaCode;
     } else if (code.len > 0) {
         // Disable path still validates format if a code is provided, but
