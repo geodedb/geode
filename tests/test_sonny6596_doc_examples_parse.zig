@@ -94,8 +94,9 @@ fn checkCallGroupBy(s: *vs.Session, f: *vs.Failures) !void {
     try s.exec("CREATE (:Cg6596 {k: 1})-[:R]->(:Cg6596 {k: 2})-[:R]->(:Cg6596 {k: 3})", &.{});
     try s.exec("CREATE (:Cg6596 {k: 4})-[:R]->(:Cg6596 {k: 5})", &.{});
     try s.exec("CREATE (:Cg6596 {k: 6})", &.{});
-    try vs.expectOrdered(s, f, "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN setId, size(collect(nodeId)) AS members, count(*) AS size GROUP BY setId ORDER BY size DESC", &.{}, &.{ "3, 3", "2, 2", "1, 1" });
-    try vs.expectOrdered(s, f, "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN count(*) AS size GROUP BY setId ORDER BY size", &.{}, &.{ "1", "2", "3" });
+    try vs.expectOrdered(s, f, "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN size(collect(nodeId)) AS members, count(*) AS n GROUP BY setId ORDER BY n DESC", &.{}, &.{ "3, 3", "2, 2", "1, 1" });
+    try vs.expectOrdered(s, f, "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN count(*) AS n GROUP BY setId HAVING count(*) > 1 ORDER BY n", &.{}, &.{ "2", "3" });
+    try vs.expectOrdered(s, f, "CALL algo.unionFind.stream() YIELD nodeId, setId RETURN count(*) AS n GROUP BY setId ORDER BY n", &.{}, &.{ "1", "2", "3" });
 }
 
 test "SONNY-6596: a procedure call's RETURN takes a GROUP BY (ISO/IEC 39075 14.11)" {

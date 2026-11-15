@@ -2616,6 +2616,21 @@
 
 ### Fixed
 
+- **A procedure call's RETURN takes GROUP BY and HAVING; the graph
+  algorithm guide's examples parse (SONNY-6596).** ISO/IEC 39075:2024 14.11
+  puts the `<group by clause>` in the `<return statement body>`, so `CALL
+  algo.louvain.stream() YIELD nodeId, community RETURN community,
+  collect(nodeId) AS members, count(*) AS n GROUP BY community` is valid; it
+  was a syntax error after `CALL ... YIELD` (it worked after MATCH and
+  `CALL { }`). The GROUP BY and HAVING now group the yielded rows.
+  docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md had 15 examples Geode refused: the
+  GROUP BY ones, `AS size` (SIZE is a reserved word, SONNY-6564), a `CALL`
+  followed by `MATCH` (now `MATCH ... CALL ... FILTER`), fragments ending in
+  a WITH, and a query chaining three procedure calls (a query part runs one;
+  the guide now says so). Regression:
+  `zig build test-sonny6596-doc-examples-parse` parses every ```gql example
+  of the guide through the real parser and runs a grouped procedure call.
+
 - **The spill-threshold environment variables are no longer read
   (SONNY-6596).** The server read `GEODE_SPILL_THRESHOLD_BYTES` /
   `GEODE_QUERY_MEM_LIMIT_BYTES` at startup and copied the value into every

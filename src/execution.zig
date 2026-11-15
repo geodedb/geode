@@ -1156,7 +1156,9 @@ pub fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult,
         identity = own;
         break :blk own;
     };
-    var projected = try executeWithClauseWithGroupByAndParams(allocator, view, .{ .items = items }, null, null, context.query_param_names, context.query_param_values);
+    // SONNY-6596: the RETURN's GROUP BY and HAVING (14.11).
+    const having: ?ast.Expr = if (proc.having) |h| h.* else null;
+    var projected = try executeWithClauseWithGroupByAndParams(allocator, view, .{ .items = items }, proc.group_by, having, context.query_param_names, context.query_param_values);
     errdefer projected.deinit(allocator);
     try value_utilities.adoptProjectionRowValues(allocator, &projected, items);
     projected.owned_graph_entities = result.owned_graph_entities;

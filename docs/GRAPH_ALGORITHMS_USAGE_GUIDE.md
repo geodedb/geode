@@ -223,9 +223,9 @@ LIMIT 5
 ```gql
 CALL algo.louvain.stream()
 YIELD nodeId, community
-RETURN community, collect(nodeId) AS members, count(*) AS size
+RETURN community, collect(nodeId) AS members, count(*) AS n
 GROUP BY community
-ORDER BY size DESC
+ORDER BY n DESC
 ```
 
 **Expected Results** (verified — community ids are store-assigned node ids, so
@@ -233,7 +233,7 @@ the table shows membership; typical run):
 
 ```
 ┌───────────┬──────────────────────────────┬──────┐
-│ community │ members                      │ size │
+│ community │ members                      │ n    │
 ├───────────┼──────────────────────────────┼──────┤
 │ A         │ Alice, Bob, Charlie, Diana   │ 4    │  -- densely connected core
 │ B         │ Eve, Frank                   │ 2    │  -- chain pair
@@ -260,9 +260,9 @@ chain tail merging into the core.
 ```gql
 CALL algo.labelPropagation.stream()
 YIELD nodeId, label
-RETURN label, collect(nodeId) AS members, count(*) AS size
+RETURN label, collect(nodeId) AS members, count(*) AS n
 GROUP BY label
-ORDER BY size DESC
+ORDER BY n DESC
 ```
 
 **Expected Results** (verified properties — the exact split is
@@ -288,9 +288,9 @@ do not pin exact labels):
 ```gql
 CALL algo.unionFind.stream()
 YIELD nodeId, setId
-RETURN setId AS component, collect(nodeId) AS members, count(*) AS size
+RETURN setId, collect(nodeId) AS members, count(*) AS n
 GROUP BY setId
-ORDER BY size DESC
+ORDER BY n DESC
 ```
 
 **Expected Results** (verified — `setId` is a store-assigned representative
@@ -298,7 +298,7 @@ node id, not a small integer):
 
 ```
 ┌───────────┬──────────────────────────────────────────────────────────┬──────┐
-│ component │ members                                                  │ size │
+│ setId     │ members                                                  │ n    │
 ├───────────┼──────────────────────────────────────────────────────────┼──────┤
 │ <setId>   │ Alice, Bob, Charlie, Diana, Eve, Frank, Grace, Henry     │ 8    │
 └───────────┴──────────────────────────────────────────────────────────┴──────┘
@@ -310,24 +310,21 @@ node id, not a small integer):
 
 ```gql
 -- Add isolated group
-CREATE (ian:Person {name: 'Ian'})
-CREATE (jane:Person {name: 'Jane'})
-MATCH (ian:Person {name: 'Ian'}), (jane:Person {name: 'Jane'})
-CREATE (ian)-[:FRIENDS_WITH]->(jane)
+CREATE (:Person {name: 'Ian'})-[:FRIENDS_WITH]->(:Person {name: 'Jane'})
 
 -- Now run Union-Find
 CALL algo.unionFind.stream()
 YIELD nodeId, setId
-RETURN setId, collect(nodeId) AS members, count(*) AS size
+RETURN setId, collect(nodeId) AS members, count(*) AS n
 GROUP BY setId
-ORDER BY size DESC
+ORDER BY n DESC
 ```
 
 **Results with Isolation** (verified — exactly two distinct `setId` values):
 
 ```
 ┌──────────┬──────────────────────────────────────────────────────────┬──────┐
-│ setId    │ members                                                  │ size │
+│ setId    │ members                                                  │ n    │
 ├──────────┼──────────────────────────────────────────────────────────┼──────┤
 │ <setId1> │ Alice, Bob, Charlie, Diana, Eve, Frank, Grace, Henry     │ 8    │
 │ <setId2> │ Ian, Jane                                                │ 2    │
@@ -345,9 +342,9 @@ ORDER BY size DESC
 ```gql
 CALL algo.scc.stream()
 YIELD nodeId, componentId
-RETURN componentId, collect(nodeId) AS members, count(*) AS size
+RETURN componentId, collect(nodeId) AS members, count(*) AS n
 GROUP BY componentId
-ORDER BY size DESC
+ORDER BY n DESC
 ```
 
 **Expected Results** (verified — SCC is a **directed** algorithm and follows
@@ -355,7 +352,7 @@ outgoing edges only; it does NOT treat the graph as undirected):
 
 ```
 ┌─────────────┬──────────┬──────┐
-│ componentId │ members  │ size │
+│ componentId │ members  │ n    │
 ├─────────────┼──────────┼──────┤
 │ 0..7        │ each     │ 1    │  -- 8 singleton SCCs
 └─────────────┴──────────┴──────┘
@@ -406,9 +403,10 @@ behavior is pinned by the two-directed-triangles test in
 
 ```gql
 -- Find key connectors in the organization
+MATCH (e:Employee)
 CALL algo.betweenness.stream()
 YIELD nodeId, betweenness
-MATCH (e:Employee) WHERE id(e) = nodeId
+FILTER id(e) = nodeId
 RETURN e.name, e.department, betweenness
 ORDER BY betweenness DESC
 LIMIT 10
@@ -428,12 +426,13 @@ LIMIT 10
 
 ```gql
 -- Find connected components in transaction network
+MATCH (a:Account)
 CALL algo.unionFind.stream()
 YIELD nodeId, setId
-MATCH (a:Account) WHERE id(a) = nodeId
-WITH setId, collect(a.accountNumber) AS accounts
-WHERE size(accounts) > 5  -- Suspiciously large connected groups
-RETURN setId AS suspiciousGroup, accounts, size(accounts) AS accountCount
+FILTER id(a) = nodeId
+RETURN setId, collect(a.accountNumber) AS accounts, count(*) AS accountCount
+GROUP BY setId
+HAVING count(*) > 5  -- Suspiciously large connected groups
 ORDER BY accountCount DESC
 ```
 
@@ -450,20 +449,15 @@ ORDER BY accountCount DESC
 **Scenario**: Friend recommendations using community detection
 
 ```gql
--- Find people in same community who aren't yet friends
+-- The people of each community; a query part runs one procedure call, so
+-- pair the members who are not yet friends in the application (or join
+-- the stored community ids of a previous run)
+MATCH (p:Person)
 CALL algo.louvain.stream()
 YIELD nodeId, community
-MATCH (p:Person) WHERE id(p) = nodeId
-WITH community, collect(p) AS members
-UNWIND members AS person1
-UNWIND members AS person2
-WHERE person1 <> person2
-  AND NOT (person1)-[:FRIENDS_WITH]-(person2)
-RETURN person1.name AS user,
-       person2.name AS recommendedFriend,
-       community AS sharedCommunity
-ORDER BY user, sharedCommunity
-LIMIT 20
+FILTER id(p) = nodeId
+RETURN community, collect(p.name) AS members
+GROUP BY community
 ```
 
 **Business Value**:
@@ -480,10 +474,11 @@ LIMIT 20
 
 ```gql
 -- Identify critical nodes in supply chain
+MATCH (s:Supplier)
 CALL algo.betweenness.stream()
 YIELD nodeId, betweenness
-MATCH (s:Supplier) WHERE id(s) = nodeId
-WHERE betweenness > 100  -- High raw pair count indicates criticality (scores are unnormalized)
+-- A high raw pair count indicates criticality (scores are unnormalized)
+FILTER id(s) = nodeId AND betweenness > 100
 RETURN s.name,
        s.location,
        betweenness,
@@ -505,10 +500,10 @@ ORDER BY betweenness DESC
 
 ```gql
 -- Find influencers (high eigenvector centrality) who shared content
+MATCH (u:User)-[:SHARED]->(c:Content {id: 'viral-video-123'})
 CALL algo.eigenvector.stream()
 YIELD nodeId, eigenvector
-MATCH (u:User) WHERE id(u) = nodeId
-MATCH (u)-[:SHARED]->(c:Content {id: 'viral-video-123'})
+FILTER id(u) = nodeId
 RETURN sum(eigenvector) AS viralPotential,
        count(u) AS influencerCount,
        CASE
@@ -559,29 +554,24 @@ LIMIT 100
 ### 3. Filter Before Algorithm
 
 ```gql
--- Bad: Run algorithm on entire graph
+-- The procedures run over the whole graph (there is no subgraph argument
+-- yet); join and filter their rows afterwards
+MATCH (p:Person {active: true})
 CALL algo.degree.stream()
 YIELD nodeId, degree
-MATCH (p:Person) WHERE id(p) = nodeId AND p.active = true
+FILTER id(p) = nodeId
 RETURN p.name, degree
-
--- Better: Use subgraph (when supported)
--- First filter, then analyze
-MATCH (p:Person {active: true})
-WITH collect(id(p)) AS activeNodes
--- Run algorithm only on active nodes
 ```
 
 ### 4. Batch Processing
 
 ```gql
--- Process in batches for very large graphs
+-- Select a batch of nodes (the procedures still run over the whole graph)
 MATCH (p:Person)
 WITH p
 ORDER BY p.createdDate DESC
 LIMIT 10000
-WITH collect(id(p)) AS recentUsers
--- Run algorithm on recent users only
+RETURN collect(id(p)) AS recentUsers
 ```
 
 ---
@@ -590,24 +580,23 @@ WITH collect(id(p)) AS recentUsers
 
 ### Multi-Metric Influence Score
 
+A query part runs one procedure call, so run one query per measure and
+combine the scores in the application (or store each score as a property
+and combine the properties in one query):
+
 ```gql
--- Combine multiple centrality measures for comprehensive influence score
-CALL algo.degree.stream()
-YIELD nodeId AS degreeNode, degree
-
-CALL algo.betweenness.stream()
-YIELD nodeId AS betweenNode, betweenness
-
-CALL algo.eigenvector.stream()
-YIELD nodeId AS eigenNode, eigenvector
-
+-- One measure per query, joined to the people it scores
 MATCH (p:Person)
-WHERE id(p) = degreeNode AND id(p) = betweenNode AND id(p) = eigenNode
-RETURN p.name,
-       degree,
-       betweenness,
-       eigenvector,
-       (degree * 0.3 + betweenness * 0.4 + eigenvector * 0.3) AS influenceScore
+CALL algo.degree.stream()
+YIELD nodeId, degree
+FILTER id(p) = nodeId
+RETURN p.name AS name, degree
+ORDER BY degree DESC
+
+-- After storing each score on the node (degree, betweenness, eigenvector)
+MATCH (p:Person)
+RETURN p.name AS name,
+       p.degree * 0.3 + p.betweenness * 0.4 + p.eigenvector * 0.3 AS influenceScore
 ORDER BY influenceScore DESC
 LIMIT 10
 ```
@@ -634,10 +623,9 @@ RETURN nodeId, betweenness
 -- First identify components, then analyze each
 CALL algo.unionFind.stream()
 YIELD nodeId, setId
-WITH setId, collect(nodeId) AS componentNodes
-WHERE size(componentNodes) >= 5  -- Only analyze substantial components
-UNWIND componentNodes AS nodeId
--- Run centrality analysis on each component
+RETURN setId, collect(nodeId) AS componentNodes
+GROUP BY setId
+HAVING count(*) >= 5  -- Only analyze substantial components
 ```
 
 ---

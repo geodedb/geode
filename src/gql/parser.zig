@@ -2247,6 +2247,33 @@ pub const Parser = struct {
                         };
                     }
 
+                    // CANARY: REQ=REQ-SONNY-6596-CALL-GROUP-BY; FEATURE="CallProcedure"; ASPECT=ReturnGroupBy; STATUS=TESTED; TEST=tests/test_sonny6596_doc_examples_parse.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: the RETURN's GROUP BY and HAVING (ISO/IEC
+                    // 39075:2024 14.11: the <group by clause> is part of the
+                    // <return statement body>), as after MATCH and CALL { }.
+                    // `CALL algo.louvain.stream() YIELD nodeId, community
+                    // RETURN community, count(*) AS size GROUP BY community`
+                    // was a syntax error.
+                    var call_group_by: ?ast.GroupBy = null;
+                    var call_having: ?*const ast.Expr = null;
+                    if (return_clause != null and self.cur.kind == .GROUP) {
+                        self.advance();
+                        _ = try self.expect(.BY);
+                        var keys = std.ArrayList(ast.Expr).empty;
+                        while (true) {
+                            try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                            if (self.cur.kind != .comma) break;
+                            self.advance();
+                        }
+                        call_group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                        if (self.cur.kind == .HAVING) {
+                            self.advance();
+                            const h = try self.arena.allocator().create(ast.Expr);
+                            h.* = try self.parseOrExpr();
+                            call_having = h;
+                        }
+                    }
+
                     // Optional ORDER BY clause (after RETURN)
                     var order_by: ?ast.OrderBy = null;
                     if (return_clause != null and self.cur.kind == .ORDER) {
@@ -2277,6 +2304,8 @@ pub const Parser = struct {
                         .yield_items = yield_items,
                         .filter = call_filter,
                         .return_clause = return_clause,
+                        .group_by = call_group_by,
+                        .having = call_having,
                         .order_by = order_by,
                         .limit = limit,
                         .offset = offset,
