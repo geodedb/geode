@@ -138,30 +138,6 @@ pub fn encryptionKeyFromEnv() error{ InvalidTsTdeKey, InvalidTsTdeSetting }!?[32
 /// SONNY-6590: where an empty plaintext store is moved before it is deleted.
 const discarded_store_suffix = ".plaintext-discard";
 
-/// SONNY-6590: the wal library's encrypted frame (timeseries-storage under an
-/// `encryption_key`) starts with its u32 length and then this tag; a plaintext
-/// frame starts with its u64 LSN.
-const sealed_wal_frame_tag = "ZIGWALE\x00";
-
-const WalLayout = enum { none, sealed, plaintext };
-
-/// SONNY-6590: the layout of `<data_dir>/ts.wal` from its first frame.
-fn walLayout(allocator: std.mem.Allocator, data_dir: []const u8) !WalLayout {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const path = try std.fmt.allocPrint(allocator, "{s}/ts.wal", .{data_dir});
-    defer allocator.free(path);
-    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return .none,
-        else => return err,
-    };
-    defer file.close(io);
-    var head: [4 + sealed_wal_frame_tag.len]u8 = undefined;
-    const n = try file.readPositionalAll(io, &head, 0);
-    if (n == 0) return .none;
-    if (n == head.len and std.mem.eql(u8, head[4..], sealed_wal_frame_tag)) return .sealed;
-    return .plaintext;
-}
-
 fn removeDiscardedStore(allocator: std.mem.Allocator, data_dir: []const u8) !void {
     const discard = try std.fmt.allocPrint(allocator, "{s}{s}", .{ data_dir, discarded_store_suffix });
     defer allocator.free(discard);
@@ -297,13 +273,6 @@ pub const Store = struct {
         try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), data_dir_owned);
         // SONNY-6590: an empty plaintext store being replaced when a crash hit.
         if (config.encryption_key != null) try removeDiscardedStore(allocator, data_dir_owned);
-        // SONNY-6590: never hand the engine a WAL of the other layout. It
-        // reads the frames it cannot decode as a torn tail and truncates
-        // `ts.wal` to nothing, so a store whose points are still only in the
-        // WAL (no flush yet, hence no manifest for the engine to refuse) loses
-        // them: under the key a plaintext WAL, without it an encrypted one.
-        const wal_layout = try walLayout(allocator, data_dir_owned);
-        if (wal_layout == .sealed and config.encryption_key == null) return error.TimeseriesNeedsTdeKey;
 
         const engine_config = ts_storage.engine.Config{
             .data_dir = data_dir_owned,
@@ -319,11 +288,24 @@ pub const Store = struct {
         const engine_ptr = try allocator.create(ts_storage.engine.Engine);
         errdefer allocator.destroy(engine_ptr);
 
-        if (wal_layout == .plaintext and config.encryption_key != null)
-            try replaceEmptyPlaintextStore(allocator, engine_config, pool_ptr);
+        // SONNY-6590 / SONNY-6615: timeseries-storage 0.2.21 refuses, and
+        // leaves untouched, a ts.wal it cannot decode (0.2.20 truncated it
+        // to nothing, losing every point not yet flushed). Without the key,
+        // an encrypted store is TimeseriesNeedsTdeKey. Under the key, a store
+        // in plaintext (manifest, segment or WAL) goes to the empty-store
+        // replacement, which refuses it (TimeseriesNotEncrypted) when it
+        // holds points. WalAuthFailed (another key) and WalCorrupted
+        // (mid-log damage) pass through as themselves and never reach the
+        // replacement, which deletes.
         engine_ptr.* = ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr) catch |err| blk: {
-            const plaintext = err == error.UnexpectedPlaintextManifest or err == error.UnexpectedPlaintextSegment;
-            if (!plaintext or config.encryption_key == null) return err;
+            if (config.encryption_key == null) {
+                if (err == error.WalEncryptionMismatch) return error.TimeseriesNeedsTdeKey;
+                return err;
+            }
+            const plaintext = err == error.UnexpectedPlaintextManifest or
+                err == error.UnexpectedPlaintextSegment or
+                err == error.WalEncryptionMismatch;
+            if (!plaintext) return err;
             try replaceEmptyPlaintextStore(allocator, engine_config, pool_ptr);
             break :blk try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
         };

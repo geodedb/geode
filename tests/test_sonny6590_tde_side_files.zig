@@ -702,6 +702,10 @@ test "SONNY-6590: a time-series WAL of the other layout is never opened (the eng
         try testing.expect(before.len > 0);
         try testing.expectError(error.TimeseriesNeedsTdeKey, ts.Store.initWithConfig(testing.allocator, .{ .data_dir = path }));
         try testing.expectEqualSlices(u8, before, try walBytes(aa, path));
+        // SONNY-6615: under another key the library's WalAuthFailed passes
+        // through and never reaches the empty-store replacement.
+        try testing.expectError(error.WalAuthFailed, ts.Store.initWithConfig(testing.allocator, .{ .data_dir = path, .encryption_key = randomKey() }));
+        try testing.expectEqualSlices(u8, before, try walBytes(aa, path));
         try testing.expectEqual(error.TimeseriesNeedsTdeKey, geode.graph_store.GraphQuarantineError.TimeseriesNeedsTdeKey);
         try testing.expectEqualStrings("58000", geode.proto_util.mapError(error.TimeseriesNeedsTdeKey).code);
         var st = try ts.Store.initWithConfig(testing.allocator, .{ .data_dir = path, .encryption_key = key });

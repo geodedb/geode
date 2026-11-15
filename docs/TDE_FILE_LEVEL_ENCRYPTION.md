@@ -102,13 +102,16 @@ wrote time-series values in plaintext to `<data_dir>/timeseries/ts.wal`.
 | any | anything else | refused (`InvalidTsTdeSetting`) |
 | unset | unset, `0` or `false` | plaintext (no TDE) |
 
-geode reads the layout of a store's `ts.wal` before it opens the store and
-never opens a WAL of the other layout: timeseries-storage 0.2.20 reads the
-frames it cannot decode as a torn tail and truncates the file, so points
-not yet flushed to a segment would be lost. An encrypted store opened
+timeseries-storage 0.2.20 read the frames of a `ts.wal` it could not
+decode as a torn tail and truncated the file, losing every point not yet
+flushed to a segment; geode checked the WAL's layout itself before opening
+a store. Since 0.2.21 (SONNY-6615) the library refuses such a WAL and
+leaves it untouched, and geode maps its errors: an encrypted store opened
 without the key (or with `GEODE_TS_TDE=0`) is refused
 (`TimeseriesNeedsTdeKey`; a graph's store refuses the graph with 58000, the
-server-wide one stops startup).
+server-wide one stops startup); a plaintext WAL under the key is handled
+as a plaintext store (below); a WAL under another key (`WalAuthFailed`) or
+damaged mid-log (`WalCorrupted`) is refused as itself and never replaced.
 
 A time-series store written in plaintext and opened under the key:
 

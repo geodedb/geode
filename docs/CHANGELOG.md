@@ -405,6 +405,18 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **timeseries-storage v0.2.21 (SONNY-6615): a time-series WAL that cannot
+  be decoded is refused, not truncated.** 0.2.20 read the frames of a
+  `ts.wal` it could not decode (another key mode, another key, mid-log
+  damage) as a torn tail and truncated the file, losing every point not yet
+  flushed. 0.2.21 refuses with `WalEncryptionMismatch`, `WalAuthFailed` or
+  `WalCorrupted` and leaves the file; only a torn tail is truncated, from
+  its first bad record. geode drops its own `ts.wal` layout precheck
+  (SONNY-6590) and maps the errors: without the key `WalEncryptionMismatch`
+  is `TimeseriesNeedsTdeKey`; under the key it is a plaintext store and goes
+  to the empty-store replacement (refused with `TimeseriesNotEncrypted`
+  when it holds points); `WalAuthFailed` and `WalCorrupted` pass through
+  and never reach the replacement.
 - **Invalidating a graph's exact property index removes `prop_rev.idx`
   too (SONNY-6616).** A full checkpoint of a graph whose exact index was
   never built and that has no nodes left deleted `prop_exact.idx` and left

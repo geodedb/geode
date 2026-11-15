@@ -734,8 +734,14 @@
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.20#9b52189748a43f48df458bc3126cff2d151a7e0a",
-            .hash = "timeseries_storage-0.2.20-5wzBJNRSFAAC5RKVAhQm22TKlUa8qRACnjDboRbEdJnM",
+            // v0.2.21 (SONNY-6615): Engine.init refuses, and leaves
+            // untouched, a ts.wal it cannot decode instead of truncating it
+            // (WalEncryptionMismatch for a key-mode mismatch, WalAuthFailed
+            // for a wrong key, WalCorrupted for mid-log damage; salvage is
+            // opt-in). A torn tail is still truncated, from the first bad
+            // record only. geode's thread_pool override in build.zig wins.
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.21#c1b3d4d4cb29ffeafc11384fbaad2232234ffe4a",
+            .hash = "timeseries_storage-0.2.21-5wzBJMrmFABWwPSqL7XOvnfdrns5_soc-nRtq_UoiC3O",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
