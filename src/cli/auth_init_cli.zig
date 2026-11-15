@@ -389,7 +389,7 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
     // SONNY-3035: an empty store (no records, no chain root) verifies with
     // no key; otherwise the key is looked up, never generated: a key made up
     // now cannot verify an existing chain, and verifying wrote it.
-    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) {
+    if (mgr.countAuthRecords() == 0 and (try mgr.storage.loadChainRoot()) == null) {
         std.debug.print("HMAC chain verified: 0 records, integrity OK.\n", .{});
         return;
     }

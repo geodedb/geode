@@ -2595,6 +2595,21 @@
   expression: `StorageReadFailed`, 58000, the cause logged). An edge that is
   absent (deleted), in another graph or tenant, or hidden by RLS is still
   skipped. Regression: `zig build test-sonny6594-read-failure`.
+- **An auth decision that cannot read a security record reports the read
+  failure (SONNY-6594 item 5).** Fail closed as before, but no longer
+  misreported: `canUserAccessGraph` (schema / LSP visibility) skipped a
+  grant it could not read and answered "no access", a deny an operator
+  could not tell from a missing grant; it now fails with the read's error.
+  `verifyChain` (the periodic HMAC verify, `geode auth verify`, the offline
+  commands' verify-before-change, restore) took an unreadable chain root
+  for a missing one and raised `MissingChainRoot` ("POSSIBLE TAMPERING");
+  it now fails with the read's error. Loading the auth store at start
+  skipped a user whose record it could not read (the user then did not
+  exist for the run); it now fails. A username lookup still falls back to
+  the engine-direct read, and answers the read's error instead of "no such
+  user" when that finds nothing. `canUserAccessGraph` and
+  `UserStorageBackend.loadChainRoot` now return error unions. Regression:
+  `zig build test-sonny6594-auth-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,

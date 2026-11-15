@@ -21,7 +21,7 @@ fn storeHasAuthRecords(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     if (persisted > 0) return true;
     var agm = try auth_graph_manager.AuthGraphManager.init(allocator, store);
     defer agm.deinit();
-    return agm.countAuthRecords() > 0 or agm.storage.loadChainRoot() != null;
+    return agm.countAuthRecords() > 0 or (try agm.storage.loadChainRoot()) != null;
 }
 
 /// SONNY-6322: the startup refusal when auth records exist and no HMAC key

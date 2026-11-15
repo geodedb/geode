@@ -536,7 +536,9 @@ pub const AuthGraphManager = struct {
     pub fn verifyChain(self: *Self, hmac_key: *const [32]u8) !void {
         const total_records = self.countAuthRecords();
 
-        const chain_root = self.storage.loadChainRoot();
+        // SONNY-6594 (5): a root that cannot be read is the read's error, not
+        // MissingChainRoot ("POSSIBLE TAMPERING").
+        const chain_root = try self.storage.loadChainRoot();
 
         if (chain_root == null) {
             if (total_records > 0) {
@@ -2222,7 +2224,10 @@ pub const AuthGraphManager = struct {
     /// REVOKE hold it while they change `graph_grant_nodes`; it iterated
     /// the map unlocked. Callers (LSP / schema introspection) hold no
     /// graph lock here, as the lock order requires.
-    pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) bool {
+    /// SONNY-6594 (5): a grant whose record cannot be READ fails the check
+    /// with the read's error (still no access): it was skipped, a silent
+    /// deny an operator could not tell from a missing grant.
+    pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) !bool {
         const ddl_guard = geode.security.auth_ddl_lock.acquire();
         defer ddl_guard.release();
 
@@ -2245,7 +2250,7 @@ pub const AuthGraphManager = struct {
             // Gap 0034 discipline: hydrate-on-miss so an evicted/not-yet-resident
             // grant body still resolves from the engine (the getNodeProperty
             // reads below already hydrate; the body read must match).
-            const node = self.storage.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.storage.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             // SECURITY_GRAPH_NAME is duplicated as a file-local const in this
             // module (and in user_storage.zig). Use the local copy so we don't
             // rely on a cross-module reference.
@@ -2650,7 +2655,7 @@ test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC cha
     try testing.expect(std.mem.eql(u8, role.?.getName(), "admin"));
 
     // Verify chain root exists
-    const chain_root = mgr.storage.loadChainRoot();
+    const chain_root = try mgr.storage.loadChainRoot();
     try testing.expect(chain_root != null);
     try testing.expectEqual(@as(u64, 2), chain_root.?.record_count); // 1 user + 1 role
 }
@@ -2810,7 +2815,7 @@ test "createUser adds user and maintains valid chain" {
     try testing.expect(std.mem.eql(u8, alice.?.getUsername(), "alice"));
 
     // Verify chain root count updated (admin user + admin role + alice)
-    const chain_root = mgr.storage.loadChainRoot();
+    const chain_root = try mgr.storage.loadChainRoot();
     try testing.expect(chain_root != null);
     try testing.expectEqual(@as(u64, 3), chain_root.?.record_count);
 
@@ -2854,22 +2859,22 @@ test "canUserAccessGraph returns true after grant and false after revoke" {
     const alice_id = try mgr.createUser(&hmac_key, "alice", "alice@example.com", pw_hash, false);
 
     // Pre-grant: alice cannot see the "trade" graph.
-    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "trade"));
 
     // Action byte 0 == Read per GraphGrantRecord.action encoding.
     try mgr.grantUserGraphPermission(&hmac_key, alice_id, "trade", 0);
 
     // Post-grant: alice sees "trade".
-    try testing.expect(mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(try mgr.canUserAccessGraph("alice", "trade"));
     // Other graphs remain hidden.
-    try testing.expect(!mgr.canUserAccessGraph("alice", "other"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "other"));
     // Other users still don't see "trade".
-    try testing.expect(!mgr.canUserAccessGraph("nobody", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("nobody", "trade"));
 
     // Revoke the same action and verify visibility drops back to false.
     const removed = try mgr.revokeUserGraphPermission(&hmac_key, alice_id, "trade", 0);
     try testing.expect(removed);
-    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "trade"));
 }
 
 // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=AdminShortcut; STATUS=TESTED; TEST=test_canUserAccessGraph_admin_shortcut; OWNER=security; UPDATED=2026-05-14
@@ -2890,10 +2895,10 @@ test "canUserAccessGraph short-circuits true for superusers without any grant" {
     // bootstrapDefaultAdmin creates a superuser named "geode" with no
     // graph grants. The admin shortcut must still return true for any
     // graph name.
-    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "any_graph_name"));
-    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "another"));
+    try testing.expect(try mgr.canUserAccessGraph(bootstrap.username, "any_graph_name"));
+    try testing.expect(try mgr.canUserAccessGraph(bootstrap.username, "another"));
     // And an unknown user remains false.
-    try testing.expect(!mgr.canUserAccessGraph("ghost", "any"));
+    try testing.expect(!try mgr.canUserAccessGraph("ghost", "any"));
 }
 
 // CANARY: REQ=REQ-AUTH-GRAPH-MGR-002; FEATURE="AuthGraphManagerTests"; ASPECT=ChainIntegrity; STATUS=TESTED; TEST=test_bootstrapDefaultAdmin_creates_user; OWNER=security; UPDATED=2026-02-24

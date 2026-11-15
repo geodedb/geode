@@ -76,7 +76,7 @@ pub fn freeStringList(allocator: std.mem.Allocator, list: [][]const u8) void {
 /// - `Role.Admin` short-circuits to `true` (admin sees every graph).
 /// - `auth_mgr == null` is the permissive fallback for tests / no-auth.
 /// - Otherwise the per-graph grant check decides.
-fn graphVisible(ctx: IntrospectionContext) bool {
+fn graphVisible(ctx: IntrospectionContext) !bool {
     if (ctx.role == .Admin) return true;
     const mgr = ctx.auth_mgr orelse return true;
     return mgr.canUserAccessGraph(ctx.user, ctx.graph_name);
@@ -154,7 +154,7 @@ pub fn listLabelsForUser(
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     const all = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
@@ -174,7 +174,7 @@ pub fn listEdgeTypesForUser(
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     const all = try tenant_visibility.listEdgeTypesVisible(allocator, store, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
@@ -197,7 +197,7 @@ pub fn listPropertiesForLabelForUser(
     ctx: IntrospectionContext,
     label: []const u8,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     if (!labelVisible(ctx, label)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     return tenant_visibility.listPropertiesForLabelVisible(allocator, store, filter_tenant, label);
@@ -234,7 +234,7 @@ pub fn listGraphsForUser(
     errdefer keep.deinit(allocator);
     var i: usize = 0;
     while (i < all.len) : (i += 1) {
-        if (ctx.auth_mgr.?.canUserAccessGraph(ctx.user, all[i])) {
+        if (try ctx.auth_mgr.?.canUserAccessGraph(ctx.user, all[i])) {
             try keep.append(allocator, all[i]);
         } else {
             allocator.free(all[i]);
