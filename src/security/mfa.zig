@@ -105,6 +105,12 @@ pub fn verifyEnrollment(allocator: std.mem.Allocator, secret_base32: []const u8,
     return verifyCode(allocator, secret_base32, now_ms, code, 30, 6, 1);
 }
 
+/// SONNY-6600: the digest a recovery code is held as (SHA-256, the auth
+/// library's `hashScratchCode`; the codes are 160-bit random values).
+pub fn hashRecoveryCode(code: []const u8) [32]u8 {
+    return ext_mfa.hashScratchCode(code);
+}
+
 pub fn verifyRecoveryCode(candidate: []const u8, codes_ptr: anytype) ?usize {
     if (candidate.len != 8) return null;
 

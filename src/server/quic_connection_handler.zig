@@ -137,6 +137,11 @@ var g_mtls_provider: ?*mtls_provider.MtlsProvider = null;
 // S6: Per-IP authentication rate limiter — prevents brute-force attacks on QUIC HELLO.
 // CANARY: REQ=REQ-SEC-RATE-LIMIT-003; FEATURE="AuthRateLimiting"; ASPECT=GlobalInstance; STATUS=TESTED; TEST=geodetestlab/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-06-11
 const auth_rate_limiter = @import("auth_rate_limiter.zig");
+// SONNY-6600: a procedure answers the HELLO messages for the same errors.
+comptime {
+    std.debug.assert(std.mem.eql(u8, auth_rate_limiter.hello_unavailable_message, proto_util.auth_unavailable_message));
+    std.debug.assert(std.mem.eql(u8, auth_rate_limiter.hello_credential_invalid_message, proto_util.auth_credential_invalid_message));
+}
 var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 
 // S1: Post-execution RLS filter — removes result rows containing denied labels.

@@ -45,9 +45,10 @@ const user_management = geode.user_management;
 ///
 /// `verifyFn` returns an `Outcome.ok` on success, populating the username
 /// and an optional role string (which the caller maps through
-/// `user_management.Role.fromString`). It returns `Outcome.invalid` on
-/// any error path — auth errors are not differentiated at the LSP layer
-/// because the protocol surface is the same -32002 regardless.
+/// `user_management.Role.fromString`). It returns `Outcome.invalid` when
+/// the token was checked and is not valid, and `Outcome.err` when the
+/// check could not run (out of memory, ...): SONNY-6600, every error was
+/// `.invalid`, so a server-side fault told the client its token was bad.
 pub const Verifier = struct {
     ctx: *anyopaque,
     verifyFn: *const fn (ctx: *anyopaque, token: []const u8) Outcome,
@@ -62,8 +63,12 @@ pub const Verifier = struct {
             free_with: ?std.mem.Allocator = null,
         },
         invalid,
+        /// The check could not run (SONNY-6600): not a verdict on the token.
+        err: anyerror,
     };
 };
+
+const log = std.log.scoped(.lsp_auth);
 
 pub const AuthError = error{
     MissingToken,
@@ -71,6 +76,8 @@ pub const AuthError = error{
     ExpiredToken,
     BadFormat,
     OutOfMemory,
+    /// SONNY-6600: the token could not be checked (a server-side error).
+    AuthUnavailable,
 };
 
 pub const AuthState = struct {
@@ -193,6 +200,11 @@ pub const AuthState = struct {
 
         switch (v.verifyFn(v.ctx, self.token)) {
             .invalid => return AuthError.InvalidToken,
+            // CANARY: REQ=REQ-SONNY-6600-LSP-AUTH-ERROR-OUTCOME; FEATURE="LspPermissionAwareCompletion"; ASPECT=VerifierErrorOutcome; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+            .err => |e| {
+                log.warn("LSP token check could not run (a server-side error, not an invalid token); session not bound: {s}", .{@errorName(e)});
+                return AuthError.AuthUnavailable;
+            },
             .ok => |ok| {
                 // Release owned outcome strings once copied (api-key path);
                 // borrowed-literal outcomes (stub verifiers) set free_with=null.
@@ -237,6 +249,16 @@ pub const AuthState = struct {
 // `auth_test.zig` already exercises.
 const authn = @import("geode").security.authn;
 
+/// SONNY-6600: the `AuthProvider.authenticate` errors that are a verdict
+/// on the token: not an API key at all, no key or session matches, an idle
+/// session. Any other error (out of memory, ...) means the check could not
+/// run.
+fn isTokenVerdict(err: anyerror) bool {
+    return err == error.AuthenticationRequired or
+        err == error.InvalidApiKeyFormat or
+        err == error.SessionIdleTimeout;
+}
+
 fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
     if (token.len == 0) return .invalid;
     const provider: *authn.AuthProvider = @ptrCast(@alignCast(ctx));
@@ -248,25 +270,26 @@ fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
         // release the result; AuthState.verify frees the copies after use.
         defer result.deinit(provider.allocator);
         const role_src: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
-        const user_dup = provider.allocator.dupe(u8, result.username) catch return .invalid;
+        const user_dup = provider.allocator.dupe(u8, result.username) catch |e| return .{ .err = e };
         const role_dup: ?[]const u8 = if (role_src) |rn|
-            (provider.allocator.dupe(u8, rn) catch {
+            (provider.allocator.dupe(u8, rn) catch |e| {
                 provider.allocator.free(user_dup);
-                return .invalid;
+                return .{ .err = e };
             })
         else
             null;
         return .{ .ok = .{ .username = user_dup, .role = role_dup, .free_with = provider.allocator } };
-    } else |_| {
-        // Fall through to session-token path.
+    } else |e| {
+        // Not an API key, or no key matches: try it as a session token.
+        if (!isTokenVerdict(e)) return .{ .err = e };
     }
 
     // 2. Try session token — rotating session issued by a prior login.
     if (provider.authenticate(.{ .session_token = token })) |result| {
         const role_name: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
         return .{ .ok = .{ .username = result.username, .role = role_name } };
-    } else |_| {
-        return .invalid;
+    } else |e| {
+        return if (isTokenVerdict(e)) .invalid else .{ .err = e };
     }
 }
 

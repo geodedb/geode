@@ -25,6 +25,19 @@ overlap window (`src/distributed/cluster_auth.zig`):
   `GEODE_CLUSTER_TOKEN` is unset the node stays in standalone mode and
   rejects everything, regardless of `GEODE_CLUSTER_TOKEN_PREVIOUS`.
 
+Token requirements (SONNY-6600):
+
+- Each token that is set must be at least **16 bytes**; `geode serve`
+  refuses to start otherwise (exit 1, naming the variable and its
+  length). Set but empty is refused too. Use a random token, for example
+  `openssl rand -hex 32` (64 characters, 256 bits); no other entropy check
+  is made.
+- Tokens are compared in full: both are hashed with SHA-256 and the
+  digests compared in constant time, so the time taken depends only on
+  the two lengths. Until SONNY-6600 only the first 256 bytes were
+  compared, so a token longer than 256 bytes was accepted from a peer that
+  knew its first 256 bytes. Regression: `zig build test-sonny6600-cluster-token`.
+
 Rotation procedure (no flag-day, no quorum loss). A running process only
 sees the env values it started with, so the accept-both phase must complete
 on **every** node before any node starts *sending* the new token:

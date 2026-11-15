@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T15:49:00.970902684Z",
+  "generated_at": "2026-11-15T16:05:14.646671937Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78885,6 +78885,191 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6600-AUTH-ERROR-GQLSTATUS",
+      "features": [
+        {
+          "feature": "AuthOutcomeClassification",
+          "aspect": "ProcedureGqlstatus",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_auth_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG",
+      "features": [
+        {
+          "feature": "ClusterAuth",
+          "aspect": "StartupTokenCheck",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_cluster_token.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "ClusterAuth",
+          "aspect": "StartupRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_cluster_token.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-CLUSTER-TOKEN-FULL-COMPARE",
+      "features": [
+        {
+          "feature": "ClusterAuth",
+          "aspect": "FullLengthConstantTimeCompare",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_cluster_token.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-LSP-AUTH-ERROR-OUTCOME",
+      "features": [
+        {
+          "feature": "LspPermissionAwareCompletion",
+          "aspect": "VerifierErrorOutcome",
+          "status": "TESTED",
+          "files": [
+            "src/cli/lsp/auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_auth_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-MFA-SECRET-COPY",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "SecretCopiedUnderLock",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-MFA-STORE-LIFETIME",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "StoreOwnsItsMemory",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-NONCE-RECORD-ERROR",
+      "features": [
+        {
+          "feature": "Nonce Replay Protection",
+          "aspect": "RecordFailureIsAnError",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/nonce_tracker.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_auth_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-RECOVERY-CODE-DIGESTS",
+      "features": [
+        {
+          "feature": "MFA recovery code",
+          "aspect": "DigestAtRest",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_mfa.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6600-STRICT-PHC",
+      "features": [
+        {
+          "feature": "Canonical Argon2id Hashing",
+          "aspect": "StrictPhcParse",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6600_auth_outcomes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83976,7 +84161,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4156
+      "TESTED": 4166
     },
     "by_aspect": {
       "2PC": 3,
@@ -84800,6 +84985,7 @@
       "DiagnosticsExport": 1,
       "DiagnosticsTenantGate": 1,
       "Diameter": 1,
+      "DigestAtRest": 1,
       "DigitalSignatures": 1,
       "DijkstraWithBinding": 1,
       "DimAdoptAfterCommit": 1,
@@ -85261,6 +85447,7 @@
       "FtsApplySymmetry": 1,
       "FtsSnapshotRebuild": 1,
       "FtsStrictTenancyFailClosed": 1,
+      "FullLengthConstantTimeCompare": 1,
       "FullRecordEventHash": 1,
       "FullResultDecode": 1,
       "FulltextDropInDefault": 1,
@@ -86503,6 +86690,7 @@
       "PrivateFileWrite": 1,
       "PrivateTempDir": 1,
       "PrivateUserTmpDir": 1,
+      "ProcedureGqlstatus": 1,
       "ProcedureGraphDeny": 1,
       "ProcessEnvironment": 1,
       "ProcessFlag": 1,
@@ -86735,6 +86923,7 @@
       "RebuildStateRegistry": 1,
       "RebuildWindowApi": 1,
       "RecomputeEveryRecordHash": 1,
+      "RecordFailureIsAnError": 1,
       "RecordFallback": 1,
       "RecordKind": 1,
       "RecordKinds": 1,
@@ -86986,6 +87175,7 @@
       "SearchRowFilter": 1,
       "SearchSigintCheck": 1,
       "SecondsPrecisionDeclaration": 1,
+      "SecretCopiedUnderLock": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
       "Security": 46,
@@ -87231,8 +87421,10 @@
       "StartupLoad": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupRefusal": 1,
       "StartupRefusesPartialAuthState": 1,
       "StartupReport": 1,
+      "StartupTokenCheck": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
       "StarvationIsNotAWedge": 1,
@@ -87293,6 +87485,7 @@
       "StoreCount": 1,
       "StoreEnvelopeAuthenticated": 1,
       "StoreLockReentrancy": 1,
+      "StoreOwnsItsMemory": 1,
       "StoreStats": 1,
       "StoreUndoCapture": 1,
       "StoreUpgradedHash": 1,
@@ -87314,6 +87507,7 @@
       "StressHarnessTeardown": 1,
       "StrictCreatePolicy": 1,
       "StrictIso8601Strings": 1,
+      "StrictPhcParse": 1,
       "StrictUrisAndTemplates": 1,
       "String": 1,
       "StringFunctions": 2,
@@ -87629,6 +87823,7 @@
       "Verification": 3,
       "VerifiedChannelBoundAttestation": 1,
       "VerifiedPrincipalGate": 1,
+      "VerifierErrorOutcome": 1,
       "VerifiesTheServersDataDir": 1,
       "Verify": 1,
       "VerifyBeforeChange": 1,

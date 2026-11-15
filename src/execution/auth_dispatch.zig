@@ -217,9 +217,11 @@ pub fn setGrantPersistCallbacks(cb: GrantPersistCallbacks) void {
 }
 
 // GAP-0501/0502: Per-user MFA credential store for TOTP secrets and recovery codes.
+// SONNY-6600: the recovery codes are held as SHA-256 digests
+// (`mfa.hashRecoveryCode`), never in plaintext.
 const MfaCredential = struct {
     secret_base32: []u8,
-    recovery_codes: [][]u8,
+    recovery_codes: [][32]u8,
 };
 
 pub var g_mfa_store: std.StringHashMap(MfaCredential) = undefined;
@@ -236,62 +238,97 @@ const MfaAttemptRecord = struct {
 pub var g_mfa_attempts: std.StringHashMap(MfaAttemptRecord) = undefined;
 pub var g_mfa_attempts_init: bool = false;
 
+// CANARY: REQ=REQ-SONNY-6600-MFA-STORE-LIFETIME; FEATURE="MFA authentication"; ASPECT=StoreOwnsItsMemory; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6600: the MFA store and the MFA attempt records live for the
+/// process, so they allocate from a process allocator (as the custom-role
+/// store, SONNY-6278). They were created with the allocator of the first
+/// mfa_* request and kept it: a request-scoped allocator left the store in
+/// freed memory once that request was answered.
+const g_mfa_store_alloc: std.mem.Allocator = std.heap.c_allocator;
+
 const MFA_MAX_ATTEMPTS: u32 = 5;
 const MFA_LOCKOUT_MS: i64 = 300_000; // 5 minutes
 
-fn ensureMfaStoreInit(allocator: std.mem.Allocator) void {
+fn ensureMfaStoreInit() void {
     if (!g_mfa_store_init) {
-        g_mfa_store = std.StringHashMap(MfaCredential).init(allocator);
-        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(allocator);
+        g_mfa_store = std.StringHashMap(MfaCredential).init(g_mfa_store_alloc);
         g_mfa_store_init = true;
+    }
+    if (!g_mfa_attempts_init) {
+        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(g_mfa_store_alloc);
         g_mfa_attempts_init = true;
     }
 }
 
+fn freeMfaCredential(key: []const u8, cred: MfaCredential) void {
+    crypto_backend.secureZero(cred.secret_base32);
+    g_mfa_store_alloc.free(cred.secret_base32);
+    g_mfa_store_alloc.free(cred.recovery_codes);
+    g_mfa_store_alloc.free(key);
+}
+
+/// SONNY-6600: free the MFA store and the attempt records (process teardown,
+/// tests).
+pub fn deinitMfaStore() void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_mfa_store_mu.lockUncancelable(io);
+    defer g_mfa_store_mu.unlock(io);
+    if (g_mfa_store_init) {
+        var it = g_mfa_store.iterator();
+        while (it.next()) |e| freeMfaCredential(e.key_ptr.*, e.value_ptr.*);
+        g_mfa_store.deinit();
+        g_mfa_store_init = false;
+    }
+    if (g_mfa_attempts_init) {
+        var it = g_mfa_attempts.keyIterator();
+        while (it.next()) |k| g_mfa_store_alloc.free(k.*);
+        g_mfa_attempts.deinit();
+        g_mfa_attempts_init = false;
+    }
+}
+
 /// Store MFA credentials for a user, replacing any existing ones.
-fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
+fn storeMfaCredential(username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
+    const a = g_mfa_store_alloc;
+    const secret_copy = try a.dupe(u8, secret_base32);
+    errdefer {
+        crypto_backend.secureZero(secret_copy);
+        a.free(secret_copy);
+    }
+    const digests = try a.alloc([32]u8, scratch_codes.len);
+    errdefer a.free(digests);
+    for (scratch_codes, digests) |code, *d| d.* = mfa_mod.hashRecoveryCode(code);
+    const key_copy = try a.dupe(u8, username);
+    errdefer a.free(key_copy);
+
     g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureMfaStoreInit(allocator);
-
-    // Remove old entry if present
-    if (g_mfa_store.fetchRemove(username)) |old_kv| {
-        crypto_backend.secureZero(old_kv.value.secret_base32);
-        allocator.free(old_kv.value.secret_base32);
-        for (old_kv.value.recovery_codes) |code| allocator.free(code);
-        allocator.free(old_kv.value.recovery_codes);
-        allocator.free(old_kv.key);
-    }
-
-    const secret_copy = try allocator.dupe(u8, secret_base32);
-    errdefer allocator.free(secret_copy);
-
-    const codes_copy = try allocator.alloc([]u8, scratch_codes.len);
-    var copied: usize = 0;
-    errdefer {
-        for (codes_copy[0..copied]) |c| allocator.free(c);
-        allocator.free(codes_copy);
-    }
-    for (scratch_codes) |code| {
-        codes_copy[copied] = try allocator.dupe(u8, code);
-        copied += 1;
-    }
-
-    const key_copy = try allocator.dupe(u8, username);
-    errdefer allocator.free(key_copy);
-    try g_mfa_store.put(key_copy, .{
+    ensureMfaStoreInit();
+    try g_mfa_store.ensureUnusedCapacity(1);
+    // Replace the old entry, if any.
+    if (g_mfa_store.fetchRemove(username)) |old_kv| freeMfaCredential(old_kv.key, old_kv.value);
+    g_mfa_store.putAssumeCapacityNoClobber(key_copy, .{
         .secret_base32 = secret_copy,
-        .recovery_codes = codes_copy,
+        .recovery_codes = digests,
     });
 }
 
+// CANARY: REQ=REQ-SONNY-6600-MFA-SECRET-COPY; FEATURE="MFA authentication"; ASPECT=SecretCopiedUnderLock; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
 /// Look up a user's stored MFA secret (base32). Returns null if not enrolled.
-fn getMfaSecret(username: []const u8) ?[]const u8 {
+/// SONNY-6600: a copy taken under the store's lock (it returned a slice of
+/// the store after releasing the lock, which a re-enrollment frees); the
+/// caller zeroes and frees it with `freeMfaSecret`.
+fn getMfaSecret(allocator: std.mem.Allocator, username: []const u8) !?[]u8 {
     g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!g_mfa_store_init) return null;
     const cred = g_mfa_store.get(username) orelse return null;
-    return cred.secret_base32;
+    return try allocator.dupe(u8, cred.secret_base32);
+}
+
+fn freeMfaSecret(allocator: std.mem.Allocator, secret: []u8) void {
+    crypto_backend.secureZero(secret);
+    allocator.free(secret);
 }
 
 /// Check rate limiting on MFA verify attempts. Returns true if locked out.
@@ -302,11 +339,9 @@ fn checkMfaRateLimit(username: []const u8, now_ms: i64) bool {
 }
 
 /// Record a failed MFA attempt; lock out after MFA_MAX_ATTEMPTS.
-fn recordMfaFailure(allocator: std.mem.Allocator, username: []const u8, now_ms: i64) void {
-    if (!g_mfa_attempts_init) {
-        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(allocator);
-        g_mfa_attempts_init = true;
-    }
+fn recordMfaFailure(username: []const u8, now_ms: i64) void {
+    const allocator = g_mfa_store_alloc;
+    ensureMfaStoreInit();
     const existing = g_mfa_attempts.get(username);
     if (existing) |rec| {
         const new_count = rec.fail_count + 1;
@@ -341,7 +376,8 @@ fn recordMfaFailure(allocator: std.mem.Allocator, username: []const u8, now_ms: 
 /// Clear rate limit record on successful verification.
 fn clearMfaRateLimit(username: []const u8) void {
     if (!g_mfa_attempts_init) return;
-    _ = g_mfa_attempts.fetchRemove(username);
+    // SONNY-6600: free the record's key (it leaked).
+    if (g_mfa_attempts.fetchRemove(username)) |kv| g_mfa_store_alloc.free(kv.key);
 }
 
 /// Build a space-separated string from recovery code slices.
@@ -1069,7 +1105,7 @@ fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt
     defer mfa_mod.freeEnrollment(allocator, &enrollment);
 
     // Store per-user secret and recovery codes for later TOTP verification
-    storeMfaCredential(allocator, username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
+    storeMfaCredential(username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
         log.warn("geode.auth.mfa_setup could not store the credential", &.{Attr.string("error", @errorName(err))});
         return err;
     };
@@ -1136,13 +1172,13 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
     {
         g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        ensureMfaStoreInit(allocator);
+        ensureMfaStoreInit();
         if (checkMfaRateLimit(username, now_ms)) return error.MfaRateLimited;
     }
 
     // Look up the user's stored TOTP secret
-    const stored_secret = getMfaSecret(username);
-    if (stored_secret == null) return error.MfaNotEnrolled;
+    const stored_secret = (try getMfaSecret(allocator, username)) orelse return error.MfaNotEnrolled;
+    defer freeMfaSecret(allocator, stored_secret);
 
     // Parse the 6-digit token string to u32 and validate via RFC 6238 TOTP
     var is_valid = false;
@@ -1157,7 +1193,7 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
             // "invalid code", counted.
             is_valid = mfa_mod.verifyCode(
                 allocator,
-                stored_secret.?,
+                stored_secret,
                 @as(u64, @intCast(now_ms)),
                 code,
                 30, // step_seconds
@@ -1177,7 +1213,7 @@ fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stm
         if (is_valid) {
             clearMfaRateLimit(username);
         } else {
-            recordMfaFailure(allocator, username, now_ms);
+            recordMfaFailure(username, now_ms);
         }
     }
 
@@ -1763,7 +1799,8 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
         if (!isSixDigitCode(code)) return error.InvalidArgs;
 
         // Verify the code against the user's stored TOTP secret.
-        const stored_secret = getMfaSecret(username) orelse return error.MfaNotEnrolled;
+        const stored_secret = (try getMfaSecret(allocator, username)) orelse return error.MfaNotEnrolled;
+        defer freeMfaSecret(allocator, stored_secret);
 
         const code_u32 = std.fmt.parseInt(u32, code, 10) catch 0xFFFFFFFF;
         const now_ms = @as(u64, @intCast(compat_milliTimestamp()));

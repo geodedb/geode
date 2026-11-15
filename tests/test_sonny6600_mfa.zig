@@ -323,12 +323,14 @@ test "SONNY-6600 (3): the MFA store outlives the request allocator of the first 
     {
         var request_arena = std.heap.ArenaAllocator.init(testing.allocator);
         defer request_arena.deinit();
-        try fx.expectRuns(request_arena.allocator(), w.admin, "CALL geode.auth.mfa_setup('" ++ USERNAME ++ "')");
+        try fx.expectRuns(request_arena.allocator(), w.admin2, "CALL geode.auth.mfa_setup('" ++ USERNAME ++ "')");
+        // The session keeps its last result, allocated by the request:
+        // release it with the request (the session is not used again).
+        const entry = w.sessions.getEntry(w.admin2) orelse return error.NoSession;
+        entry.state.resetResult();
     }
     // Later requests use the store: it must not live in that allocator.
-    var request_arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer request_arena.deinit();
-    const ga = request_arena.allocator();
+    const ga = w.arena.allocator();
     try fx.expectRuns(ga, w.admin, "CALL geode.auth.mfa_setup('" ++ USERNAME ++ "')");
     const resp = try fx.execute(ga, w.admin, "CALL geode.auth.mfa_enable('" ++ USERNAME ++ "', '000000')");
     switch (resp.payload orelse return error.MissingPayload) {

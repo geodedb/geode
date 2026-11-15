@@ -1642,6 +1642,28 @@ pub fn main() !void {
             std.process.exit(1);
         };
     }
+    // CANARY: REQ=REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG; FEATURE="ClusterAuth"; ASPECT=StartupRefusal; STATUS=TESTED; TEST=tests/test_sonny6600_cluster_token.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6600: refuse a cluster token too short to be a secret before any
+    // listener binds (GEODE_CLUSTER_TOKEN=t turned cluster mode on with a
+    // one-byte shared secret). Printed as well as logged, as above.
+    {
+        const cluster_auth = geode.distributed.cluster_auth;
+        cluster_auth.validateClusterTokenEnv() catch |err| {
+            const name = if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS";
+            const value: ?[]const u8 = posixGetenv(if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS");
+            const len: usize = if (value) |v| v.len else 0;
+            std.debug.print(
+                "SECURITY: refusing to start — {s} is {d} bytes; a cluster token must be at least {d} bytes (generate one with `openssl rand -hex 32`). See src/distributed/README.md.\n",
+                .{ name, len, cluster_auth.min_token_len },
+            );
+            log.err("SECURITY: refusing to start — the cluster token is too short", &.{
+                Attr.string("variable", name),
+                Attr.int("length", @intCast(len)),
+                Attr.int("minimum", @intCast(cluster_auth.min_token_len)),
+            });
+            std.process.exit(1);
+        };
+    }
     if (config.insecure_allow_all) {
         gps.setInsecureAllowAll(true);
         // CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08

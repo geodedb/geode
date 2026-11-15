@@ -74,7 +74,8 @@ const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
 const pooled = @import("transport/thread_pool");
-const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
+const nonce_tracker_mod = @import("nonce_tracker.zig");
+const NonceTracker = nonce_tracker_mod.NonceTracker;
 
 const cluster_auth = @import("cluster_auth.zig");
 const raft_apply = @import("raft_apply.zig");
@@ -2069,7 +2070,18 @@ pub const ClusterCoordinator = struct {
         // nonces and rejects any duplicate.  Combined with the per-RPC
         // TLS handshake (SEC-D011) and the cluster_token gate
         // (SEC-D001) this gives cryptographic replay protection.
-        if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
+        // SONNY-6600: a nonce the tracker cannot record (out of memory) is
+        // still dropped (fail closed), but logged and counted as the error
+        // it is, not as a replay attack.
+        const fresh = self.raft_nonce_tracker.checkAndRecord(frame_res.nonce) catch |err| {
+            _ = nonce_tracker_mod.record_errors_total.fetchAdd(1, .monotonic);
+            log.err("Raft frame dropped: its nonce could not be recorded for the replay check (a server-side error, not a replay)", &.{
+                Attr.uint("from", frame_res.from),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        if (!fresh) {
             log.warn("Raft frame rejected: replay or missing nonce", &.{
                 Attr.uint("from", frame_res.from),
                 Attr.uint("nonce", frame_res.nonce),

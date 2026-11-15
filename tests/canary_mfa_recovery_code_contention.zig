@@ -67,9 +67,12 @@ fn remainingCodes(sm: *SecurityManager) []const []const u8 {
     return if (user.recovery_codes) |codes| codes.items else &.{};
 }
 
+/// SONNY-6600: the codes are held as digests (`recoveryCodeStoredForm`);
+/// the plaintext ones the fixture stores are converted on the first check.
 fn containsCode(codes: []const []const u8, code: []const u8) bool {
+    const form = geode_auth.recoveryCodeStoredForm(code);
     for (codes) |c| {
-        if (std.mem.eql(u8, c, code)) return true;
+        if (std.mem.eql(u8, c, &form)) return true;
     }
     return false;
 }

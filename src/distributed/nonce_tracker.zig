@@ -14,6 +14,10 @@ fn compat_fillRandom(buf: []u8) void {
 // Provides O(1) lookup via a HashSet and bounded memory via a ring buffer that
 // evicts the oldest nonce when capacity is reached.
 
+/// SONNY-6600: frames dropped because their nonce could not be recorded
+/// (out of memory), apart from replays. Monotonic.
+pub var record_errors_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
 /// Thread-safe nonce tracker with bounded memory.
 /// Uses a ring buffer of capacity `max_nonces` and a HashSet for O(1) lookup.
 pub const NonceTracker = struct {
@@ -44,10 +48,16 @@ pub const NonceTracker = struct {
         self.allocator.free(self.ring);
     }
 
+    // CANARY: REQ=REQ-SONNY-6600-NONCE-RECORD-ERROR; FEATURE="Nonce Replay Protection"; ASPECT=RecordFailureIsAnError; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
     /// Check if a nonce has been seen before. If not, record it and return true (valid).
     /// If already seen, return false (replay detected). A nonce of 0 is always rejected
     /// (indicates an uninitialized or legacy frame).
-    pub fn checkAndRecord(self: *Self, nonce: u64) bool {
+    ///
+    /// SONNY-6600: a nonce that cannot be recorded (out of memory) is
+    /// `error.OutOfMemory`, not a replay verdict; the caller still drops the
+    /// frame (fail closed). Nothing is changed then: the ring slot was
+    /// overwritten before the failed insert, so ring and set disagreed.
+    pub fn checkAndRecord(self: *Self, nonce: u64) error{OutOfMemory}!bool {
         if (nonce == 0) return false;
 
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -55,6 +65,8 @@ pub const NonceTracker = struct {
 
         // Already seen => replay.
         if (self.seen.contains(nonce)) return false;
+        // The one allocation, before anything changes.
+        try self.seen.ensureUnusedCapacity(1);
 
         // If ring is full, evict the oldest entry.
         if (self.count == self.capacity) {
@@ -68,7 +80,7 @@ pub const NonceTracker = struct {
 
         // Record new nonce.
         self.ring[self.head] = nonce;
-        self.seen.put(nonce, {}) catch return false;
+        self.seen.putAssumeCapacityNoClobber(nonce, {});
         self.head = (self.head + 1) % self.capacity;
 
         return true;
@@ -93,11 +105,11 @@ test "NonceTracker: basic checkAndRecord" {
     defer tracker.deinit();
 
     // First time seeing nonce 42 => valid.
-    try std.testing.expect(tracker.checkAndRecord(42));
+    try std.testing.expect(try tracker.checkAndRecord(42));
     // Second time seeing nonce 42 => replay.
-    try std.testing.expect(!tracker.checkAndRecord(42));
+    try std.testing.expect(!try tracker.checkAndRecord(42));
     // Different nonce => valid.
-    try std.testing.expect(tracker.checkAndRecord(43));
+    try std.testing.expect(try tracker.checkAndRecord(43));
 }
 
 test "NonceTracker: rejects zero nonce" {
@@ -105,7 +117,7 @@ test "NonceTracker: rejects zero nonce" {
     var tracker = try NonceTracker.init(ally, 10);
     defer tracker.deinit();
 
-    try std.testing.expect(!tracker.checkAndRecord(0));
+    try std.testing.expect(!try tracker.checkAndRecord(0));
 }
 
 test "NonceTracker: ring buffer eviction" {
@@ -114,20 +126,20 @@ test "NonceTracker: ring buffer eviction" {
     var tracker = try NonceTracker.init(ally, 3);
     defer tracker.deinit();
 
-    try std.testing.expect(tracker.checkAndRecord(1));
-    try std.testing.expect(tracker.checkAndRecord(2));
-    try std.testing.expect(tracker.checkAndRecord(3));
+    try std.testing.expect(try tracker.checkAndRecord(1));
+    try std.testing.expect(try tracker.checkAndRecord(2));
+    try std.testing.expect(try tracker.checkAndRecord(3));
     // Ring is full (contains [1,2,3]). Adding 4 evicts oldest (1).
-    try std.testing.expect(tracker.checkAndRecord(4));
+    try std.testing.expect(try tracker.checkAndRecord(4));
     // Nonce 1 was evicted, so it should be accepted again.
     // This also evicts the next oldest (2).
-    try std.testing.expect(tracker.checkAndRecord(1));
+    try std.testing.expect(try tracker.checkAndRecord(1));
     // Nonce 3 should still be tracked.
-    try std.testing.expect(!tracker.checkAndRecord(3));
+    try std.testing.expect(!try tracker.checkAndRecord(3));
     // Nonce 4 should still be tracked.
-    try std.testing.expect(!tracker.checkAndRecord(4));
+    try std.testing.expect(!try tracker.checkAndRecord(4));
     // Nonce 2 was evicted by the insert of 1, so it should be accepted.
-    try std.testing.expect(tracker.checkAndRecord(2));
+    try std.testing.expect(try tracker.checkAndRecord(2));
 }
 
 test "NonceTracker: generateNonce produces nonzero values" {

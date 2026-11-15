@@ -1600,8 +1600,12 @@ pub const Server = struct {
             auth_mod.AuthError.ExpiredToken => "expired auth token",
             auth_mod.AuthError.BadFormat => "malformed initializationOptions.geode block",
             auth_mod.AuthError.OutOfMemory => "out of memory",
+            auth_mod.AuthError.AuthUnavailable => "authentication temporarily unavailable: the token could not be checked (a server-side error, not an invalid token); retry",
         };
-        try self.sendError(id, -32002, msg);
+        // SONNY-6600: a check that could not run is a server-side error
+        // (-32603 InternalError), not the -32002 refusal of a bad token.
+        const code: i32 = if (err == auth_mod.AuthError.AuthUnavailable) -32603 else -32002;
+        try self.sendError(id, code, msg);
     }
 
     /// GAP-0817: choose the session position encoding from the client's
