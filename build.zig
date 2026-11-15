@@ -754,6 +754,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10635,6 +10636,32 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6595_vec_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6595_vec_step = b.step("test-sonny6595-vector-write-paths", "Run SONNY-6595 items 1-2 against a real server with QUIC and plaintext gRPC listeners: after CREATE INDEX ... USING vector, every node write path (index backfill, executor and fast-path MERGE ON CREATE SET and SET, a replaced vector, executor MERGE, /*+BATCH*/ bulk MERGE, MATCH ... SET) leaves knn() answering each node for its own vector, immediately, after a SIGKILL and restart, and after a checkpoint and restart; and every path refuses a wrong-dimension vector with the executor's error");
     sonny6595_vec_step.dependOn(&run_sonny6595_vec_tests.step);
+
+    // SONNY-6595 item 4: a snapshot installed after a restart, before any
+    // write, rebuilds the fulltext indexes (in-process store and catalog).
+    const sonny6595_snap_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_fts_snapshot_restart.zig"), .target = target, .optimize = optimize }) });
+    sonny6595_snap_tests.root_module.addImport("geode", root_mod);
+    sonny6595_snap_tests.root_module.link_libc = true;
+    const run_sonny6595_snap_tests = b.addRunArtifact(sonny6595_snap_tests);
+    shardDep(test_step, &run_sonny6595_snap_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6595_snap_step = b.step("test-sonny6595-fts-snapshot-restart", "Run SONNY-6595 item 4: a raft snapshot installed on a restarted node before any write rebuilds its fulltext indexes from the restored store (a node the snapshot restores under a tombstoned id is found again, one it drops is not)");
+    sonny6595_snap_step.dependOn(&run_sonny6595_snap_tests.step);
+
+    // SONNY-6595 item 5: shard WALs drain after a crash restart (a real
+    // server; intentionally red until graph-storage truncates the WAL it
+    // replays, see docs/KNOWN_TEST_ISSUES.md).
+    const sonny6595_wal_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_wal_drain.zig"), .target = target, .optimize = optimize });
+    sonny6595_wal_test_mod.link_libc = true;
+    sonny6595_wal_test_mod.addImport("geode", root_mod);
+    sonny6595_wal_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6595_wal_test_mod.addImport("schema", schema_mod);
+    sonny6595_wal_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6595_wal_tests = b.addTest(.{ .root_module = sonny6595_wal_test_mod });
+    const run_sonny6595_wal_tests = b.addRunArtifact(sonny6595_wal_tests);
+    spawnsBuiltGeode(sonny6595_wal_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6595_wal_tests.step);
+    const sonny6595_wal_step = b.step("test-sonny6595-wal-drain", "Run SONNY-6595 item 5 reproduction (intentionally red: after a SIGKILL and a restart, a shard written to before the crash and not after keeps its replayed WAL through every light checkpoint and the clean shutdown; the data survives every restart)");
+    sonny6595_wal_step.dependOn(&run_sonny6595_wal_tests.step);
     // SONNY-6547 (4): a replicated write's first hydration of its graph does
     // not run under the Raft node's inner_mutex. In-process 3-node cluster.
     const sonny6547_hs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6547_apply_hydration_stall.zig"), .target = target, .optimize = optimize });
