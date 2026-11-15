@@ -2616,6 +2616,19 @@
 
 ### Fixed
 
+- **A double-quoted delimited identifier names what a backquoted one does
+  (SONNY-6596).** ISO/IEC 39075:2024 21.3: `<delimited identifier> ::=
+  <double quoted character sequence> | <accent quoted character sequence>`.
+  Geode read `"x"` as a string literal everywhere, so `("n":L)`, `:"My
+  Label"`, `n."k"`, `$"p"` and `FOR "i" IN ...` were syntax errors, and
+  `RETURN 1 AS "x""y"` named the column `x""y`. Where only a name can stand
+  (a variable, label, relationship type, property, alias or parameter
+  name) a double-quoted sequence is now a delimited identifier: a doubled
+  quote stands for one, an empty one is refused (SR 4). Where an expression
+  starts it stays a string literal (`RETURN "x"`): the grammar admits both
+  readings there (docs/GQL_COMPLIANCE.md). Regression:
+  `zig build test-sonny6596-double-quoted-identifiers`.
+
 - **A version-1 PROFILE reports the measured execution, nothing invented
   (SONNY-6596).** The version-1 payload (a PROFILE the planned read runtime
   does not serve: a data change, a UNION, a tenant-bound or RLS session)

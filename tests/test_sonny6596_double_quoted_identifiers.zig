@@ -58,6 +58,8 @@ fn checkDoubleQuoted(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN $\"p\" AS x", &.{.{ .name = "p", .value = .{ .Int = 5 } }}, "5");
     // A FOR variable.
     try expectValue(s, f, "FOR \"i\" IN [7] RETURN i AS x", &.{}, "7");
+    // A LET variable.
+    try expectValue(s, f, "MATCH (n:`Dq 6596`) LET \"v\" = n.k + 1 RETURN v AS x", &.{}, "2");
     // 21.3 SR 4: not zero-length.
     try expectFail(s, f, "RETURN 1 AS \"\"", &.{}, error.UnexpectedToken);
     // Where an expression starts it is a character string literal.

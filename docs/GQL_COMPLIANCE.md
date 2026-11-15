@@ -149,9 +149,19 @@ identifiers, so `MATCH (type:T) SET type.x = 1` was a syntax error.
    labels `Product`, `Project` and `Next` about 120 times).
 3. **A delimited identifier may name a binding variable** (`` (`match`) ``):
    21.3 makes a `<binding variable>` a `<regular identifier>`.
-4. **A double-quoted sequence is a string literal everywhere**: 21.3 also
-   allows `"name"` as a delimited identifier; Geode accepts only the
-   backquoted (accent-quoted) form.
+4. **A double-quoted sequence where an expression starts is a string
+   literal.** 21.3 makes a `<double quoted character sequence>` a
+   `<delimited identifier>` as well as (21.2) a `<character string
+   literal>`. Where only a name can stand, Geode reads `"name"` as a
+   delimited identifier, as `` `name` `` (SONNY-6596): a node, edge or path
+   variable (`("n":L)`, `-["r"]->`, `"p" = (...)`), a label or relationship
+   type (`:"My Label"`), a property name (`n."k"`), an alias (`AS "x"`), a
+   `FOR` or `LET` variable, a parameter name (`$"p"`); a doubled
+   quote stands for one and an empty one is refused (SR 4). Where an
+   expression starts, the grammar admits both a `<character string literal>`
+   and a `<binding variable reference>` (20.x) and gives no rule to choose:
+   Geode reads the literal there (`RETURN "x"` is the string `'x'`; write a
+   variable reference as `x` or `` `x` ``).
 
 Every other reserved word (257 of 262) is refused as an unquoted binding
 name. Of the 14,410 queries, 141 are refused: 44 of Geode's own (35 test

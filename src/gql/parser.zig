@@ -447,6 +447,12 @@ pub const Parser = struct {
             self.advance();
             return out;
         }
+        if (self.isDoubleQuoted(self.cur)) {
+            var out = self.cur;
+            out.lexeme = try self.doubleQuotedName(out);
+            self.advance();
+            return out;
+        }
         if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             const out = self.cur;
             self.advance();
@@ -543,6 +549,11 @@ pub const Parser = struct {
             self.advance();
             return if (t.kind == .quoted_identifier) try self.delimitedName(t) else t.lexeme;
         }
+        if (self.isDoubleQuoted(t)) {
+            const name = try self.doubleQuotedName(t);
+            self.advance();
+            return name;
+        }
         if (self.isReservedWordToken(t)) return self.refuseReservedName(t, what);
         self.last_error = std.fmt.allocPrint(
             self.arena.allocator(),
@@ -550,6 +561,46 @@ pub const Parser = struct {
             .{ what, @tagName(t.kind), t.loc.line, t.loc.column },
         ) catch what;
         return error.UnexpectedToken;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER; FEATURE="GQLParser"; ASPECT=DelimitedIdentifier; STATUS=TESTED; TEST=tests/test_sonny6596_double_quoted_identifiers.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6596: a character string token written in double quotes, a
+    /// <double quoted character sequence> (21.1). ISO/IEC 39075:2024 21.3
+    /// makes it a <delimited identifier> as well as (21.2) a <character
+    /// string literal>. The parser reads it as a name where only a name can
+    /// stand (`expectBindingName`, `expectIdentifierOrKeyword` and the
+    /// variable declarations of a pattern); where an expression starts the
+    /// grammar admits both and gives no rule to choose, and Geode keeps the
+    /// literal, as before (docs/GQL_COMPLIANCE.md). The lexer leaves the
+    /// quotes out of the lexeme; the byte before it in the source tells.
+    fn isDoubleQuoted(self: *Parser, t: tok.Token) bool {
+        if (t.kind != .string_lit) return false;
+        const src = self.lx.src;
+        const start = @intFromPtr(t.lexeme.ptr);
+        const base = @intFromPtr(src.ptr);
+        if (start <= base or start > base + src.len) return false;
+        return src[start - base - 1] == '"';
+    }
+
+    /// The name a double-quoted delimited identifier stands for (21.3 SR 4):
+    /// its text with a doubled quote undoubled and its escapes read, never
+    /// zero-length.
+    fn doubleQuotedName(self: *Parser, t: tok.Token) ParserError![]const u8 {
+        var text = t.lexeme;
+        if (std.mem.indexOf(u8, text, "\"\"") != null) {
+            const out = try self.arena.allocator().alloc(u8, text.len);
+            var n: usize = 0;
+            var i: usize = 0;
+            while (i < text.len) : (i += 1) {
+                out[n] = text[i];
+                n += 1;
+                if (text[i] == '"' and i + 1 < text.len and text[i + 1] == '"') i += 1;
+            }
+            text = out[0..n];
+        }
+        const name = try self.unescapeString(text);
+        if (name.len == 0) return self.unexpected("a delimited identifier is not zero-length (ISO/IEC 39075:2024 21.3 SR 4)");
+        return name;
     }
 
     /// The name a delimited identifier stands for: its text with each doubled
@@ -1987,7 +2038,7 @@ pub const Parser = struct {
                                 if (self.cur.kind == .dollar) {
                                     self.advance();
                                     // SONNY-6564: a <parameter name>.
-                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
                                         try imports.append(self.arena.allocator(), try self.expectBindingName("a parameter name"));
                                     }
                                 }
@@ -3595,7 +3646,7 @@ pub const Parser = struct {
             var chain_name: ?[]const u8 = null;
             // SONNY-6564: a path variable is a binding name (PATH, a 21.3
             // reserved word, is one of the five Geode keeps).
-            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .eq) {
+            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) and self.peekKind() == .eq) {
                 chain_name = try self.expectBindingName("a path variable");
                 _ = try self.expect(.eq);
 
@@ -3865,7 +3916,7 @@ pub const Parser = struct {
         // SONNY-6564: a node variable is a binding name (21.3 SR 18): a
         // non-reserved word (`(type:T)`) or a delimited identifier names it,
         // a reserved word (`(match:X)`) is refused.
-        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
             name = try self.expectBindingName("a node variable");
         }
         var labels = std.ArrayList([]const u8).empty;
@@ -3887,7 +3938,7 @@ pub const Parser = struct {
         _ = try self.expect(.l_bracket);
         var name: ?[]const u8 = null;
         // SONNY-6564: an edge variable is a binding name, as a node's.
-        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) {
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
             name = try self.expectBindingName("an edge variable");
         }
         var types = std.ArrayList([]const u8).empty;
@@ -4014,7 +4065,7 @@ pub const Parser = struct {
                 self.advance();
                 // A quoted string literal, or a binding name (SONNY-6564:
                 // a reserved word is refused, ISO/IEC 39075:2024 21.3).
-                alias = if (self.cur.kind == .string_lit) blk: {
+                alias = if (self.cur.kind == .string_lit and !self.isDoubleQuoted(self.cur)) blk: {
                     const token = self.cur;
                     self.advance();
                     break :blk token.lexeme;
