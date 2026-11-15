@@ -543,23 +543,6 @@ pub fn estimatePlanCost(root: enumerator.LogicalPlan, factors: CostFactors) f64 
     return walk(root, factors, 0).cost;
 }
 
-// Apply calibration-adjusted factors (if provided) and return cost.
-pub fn estimateWithCalibration(root: enumerator.LogicalPlan, base: CostFactors, maybe_cal: ?*const @import("cost_calibration.zig").Calibration) f64 {
-    var f = base;
-    if (maybe_cal) |cal| {
-        if (cal.applied) {
-            f.scan_base = cal.factors.scan_base;
-            f.filter_base = cal.factors.filter_base;
-            f.project_base = cal.factors.project_base;
-            f.join_base = cal.factors.join_base;
-            f.aggregate_base = cal.factors.aggregate_base;
-            f.sort_base = cal.factors.sort_base;
-            f.limit_base = cal.factors.limit_base;
-        }
-    }
-    return estimatePlanCost(root, f);
-}
-
 const WalkResult = struct { cost: f64, rows: f64, joins: usize };
 
 fn walk(node: enumerator.LogicalPlan, f: CostFactors, depth: usize) WalkResult {

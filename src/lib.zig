@@ -152,8 +152,6 @@ pub const cost_explain = @import("planner/cost_explain.zig");
 pub const pagination_calibration = @import("pagination/calibration.zig");
 // Expose structural key utilities for benchmarks (PathCache related)
 pub const planner_structural_key = @import("planner/structural_key.zig");
-// Expose planner pipeline orchestration (synthetic phases + selection integration)
-pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
@@ -976,8 +974,6 @@ test "sonny6511-lib: inline test roots" {
     _ = @import("client/repl/spinner.zig");
     _ = @import("performance/memory_mapped_io.zig");
     _ = @import("ml/graph_embeddings.zig");
-    _ = @import("planner/cost_calibration.zig");
-    _ = @import("planner/pipeline.zig");
     _ = @import("graph/containers/lfu.zig");
     // SONNY-6517 item 3: the planner's own inline tests.
     _ = @import("planner.zig");

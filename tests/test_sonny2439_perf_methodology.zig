@@ -134,7 +134,6 @@ const measured = [_]struct { path: []const u8, ab: bool }{
     .{ .path = "tests/canary_planner_prune.zig", .ab = true },
     .{ .path = "tests/canary_planner_enumerator.zig", .ab = false },
     .{ .path = "tests/canary_planner_plan_selection.zig", .ab = false },
-    .{ .path = "tests/canary_planner_pipeline_selection.zig", .ab = false },
     .{ .path = "tests/canary_physiological_redo.zig", .ab = false },
     .{ .path = "tests/canary_txn_write_skew.zig", .ab = false },
     .{ .path = "tests/canary_recovery_corrupt_latency.zig", .ab = false },

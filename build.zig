@@ -5314,11 +5314,6 @@ pub fn build(b: *std.Build) void {
     const planner_prune_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_prune.zig"), .target = target, .optimize = optimize }) });
     planner_prune_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_prune_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const planner_pipeline_selection_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_pipeline_selection.zig"), .target = target, .optimize = optimize }) });
-    // Import shared geode root for planner + pipeline access
-    planner_pipeline_selection_tests.root_module.addImport("geode", root_mod);
-    planner_pipeline_selection_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
-    planner_pipeline_selection_tests.root_module.addImport("perf_gate", perf_gate_mod);
     phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_tests);
     phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const run_phantom_tests = b.addRunArtifact(phantom_tests);
@@ -5357,10 +5352,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_planner_prune_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_prune_tests_step = b.step("test-canary-planner-prune", "Run plan enumeration cost-prune CANARY tests (REQ-GQL-024)");
     planner_prune_tests_step.dependOn(&run_planner_prune_tests.step);
-    const run_planner_pipeline_selection_tests = b.addRunArtifact(planner_pipeline_selection_tests);
-    shardDep(test_step, &run_planner_pipeline_selection_tests.step, 1, test_shard_loads, test_shard_index);
-    const planner_pipeline_selection_tests_step = b.step("test-canary-planner-pipeline-selection", "Run plan selection pipeline adoption CANARY tests (REQ-GQL-024)");
-    planner_pipeline_selection_tests_step.dependOn(&run_planner_pipeline_selection_tests.step);
 
     // Variance auto-calibration tests (cost model & pagination)
     const cost_model_autocalib_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_cost_model_variance_autocalib.zig"), .target = target, .optimize = optimize }) });
@@ -7093,7 +7084,8 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0883: src/ml/integration.zig (demo MLEngine with random embeddings
     // and an embedding-sign "community detection" hack) was dead code — no
-    // production importer; superseded by src/ml/integration_enhanced.zig.
+    // production importer (its successor integration_enhanced.zig went the
+    // same way in SONNY-6555).
     // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
@@ -7581,16 +7573,12 @@ pub fn build(b: *std.Build) void {
     const gap0879_tests = b.addTest(.{ .root_module = gap0879_test_mod });
     const run_gap0879_tests = b.addRunArtifact(gap0879_tests);
     shardDep(test_step, &run_gap0879_tests.step, 1, test_shard_loads, test_shard_index);
-    // Also compile+run the in-module tests of src/ml/integration_enhanced.zig
-    // (caller-owned getNeighbors allocation contract, p/q-biased RandomWalker).
-    const gap0879_ie_tests = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/ml/integration_enhanced.zig"), .target = target, .optimize = optimize }),
-    });
-    const run_gap0879_ie_tests = b.addRunArtifact(gap0879_ie_tests);
-    shardDep(test_step, &run_gap0879_ie_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6555 item 8: src/ml/integration_enhanced.zig (a third Louvain,
+    // a Node2Vec/PageRank/link-prediction copy and stub gds.* procedures no
+    // server path registered) was compiled only by its own in-module tests
+    // here; removed with them.
     const gap0879_step = b.step("test-gap0879", "GAP-0879 regression (Node2Vec p/q bias + real training loss + ML allocator ownership)");
     gap0879_step.dependOn(&run_gap0879_tests.step);
-    gap0879_step.dependOn(&run_gap0879_ie_tests.step);
 
     // GAP-0891 regression suite (native-tenant write tagging + edge reads).
     const gap0891_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0891_repro.zig"), .target = target, .optimize = optimize });
@@ -17296,8 +17284,6 @@ pub fn build(b: *std.Build) void {
             "client.repl.spinner.test.",
             "performance.memory_mapped_io.test.",
             "ml.graph_embeddings.test.",
-            "planner.cost_calibration.test.",
-            "planner.pipeline.test.",
             "graph.containers.lfu.test.",
             // SONNY-6517 item 3: src/planner.zig's inline tests (stale arity, never compiled).
             "planner.test.",

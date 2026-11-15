@@ -6744,6 +6744,25 @@
   collision benchmark is compiled by no step) and annotated
   `docs/performance/2026-04-20-query-bench/FINAL.md` (the AST cache does not
   use `structural_key.zig`).
+- **Dead code: `src/ml/integration_enhanced.zig`, `src/planner/pipeline.zig`
+  and `src/planner/cost_calibration.zig` (SONNY-6555 item 8).** No server
+  path reaches any of them (the server binary builds without them):
+  `integration_enhanced.zig` (a second Node2Vec, a PageRank, a third
+  Louvain, link prediction and `gds.node2vec/pageRank/louvain/linkPrediction`
+  procedure stubs that no dispatcher registered) was compiled only by its own
+  in-module tests in `test-gap0879` and `tests/e2e_ml_integration.zig`
+  (compiled by nothing); `pipeline.zig` (the synthetic plan-selection runner)
+  and `cost_calibration.zig` (with `cost_model.estimateWithCalibration`, its
+  only user) only by `lib.zig`'s inline-test roots and three canary tests
+  (`canary_planner_pipeline_selection`, `canary_planner_cost_model`,
+  `canary_planner_join_reorder`). Removed with those tests, their build.zig
+  registrations, the `test-canary-planner-pipeline-selection` step (and its
+  perf-gate CI entry), and their allowlist rows. `src/canary.zig` claimed
+  REQ-GQL-075 "Query Optimizer / AdvancedCostModel" TESTED by
+  `TestCANARY_REQ_GQL_075_AdvancedCostModel`, which does not exist, and a
+  BENCHED envelope of a benchmark that does not compile; both rows removed.
+  Docs corrected: ML_GRAPH_EMBEDDINGS.md, CURRENT_ARCHITECTURE.md,
+  SERVER_FEATURES.md, kb/PROFILING.md, kb/VARIANCE_ENVELOPES.md.
 - **Dead code: the planner's `PathExpand` operator (SONNY-6540 item 6).**
   `PathExpand` and its `AdjacencyList` (`src/planner.zig`) were reached by
   no query: nothing outside `planner.zig` named them except 17 test and

@@ -379,8 +379,10 @@ SONNY-6298).
 execution. Planning phases 4–6 below (enumerate, cost, select) and the 4.2
 index-selection, join-ordering and adaptive re-planning text describe code no
 server path runs: `src/planner/cbo.zig` and `cost_model.zig` are compiled, but
-their callers are tests (`zig build test-gap0867`), `src/planner/pipeline.zig`
-and `src/distributed/query_planner.zig`, and no query's plan is chosen by them.
+their callers are tests (`zig build test-gap0867`) and
+`src/distributed/query_planner.zig`, and no query's plan is chosen by them
+(`src/planner/pipeline.zig` and `cost_calibration.zig`, reached only by
+tests, were removed in SONNY-6555).
 Index use is rule-based (see 4.3).
 
 ### 4.1 Query Planner
