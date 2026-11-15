@@ -2400,6 +2400,10 @@ const HydrationEntry = struct {
     /// Why the build failed, as a `GraphQuarantineError` code (set before
     /// `failed`). Reads of the quarantined graph fail with this error.
     failure: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(QuarantineCause.unknown)),
+    /// SONNY-6605: the last build failed with a `TransientHydrationError`
+    /// and left `done` false, so the next access builds again; that build
+    /// first clears the counters the failed one bumped. Under `mutex`.
+    needs_reset: bool = false,
 };
 
 /// SONNY-6523 (7): keys DROP GRAPH collects per scan of a shared map.
@@ -2418,7 +2422,7 @@ pub fn dropGraphMapScans() u64 {
 /// its resident loop2 indexes are PARTIAL, so serving a read from them would
 /// answer OK with missing rows (a corrupt graph read as empty). A storage
 /// corruption error from the build is reported as itself; any other cause
-/// (out of memory, I/O) as `GraphQuarantined`. Reopening the store
+/// that is not transient (an I/O error, ...) as `GraphQuarantined`. Reopening the store
 /// re-registers the graph and retries the build. SONNY-6524: a graph the
 /// storage engine refused to open because its shard label dictionaries
 /// disagree is reported as `LabelDictionaryDiverged` (a restart does not
@@ -2428,7 +2432,51 @@ pub fn dropGraphMapScans() u64 {
 /// its pages) or `CommitFailed` (a commit failed and the engine undid the
 /// transaction, whose writes the store's in-memory copy still holds); a
 /// restart reopens the graph at its committed state and clears both.
+/// SONNY-6605: a build that fails with a `TransientHydrationError` does not
+/// quarantine the graph.
 pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed };
+
+// CANARY: REQ=REQ-SONNY-6605-HYDRATION-RETRY; FEATURE="StorageIntegrity"; ASPECT=TransientFailureRetried; STATUS=TESTED; TEST=tests/test_sonny6605_hydration_retry.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6605: the hydration errors that say nothing about the graph's data:
+/// the process ran short of memory, descriptors, threads or disk space, or
+/// a resource was briefly unavailable. Such a failure fails the statement
+/// that triggered the build with the error itself (53200 for OutOfMemory)
+/// and the graph's next access builds it again (`ensureGraphHydratedImpl`).
+/// Every other error, the storage corruption errors, an authentication
+/// failure of an encrypted page, `LabelDictionaryDiverged`, the side-file
+/// errors and an I/O error (EIO) included, quarantines the graph as before.
+pub const TransientHydrationError = error{
+    OutOfMemory,
+    SystemResources,
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+    ThreadQuotaExceeded,
+    LockedMemoryLimitExceeded,
+    NoSpaceLeft,
+    DiskQuota,
+    WouldBlock,
+    DeviceBusy,
+};
+
+/// What a read that hydrates a graph can fail with: the graph is
+/// quarantined, or this access's build failed transiently.
+pub const HydrationReadError = GraphQuarantineError || TransientHydrationError;
+
+fn transientHydrationError(err: anyerror) ?TransientHydrationError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.SystemResources => error.SystemResources,
+        error.ProcessFdQuotaExceeded => error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded => error.SystemFdQuotaExceeded,
+        error.ThreadQuotaExceeded => error.ThreadQuotaExceeded,
+        error.LockedMemoryLimitExceeded => error.LockedMemoryLimitExceeded,
+        error.NoSpaceLeft => error.NoSpaceLeft,
+        error.DiskQuota => error.DiskQuota,
+        error.WouldBlock => error.WouldBlock,
+        error.DeviceBusy => error.DeviceBusy,
+        else => null,
+    };
+}
 
 const QuarantineCause = enum(u8) {
     unknown,
@@ -2471,7 +2519,9 @@ const QuarantineCause = enum(u8) {
 /// the chokepoint's callers fails closed without each having to return an
 /// error. The security graph is exempt: user queries cannot read it, and its
 /// internal readers already fall back to the engine (GAP-0061).
-threadlocal var t_quarantined_read: ?GraphQuarantineError = null;
+/// SONNY-6605: a build that failed transiently is noted with its error too:
+/// the graph's products are partial until its next build.
+threadlocal var t_quarantined_read: ?HydrationReadError = null;
 
 /// Clear this thread's quarantined-read note (start of a program).
 pub fn clearQuarantinedReadError() void {
@@ -2479,7 +2529,7 @@ pub fn clearQuarantinedReadError() void {
 }
 
 /// Return and clear this thread's quarantined-read note.
-pub fn takeQuarantinedReadError() ?GraphQuarantineError {
+pub fn takeQuarantinedReadError() ?HydrationReadError {
     const err = t_quarantined_read;
     t_quarantined_read = null;
     return err;
@@ -13293,7 +13343,7 @@ pub const GraphStore = struct {
     pub fn ensureGraphHydrated(self: *GraphStore, graph_name: []const u8) void {
         // SONNY-6567 (6c): on a thread applying a Raft entry, the completion
         // persist is skipped too (see `enterReplicatedApply`).
-        self.ensureGraphHydratedImpl(graph_name, t_replicated_apply_depth == 0);
+        _ = self.ensureGraphHydratedImpl(graph_name, t_replicated_apply_depth == 0);
     }
 
     // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrateWithoutCompletionPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
@@ -13305,8 +13355,11 @@ pub const GraphStore = struct {
     /// long. The products stay memory-only until the next full checkpoint
     /// (a crash before it re-pays this hydration's scan on the next first
     /// touch, as before the completion persist existed).
-    pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) void {
-        self.ensureGraphHydratedImpl(graph_name, false);
+    /// SONNY-6605: fails with the build's error when it failed transiently:
+    /// the graph's products are partial until its next build, and the apply
+    /// must not write on them.
+    pub fn ensureGraphHydratedForReplicatedApply(self: *GraphStore, graph_name: []const u8) TransientHydrationError!void {
+        if (self.ensureGraphHydratedImpl(graph_name, false)) |err| return err;
     }
 
     // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=ApplyThreadNeverPersistsHydration; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
@@ -13326,31 +13379,63 @@ pub const GraphStore = struct {
         if (t_replicated_apply_depth > 0) t_replicated_apply_depth -= 1;
     }
 
-    fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) void {
+    /// Returns this call's build error when the build failed transiently
+    /// (SONNY-6605), else null (built, already built, not deferred, or
+    /// quarantined: `graphQuarantineError` reports that one).
+    fn ensureGraphHydratedImpl(self: *GraphStore, graph_name: []const u8, persist: bool) ?TransientHydrationError {
         const io = std.Io.Threaded.global_single_threaded.io();
         const entry = blk: {
             self.hydration_mutex.lockUncancelable(io);
             defer self.hydration_mutex.unlock(io);
-            break :blk self.pending_hydration.get(graph_name) orelse return;
+            break :blk self.pending_hydration.get(graph_name) orelse return null;
         };
         // Fail closed: note a quarantined graph for the executor (on every
         // return path, including the build that just failed).
         defer if (entry.failed.load(.acquire)) noteQuarantinedRead(graph_name, entry);
-        if (entry.done.load(.acquire)) return;
+        if (entry.done.load(.acquire)) return null;
         entry.mutex.lockUncancelable(io);
         defer entry.mutex.unlock(io);
-        if (entry.done.load(.acquire)) return;
+        if (entry.done.load(.acquire)) return null;
 
         const adapter = global_adapter orelse {
             entry.done.store(true, .release);
-            return;
+            return null;
         };
         // PHASE 1b concurrency fix: serialise the build store-wide so a
         // concurrent first-touch of a DIFFERENT cold graph cannot race this
         // build on the store-wide maps it mutates (see `hydration_build_mutex`).
         self.hydration_build_mutex.lockUncancelable(io);
         defer self.hydration_build_mutex.unlock(io);
+        // SONNY-6605: the previous build failed transiently. Every product
+        // it left behind is rebuilt idempotently (IdMap, node bodies, label
+        // postings and their counts, per-graph node set, merge index, edge
+        // bodies; relationship-type counts are bumped per edge scanned, not
+        // per edge cached), except the counters the scan bumps once per node
+        // and edge it visits: the tenant-introspection multisets and the
+        // per-(graph, type) relationship counts. Clear them, so this build
+        // counts every node and edge exactly once. (Cleared at the failure
+        // too; again here because a write may have bumped them since.)
+        if (entry.needs_reset) {
+            self.removeHydrationCounterContributionsForGraph(graph_name);
+            entry.needs_reset = false;
+        }
         const outcome: ?HydrationBuildOutcome = self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| blk: {
+            if (transientHydrationError(err)) |terr| {
+                // SONNY-6605: not a property of the graph's data. Fail this
+                // statement with the error and build again on the next
+                // access; `done` stays false, so the checkpoint writers
+                // treat the graph as not built yet (they persist none of its
+                // partial products) and the retired-cache reclaims stay off
+                // for it.
+                log.warn("lazy graph hydration failed transiently; the graph is retried on its next access", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                self.removeHydrationCounterContributionsForGraph(graph_name);
+                entry.needs_reset = true;
+                noteTransientHydrationFailure(graph_name, terr);
+                return terr;
+            }
             log.err("lazy graph hydration failed; graph may be degraded", &.{
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
@@ -13398,6 +13483,7 @@ pub const GraphStore = struct {
         if (persist and outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
+        return null;
     }
 
     // CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=QuarantineReads; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
@@ -13445,6 +13531,14 @@ pub const GraphStore = struct {
         t_quarantined_read = @as(QuarantineCause, @enumFromInt(entry.failure.load(.acquire))).toError();
     }
 
+    /// SONNY-6605: as `noteQuarantinedRead`, for a build that failed
+    /// transiently: the statement fails with `err`.
+    fn noteTransientHydrationFailure(graph_name: []const u8, err: TransientHydrationError) void {
+        if (std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME)) return;
+        if (t_quarantined_read != null) return;
+        t_quarantined_read = err;
+    }
+
     /// The error a read of `graph_name` fails with if the graph is
     /// quarantined (`GraphQuarantineError`), else null. Does NOT hydrate: for
     /// the engine-direct read paths, which never need the resident indexes.
@@ -13460,8 +13554,9 @@ pub const GraphStore = struct {
     /// `ensureGraphHydrated`, then fail if the graph is quarantined: for the
     /// entry points that must refuse a quarantined graph before reading it
     /// (`snapshotUnderReadLock` copies the resident indexes).
-    pub fn requireGraphHydrated(self: *GraphStore, graph_name: []const u8) GraphQuarantineError!void {
-        self.ensureGraphHydrated(graph_name);
+    /// SONNY-6605: or with the build's error when it failed transiently.
+    pub fn requireGraphHydrated(self: *GraphStore, graph_name: []const u8) HydrationReadError!void {
+        if (self.ensureGraphHydratedImpl(graph_name, t_replicated_apply_depth == 0)) |err| return err;
         if (self.graphQuarantineError(graph_name)) |err| return err;
     }
 
@@ -13470,6 +13565,12 @@ pub const GraphStore = struct {
     /// (listNodeLabels / listEdgeTypes / listPropertiesForLabel, and the
     /// admin/null-graph `getEdgesByType`).
     pub fn ensureAllGraphsHydrated(self: *GraphStore) void {
+        _ = self.hydrateAllGraphs();
+    }
+
+    /// `ensureAllGraphsHydrated`, returning the first transient build
+    /// failure (SONNY-6605).
+    fn hydrateAllGraphs(self: *GraphStore) ?TransientHydrationError {
         const io = std.Io.Threaded.global_single_threaded.io();
         var names: std.ArrayList([]const u8) = .empty;
         defer {
@@ -13489,7 +13590,12 @@ pub const GraphStore = struct {
                 };
             }
         }
-        for (names.items) |n| self.ensureGraphHydrated(n);
+        var transient: ?TransientHydrationError = null;
+        for (names.items) |n| {
+            const err = self.ensureGraphHydratedImpl(n, t_replicated_apply_depth == 0);
+            if (transient == null) transient = err;
+        }
+        return transient;
     }
 
     // CANARY: REQ=REQ-SONNY-6528-QUARANTINE-IN-PROCESS; FEATURE="StorageIntegrity"; ASPECT=CrossGraphListingsFailClosed; STATUS=TESTED; TEST=tests/test_sonny6528_quarantine_in_process.zig; OWNER=storage; UPDATED=2026-11-14
@@ -13504,10 +13610,11 @@ pub const GraphStore = struct {
     /// errors). The security graph is exempt, as for reads
     /// (`noteQuarantinedRead`); a dropped graph is not quarantined
     /// (`dropGraph` clears it).
-    pub fn requireAllGraphsHydrated(self: *GraphStore) GraphQuarantineError!void {
-        self.ensureAllGraphsHydrated();
+    /// SONNY-6605: or with the first transient build failure.
+    pub fn requireAllGraphsHydrated(self: *GraphStore) HydrationReadError!void {
+        const transient = self.hydrateAllGraphs();
         const io = std.Io.Threaded.global_single_threaded.io();
-        const found: ?GraphQuarantineError = blk: {
+        const found: ?HydrationReadError = blk: {
             self.hydration_mutex.lockUncancelable(io);
             defer self.hydration_mutex.unlock(io);
             var it = self.pending_hydration.iterator();
@@ -13516,7 +13623,7 @@ pub const GraphStore = struct {
                 if (std.mem.eql(u8, e.key_ptr.*, SECURITY_GRAPH_NAME)) continue;
                 break :blk @as(QuarantineCause, @enumFromInt(e.value_ptr.*.failure.load(.acquire))).toError();
             }
-            break :blk null;
+            break :blk transient;
         };
         const err = found orelse return;
         if (t_quarantined_read == null) t_quarantined_read = err;
@@ -14448,6 +14555,29 @@ pub const GraphStore = struct {
         }
     };
 
+    /// SONNY-6605: `addToAdjacencyIndex` for a hydration build. A bounded
+    /// adjacency cache only appends to a resident list, and a resident list
+    /// read from the engine already holds every edge: one read while a
+    /// failed build waited for its retry, or one the failed build appended
+    /// to, would hold this edge twice once the retry appended it again. An
+    /// unbounded cache is the source of truth and is built only here, where
+    /// a cached edge body (`edges.contains`) skips the edge.
+    fn addToAdjacencyIndexHydrating(self: *GraphStore, from_id: u64, to_id: u64, edge_id: u64) !void {
+        try self.appendAdjHydrating(&self.outgoing_edges, from_id, edge_id, self.nodeGraphNameOrDefault(from_id));
+        try self.appendAdjHydrating(&self.incoming_edges, to_id, edge_id, self.nodeGraphNameOrDefault(to_id));
+    }
+
+    fn appendAdjHydrating(self: *GraphStore, cache: *AdjCache, node: u64, edge_id: u64, graph_name: []const u8) !void {
+        if (cache.effectiveCap() == 0) return self.appendAdj(cache, node, edge_id, graph_name);
+        // As `appendAdj`'s bounded arm, under the shard's map lock held
+        // exclusively.
+        cache.lockShardExclusive(node);
+        defer cache.unlockShardExclusive(node);
+        const entry = cache.getPtrUnlocked(node) orelse return;
+        if (std.mem.indexOfScalar(u64, entry.list.items, edge_id) != null) return;
+        try self.appendAdjId(cache, node, entry, edge_id, graph_name);
+    }
+
     /// GAP hydration fast-scan: build the loop1/loop2 products from the
     /// per-shard SEQUENTIAL stream scan instead of the per-node engine-read
     /// walk. Produces byte-identical products via the SAME insert calls in
@@ -14805,11 +14935,17 @@ pub const GraphStore = struct {
                         if (resident)
                             try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
 
+                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
+                        const edge_label_str = adapter.hydrationLabelString(graph_name, edge_entry.rel_type) orelse "UNKNOWN";
+                        // GAP-ENT-0023 P3 / 0012: restored counters are never
+                        // re-bumped. SONNY-6605: every edge the scan finds is
+                        // counted, cached or not: a build retried after a
+                        // transient failure finds the edges the failed one
+                        // cached, and its counts were cleared.
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
+
                         if (self.edges.contains(edge_uuid)) continue;
 
-                        const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
-
-                        const edge_label_str = adapter.hydrationLabelString(graph_name, edge_entry.rel_type) orelse "UNKNOWN";
                         const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                         const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
                         const edge_tenant_id_copy = blk_edge_tenant: {
@@ -14841,11 +14977,8 @@ pub const GraphStore = struct {
                         }
 
                         try self.edges.put(edge_uuid, edge);
-                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        try self.addToAdjacencyIndexHydrating(node_uuid, target_uuid, edge_uuid);
                         try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
-                        // GAP-ENT-0023 P3 / 0012: restored counters are never
-                        // re-bumped.
-                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
 
                         if (edge_uuid >= self.next_edge_id) {
                             self.next_edge_id = edge_uuid + 1;
@@ -15355,13 +15488,22 @@ pub const GraphStore = struct {
                         if (id_map.mode == .resident)
                             try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
 
-                        if (self.edges.contains(edge_uuid)) continue;
-
                         const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
 
                         // Get edge label from label dict
                         const mg = try adapter.getOrCreateGraph(graph_name);
                         const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
+                        // DURABILITY: rebuild the per-(graph,type) exact counter on the
+                        // restart edge-scan so typed count(r:TYPE) survives reopen
+                        // (replay-on-load, like the label refcount + untyped edge count).
+                        // GAP-ENT-0023 P3: restored from the counters snapshot when
+                        // present — re-bumping would double-count. SONNY-6605: every
+                        // edge the scan finds is counted, cached or not (see the
+                        // stream scan).
+                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge_label_str);
+
+                        if (self.edges.contains(edge_uuid)) continue;
+
                         const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                         const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
                         // GAP-0891 (RC-2): recover the persisted edge tenant tag
@@ -15421,15 +15563,9 @@ pub const GraphStore = struct {
                         }
 
                         try self.edges.put(edge_uuid, edge);
-                        try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                        try self.addToAdjacencyIndexHydrating(node_uuid, target_uuid, edge_uuid);
                         // PERF-P0-001: Maintain edge-type index during adapter load
                         try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
-                        // DURABILITY: rebuild the per-(graph,type) exact counter on the
-                        // restart edge-scan so typed count(r:TYPE) survives reopen
-                        // (replay-on-load, like the label refcount + untyped edge count).
-                        // GAP-ENT-0023 P3: restored from the counters snapshot when
-                        // present — re-bumping would double-count.
-                        if (!snap.counters) self.bumpGraphEdgeTypeCount(graph_name, edge.label);
 
                         if (edge_uuid >= self.next_edge_id) {
                             self.next_edge_id = edge_uuid + 1;
@@ -18712,12 +18848,19 @@ pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const
 /// to hydrate, but a read served engine-direct (no row-security engine
 /// installed: the handlers called in process) has no snapshot and answered
 /// rows from the damaged store.
-pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, hydrate: bool) ?GraphQuarantineError {
+///
+/// SONNY-6605: a hydration that failed transiently fails the program with
+/// its error (53200 for OutOfMemory); the graph is not quarantined, and the
+/// next program builds it again.
+pub fn programQuarantineError(allocator: std.mem.Allocator, graph_names: []const []const u8, hydrate: bool) ?HydrationReadError {
     clearQuarantinedReadError();
     const store = getPrimaryGlobalStore(allocator);
     for (graph_names) |g| {
-        if (hydrate) store.ensureGraphHydrated(g);
-        if (store.graphQuarantineError(g)) |err| {
+        const found: ?HydrationReadError = if (hydrate)
+            (if (store.requireGraphHydrated(g)) |_| null else |err| err)
+        else
+            store.graphQuarantineError(g);
+        if (found) |err| {
             clearQuarantinedReadError();
             return err;
         }

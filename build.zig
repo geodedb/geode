@@ -753,7 +753,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6605-hydration-retry", .reason = "intentionally red TDD reproduction (SONNY-6605 item 1): a hydration that runs out of memory quarantines the graph until restart; compiled by test-compile; registered through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10886,7 +10885,7 @@ pub fn build(b: *std.Build) void {
     sonny6605_hyd_test_mod.addImport("geode", root_mod);
     const sonny6605_hyd_tests = b.addTest(.{ .root_module = sonny6605_hyd_test_mod });
     const run_sonny6605_hyd_tests = b.addRunArtifact(sonny6605_hyd_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6605_hyd_tests.step);
+    shardDep(test_step, &run_sonny6605_hyd_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6605_hyd_step = b.step("test-sonny6605-hydration-retry", "Run SONNY-6605 item 1 regression (a hydration that runs out of memory at any point of the stream scan, its pipelined or single-threaded merge, or the legacy walk fails its statement with 53200 and the graph is NOT quarantined; the next access hydrates it with exact label, node, relationship and per-type counts and no tenant-introspection count taken twice; a store whose node pages are zeroed stays quarantined and is not scanned again)");
     sonny6605_hyd_step.dependOn(&run_sonny6605_hyd_tests.step);
 

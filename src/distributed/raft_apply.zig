@@ -286,7 +286,9 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anye
 pub fn prehydrateForApply(cmd: Command) void {
     const store = g_store orelse return;
     switch (cmd) {
-        .graph_mutation => |gm| store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default"),
+        // SONNY-6605: a build that fails transiently is tried again by the
+        // apply, which fails if it fails again.
+        .graph_mutation => |gm| store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default") catch {},
         else => {},
     }
 }
@@ -526,7 +528,9 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
     // measured). The leader hydrates an entry's graph before it proposes
     // it, without `inner_mutex` (`prehydrateForApply`); a graph hydrated
     // here is persisted by the next full checkpoint.
-    store.ensureGraphHydratedForReplicatedApply(graph_name);
+    // SONNY-6605: a build that failed transiently left the graph's products
+    // partial: the apply fails rather than write on them.
+    try store.ensureGraphHydratedForReplicatedApply(graph_name);
     const apply_adapter = graph_store_mod.getGlobalAdapter();
     const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
     defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);
