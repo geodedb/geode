@@ -29,8 +29,8 @@
 // (`RaftNode.prehydrate_callback` = `raft_apply.prehydrateForApply`, on
 // receive, on replay and on propose). Both shapes run that sequence here:
 // prehydrate, then the apply, which is timed and must take at most 50 ms.
-// The creates use the graph's existing label: a label new to a graph costs
-// a durable label-dictionary write on first use, which is not hydration.
+// The creates use labels new to the graph: their durable label-dictionary
+// writes are interned before the apply too (SONNY-6633 item 4).
 //
 // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
 
@@ -132,7 +132,7 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
     // (b) The follower / replay shape: the apply hydrates its own graph.
     try store.markPendingHydrationForTest("ga");
     {
-        const payload = try createCmd(allocator, "ga", "S6567");
+        const payload = try createCmd(allocator, "ga", "B6567");
         defer allocator.free(payload);
         const cmd: geode.distributed.raft_consensus.Command = .{ .graph_mutation = .{ .graph = "ga", .mutation_type = .create, .data = payload, .txn_id = null } };
         raft_apply.prehydrateForApply(cmd);
@@ -141,7 +141,7 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
         allocator.free(out);
         const dt = nowMs() - t0;
         std.debug.print("SONNY-6567 (6b) a follower's / replay's apply of a create on a {d}-node graph not hydrated yet held the apply (inner_mutex) for {d} ms (budget {d} ms)\n", .{ NODES, dt, CRITICAL_SECTION_MS });
-        try testing.expectEqual(NODES + 1, countLabel(store, "ga", "S6567"));
+        try testing.expectEqual(@as(usize, 1), countLabel(store, "ga", "B6567"));
         try testing.expect(dt <= CRITICAL_SECTION_MS);
     }
 
@@ -153,9 +153,9 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
     while (!reader.locked.load(.acquire)) sleepMs(1);
     var dt: i64 = 0;
     const applied = blk: {
-        const inner = try createCmd(allocator, "gb", "S6567");
+        const inner = try createCmd(allocator, "gb", "C6567");
         defer allocator.free(inner);
-        const inner2 = try createCmd(allocator, "gb", "S6567");
+        const inner2 = try createCmd(allocator, "gb", "C6567");
         defer allocator.free(inner2);
         const batch = try cr.serializeBatch(allocator, null, &.{
             .{ .mutation = .create, .graph = "gb", .data = inner },
@@ -174,6 +174,6 @@ test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex,
     const out = try applied;
     allocator.free(out);
     std.debug.print("SONNY-6567 (6c) a batch entry writing another graph not hydrated yet, its lock held: the apply (inner_mutex) took {d} ms (budget {d} ms, election timeout {d} ms)\n", .{ dt, CRITICAL_SECTION_MS, ELECTION_TIMEOUT_MS });
-    try testing.expectEqual(NODES + 2, countLabel(store, "gb", "S6567"));
+    try testing.expectEqual(@as(usize, 2), countLabel(store, "gb", "C6567"));
     try testing.expect(dt <= CRITICAL_SECTION_MS);
 }

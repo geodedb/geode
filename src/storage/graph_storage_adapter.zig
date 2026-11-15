@@ -4464,6 +4464,31 @@ pub const StorageAdapter = struct {
         self.unpinGraph(mg);
     }
 
+    // CANARY: REQ=REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY; FEATURE="DistributedCluster"; ASPECT=InternOffRaftMutex; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6633 (4): give `names` (labels and relationship types a Raft
+    /// entry's apply will write to `graph_name`) their label ids now, for a
+    /// caller that does not hold the Raft node's `inner_mutex`: a name new
+    /// to the graph is written to every shard's labels.dict durably (tmp,
+    /// fsync, rename, directory fsync) on first use, and under `inner_mutex`
+    /// that stopped the node for tens of milliseconds. Serialized with the
+    /// apply by the graph's `replicated_apply_mutex`, as the apply's own
+    /// assignment is. An entry that never commits leaves an id with no
+    /// records, which nothing lists. Best effort: a failure is the apply's to
+    /// report, when it assigns the id itself.
+    pub fn internNamesForReplicatedApply(self: *StorageAdapter, graph_name: []const u8, names: []const []const u8) void {
+        if (names.len == 0) return;
+        const mg = self.beginReplicatedApply(graph_name) catch return;
+        defer self.endReplicatedApply(mg);
+        refuseQuarantinedWrite(mg) catch return;
+        for (names) |name| {
+            if (name.len == 0) continue;
+            _ = resolvePersistedLabelId(mg, name) catch |err| {
+                log.debug("label not interned ahead of the Raft apply: graph={s} error={s}", .{ graph_name, @errorName(err) });
+                return;
+            };
+        }
+    }
+
     /// SONNY-6541 (1): a Raft `drop_graph` apply of `graph_name` is about to
     /// wait for the graph's write lock under the Raft node's `inner_mutex`:
     /// a holder of the graph's lock that would wait for Raft gives up
