@@ -1447,7 +1447,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,967
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18904
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,18913
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2515
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1490
@@ -1594,7 +1594,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18913
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,18922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1466
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1661
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,826
@@ -1606,7 +1606,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7747
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18925
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,18934
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -5338,6 +5338,7 @@ REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,Argon2idVerifyErr
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors,TESTED,,,security,2026-11-15,src/security/user_management.zig,677
 REQ-SONNY-6613-FOR-WRITE-RESULT,ForStatement,NoRowsWithoutReturn,TESTED,,,engine,2026-11-15,src/execution/statement_handlers.zig,495
 REQ-SONNY-6613-FOR-WRITE-RESULT,ForStatement,NoRowsWithoutReturn,TESTED,,,engine,2026-11-15,tests/test_sonny6613_for_write_result.zig,11
+REQ-SONNY-6613-GROUP-KEY-OOM,Grouping,KeyAllocationFailureIsOutOfMemory,TESTED,,,engine,2026-11-15,tests/test_sonny6613_group_key_oom.zig,14
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,2609
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,tests/test_sonny6613_leading_let_unwind.zig,12
 REQ-SONNY-6613-LEADING-UNWIND,Unwind,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,7208
