@@ -5336,8 +5336,10 @@ REQ-SONNY-6598-KDF-FAULT-HOOK,AuthOutcomeClassification,TestOnlyKdfFaultHook,TES
 REQ-SONNY-6598-MFA-VERIFY-ERRORS,AuthOutcomeClassification,MfaVerifyErrors,TESTED,,,security,2026-11-15,src/execution/auth_dispatch.zig,1153
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,Argon2idVerifyErrors,TESTED,,,security,2026-11-15,src/security/geode_auth_lib.zig,2250
 REQ-SONNY-6598-VERIFY-THREE-OUTCOMES,AuthOutcomeClassification,LoginVerifyErrors,TESTED,,,security,2026-11-15,src/security/user_management.zig,677
+REQ-SONNY-6613-ENTITY-ADOPT,ExecutionResultOwnership,MismatchedTrackerLinked,TESTED,,,execution,2026-11-15,tests/test_sonny6613_entity_adopt.zig,13
 REQ-SONNY-6613-FOR-WRITE-RESULT,ForStatement,NoRowsWithoutReturn,TESTED,,,engine,2026-11-15,src/execution/statement_handlers.zig,495
 REQ-SONNY-6613-FOR-WRITE-RESULT,ForStatement,NoRowsWithoutReturn,TESTED,,,engine,2026-11-15,tests/test_sonny6613_for_write_result.zig,11
+REQ-SONNY-6613-FUNCTION-CATALOGUE,FunctionCatalogue,EvaluatedFunctionsListed,TESTED,,,gql,2026-11-15,tests/test_sonny6613_function_catalogue.zig,16
 REQ-SONNY-6613-GROUP-KEY-OOM,Grouping,KeyAllocationFailureIsOutOfMemory,TESTED,,,engine,2026-11-15,src/execution/distinct_set.zig,107
 REQ-SONNY-6613-GROUP-KEY-OOM,Grouping,KeyAllocationFailureIsOutOfMemory,TESTED,,,engine,2026-11-15,tests/test_sonny6613_group_key_oom.zig,14
 REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,2609
