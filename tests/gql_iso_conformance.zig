@@ -401,7 +401,23 @@ test "ISO Sec 17.3: LIMIT" {
     try expectParseOk("MATCH (n:Person) RETURN n.name LIMIT 10");
 }
 
+// SONNY-6555 item 6: ISO/IEC 39075:2024 14.9 <order by and page statement>
+// puts the <offset clause> (OFFSET | SKIP, 16.19) before the <limit clause>
+// (16.18). This case read `LIMIT 10 OFFSET 5`, which is Geode's extension
+// order (kept, see the case below), under the standard's name.
 test "ISO Sec 17.4: OFFSET" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name ORDER BY n.name OFFSET 5 LIMIT 10");
+}
+
+test "ISO 14.9: SKIP before LIMIT after a WITH" {
+    try expectParseOk("MATCH (n:Person) WITH n.name AS s ORDER BY s SKIP 5 LIMIT 10 RETURN s");
+}
+
+test "ISO 14.9: OFFSET before LIMIT after a UNION" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS s UNION MATCH (m:Company) RETURN m.name AS s ORDER BY s OFFSET 5 LIMIT 10");
+}
+
+test "Geode extension: LIMIT before OFFSET" {
     try expectParseOk("MATCH (n:Person) RETURN n.name ORDER BY n.name LIMIT 10 OFFSET 5");
 }
 

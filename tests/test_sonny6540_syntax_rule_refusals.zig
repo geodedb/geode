@@ -17,9 +17,9 @@
 // - `toString(1, 2)`: Geode's one-operand conversion function (the CAST of
 //   20.8 under another name) with two operands: the same Format failure.
 //
-// The executor's own arity refusals (`sqrt()`, `upper('a', 'b')`: 22023,
-// tests/test_sonny6518_builtin_errors.zig) are for operands the parser
-// does not check; see the SONNY-6540 report.
+// The executor's own arity refusals (`sqrt()`, `upper('a', 'b')`, for the
+// functions the parser does not check) answer the same 42000 since
+// SONNY-6555 item 5 (tests/test_sonny6555_function_arity.zig).
 
 const std = @import("std");
 const testing = std.testing;

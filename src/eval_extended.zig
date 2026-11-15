@@ -153,7 +153,7 @@ fn adapterFactory(comptime name: []const u8) *const fn (allocator: std.mem.Alloc
             const reg_ptr = try getAdapterRegistry(allocator);
             const fnp = reg_ptr.get(name) orelse return error.NotFound;
             var tmp: [8]extf.BuiltinValue = undefined;
-            if (args.len > tmp.len) return error.InvalidArgs;
+            if (args.len > tmp.len) return error.WrongArgumentCount;
             var i: usize = 0;
             while (i < args.len) : (i += 1) tmp[i] = toBuiltin(args[i]);
             const res = try fnp(allocator, tmp[0..args.len]);
@@ -313,7 +313,7 @@ pub fn initFunctionRegistry(allocator: std.mem.Allocator) !FunctionRegistry {
 
 // Constructors
 fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
@@ -329,7 +329,7 @@ fn constructIpAddr(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
@@ -345,7 +345,7 @@ fn constructSubnet(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const text = args[0].Str;
@@ -355,7 +355,7 @@ fn constructMac(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn constructHash(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Str or args[1] != .Str) return error.TypeMismatch;
 
     const alg_str = args[0].Str;
@@ -398,7 +398,7 @@ fn constructHash(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue
 
 fn constructCurrency(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     // allocator currently unused
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const code_str = args[0].Str;
@@ -413,7 +413,7 @@ fn constructCurrency(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn constructLanguageTag(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const tag_str = args[0].Str;
@@ -475,7 +475,7 @@ fn constructLatLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
     }
 
     // Handle numeric format: LatLon(40.7128, -74.0060)
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     const lat = switch (args[0]) {
         .Int => |i| @as(f64, @floatFromInt(i)),
@@ -533,7 +533,7 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
     // Handle numeric format: LatLonAlt(40.7128, -74.0060, 100, 'ellipsoid')
     // Also accept 3 args with default ref
-    if (args.len != 3 and args.len != 4) return error.InvalidArgs;
+    if (args.len != 3 and args.len != 4) return error.WrongArgumentCount;
 
     const lat = switch (args[0]) {
         .Int => |i| @as(f64, @floatFromInt(i)),
@@ -582,7 +582,7 @@ fn constructLatLonAlt(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 }
 
 fn constructGeometryFromText(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const wkt = args[0].Str;
@@ -593,7 +593,7 @@ fn constructGeometryFromText(allocator: std.mem.Allocator, args: []const ExtValu
 
 fn constructTemperature(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     const value = switch (args[0]) {
         .Int => |i| @as(f64, @floatFromInt(i)),
@@ -642,7 +642,7 @@ fn constructTemperature(allocator: std.mem.Allocator, args: []const ExtValue) !E
 
 fn constructPressure(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     const value = switch (args[0]) {
         .Int => |i| @as(f64, @floatFromInt(i)),
@@ -696,7 +696,7 @@ fn constructPressure(allocator: std.mem.Allocator, args: []const ExtValue) !ExtV
 }
 
 fn constructVector(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .List) return error.TypeMismatch;
 
     const list = args[0].List;
@@ -721,7 +721,7 @@ fn constructVector(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVal
 }
 
 fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     // Handle array literal: VectorF32([0.1, 0.2, 0.3])
     if (args[0] == .List) {
@@ -771,7 +771,7 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
 // CANARY: REQ=REQ-VECTOR-I32-002; FEATURE="VectorI32"; ASPECT=ConstructorFunction; STATUS=TESTED; TEST=geodetestlab/specs/vector_operations_basic.yml; OWNER=eval; UPDATED=2025-12-23
 fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     // Handle array literal: VectorI32([1, 2, 3])
     if (args[0] == .List) {
@@ -828,7 +828,7 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 }
 
 fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const json_str = args[0].Str;
@@ -839,7 +839,7 @@ fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValu
 // IP/CIDR functions
 fn ipContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     const subnet = switch (args[0]) {
         .Subnet => |s| s,
@@ -905,7 +905,7 @@ fn ipContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn ipOverlaps(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Subnet or args[1] != .Subnet) return error.TypeMismatch;
 
     const subnet1 = args[0].Subnet;
@@ -926,7 +926,7 @@ fn ipOverlaps(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn ipFamily(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const family = switch (args[0]) {
         .IpAddr => |ip| if (ip == .v4) "IPv4" else "IPv6",
@@ -939,7 +939,7 @@ fn ipFamily(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn ipIsPrivate(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .IpAddr) return error.TypeMismatch;
 
     const ip = args[0].IpAddr;
@@ -971,7 +971,7 @@ fn ipIsPrivate(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn subnetPrefixLength(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const subnet = switch (args[0]) {
         .Subnet => |s| s,
@@ -984,7 +984,7 @@ fn subnetPrefixLength(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 // CANARY: REQ=REQ-GQL-NET-FUNC-EVAL-001; FEATURE="NetworkFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/network_types_basic.yml; OWNER=eval; UPDATED=2025-10-19
 fn ipNetwork(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const subnet = switch (args[0]) {
         .Subnet => |s| s,
@@ -997,7 +997,7 @@ fn ipNetwork(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn ipNetmask(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     const addr = switch (args[0]) {
         .IpAddr => |a| a,
@@ -1081,7 +1081,7 @@ fn ipNetmask(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // MAC functions
 fn macIsLocal(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator; // unused
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Mac) return error.TypeMismatch;
 
     const mac = args[0].Mac;
@@ -1091,7 +1091,7 @@ fn macIsLocal(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn macIsMulticast(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator; // unused
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Mac) return error.TypeMismatch;
 
     const mac = args[0].Mac;
@@ -1101,7 +1101,7 @@ fn macIsMulticast(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValu
 
 fn macOui(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Mac) return error.TypeMismatch;
 
     const mac = args[0].Mac;
@@ -1112,7 +1112,7 @@ fn macOui(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // Hash functions
 fn hashEquals(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Hash or args[1] != .Hash) return error.TypeMismatch;
 
     const h1 = args[0].Hash;
@@ -1132,7 +1132,7 @@ fn hashEquals(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn hashAlg(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Hash) return error.TypeMismatch;
 
     const hash = args[0].Hash;
@@ -1152,7 +1152,7 @@ fn hashAlg(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // Currency functions
 fn currencyMinorUnits(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Currency) return error.TypeMismatch;
 
     const cur = args[0].Currency;
@@ -1173,7 +1173,7 @@ fn currencyMinorUnits(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
 // Language functions
 fn langCanonizalize(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const tag = args[0].Str;
@@ -1184,7 +1184,7 @@ fn langCanonizalize(allocator: std.mem.Allocator, args: []const ExtValue) !ExtVa
 
 fn langMatch(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .List or args[1] != .LanguageTag) return error.TypeMismatch;
 
     const ranges = args[0].List;
@@ -1213,7 +1213,7 @@ fn langMatch(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // LatLon functions
 fn distanceHaversine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     var lat1: f64 = undefined;
     var lon1: f64 = undefined;
@@ -1263,7 +1263,7 @@ fn distanceHaversine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtV
 
 fn getLatitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const lat = switch (args[0]) {
         .LatLon => |ll| ll.lat,
@@ -1276,7 +1276,7 @@ fn getLatitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn getLongitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const lon = switch (args[0]) {
         .LatLon => |ll| ll.lon,
@@ -1289,7 +1289,7 @@ fn getLongitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
 
 fn getAltitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     switch (args[0]) {
         // SONNY-2739: `altitude(latlonalt('0,0,1e300'))` aborted the server.
@@ -1300,7 +1300,7 @@ fn getAltitude(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn getAltRef(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     switch (args[0]) {
         .LatLonAlt => |lla| {
@@ -1317,7 +1317,7 @@ fn getAltRef(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-GQL-GEO-FUNC-EVAL-001; FEATURE="GeographicFunctionsEvaluation"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=eval; UPDATED=2025-10-19
 fn geoBearing(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     var lat1: f64 = undefined;
     var lon1: f64 = undefined;
@@ -1369,7 +1369,7 @@ fn geoBearing(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn geoLat(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const lat = switch (args[0]) {
         .LatLon => |ll| ll.lat,
@@ -1382,7 +1382,7 @@ fn geoLat(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 fn geoLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     _ = allocator;
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
 
     const lon = switch (args[0]) {
         .LatLon => |ll| ll.lon,
@@ -1395,7 +1395,7 @@ fn geoLon(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 // Geometry functions
 fn stAsText(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -1468,7 +1468,7 @@ fn wkbToWkt(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
 }
 
 fn stAsGeoJson(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -1562,7 +1562,7 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
 // CANARY: REQ=REQ-SPATIAL-CONTAINS-001; FEATURE="SpatialContains"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // GAP-0089 RESOLVED: Proper point-in-polygon test using ray casting algorithm
 fn stContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
 
     const container = args[0].Geometry;
@@ -1598,7 +1598,7 @@ fn stContains(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-INTERSECTS-001; FEATURE="SpatialIntersects"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-06-11
 // GAP-0089 RESOLVED: Proper geometry intersection test
 fn stIntersects(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
 
     const geom1 = args[0].Geometry;
@@ -1740,7 +1740,7 @@ fn onSegment(a: [2]f64, b: [2]f64, p: [2]f64) bool {
 // CANARY: REQ=REQ-SPATIAL-WITHIN-001; FEATURE="SpatialWithin"; ASPECT=GeometryRelation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // GAP-0089 RESOLVED: stWithin(a, b) is the inverse of stContains(b, a)
 fn stWithin(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
 
     // stWithin(a, b) = stContains(b, a)
@@ -1827,7 +1827,7 @@ fn pointInPolygon(point: [2]f64, polygon: [][2]f64) bool {
 // CANARY: REQ=REQ-SPATIAL-POINT-001; FEATURE="SpatialPoint"; ASPECT=PointCreation; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Point(x, y) - Creates a Point geometry from coordinates
 fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
 
     // Extract x coordinate
     const x: f64 = switch (args[0]) {
@@ -1856,7 +1856,7 @@ fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-X-001; FEATURE="SpatialX"; ASPECT=CoordinateExtraction; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_X(point) - Extracts X coordinate from a Point geometry
 fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -1871,7 +1871,7 @@ fn stX(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-Y-001; FEATURE="SpatialY"; ASPECT=CoordinateExtraction; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Y(point) - Extracts Y coordinate from a Point geometry
 fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -1885,7 +1885,7 @@ fn stY(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-DISTANCE-001; FEATURE="SpatialDistance"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Distance(geom1, geom2) - Calculates Euclidean distance between two geometries
 fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Geometry or args[1] != .Geometry) return error.TypeMismatch;
 
     const geom1 = args[0].Geometry;
@@ -1914,7 +1914,7 @@ fn stDistance(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-AREA-001; FEATURE="SpatialArea"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Area(polygon) - Calculates area of a Polygon using Shoelace formula
 fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -1952,7 +1952,7 @@ fn stArea(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // CANARY: REQ=REQ-SPATIAL-CENTROID-001; FEATURE="SpatialCentroid"; ASPECT=GeometryMeasure; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=spatial; UPDATED=2026-01-10
 // ST_Centroid(polygon) - Calculates centroid of a Polygon
 fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 1) return error.InvalidArgs;
+    if (args.len != 1) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     const geom = args[0].Geometry;
@@ -2007,7 +2007,7 @@ fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 // ST_Buffer(geometry, distance) - Creates a buffer around a geometry
 // For Point: creates a square polygon at distance (approximation of circle)
 fn stBuffer(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Geometry) return error.TypeMismatch;
 
     // Extract buffer distance
@@ -2121,7 +2121,7 @@ fn coerceVectorF32(allocator: std.mem.Allocator, value: ExtValue) !?CoercedVecto
 
 /// Coerce the two leading arguments of a binary vector function.
 fn coerceVectorPair(allocator: std.mem.Allocator, args: []const ExtValue) !?struct { a: CoercedVector, b: CoercedVector } {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     // NULL in, NULL out (standard null propagation). A non-vector scalar
     // argument propagates the same way (issue #476 contract).
     if (args[0] == .Null or args[1] == .Null) return null;
@@ -2219,7 +2219,7 @@ fn vectorCosine(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue 
 
 // Decimal constructor
 fn constructDecimal(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Str) return error.TypeMismatch;
     if (args[1] != .Int) return error.TypeMismatch;
 
@@ -2238,7 +2238,7 @@ fn constructDecimal(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 
 // Decimal arithmetic functions
 fn decimalAdd(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
 
     const decimal128 = @import("types/decimal128.zig");
@@ -2250,7 +2250,7 @@ fn decimalAdd(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn decimalSub(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
 
     const decimal128 = @import("types/decimal128.zig");
@@ -2262,7 +2262,7 @@ fn decimalSub(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn decimalMul(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
 
     const decimal128 = @import("types/decimal128.zig");
@@ -2275,7 +2275,7 @@ fn decimalMul(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
 }
 
 fn decimalDiv(_: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    if (args.len != 2) return error.InvalidArgs;
+    if (args.len != 2) return error.WrongArgumentCount;
     if (args[0] != .Decimal or args[1] != .Decimal) return error.TypeMismatch;
 
     const decimal128 = @import("types/decimal128.zig");

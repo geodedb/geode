@@ -4166,6 +4166,8 @@ fn rowEnv(allocator: std.mem.Allocator, columns: []const []const u8, row: []cons
 pub fn isQueryLevelEvalError(err: anyerror) bool {
     return switch (err) {
         error.UnknownFunction,
+        // SONNY-6555 item 5: an operand count is the query text's.
+        error.WrongArgumentCount,
         error.MissingParameter,
         error.TenantScopeRequired,
         error.ReadQueryBudgetExceeded,

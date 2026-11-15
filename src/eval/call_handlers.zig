@@ -103,6 +103,28 @@ fn charOffset(s: []const u8, n: usize) usize {
     return at;
 }
 
+/// SONNY-6555 item 4: the number of characters of `s` (4.16.3), counted
+/// as `charOffset` steps: a byte that starts no UTF-8 sequence is one.
+fn charCount(s: []const u8) usize {
+    var at: usize = 0;
+    var seen: usize = 0;
+    while (at < s.len) : (seen += 1) {
+        const width = std.unicode.utf8ByteSequenceLength(s[at]) catch 1;
+        at = @min(s.len, at + width);
+    }
+    return seen;
+}
+
+/// SONNY-6555 item 4: whether an operand is the null value; the function's
+/// result is then the null value (NULL in is NULL out), not the heap
+/// function's 22G03 for a value of no type it takes.
+fn anyNull(values: []const Value) bool {
+    for (values) |v| {
+        if (v == .Null) return true;
+    }
+    return false;
+}
+
 /// SONNY-6518: a text argument of a constructor: null for the null value
 /// (the result is then null); a value that is no text is 22G03 (it was
 /// NULL).
@@ -182,7 +204,7 @@ pub fn evalMathFunction(
 ) EvalError!?Value {
     // abs(x)
     if (std.mem.eql(u8, function_name, "abs")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             // SONNY-2769: abs(minInt) does not fit; the negation aborted
@@ -206,7 +228,7 @@ pub fn evalMathFunction(
 
     // sqrt(x)
     if (std.mem.eql(u8, function_name, "sqrt")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| {
@@ -230,7 +252,7 @@ pub fn evalMathFunction(
 
     // pow(base, exp)
     if (std.mem.eql(u8, function_name, "pow")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const base_arg = try eval.evalExpr(allocator, args[0].*, env);
         const exp_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -264,7 +286,7 @@ pub fn evalMathFunction(
 
     // sin(x)
     if (std.mem.eql(u8, function_name, "sin")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -280,7 +302,7 @@ pub fn evalMathFunction(
 
     // cos(x)
     if (std.mem.eql(u8, function_name, "cos")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -296,7 +318,7 @@ pub fn evalMathFunction(
 
     // tan(x)
     if (std.mem.eql(u8, function_name, "tan")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -315,7 +337,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // atan(x)
     if (std.mem.eql(u8, function_name, "atan")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -332,7 +354,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // atan2(y, x)
     if (std.mem.eql(u8, function_name, "atan2")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const arg_y = try eval.evalExpr(allocator, args[0].*, env);
         const arg_x = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -360,7 +382,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // asin(x)
     if (std.mem.eql(u8, function_name, "asin")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -378,7 +400,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
     // acos(x)
     if (std.mem.eql(u8, function_name, "acos")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -403,19 +425,19 @@ pub fn evalMathFunction(
     // (an f64 Double would not compose with degrees()/radians(), which accept
     // Int and Decimal only).
     if (std.mem.eql(u8, function_name, "pi")) {
-        if (args.len != 0) return EvalError.InvalidArgs;
+        if (args.len != 0) return EvalError.WrongArgumentCount;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.pi * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     if (std.mem.eql(u8, function_name, "e")) {
-        if (args.len != 0) return EvalError.InvalidArgs;
+        if (args.len != 0) return EvalError.WrongArgumentCount;
         return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(std.math.e * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
     // degrees(radians)
     if (std.mem.eql(u8, function_name, "degrees")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -432,7 +454,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
     // radians(degrees)
     if (std.mem.eql(u8, function_name, "radians")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -448,7 +470,7 @@ pub fn evalMathFunction(
 
     // log(x)
     if (std.mem.eql(u8, function_name, "log")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -465,7 +487,7 @@ pub fn evalMathFunction(
 
     // exp(x)
     if (std.mem.eql(u8, function_name, "exp")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const val = switch (arg) {
             .Int => |i| @as(f64, @floatFromInt(i)),
@@ -483,7 +505,7 @@ pub fn evalMathFunction(
 
     // ceil(x)
     if (std.mem.eql(u8, function_name, "ceil")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
@@ -500,7 +522,7 @@ pub fn evalMathFunction(
 
     // floor(x)
     if (std.mem.eql(u8, function_name, "floor")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
@@ -516,7 +538,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-12-22
     // round(x [, precision])
     if (std.mem.eql(u8, function_name, "round")) {
-        if (args.len < 1 or args.len > 2) return EvalError.InvalidArgs;
+        if (args.len < 1 or args.len > 2) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
 
         var precision: i64 = 0;
@@ -573,7 +595,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
     // mod(dividend, divisor)
     if (std.mem.eql(u8, function_name, "mod")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const dividend_arg = try eval.evalExpr(allocator, args[0].*, env);
         const divisor_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -600,7 +622,7 @@ pub fn evalMathFunction(
     // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
     // sign(x)
     if (std.mem.eql(u8, function_name, "sign")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const sign_value = switch (arg) {
@@ -616,7 +638,7 @@ pub fn evalMathFunction(
 
     // random() — returns decimal in [0, 1) using cryptographically secure source
     if (std.mem.eql(u8, function_name, "random")) {
-        if (args.len != 0) return EvalError.InvalidArgs;
+        if (args.len != 0) return EvalError.WrongArgumentCount;
         var rand_bytes: [8]u8 = undefined;
         // fips-exempt: non-security GQL random() function (query evaluation, not cryptographic)
         // Zig 0.16: std.posix.getrandom removed; branch on OS.
@@ -659,7 +681,7 @@ pub fn evalStringFunction(
     // negative length is a substring error (22011: it was ''), and positions
     // are characters, not bytes.
     if (std.mem.eql(u8, function_name, "substring")) {
-        if (args.len < 2 or args.len > 3) return EvalError.InvalidArgs;
+        if (args.len < 2 or args.len > 3) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const start_arg = try eval.evalExpr(allocator, args[1].*, env);
         const len_arg: ?Value = if (args.len == 3) try eval.evalExpr(allocator, args[2].*, env) else null;
@@ -691,7 +713,7 @@ pub fn evalStringFunction(
 
     // replace(str, search, replacement)
     if (std.mem.eql(u8, function_name, "replace")) {
-        if (args.len != 3) return EvalError.InvalidArgs;
+        if (args.len != 3) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const search_arg = try eval.evalExpr(allocator, args[1].*, env);
         const replace_arg = try eval.evalExpr(allocator, args[2].*, env);
@@ -760,7 +782,7 @@ pub fn evalStringFunction(
 
     // trim(str)
     if (std.mem.eql(u8, function_name, "trim")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
@@ -776,7 +798,7 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // ltrim(str)
     if (std.mem.eql(u8, function_name, "ltrim")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
@@ -792,7 +814,7 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // rtrim(str)
     if (std.mem.eql(u8, function_name, "rtrim")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
@@ -808,7 +830,7 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // left(str, count)
     if (std.mem.eql(u8, function_name, "left")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -834,7 +856,7 @@ pub fn evalStringFunction(
     // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // right(str, count)
     if (std.mem.eql(u8, function_name, "right")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -870,7 +892,7 @@ pub fn evalStringFunction(
     // Element slices alias `str`, exactly as left()/right()/substring() do; the
     // caller's allocator owns only the Value array.
     if (std.mem.eql(u8, function_name, "split")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const delim_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -910,7 +932,7 @@ pub fn evalStringFunction(
 
     // upper(str) / toupper(str)
     if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
@@ -928,7 +950,7 @@ pub fn evalStringFunction(
 
     // lower(str) / tolower(str)
     if (std.mem.eql(u8, function_name, "lower") or std.mem.eql(u8, function_name, "tolower")) {
-        if (args.len != 1) return EvalError.InvalidArgs;
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
 
         const str = switch (str_arg) {
@@ -946,7 +968,7 @@ pub fn evalStringFunction(
 
     // icontains(str, substr) - case-insensitive CONTAINS
     if (std.mem.eql(u8, function_name, "icontains")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const str_arg = try eval.evalExpr(allocator, args[0].*, env);
         const needle_arg = try eval.evalExpr(allocator, args[1].*, env);
 
@@ -1424,7 +1446,7 @@ pub fn evalTypeCastFunction(
 ) EvalError!?Value {
     // cast(value, type_name)
     if (std.mem.eql(u8, function_name, "cast")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
 
         const value_arg = try eval.evalExpr(allocator, args[0].*, env);
         const type_arg = try eval.evalExpr(allocator, args[1].*, env);
@@ -1459,7 +1481,7 @@ pub fn evalTypeCastFunction(
     for (conversions) |conv| {
         for (conv.names) |name| {
             if (!std.mem.eql(u8, function_name, name)) continue;
-            if (args.len != 1) return EvalError.InvalidArgs;
+            if (args.len != 1) return EvalError.WrongArgumentCount;
             const arg = try eval.evalExpr(allocator, args[0].*, env);
             return try castValue(allocator, arg, conv.target);
         }
@@ -1485,7 +1507,7 @@ pub fn evalCollectionFunction(
     // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // keys(map/node/edge)
     if (std.mem.eql(u8, function_name, "keys")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Map => |map| {
@@ -1521,7 +1543,7 @@ pub fn evalCollectionFunction(
 
     // values(map)
     if (std.mem.eql(u8, function_name, "values")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Map => |map| {
@@ -1540,11 +1562,18 @@ pub fn evalCollectionFunction(
     // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
     // size/length(list/string/map)
     if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // CANARY: REQ=REQ-SONNY-6555-NULL-ARGUMENTS; FEATURE="SizeFunction"; ASPECT=NullAndCharacterLength; STATUS=TESTED; TEST=tests/test_sonny6555_null_arguments.zig; OWNER=eval; UPDATED=2026-11-14
+        // SONNY-6555 item 4: ISO/IEC 39075:2024 20.22 GR 1 b), 3 b), 4 e):
+        // the length or cardinality of the null value is the null value (it
+        // was 0); GR 1 a) and NOTE 331: a character string's length is its
+        // number of characters (it was its bytes). A value of no sized type
+        // is 22G03 (it was 0).
+        if (arg == .Null) return Value{ .Null = {} };
+        if (textLike(arg)) |s| return Value{ .Int = @intCast(charCount(s)) };
         switch (arg) {
             .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
             .Path => |p| return Value{ .Int = @intCast(p.edges.len) },
             // CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
@@ -1553,20 +1582,27 @@ pub fn evalCollectionFunction(
             // every stored embedding — a silent lie that read as "empty".
             // `data.len` (not the u16 `dim` field) is authoritative so an
             // overflow-stored vector reports its real element count.
+            // BYTE_LENGTH (GR 2 a): a byte string's length is its bytes.
+            .Bytea => |b| return Value{ .Int = @intCast(b.len) },
             .ExtValue => |ext| switch (ext) {
+                .Null => return Value{ .Null = {} },
                 .List => |l| return Value{ .Int = @intCast(l.len) },
+                .Str, .Text => |t| return Value{ .Int = @intCast(charCount(t)) },
+                .Char => |t| return Value{ .Int = @intCast(charCount(t.data)) },
+                .Varchar => |t| return Value{ .Int = @intCast(charCount(t.data)) },
+                .Bytea => |b| return Value{ .Int = @intCast(b.len) },
                 .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
                 .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                else => return Value{ .Int = 0 },
+                else => return EvalError.TypeMismatch,
             },
-            else => return Value{ .Int = 0 },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
     // head(list)
     if (std.mem.eql(u8, function_name, "head")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .List => |l| {
@@ -1580,7 +1616,7 @@ pub fn evalCollectionFunction(
     // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
     // tail(list)
     if (std.mem.eql(u8, function_name, "tail")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .List => |l| {
@@ -1591,14 +1627,17 @@ pub fn evalCollectionFunction(
                 @memcpy(tail_slice, l[1..]);
                 return Value{ .List = tail_slice };
             },
-            else => return Value{ .List = &[_]Value{} },
+            // SONNY-6555 item 4: NULL in is NULL out, and a value that is no
+            // list is 22G03 (both were the empty list).
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
     // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
     // last(list)
     if (std.mem.eql(u8, function_name, "last")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .List => |l| {
@@ -1611,7 +1650,7 @@ pub fn evalCollectionFunction(
 
     // reverse(list/string)
     if (std.mem.eql(u8, function_name, "reverse")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Str => |s| {
@@ -1732,7 +1771,7 @@ pub fn evalAggregateFunction(
 
     // sum(list)
     if (std.mem.eql(u8, function_name, "sum")) {
-        if (args.len == 0) return Value{ .Null = {} };
+        if (args.len == 0) return EvalError.WrongArgumentCount;
 
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -1780,7 +1819,7 @@ pub fn evalAggregateFunction(
 
     // avg(list)
     if (std.mem.eql(u8, function_name, "avg")) {
-        if (args.len == 0) return Value{ .Null = {} };
+        if (args.len == 0) return EvalError.WrongArgumentCount;
 
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -1809,7 +1848,7 @@ pub fn evalAggregateFunction(
 
     // min(list)
     if (std.mem.eql(u8, function_name, "min")) {
-        if (args.len == 0) return Value{ .Null = {} };
+        if (args.len == 0) return EvalError.WrongArgumentCount;
 
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -1841,7 +1880,7 @@ pub fn evalAggregateFunction(
 
     // max(list)
     if (std.mem.eql(u8, function_name, "max")) {
-        if (args.len == 0) return Value{ .Null = {} };
+        if (args.len == 0) return EvalError.WrongArgumentCount;
 
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -1888,35 +1927,35 @@ pub fn evalAdvancedTypeFunction(
     env: Env,
 ) EvalError!?Value {
     if (std.mem.eql(u8, function_name, "smallint")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const result = evaluator_functions.SmallInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "bigint")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const result = evaluator_functions.BigInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "real")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const result = evaluator_functions.Real(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "double")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const result = evaluator_functions.Double(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "int")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         return switch (arg) {
             .Int => arg,
@@ -1932,7 +1971,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "bool")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         return switch (arg) {
             .Bool => arg,
@@ -1949,7 +1988,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "decimal")) {
-        if (args.len < 1 or args.len > 2) return Value{ .Null = {} };
+        if (args.len < 1 or args.len > 2) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const value_text = (try stringifyValueForConstructor(allocator, arg)) orelse return Value{ .Null = {} };
         defer allocator.free(value_text);
@@ -1966,7 +2005,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "char")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const value_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
         const text = (try textArg(value_arg)) orelse return Value{ .Null = {} };
@@ -1978,7 +2017,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "varchar")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const value_arg = try eval.evalExpr(allocator, args[0].*, env);
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
         const text = (try textArg(value_arg)) orelse return Value{ .Null = {} };
@@ -1990,7 +2029,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "text")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         return Value{ .Text = try allocator.dupe(u8, text) };
@@ -2017,7 +2056,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "timetz")) {
-        if (args.len != 1 and args.len != 2) return Value{ .Null = {} };
+        if (args.len != 1 and args.len != 2) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
 
@@ -2040,7 +2079,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "timestamptz")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.TimestampTZ(text) catch |err| return mapEvaluatorError(err);
@@ -2048,7 +2087,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "interval")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
@@ -2062,7 +2101,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "makeinterval")) {
-        if (args.len != 3) return Value{ .Null = {} };
+        if (args.len != 3) return EvalError.WrongArgumentCount;
         const months_arg = try eval.evalExpr(allocator, args[0].*, env);
         const days_arg = try eval.evalExpr(allocator, args[1].*, env);
         const micros_arg = try eval.evalExpr(allocator, args[2].*, env);
@@ -2081,7 +2120,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "bytea")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Bytea(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2089,7 +2128,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "json")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Json(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2097,7 +2136,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "jsonb")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Jsonb(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2105,7 +2144,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "xml")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Xml(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2113,7 +2152,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "url")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Url(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2121,7 +2160,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "domain")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.Domain(allocator, text) catch |err| return mapEvaluatorError(err);
@@ -2132,7 +2171,7 @@ pub fn evalAdvancedTypeFunction(
         if (args.len == 0) {
             return heapValueToEvalValue(evaluator_functions.uuid_v4());
         }
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.UUID(text) catch |err| return mapEvaluatorError(err);
@@ -2140,7 +2179,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "bit")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const wrapped = try normalizeBitLiteral(allocator, text);
@@ -2149,7 +2188,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "varbit")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = (try textArg(arg)) orelse return Value{ .Null = {} };
         const wrapped = try normalizeBitLiteral(allocator, text);
@@ -2159,7 +2198,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "range")) {
-        if (args.len != 4) return Value{ .Null = {} };
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const base_arg = try eval.evalExpr(allocator, args[0].*, env);
         const lower_arg = try eval.evalExpr(allocator, args[1].*, env);
         const upper_arg = try eval.evalExpr(allocator, args[2].*, env);
@@ -2179,7 +2218,7 @@ pub fn evalAdvancedTypeFunction(
 
     // IntRange(lower, upper, include_lower, include_upper) constructor
     if (std.mem.eql(u8, function_name, "intrange")) {
-        if (args.len != 4) return Value{ .Null = {} };
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const lower_arg = try eval.evalExpr(allocator, args[0].*, env);
         const upper_arg = try eval.evalExpr(allocator, args[1].*, env);
         const inc_lower_arg = try eval.evalExpr(allocator, args[2].*, env);
@@ -2201,52 +2240,59 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "jsonb_get")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const path = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ doc, path })) return Value{ .Null = {} };
         const path_text = (try textArg(path)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_get(evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "jsonb_exists")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const doc = try eval.evalExpr(allocator, args[0].*, env);
         const key = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ doc, key })) return Value{ .Null = {} };
         const key_text = (try textArg(key)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.jsonb_exists(evalValueToHeapValue(doc), key_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "xml_is_well_formed")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6555 item 4: NULL in is NULL out (it was false).
+        if (arg == .Null) return Value{ .Null = {} };
         return heapValueToEvalValue(evaluator_functions.xml_is_well_formed(evalValueToHeapValue(arg)));
     }
 
     if (std.mem.eql(u8, function_name, "url_host")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_host(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "url_scheme")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_scheme(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "url_path")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.url_path(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "url_query")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         return switch (arg) {
             .Url => |u| Value{ .Text = if (u.query) |q| q else "" },
@@ -2259,7 +2305,7 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "url_origin")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         return switch (arg) {
             .Url => |u| Value{ .Text = try u.getOrigin(allocator) },
@@ -2272,14 +2318,15 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "domain_labels")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.domain_labels(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "domain_root")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const domain = switch (arg) {
             .Domain => |d| d,
@@ -2299,87 +2346,97 @@ pub fn evalAdvancedTypeFunction(
     }
 
     if (std.mem.eql(u8, function_name, "uuid_v4")) {
-        if (args.len != 0) return Value{ .Null = {} };
+        if (args.len != 0) return EvalError.WrongArgumentCount;
         return heapValueToEvalValue(evaluator_functions.uuid_v4());
     }
 
     if (std.mem.eql(u8, function_name, "uuid_v7")) {
-        if (args.len != 0) return Value{ .Null = {} };
+        if (args.len != 0) return EvalError.WrongArgumentCount;
         return heapValueToEvalValue(evaluator_functions.uuid_v7());
     }
 
     if (std.mem.eql(u8, function_name, "uuid_equal")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.uuid_equal(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "to_hex")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.to_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "from_hex")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.from_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "array_length")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.array_length(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "array_contains")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const array_arg = try eval.evalExpr(allocator, args[0].*, env);
         const value_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ array_arg, value_arg })) return Value{ .Null = {} };
         const result = evaluator_functions.array_contains(evalValueToHeapValue(array_arg), evalValueToHeapValue(value_arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "bit_and")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.bit_and(allocator, evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "bit_count")) {
-        if (args.len != 1) return Value{ .Null = {} };
+        if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        if (anyNull(&.{arg})) return Value{ .Null = {} };
         const result = evaluator_functions.bit_count(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "range_contains")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const range_arg = try eval.evalExpr(allocator, args[0].*, env);
         const element_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ range_arg, element_arg })) return Value{ .Null = {} };
         const result = evaluator_functions.range_contains(evalValueToHeapValue(range_arg), evalValueToHeapValue(element_arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "range_overlaps")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ lhs, rhs })) return Value{ .Null = {} };
         const result = evaluator_functions.range_overlaps(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     if (std.mem.eql(u8, function_name, "domain_suffix_match")) {
-        if (args.len != 2) return Value{ .Null = {} };
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         const domain_arg = try eval.evalExpr(allocator, args[0].*, env);
         const suffix_arg = try eval.evalExpr(allocator, args[1].*, env);
+        if (anyNull(&.{ domain_arg, suffix_arg })) return Value{ .Null = {} };
         const suffix_text = (try textArg(suffix_arg)) orelse return Value{ .Null = {} };
         const result = evaluator_functions.domain_suffix_match(evalValueToHeapValue(domain_arg), suffix_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);

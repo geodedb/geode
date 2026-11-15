@@ -86,7 +86,7 @@ pub fn evalTimeseriesValue(
     env: Env,
 ) EvalError!?Value {
     if (!std.ascii.eqlIgnoreCase(function_name, "timeseries.value")) return null;
-    if (args.len != 3) return EvalError.InvalidArgs;
+    if (args.len != 3) return EvalError.WrongArgumentCount;
 
     const maybe_store: ?*TimeseriesStore = resolveTimeseriesStore(env, null);
     const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
@@ -142,7 +142,7 @@ pub fn evalTimeseriesFunction(
     const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
 
     // All timeseries functions require at least 2 args: (device_id, metric)
-    if (args.len < 2) return EvalError.InvalidArgs;
+    if (args.len < 2) return EvalError.WrongArgumentCount;
 
     const device_id_val = try evalExpr(allocator, args[0].*, env);
     const metric_val = try evalExpr(allocator, args[1].*, env);
@@ -159,18 +159,18 @@ pub fn evalTimeseriesFunction(
     call.series_key = key;
 
     if (std.ascii.eqlIgnoreCase(suffix, "last_value")) {
-        if (args.len != 2) return EvalError.InvalidArgs;
+        if (args.len != 2) return EvalError.WrongArgumentCount;
         call.function_type = .last_value;
         call.params = .{ .last_value = {} };
     } else if (std.ascii.eqlIgnoreCase(suffix, "value_at")) {
-        if (args.len != 3) return EvalError.InvalidArgs;
+        if (args.len != 3) return EvalError.WrongArgumentCount;
         const ts_val = try evalExpr(allocator, args[2].*, env);
         if (ts_val != .Int) return EvalError.TypeMismatch;
         call.function_type = .value_at;
         call.params = .{ .value_at = .{ .timestamp = ts_val.Int } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "sample_by")) {
         // sample_by(device_id, metric, interval_ms, start_ts, end_ts, aggregation)
-        if (args.len != 6) return EvalError.InvalidArgs;
+        if (args.len != 6) return EvalError.WrongArgumentCount;
         const interval = try evalExpr(allocator, args[2].*, env);
         const start = try evalExpr(allocator, args[3].*, env);
         const end = try evalExpr(allocator, args[4].*, env);
@@ -187,7 +187,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "time_bucket")) {
         // time_bucket(device_id, metric, bucket_ms, start_ts, end_ts)
-        if (args.len != 5) return EvalError.InvalidArgs;
+        if (args.len != 5) return EvalError.WrongArgumentCount;
         const bucket = try evalExpr(allocator, args[2].*, env);
         const start = try evalExpr(allocator, args[3].*, env);
         const end = try evalExpr(allocator, args[4].*, env);
@@ -201,7 +201,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "interpolate")) {
         // interpolate(device_id, metric, timestamp, method)
-        if (args.len != 4) return EvalError.InvalidArgs;
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const ts_val = try evalExpr(allocator, args[2].*, env);
         const method_val = try evalExpr(allocator, args[3].*, env);
         if (ts_val != .Int or method_val != .Str) return EvalError.TypeMismatch;
@@ -220,7 +220,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "moving_avg")) {
         // moving_avg(device_id, metric, window_ms, step_ms)
-        if (args.len != 4) return EvalError.InvalidArgs;
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const window = try evalExpr(allocator, args[2].*, env);
         const step = try evalExpr(allocator, args[3].*, env);
         if (window != .Int or step != .Int) return EvalError.TypeMismatch;
@@ -231,14 +231,14 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "rate")) {
         // rate(device_id, metric, interval_ms)
-        if (args.len != 3) return EvalError.InvalidArgs;
+        if (args.len != 3) return EvalError.WrongArgumentCount;
         const interval = try evalExpr(allocator, args[2].*, env);
         if (interval != .Int) return EvalError.TypeMismatch;
         call.function_type = .rate;
         call.params = .{ .rate = .{ .interval_ms = interval.Int } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "derivative")) {
         // derivative(device_id, metric, order)
-        if (args.len != 3) return EvalError.InvalidArgs;
+        if (args.len != 3) return EvalError.WrongArgumentCount;
         const order_val = try evalExpr(allocator, args[2].*, env);
         if (order_val != .Int) return EvalError.TypeMismatch;
         if (order_val.Int < 0 or order_val.Int > 255) return EvalError.InvalidArgs;
@@ -246,7 +246,7 @@ pub fn evalTimeseriesFunction(
         call.params = .{ .derivative = .{ .order = @intCast(order_val.Int) } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "change_points")) {
         // GAP-0290: change_points(device_id, metric, start_ts, end_ts, penalty, min_size)
-        if (args.len != 6) return EvalError.InvalidArgs;
+        if (args.len != 6) return EvalError.WrongArgumentCount;
         const start = try evalExpr(allocator, args[2].*, env);
         const end = try evalExpr(allocator, args[3].*, env);
         const penalty_val = try evalExpr(allocator, args[4].*, env);
@@ -265,7 +265,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "extract_features")) {
         // GAP-0290: extract_features(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const start = try evalExpr(allocator, args[2].*, env);
         const end = try evalExpr(allocator, args[3].*, env);
         if (start != .Int or end != .Int) return EvalError.TypeMismatch;
@@ -276,7 +276,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "matrix_profile")) {
         // GAP-0290: matrix_profile(device_id, metric, start_ts, end_ts, subseq_len)
-        if (args.len != 5) return EvalError.InvalidArgs;
+        if (args.len != 5) return EvalError.WrongArgumentCount;
         const start = try evalExpr(allocator, args[2].*, env);
         const end = try evalExpr(allocator, args[3].*, env);
         const subseq = try evalExpr(allocator, args[4].*, env);
@@ -291,7 +291,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "z_normalize")) {
         // GAP-0290: z_normalize(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const start = try evalExpr(allocator, args[2].*, env);
         const end = try evalExpr(allocator, args[3].*, env);
         if (start != .Int or end != .Int) return EvalError.TypeMismatch;
@@ -302,7 +302,7 @@ pub fn evalTimeseriesFunction(
         } };
     } else if (std.ascii.eqlIgnoreCase(suffix, "invariants")) {
         // GAP-0290: invariants(device_id, metric, start_ts, end_ts)
-        if (args.len != 4) return EvalError.InvalidArgs;
+        if (args.len != 4) return EvalError.WrongArgumentCount;
         const start = try evalExpr(allocator, args[2].*, env);
         const end = try evalExpr(allocator, args[3].*, env);
         if (start != .Int or end != .Int) return EvalError.TypeMismatch;
@@ -498,8 +498,9 @@ test "ts_call_handlers: evalTimeseriesValue rejects wrong arity" {
     const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
     var dev = ast.Expr{ .Int = 42 };
     var args = [_]*ast.Expr{&dev};
+    // SONNY-6555 item 5: an operand count is the program text's (42000).
     try std.testing.expectError(
-        EvalError.InvalidArgs,
+        EvalError.WrongArgumentCount,
         evalTimeseriesValue(allocator, "TIMESERIES.VALUE", args[0..], env),
     );
 }

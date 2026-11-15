@@ -98,6 +98,11 @@ pub const EvalError = error{
     InvalidSubnet,
     InvalidMac,
     InvalidArgs,
+    // SONNY-6555 item 5: a function called with a number of arguments it
+    // does not take. The program text decides it: a syntax-rule violation,
+    // 42000 (ISO/IEC 39075:2024 4.7.3 step 4), not InvalidArgs's 22023 (an
+    // argument value the function refuses).
+    WrongArgumentCount,
     // docs/@BUGS_731.md bug 8b: an unresolved function name is a diagnostic
     // (SQLSTATE 42883 undefined_function), not a silent NULL.
     UnknownFunction,

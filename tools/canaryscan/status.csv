@@ -1648,13 +1648,10 @@ REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,src/distributed/cluster.zig,,
 REQ-GQL-021,Bench Variance Infra,VarianceConfigHelper,TESTED,src/benchmarks/variance_config.zig,TestCANARY_REQ_GQL_021_VarianceConfigHelper,,tooling,2025-09-22
 REQ-GQL-021,Cluster Message Handler,OnMessage,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-021,Query Planner,PlannerSubPhaseHooks,TESTED,src/planner.zig,TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/structural_key.zig,,,planner,2025-09-21
-REQ-GQL-021,PathCache,PathCacheDegreeBucketDiscrimination,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyValueShapeEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation,,planner,2025-09-21
+REQ-GQL-021,PathCache,PathCacheStructuralKeySelectivityEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding,,planner,2025-09-21
+REQ-GQL-021,PathCache,PathCacheStructuralKeyDegreeBucketEnrichment,TESTED,src/planner/structural_key.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheDegreeBucketUtilizationVarianceEnvelope,BENCHED,tests/benchmark_path_cache_degree_bucket_utilization.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding,BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionEnvelope,BENCHED,tests/benchmark_path_cache_structural_collision.zig,TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2026-11-14
 REQ-GQL-021,PathCache,PathCacheStructuralKeyCollisionTightened,BENCHED,tests/benchmark_path_cache_structural_collision.zig,,BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope,planner,2026-11-14
@@ -1670,19 +1667,10 @@ REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/range_
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,tests/canary_txn_phantom_anomaly.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-21
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,tests/canary_txn_phantom_range.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,,txn,2025-09-22
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2026-11-12
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,src/planner/cost_calibration.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibration,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,src/planner/cost_calibration.zig,,BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,BENCHED,src/planner/cost_model.zig,TestCANARY_REQ_GQL_024_PlanCostModelFactors,BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelFactors,BENCHED,tests/canary_planner_cost_model.zig,,,planner,2026-11-14
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationEngine,BENCHED,src/planner/enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-26
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,tests/canary_planner_pipeline_selection.zig,,,planner,2025-09-22
-REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking,,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationEngine,BENCHED,tests/canary_planner_enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-21
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationVarianceEnvelope,BENCHED,tests/canary_planner_enumerator.zig,TestCANARY_REQ_GQL_024_PlanEnumerationEngine,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope,planner,2025-09-21
-REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderDiversity,TESTED,tests/canary_planner_join_reorder.zig,TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity,,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanJoinReorderVarianceEnvelope,BENCHED,tests/canary_planner_join_reorder.zig,,BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope,planner,2026-11-14
-REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineVarianceEnvelope,BENCHED,tests/canary_planner_pipeline_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption,BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionIntegration,BENCHED,tests/canary_planner_plan_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,tests/canary_planner_plan_selection.zig,TestCANARY_REQ_GQL_024_PlanSelectionIntegration,BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanEnumerationCostPrune,BENCHED,tests/canary_planner_prune.zig,TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune,BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope,planner,2025-09-22
@@ -1869,8 +1857,6 @@ REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,tests/test_quic_slow_poll_w
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBiasVarianceEnvelope,BENCHED,benchmarks/benchmark_adaptive_estimator_variance.zig,,BenchmarkCANARY_REQ_GQL_075_AdaptiveEstimatorBiasVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,benchmarks/benchmark_cost_model_seed_variance.zig,TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates,BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,src/planner/cost_seed.zig,,,planner,2025-09-22
-REQ-GQL-075,Query Optimizer,AdvancedCostModel,TESTED,src/canary.zig,TestCANARY_REQ_GQL_075_AdvancedCostModel,,planner,2025-09-22
-REQ-GQL-075,Query Optimizer,AdvancedCostModelCalibrationVarianceEnvelope,BENCHED,src/canary.zig,,BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope,planner,2025-09-22
 REQ-GQL-075,CostModelVarianceAutoCalibration,AutoCalibrationLogic,TESTED,src/monitoring/variance_calibration.zig,TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration,,planner,2025-09-27
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration,TESTED,src/planner/calibration.zig,TestCANARY_REQ_GQL_075_AutoCalibrationAdjustsAlpha,,planner,2025-09-26
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration,TESTED,tests/canary_cost_model_variance_autocalib.zig,,,planner,2025-09-26
@@ -2811,10 +2797,6 @@ REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,src/ml/graph_embeddin
 REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_001,,ml,2026-11-14
 REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_002,,ml,2026-11-14
 REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_003,,ml,2026-11-14
-REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-06-11
-REQ-ML-MODULARITY-001,Louvain Modularity Gain,Core,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-01-25
-REQ-ML-MODULARITY-002,Graph Modularity Calculation,Graph,TESTED,src/ml/integration_enhanced.zig,src/ml/integration_enhanced.zig,,ml,2026-01-25
-REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,IMPL,src/ml/integration_enhanced.zig,,,ml,2026-06-11
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
@@ -4934,6 +4916,16 @@ REQ-SONNY-6551-SAVED-SESSION-FILE,LocalSessionStorage,OneWriterOneReaderSafeFile
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,PromptResults,TESTED,src/mcp/prompts.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,ResourceResults,TESTED,src/mcp/resources.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
 REQ-SONNY-6552-MCP-RESULT-SHAPES,MCPResultShapes,SpecResultObjects,TESTED,tests/test_sonny6552_mcp_result_shapes.zig,tests/test_sonny6552_mcp_result_shapes.zig,,mcp,2026-11-14
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/query_execution.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ForStatement,ReadBodyOverWholeTable,TESTED,src/execution/statement_handlers.zig,,,engine,2026-11-14
+REQ-SONNY-6555-FOR-CHAIN-STAGE,ChainedWithAggregation,ForAndSubqueryStages,TESTED,tests/test_sonny6555_for_chain_stage.zig,tests/test_sonny6555_for_chain_stage.zig,,engine,2026-11-14
+REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,src/eval.zig,tests/test_sonny6555_function_arity.zig,,eval,2026-11-14
+REQ-SONNY-6555-FUNCTION-ARITY,BuiltinFunctions,WrongArgumentCount,TESTED,tests/test_sonny6555_function_arity.zig,,,eval,2026-11-14
+REQ-SONNY-6555-NULL-ARGUMENTS,SizeFunction,NullAndCharacterLength,TESTED,src/eval/call_handlers.zig,tests/test_sonny6555_null_arguments.zig,,eval,2026-11-14
+REQ-SONNY-6555-NULL-ARGUMENTS,BuiltinFunctions,NullInNullOut,TESTED,tests/test_sonny6555_null_arguments.zig,tests/test_sonny6555_null_arguments.zig,,eval,2026-11-14
+REQ-SONNY-6555-ORDERED-BUILD-PROBE,OrderedIndex,ColumnClassProbe,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6555_ordered_build_probe.zig,,storage,2026-11-15
+REQ-SONNY-6555-ORDERED-BUILD-PROBE,OrderedIndex,ColumnClassProbe,TESTED,tests/test_sonny6555_ordered_build_probe.zig,,,storage,2026-11-15
+REQ-SONNY-6555-PAGE-CLAUSE-ORDER,OrderByAndPage,OffsetBeforeLimit,TESTED,tests/test_sonny6555_page_clause_order.zig,tests/test_sonny6555_page_clause_order.zig,,parser,2026-11-14
 REQ-SONNY-6559-CLI-EXIT-PATHS,CliExitPaths,ReturnThroughMain,TESTED,tests/test_sonny6559_cli_exit_paths.zig,tests/test_sonny6559_cli_exit_paths.zig,,cli,2026-11-14
 REQ-SONNY-6559-COMPLETION-STDOUT,CliExitPaths,CompletionOnStdout,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6559_cli_exit_paths.zig,,cli,2026-11-14
 REQ-SONNY-6559-MCP-BACKEND,MCPBackendTools,EveryToolAndResourceSucceeds,TESTED,tests/test_sonny6559_mcp_backend.zig,tests/test_sonny6559_mcp_backend.zig,,mcp,2026-11-14

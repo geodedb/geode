@@ -751,7 +751,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | keys | Key management | - | - |
 | log | Logging infrastructure | - | - |
 | migration | Schema migrations | - | - |
-| ml | Machine learning | ~5 | graph_embeddings.zig (750), integration_enhanced.zig (787) |
+| ml | Machine learning (library and tests only: no server path calls it) | 1 | graph_embeddings.zig (750) |
 | monitoring | Metrics and monitoring | - | metrics.zig (585) |
 | multitenancy | Multi-tenancy support | - | - |
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |

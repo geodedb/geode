@@ -245,8 +245,8 @@ The following variance envelopes explicitly guard planner/path determinism and a
 
 The rewrite / group-validation timing, planner-pipeline and adaptive-replan
 envelopes that used to be listed here measured the synthetic
-`src/planner/pipeline.zig` runner and `adaptive_replan.zig`, which no build
-compiled; they were removed with that code (SONNY-6511).
+`src/planner/pipeline.zig` runner and `adaptive_replan.zig`; the envelopes
+were removed in SONNY-6511, the runner (reached only by tests) in SONNY-6555.
 
 All emit dual schema versions during migration; schema v2 adds `sample_count`, range stats (`min_ns`,`max_ns`), and `thresholds_evaluated` objects for each metric. Consecutive threshold breaches (≥3 runs) mandate investigation (instrumentation drift, branching factor increase, scheduling jitter). Future enhancement: nested `phases` object with per-phase sub-metrics when cost model enumeration replaces any residual synthetic hooks.
 
