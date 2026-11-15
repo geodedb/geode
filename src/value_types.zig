@@ -156,8 +156,35 @@ pub const EvalError = error{
     // stack holds (`eval.evalExpr`'s stack guard). Refused instead of a
     // stack overflow. Mapped to 54001 (statement too complex) in proto_util.
     ExpressionTooDeep,
+    // SONNY-6594 (4): a node or edge body the evaluator must read could not
+    // be (an engine read error; out of memory stays OutOfMemory). It was
+    // taken for an absent one, and the answer silently left it out. The
+    // cause is logged where it is raised (`storageReadFailed`).
+    StorageReadFailed,
+    // SONNY-6607 (2): a write inside a statement failed in the storage
+    // engine (not out of memory) where the write method cannot return an
+    // error (`GraphStore.removeNodeProperty` and the other void writes). The
+    // statement succeeded without the write. The cause is logged where it is
+    // raised.
+    StorageWriteFailed,
     OutOfMemory,
 };
+
+/// SONNY-6594 (4): an engine read error as an `EvalError` (out of memory
+/// stays itself). The underlying error is logged, since the set cannot
+/// carry it.
+pub fn storageReadFailed(err: anyerror) EvalError {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    log.err("a node or edge body could not be read", &.{Attr.string("error", @errorName(err))});
+    return error.StorageReadFailed;
+}
+
+/// SONNY-6607 (2): an engine write error as an `EvalError` (out of memory
+/// stays itself). The caller logs the underlying error.
+pub fn storageWriteFailed(err: anyerror) EvalError {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    return error.StorageWriteFailed;
+}
 
 // CANARY: REQ=REQ-M5.2-VALUE-TYPES-003; FEATURE="Value Type"; ASPECT=CoreType; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=value_types; UPDATED=2025-11-13
 /// Core value type used throughout the Geode query engine

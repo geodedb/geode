@@ -561,10 +561,13 @@ by one step.
 | `range(1, 7, 2)` | `[1, 3, 5]` |
 | `range(5, 1, -2)` | `[5, 3]` |
 | `range(3, 3)` | `[]` |
-| `range(1, 4, 0)` | `NULL` (a zero step) |
+| `range(1, 4, 0)` | error 22023 (a zero step) |
+| `range(1, NULL)` | `NULL` |
+| `range(1.5, 3)` | error 22G03 |
 
-A non-integer argument returns `NULL`; more than 10,000,000 elements is
-refused (`RangeTooLarge`). `FOR i IN range(1, 1500)` runs 1,499 times.
+A `NULL` argument returns `NULL`; an argument that is not an integer is
+refused (22G03) and a zero step too (22023): both returned `NULL` until
+SONNY-6587. More than 10,000,000 elements is refused (`RangeTooLarge`). `FOR i IN range(1, 1500)` runs 1,499 times.
 
 ## Distance and Spatial Functions
 

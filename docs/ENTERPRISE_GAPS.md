@@ -150,6 +150,9 @@ scale-0 decimal when representable, else a clean `error.Overflow` parse
 error), and the Decimal → INTEGER cast's i128→i64 narrowing (now
 `EvalError.IntegerOverflow`, SQLSTATE 22003). Regression:
 `zig build test-gap0905` (`tests/test_gap0905_cast_float_overflow.zig`).
+Superseded in part by SONNY-6596: a literal with an exponent is now a DOUBLE
+(ISO/IEC 39075 21.2), so `1.0e308` evaluates and only a literal past the
+DOUBLE range is a parse error.
 **Symptom:** `RETURN CAST(1.0e308 AS INTEGER)` panics with "integer part of
 floating point value out of bounds" and kills the server.
 **Reproduction:** `RETURN CAST(1.0e308 AS INTEGER)`.

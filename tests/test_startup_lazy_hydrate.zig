@@ -1113,7 +1113,7 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
     // post-fix the `ensureGraphHydrated` guard at the top of
     // countNodesForGraph forces synchronous hydration first, so this already
     // returns the FULL count N.
-    try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+    try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
     // Proves the N above came from a real hydrate, not a lucky partial match.
     try testing.expect(graph_store.idMapScanGetPropCount() >= N);
@@ -1388,7 +1388,7 @@ test "CRITICAL regression: full checkpoint on a deferred graph does not persist 
         try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
 
         // The data is intact: full node + edge counts (NOT 0), rebuilt from pages.
-        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K + M, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(EDGES, store.countEdgesForGraph(GRAPH));
 
         // Proves session 3 rebuilt from durable pages rather than adopting an
@@ -1558,7 +1558,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         // Counts: label refcount, per-graph node count, untyped + typed edge
         // counts (typed comes straight from the counters snapshot).
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
         try testing.expectEqual(@as(usize, 0), store.countEdgesByTypeForGraph(GRAPH, "NO_SUCH_TYPE"));
@@ -1754,7 +1754,7 @@ test "GAP-0065 FIX D: light-checkpoint + flushForCleanShutdown + clean deinit �
         try testing.expectEqual(@as(u64, 0), graph_store.hydrationStreamingScanCount());
 
         // Correctness: counts, typed edges, MERGE found + authoritative miss.
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
         var out: u64 = 0;
@@ -1813,7 +1813,7 @@ test "GAP-0065 FIX D: durability comes from flushForCleanShutdown — force-exit
         try testing.expectEqual(N, got.len);
         try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
         try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
         graph_store.deinitGlobalStore();
     }
@@ -1863,7 +1863,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
         // touch: reload snapshots (proves session-1 flush produced a reload).
-        try testing.expectEqual(K, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K, try store.countNodesForGraph(GRAPH, null));
         try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
 
         var i: usize = K;
@@ -1903,7 +1903,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
 
         // FULL-KEY PARITY: every node id → name (both snapshotted and tail),
         // total counts, and every edge. No lost or corrupted record.
-        try testing.expectEqual(TOTAL, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(TOTAL, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(TOTAL, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
@@ -2036,7 +2036,7 @@ test "GAP-0065 FIX C: from-dump ingest (no index query) + clean shutdown → FIR
         // Counts / labels / typed-edge counts served from the reloaded loop2 —
         // fast on the FIRST reopen (the count/GROUP-BY/DISTINCT-via-loop2 shapes).
         try testing.expectEqual(N, store.countNodesByLabel(G, LBL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(G, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(G, null));
         try testing.expectEqual(E, store.countEdgesForGraph(G));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
 
@@ -2114,7 +2114,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
         graph_store.resetLazyHydrateCounters();
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
-        try testing.expectEqual(K, store.countNodesForGraph(G, null)); // reload proof
+        try testing.expectEqual(K, try store.countNodesForGraph(G, null)); // reload proof
         try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
 
         var i: usize = K;
@@ -2158,7 +2158,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
         try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
 
         // FULL-KEY PARITY over the snapshot + tail: names, counts, edges, MERGE.
-        try testing.expectEqual(TOTAL, store.countNodesForGraph(G, null));
+        try testing.expectEqual(TOTAL, try store.countNodesForGraph(G, null));
         try testing.expectEqual(TOTAL, store.countNodesByLabel(G, LBL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(G));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
@@ -2245,7 +2245,7 @@ test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snaps
         graph_store.resetLazyHydrateCounters();
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
-        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K + M, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(K + M, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expect(graph_store.loop2ScanNodeCount() >= K + M);
         graph_store.deinitGlobalStore();
@@ -2307,7 +2307,7 @@ test "P3: partial snapshot set — only the uncovered product is scan-rebuilt, n
         // EXACT counts everywhere — the per-product skips must prevent any
         // double-count between restored products and the scan rebuild.
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
 
         var out: u64 = 0;
@@ -2371,7 +2371,7 @@ test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         graph_store.deinitGlobalStore();
     }
 }
@@ -2858,7 +2858,7 @@ test "T3a: hydrate (scan) -> crash with NO checkpoint -> reopen hydrates from sn
         try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
         try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
 
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));

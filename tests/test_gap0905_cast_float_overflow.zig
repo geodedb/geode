@@ -50,54 +50,47 @@ const Harness = struct {
     }
 };
 
+// SONNY-6596: a literal with an exponent is an approximate numeric literal
+// (ISO/IEC 39075:2024 21.2), a DOUBLE. 1.0e308 is a DOUBLE value (SR 20), so
+// it evaluates; only a literal past the DOUBLE range is refused, still a
+// clean parse error. Its CAST to INTEGER is 22003 (IntegerOverflow).
 test "GAP-0905: 1.0e308 float literal must not panic the parser" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    // Unrepresentable in a 38-digit decimal: clean parse error, no panic.
-    try testing.expectError(error.Overflow, h.run("RETURN CAST(1.0e308 AS INTEGER)"));
-    try testing.expectError(error.Overflow, h.run("RETURN 1.0e308"));
-    try testing.expectError(error.Overflow, h.run("RETURN -1.0e308"));
+    try testing.expectError(error.IntegerOverflow, h.run("RETURN CAST(1.0e308 AS INTEGER)"));
+    try testing.expectError(error.Overflow, h.run("RETURN 1.0e309"));
+    try testing.expectError(error.Overflow, h.run("RETURN -1.0e309"));
+    const res = try h.run("RETURN -1.0e308");
+    try testing.expectEqual(@as(usize, 1), res.rows.len);
+    try testing.expectEqual(@as(f64, -1.0e308), res.rows[0][0].Double);
 }
 
-test "GAP-0905: huge-but-representable literal falls back to integer-valued decimal" {
+test "GAP-0905: huge-but-representable literal is a DOUBLE" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    // 1.0e30 overflows the scale-15 fixed-point form (1e45 > i128 max) but
-    // fits a scale-0 decimal; it must parse and evaluate, not panic.
     const res = try h.run("RETURN 1.0e30");
     try testing.expectEqual(@as(usize, 1), res.rows.len);
-    switch (res.rows[0][0]) {
-        .Decimal => |d| {
-            try testing.expectEqual(@as(u8, 0), d.scale);
-            try testing.expect(d.coeff > 0);
-        },
-        else => return error.ExpectedDecimal,
-    }
+    try testing.expectEqual(@as(f64, 1.0e30), res.rows[0][0].Double);
 }
 
-test "GAP-0905: small scientific literals keep scale-15 precision" {
+test "GAP-0905: small scientific literals are exact DOUBLE values" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
     const res = try h.run("RETURN 1.5e3");
     try testing.expectEqual(@as(usize, 1), res.rows.len);
-    switch (res.rows[0][0]) {
-        .Decimal => |d| {
-            try testing.expectEqual(@as(u8, 15), d.scale);
-            try testing.expectEqual(@as(i128, 1_500_000_000_000_000_000), d.coeff);
-        },
-        else => return error.ExpectedDecimal,
-    }
+    try testing.expectEqual(@as(f64, 1500.0), res.rows[0][0].Double);
 }
 
 test "GAP-0905: CAST of a > i64 decimal to INTEGER raises IntegerOverflow, not a panic" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    // 9.9e30 parses fine (scale-0 decimal) but its integer value exceeds i64:
-    // the cast must raise a typed error instead of hitting unchecked @intCast.
+    // 9.9 x 10^30 as an exact decimal (SONNY-6596: `9.9e30` is a DOUBLE) exceeds
+    // i64: the cast must raise a typed error instead of hitting unchecked @intCast.
+    try testing.expectError(error.IntegerOverflow, h.run("RETURN CAST(9900000000000000000000000000000.0 AS INTEGER)"));
     try testing.expectError(error.IntegerOverflow, h.run("RETURN CAST(9.9e30 AS INTEGER)"));
 }
 

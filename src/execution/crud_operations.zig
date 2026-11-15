@@ -746,11 +746,11 @@ fn findExistingEdge(
     rel_types: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
     visibility: *MergeVisibility,
-) EdgeMatch {
-    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
+) !EdgeMatch {
+    const outgoing_ids = (try read_store.getOutgoingEdgeIdsOrError(source_id)) orelse return .none;
     var saw_hidden = false;
     for (outgoing_ids) |edge_id| {
-        const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
+        const edge = (try read_store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
         if (!edgeMatchesEvaluatedProps(edge, props)) continue;
@@ -1085,7 +1085,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
 
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
-        const chain_env = if (binds) scope.env(allocator) else row_env;
+        const chain_env = if (binds) (try scope.env(allocator)) else row_env;
         // Handle single node creation
         if (chain.head) |node_pattern| {
             // Check if this node already exists in matched bindings
@@ -1617,7 +1617,7 @@ pub fn executeCreateQuery(
             // NULL. Pre-evaluation is self-contained (no undo-log dependency):
             // if any expression errors, we return before the first store write.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_eval: {
-                const env = scope.env(ca);
+                const env = (try scope.env(ca));
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| {
                     buf[i] = try eval.evalExpr(ca, prop.value.*, env);
@@ -1668,7 +1668,7 @@ pub fn executeCreateQuery(
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically instead of committing partially-populated
             // endpoints with the failed property defaulted to NULL.
-            const hop_env = scope.env(ca);
+            const hop_env = (try scope.env(ca));
             const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -2565,7 +2565,7 @@ fn bindCreatedChain(
 pub fn resolveCreatedEdges(store: *graph_store.GraphStore, ids: *const std.StringHashMap(u64), out: *std.StringHashMap(Value)) !void {
     var it = ids.iterator();
     while (it.next()) |entry| {
-        const edge = store.getEdgePtrHydrated(entry.value_ptr.*) orelse return error.EdgeNotFound;
+        const edge = (try store.getEdgePtrHydratedChecked(entry.value_ptr.*)) orelse return error.EdgeNotFound;
         try out.put(entry.key_ptr.*, Value{ .Edge = edge });
     }
 }
@@ -2732,7 +2732,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // stmt_txn_open stays false, so no engine txn would roll the node
             // back on error.
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = scope.env(ca);
+                const env = (try scope.env(ca));
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -2778,7 +2778,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // edge, so a mid-property eval error aborts the whole relationship
             // CREATE atomically rather than committing partially-populated
             // endpoints. Self-contained (no reliance on stmt_txn/undo-log).
-            const hop_env = scope.env(ca);
+            const hop_env = (try scope.env(ca));
             const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -3043,7 +3043,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // node so an eval error aborts the INSERT atomically (no orphan node
             // with the failed property defaulted to NULL).
             const evaluated_values: []Value = if (node_pattern.props) |props| blk_ev: {
-                const env = scope.env(ca);
+                const env = (try scope.env(ca));
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, env);
                 break :blk_ev buf;
@@ -3080,7 +3080,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
-            const hop_env = scope.env(ca);
+            const hop_env = (try scope.env(ca));
             const left_values: []Value = if (prev_right_id != null) &.{} else if (hop.left.props) |props| blk_lv: {
                 const buf = try ca.alloc(Value, props.len);
                 for (props, 0..) |prop, i| buf[i] = try eval.evalExpr(ca, prop.value.*, hop_env);
@@ -3541,7 +3541,7 @@ fn mergeNodeChain(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const pa = prop_arena.allocator();
-    const evaluated_props = try evaluateMergeKeyIn(pa, node_pattern.props, scope.env(pa));
+    const evaluated_props = try evaluateMergeKeyIn(pa, node_pattern.props, (try scope.env(pa)));
 
     // SONNY-2686: a node the session may not see is never bound, so none of
     // the ON MATCH clauses can reach it; a pattern that only such a node
@@ -3691,8 +3691,8 @@ fn refuseHiddenMergeMatches(
                 // this per matched row (SONNY-3025).
                 var rel_prop_arena = std.heap.ArenaAllocator.init(allocator);
                 defer rel_prop_arena.deinit();
-                const rel_props = evaluatePatternPropsIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator())) catch break :check;
-                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, rel_props, visibility), hop.rel);
+                const rel_props = evaluatePatternPropsIn(rel_prop_arena.allocator(), hop.rel.props, (try scope.env(rel_prop_arena.allocator()))) catch break :check;
+                _ = try visibility.bindEdge(try findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, rel_props, visibility), hop.rel);
             }
         }
     }
@@ -3711,7 +3711,7 @@ fn preResolveMergeNode(
 ) !?u64 {
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
-    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
+    const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, (try scope.env(prop_arena.allocator())));
     return try visibility.bindNode(findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
 }
 
@@ -3788,7 +3788,7 @@ fn resolveMergeEndpoint(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     // SONNY-3240: in the scope of the chains before this one.
-    const evaluated_props = try evaluateMergeKeyIn(prop_arena.allocator(), node_pattern.props, scope.env(prop_arena.allocator()));
+    const evaluated_props = try evaluateMergeKeyIn(prop_arena.allocator(), node_pattern.props, (try scope.env(prop_arena.allocator())));
 
     if (try visibility.bindNode(findMergeMatch(
         read_store,
@@ -3851,11 +3851,11 @@ fn mergeRelationshipHop(
     // key is refused (`evaluateMergeKeyIn`).
     var rel_prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer rel_prop_arena.deinit();
-    const rel_props = try evaluateMergeKeyIn(rel_prop_arena.allocator(), hop.rel.props, scope.env(rel_prop_arena.allocator()));
+    const rel_props = try evaluateMergeKeyIn(rel_prop_arena.allocator(), hop.rel.props, (try scope.env(rel_prop_arena.allocator())));
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
-    const existing_edge = try visibility.bindEdge(findExistingEdge(
+    const existing_edge = try visibility.bindEdge(try findExistingEdge(
         read_store,
         target_graph,
         filter_tenant,
@@ -4923,7 +4923,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
                 // cannot be durably deleted (`deleteEdge` needs its endpoint
                 // + edge slots), so proceeding would leave it DANGLING once
                 // the node goes. Refuse the whole DETACH instead.
-                if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
+                if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) return error.IncidentEdgeUnresolvable;
                 try store.deleteEdgeChecked(edge_id);
                 try detached_edge_ids.append(allocator, edge_id);
             }
@@ -4940,7 +4940,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
     for (edge_ids) |edge_id| {
         // SONNY-1841: poll cancellation between edge deletes too.
         try write_budget.check();
-        if (store.getEdgePtr(edge_id) == null) {
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
             // Already gone (removed as an incident edge of a DETACH'd node
             // above) — do not double-count it.
             var already_detached = false;
@@ -4960,7 +4960,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
             return error.EdgeBodyUnresolvable;
         }
         try store.deleteEdgeChecked(edge_id);
-        if (store.getEdgePtr(edge_id) == null) {
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
             deleted_count += 1;
         }
     }

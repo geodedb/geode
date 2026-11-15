@@ -122,12 +122,18 @@ identifiers, so `MATCH (type:T) SET type.x = 1` was a syntax error.
 **Documented non-conformances** (Geode extensions to 21.3 SR 18):
 
 1. **Five reserved words stay binding names: `PATH`, `VALUE`, `COUNT`, `AVG`,
-   `TIMESTAMP`.** Geode's own procedures yield columns with these names, so a
-   `YIELD` binds them: `algo.bfs.stream`, `algo.dfs.stream`,
-   `algo.shortestPath.dijkstra` and the recursive path procedures yield
-   `path`; `geode.ts.range` / `last` / `sample_by` yield `value` and
-   `geode.ts.bucket_avg` yields `avg`; RLS and storage procedures yield
-   `count` and `timestamp`. They are also the reserved words most used as
+   `TIMESTAMP`.** Geode's own procedures yield columns with four of these
+   names, so a `YIELD` binds them (verified 2026-11-15, SONNY-6596):
+   `algo.bfs.stream` / `bfs`, `algo.dfs.stream` / `dfs` and
+   `algo.dijkstra.stream` / `algo.shortestPath.dijkstra` / `dijkstra` yield
+   `path` (src/execution/algo_dispatch.zig); `geode.ts.range`, `last` and
+   `sample_by` yield `value` and `geode.ts.bucket_avg` yields `avg`
+   (src/execution/ts_dispatch.zig); `geode.rls.policy_count` yields `count`
+   (src/execution/rls_dispatch.zig). No procedure yields `timestamp` any
+   more: the CDC procedures that did are refused (0A000, SONNY-6570), so
+   `TIMESTAMP` stays a binding name for existing queries only. Renaming the
+   columns (and then dropping this deviation) is a breaking change for every
+   client and is a pending decision. They are also the reserved words most used as
    names: of 14,410 queries in Geode's tests, docs and examples and the
    integration-harness specs, a strict rule refused 260, and 123 of those
    used one of these five (`PATH` 56, `VALUE` 41, `COUNT` 20, `AVG` 4,
@@ -143,9 +149,19 @@ identifiers, so `MATCH (type:T) SET type.x = 1` was a syntax error.
    labels `Product`, `Project` and `Next` about 120 times).
 3. **A delimited identifier may name a binding variable** (`` (`match`) ``):
    21.3 makes a `<binding variable>` a `<regular identifier>`.
-4. **A double-quoted sequence is a string literal everywhere**: 21.3 also
-   allows `"name"` as a delimited identifier; Geode accepts only the
-   backquoted (accent-quoted) form.
+4. **A double-quoted sequence where an expression starts is a string
+   literal.** 21.3 makes a `<double quoted character sequence>` a
+   `<delimited identifier>` as well as (21.2) a `<character string
+   literal>`. Where only a name can stand, Geode reads `"name"` as a
+   delimited identifier, as `` `name` `` (SONNY-6596): a node, edge or path
+   variable (`("n":L)`, `-["r"]->`, `"p" = (...)`), a label or relationship
+   type (`:"My Label"`), a property name (`n."k"`), an alias (`AS "x"`), a
+   `FOR` or `LET` variable, a parameter name (`$"p"`); a doubled
+   quote stands for one and an empty one is refused (SR 4). Where an
+   expression starts, the grammar admits both a `<character string literal>`
+   and a `<binding variable reference>` (20.x) and gives no rule to choose:
+   Geode reads the literal there (`RETURN "x"` is the string `'x'`; write a
+   variable reference as `x` or `` `x` ``).
 
 Every other reserved word (257 of 262) is refused as an unquoted binding
 name. Of the 14,410 queries, 141 are refused: 44 of Geode's own (35 test
@@ -158,6 +174,10 @@ and 97 in 39 integration-harness specs.
 -- Primitive types
 RETURN true, false, null
 RETURN 42, -123, 3.14, 'hello world'
+
+-- Numeric literals (21.2): exact without an exponent, approximate with one
+RETURN 3.14      -- DECIMAL (exact numeric literal)
+RETURN 1.5E0     -- DOUBLE  (approximate numeric literal, SONNY-6596)
 
 -- Temporal types
 RETURN date('2024-01-15')
@@ -465,6 +485,13 @@ CALL db.labels() YIELD label
 FILTER label <> 'Internal'
 RETURN label ORDER BY label
 ```
+
+`db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()` and
+`SHOW TABLES` list the schema of the graph the session is on (its HELLO
+graph, or the last `USE GRAPH`), in its tenant scope, without the labels or
+types an RLS policy denies it; never another graph's, and never the
+internal `__geode_security` graph's (SONNY-6606: they listed every graph's,
+`User`, `Role` and `password_hash` included, to every session).
 
 #### Inline procedure calls (`CALL { }`, 15.2)
 

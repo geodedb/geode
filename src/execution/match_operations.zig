@@ -1113,7 +1113,7 @@ pub fn countNodesFastPath(
     const n: usize = if (plan.label) |label|
         store.countNodesByLabel(filter_graph, label, filter_tenant)
     else
-        store.countNodesForGraph(filter_graph, filter_tenant);
+        try store.countNodesForGraph(filter_graph, filter_tenant);
 
     // Build single-row `{<alias>: n}` result. Match the column-naming
     // conventions of `generateUniqueColumnNames`: prefer explicit alias,
@@ -1905,7 +1905,7 @@ pub fn propertyAggregateFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -1917,14 +1917,14 @@ pub fn propertyAggregateFastPath(
                 if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
             }
             if (where_pred) |p| {
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator) catch continue) orelse continue;
+                const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, p.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
                 };
                 if (!compareStoragePvLit(w_val, p.op, p.lit)) continue;
             }
-            const t_raw = (adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator) catch continue) orelse continue;
+            const t_raw = (try adapter.getNodeProperty(filter_graph, slot_id, target_key, allocator)) orelse continue;
             defer switch (t_raw) {
                 .string => |s| allocator.free(s),
                 .ext => |e| allocator.free(e.data),
@@ -2063,6 +2063,22 @@ pub fn propertyAggregateFastPath(
 // runs executeClusterMatchUpdateIfNeeded BEFORE dispatching to
 // executeMatchQueryImpl, so replicated/rejected cluster writes never reach
 // this fast path.
+// CANARY: REQ=REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK; FEATURE="PROFILE"; ASPECT=PointWriteSeekRecord; STATUS=TESTED; TEST=tests/test_sonny6587_profile_point_write_seek.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6587 item 2: the exact-property seek `pointWriteFastPath` served a
+/// statement with, for that statement's PROFILE: the label and key (borrowed
+/// from the query) and the nodes the seek returned. Per thread: the
+/// transport runs the statement and reads it on the same thread.
+pub const PointWriteSeek = struct { label: []const u8, key: []const u8, rows: u64 };
+threadlocal var point_write_seek: ?PointWriteSeek = null;
+
+/// The seek the last statement on this thread was served by, cleared. A
+/// transport clears it before a PROFILE'd statement runs and reads it after.
+pub fn takePointWriteSeek() ?PointWriteSeek {
+    const seek = point_write_seek;
+    point_write_seek = null;
+    return seek;
+}
+
 pub fn pointWriteFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -2173,7 +2189,7 @@ pub fn pointWriteFastPath(
     // above this is 0 or 1 candidates; keep the loop defensive.
     var matched_slot: ?u64 = null;
     for (candidates) |slot_id| {
-        const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+        const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
         defer switch (w_val) {
             .string => |s| allocator.free(s),
             else => {},
@@ -2196,6 +2212,7 @@ pub fn pointWriteFastPath(
             break :blk cols;
         };
         _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+        point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 0 };
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
@@ -2299,6 +2316,7 @@ pub fn pointWriteFastPath(
     }
 
     _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
+    point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 1 };
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
@@ -2434,7 +2452,7 @@ pub fn countFilteredFastPath(
             var seek_matched: usize = 0;
             for (candidates) |slot_id| {
                 if (tenant_active) {
-                    const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                    const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                     const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                         .string => |s| s,
                         else => graph_store.DEFAULT_TENANT_ID,
@@ -2445,7 +2463,7 @@ pub fn countFilteredFastPath(
                     };
                     if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
                 }
-                const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+                const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -2497,7 +2515,7 @@ pub fn countFilteredFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -2508,7 +2526,7 @@ pub fn countFilteredFastPath(
                 };
                 if (!passesTenantFilterSlice(node_tenant, filter_tenant)) continue;
             }
-            const w_val = (adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator) catch continue) orelse continue;
+            const w_val = (try adapter.getNodeProperty(filter_graph, slot_id, where_pred.key, allocator)) orelse continue;
             defer switch (w_val) {
                 .string => |s| allocator.free(s),
                 else => {},
@@ -2815,8 +2833,9 @@ pub fn indexServedGroupByFastPath(
 /// random read — a pure single-property read, never a whole-node decode. A
 /// `prop_head` of 0 means the node has no properties: every key reads null.
 /// Label-posting sources (`prop_head == null`) keep the `getNodeProperty`
-/// read (getNode + single-key chain walk). Errors read as null (skip),
-/// matching the existing `catch null` / `catch continue` loop semantics.
+/// read (getNode + single-key chain walk). SONNY-6607 (1): a read error is
+/// the caller's error; it read as null, so the row was skipped (or its
+/// tenant tag read as the default tenant's).
 fn readScanNodeProp(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
@@ -2824,12 +2843,12 @@ fn readScanNodeProp(
     prop_head: ?u64,
     key: []const u8,
     alloc: std.mem.Allocator,
-) ?gs.PropertyValue {
+) !?gs.PropertyValue {
     if (prop_head) |ph| {
         if (ph == 0) return null;
-        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc) catch null;
+        return adapter.getNodePropertyByHead(graph_name, slot_id, ph, key, alloc);
     }
-    return adapter.getNodeProperty(graph_name, slot_id, key, alloc) catch null;
+    return adapter.getNodeProperty(graph_name, slot_id, key, alloc);
 }
 
 pub fn groupByAggregateFastPath(
@@ -3109,7 +3128,7 @@ pub fn groupByAggregateFastPath(
             const slot_id: u64 = if (scan_label != null) scan_slots[scan_i] else scan_entries[scan_i].slot_id;
             const prop_head: ?u64 = if (scan_label != null) null else scan_entries[scan_i].rec.prop_head;
             if (tenant_active) {
-                const tprop = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
+                const tprop = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator));
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -3122,7 +3141,7 @@ pub fn groupByAggregateFastPath(
             }
 
             if (where_pred) |p| {
-                const w_val = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator) orelse continue;
+                const w_val = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, p.key, allocator)) orelse continue;
                 defer switch (w_val) {
                     .string => |s| allocator.free(s),
                     else => {},
@@ -3135,7 +3154,7 @@ pub fn groupByAggregateFastPath(
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
             const key_w = &key_aw.writer;
             for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                const raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator);
+                const raw = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, kprop, allocator));
                 // m1: the engine-owned bytes are freed when this block exits
                 // (success or error), after the capture below copied them.
                 defer if (raw) |r| switch (r) {
@@ -3170,7 +3189,7 @@ pub fn groupByAggregateFastPath(
                     .group_key => {},
                     .count_star => group.accs[item_acc_idx[i]].count += 1,
                     .count_prop => {
-                        const pv = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator);
+                        const pv = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator));
                         if (pv) |pval| {
                             switch (pval) {
                                 .string => |s| allocator.free(s),
@@ -3180,7 +3199,7 @@ pub fn groupByAggregateFastPath(
                         }
                     },
                     .sum, .avg, .min, .max => {
-                        const t_raw = readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator) orelse continue;
+                        const t_raw = (try readScanNodeProp(adapter, filter_graph, slot_id, prop_head, item_agg_prop[i].?, allocator)) orelse continue;
                         defer switch (t_raw) {
                             .string => |s| allocator.free(s),
                             .ext => |e| allocator.free(e.data),
@@ -3552,7 +3571,7 @@ pub fn topKOrderedFastPath(
         for (slots) |slot_id| {
             try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
             if (tenant_active) {
-                const tprop = adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch null;
+                const tprop = try adapter.getNodeProperty(filter_graph, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator);
                 const node_tenant: []const u8 = if (tprop) |tp| switch (tp) {
                     .string => |s| s,
                     else => graph_store.DEFAULT_TENANT_ID,
@@ -5319,7 +5338,7 @@ fn expandVarLengthHop(
         var edge_values = try allocator.alloc(Value, path.edges.items.len);
         var edges_ok = true;
         for (path.edges.items, 0..) |eid, i| {
-            const ep = store.getEdgePtrHydrated(eid) orelse {
+            const ep = (try store.getEdgePtrHydratedChecked(eid)) orelse {
                 edges_ok = false;
                 break;
             };
@@ -5669,14 +5688,14 @@ const MultiChainJoin = struct {
                     return;
                 }
                 const empty = [_]u64{};
-                const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) (self.store.getOutgoingEdgeIds(left.id) orelse &empty) else &empty;
-                const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) (self.store.getIncomingEdgeIds(left.id) orelse &empty) else &empty;
+                const outgoing: []const u64 = if (hop.rel.dir == .right or hop.rel.dir == .undirected) ((try self.store.getOutgoingEdgeIdsOrError(left.id)) orelse &empty) else &empty;
+                const incoming: []const u64 = if (hop.rel.dir == .left or hop.rel.dir == .undirected) ((try self.store.getIncomingEdgeIdsOrError(left.id)) orelse &empty) else &empty;
                 var scanned: usize = 0;
                 for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
                     for (edge_ids) |edge_id| {
                         scanned += 1;
                         if (scanned % poll_every == 0) try poll();
-                        const edge = self.store.getEdgePtrHydrated(edge_id) orelse continue;
+                        const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                         if (!typeFits(hop.rel.types, edge.label)) continue;
                         if (!self.scope.edgeVisible(edge)) continue;
                         if (!try matchesEdgeProperties(scratch, edge.*, hop.rel.props)) continue;
@@ -6217,7 +6236,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                         try seed.vars.put(name, node);
                     },
                     .Edge => |e| {
-                        const edge = store.getEdgePtrHydrated(e.id) orelse {
+                        const edge = (try store.getEdgePtrHydratedChecked(e.id)) orelse {
                             resolvable = false;
                             continue;
                         };
@@ -6319,11 +6338,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
                 // Zero-copy edge iteration: use getOutgoingEdgeIds/getIncomingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
-                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
-                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
+                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{} else &[_]u64{};
+                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{} else &[_]u64{};
 
                 for (outgoing_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
@@ -6346,7 +6365,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 }
 
                 for (incoming_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // SONNY-2693: the edge's own tag, like every other hop; the
                     // anchor was checked above and the far node is checked below.
@@ -6384,11 +6403,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
                 // Zero-copy edge iteration: use getIncomingEdgeIds/getOutgoingEdgeIds
                 // to avoid allocating a temporary Edge slice per node.
-                const incoming_to_right_ids = if (rel_dir == .right or rel_dir == .undirected) store.getIncomingEdgeIds(right_node.id) orelse &[_]u64{} else &[_]u64{};
-                const outgoing_from_right_ids = if (rel_dir == .left or rel_dir == .undirected) store.getOutgoingEdgeIds(right_node.id) orelse &[_]u64{} else &[_]u64{};
+                const incoming_to_right_ids = if (rel_dir == .right or rel_dir == .undirected) (try store.getIncomingEdgeIdsOrError(right_node.id)) orelse &[_]u64{} else &[_]u64{};
+                const outgoing_from_right_ids = if (rel_dir == .left or rel_dir == .undirected) (try store.getOutgoingEdgeIdsOrError(right_node.id)) orelse &[_]u64{} else &[_]u64{};
 
                 for (incoming_to_right_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself, not
                     // just its endpoints (symmetry with the left-anchor branch at
@@ -6411,7 +6430,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 }
 
                 for (outgoing_from_right_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!MultiChainJoin.typeFits(rel_types, edge.label)) continue;
                     // GAP-0846 hardening: tenant-check the edge OBJECT itself
                     // (symmetry with the left-anchor branch). Fail-closed.
@@ -6452,7 +6471,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
                 for (typed_edge_ids) |edge_id| {
-                    const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge_ptr = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!try matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
                     const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
                     const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
@@ -6510,11 +6529,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // BUG-731: honor the anchor's inline property predicate.
                 if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
 
-                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
                 for (outgoing_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.to_id)) |right_node| {
@@ -6533,7 +6552,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 }
 
                 for (incoming_edge_ids) |edge_id| {
-                    const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.getNodePtrForScan(edge.from_id)) |right_node| {
@@ -7236,7 +7255,7 @@ fn executeVariableLengthPathTraversal(
             // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
             var edge_values = try allocator.alloc(Value, path.edges.items.len);
             for (path.edges.items, 0..) |eid, i| {
-                if (store.getEdgePtrHydrated(eid)) |ep| {
+                if ((try store.getEdgePtrHydratedChecked(eid))) |ep| {
                     edge_values[i] = Value{ .Edge = ep };
                 } else {
                     edge_values[i] = Value{ .Null = {} };
@@ -7258,7 +7277,7 @@ fn executeVariableLengthPathTraversal(
                 }
             }
             for (path.edges.items) |edge_id| {
-                if (store.getEdgePtrHydrated(edge_id)) |path_edge_ptr| {
+                if ((try store.getEdgePtrHydratedChecked(edge_id))) |path_edge_ptr| {
                     path_edges_list.append(allocator, path_edge_ptr) catch {};
                 }
             }
@@ -7618,8 +7637,8 @@ fn executeSingleHopEdgeTraversal(
 ) !void {
     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-    const outgoing_edge_ids_std = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-    const incoming_edge_ids_std = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+    const outgoing_edge_ids_std = if (rel_direction == 'r' or rel_direction == 'u') ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+    const incoming_edge_ids_std = if (rel_direction == 'l' or rel_direction == 'u') ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
     // Helper to process one set of edges for a given target node ID extractor
     const edge_id_sets = [_]struct { edge_ids: []const u64, use_from: bool }{
@@ -7629,7 +7648,7 @@ fn executeSingleHopEdgeTraversal(
 
     for (edge_id_sets) |edge_set| {
         for (edge_set.edge_ids) |edge_id| {
-            const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+            const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
             // CANARY: REQ=REQ-SONNY-6483-QUERY-RESIDUALS; FEATURE="UndirectedPatternMatch"; ASPECT=SelfLoopOnce; STATUS=TESTED; TEST=tests/test_sonny6483_query_residuals.zig; OWNER=engine; UPDATED=2026-11-13
             // SONNY-6483 (3): a self-loop is in the node's outgoing and its
             // incoming edges; an any-direction pattern matched it from both.
@@ -7805,7 +7824,7 @@ fn executeSingleHopEdgeTraversal(
                     .Property => |prop| {
                         // Check if setting property on relationship variable
                         if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
-                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse continue;
+                            const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse continue;
                             const value = try eval.evalExpr(allocator, prop.value, env);
                             try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
                         }
@@ -7834,7 +7853,7 @@ fn executeSingleHopEdgeTraversal(
                     },
                     .AllProperties => |all_props| {
                         if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
-                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse continue;
+                            const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse continue;
                             const props_value = try eval.evalExpr(allocator, all_props.properties, env);
                             try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
                         } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
@@ -7854,7 +7873,7 @@ fn executeSingleHopEdgeTraversal(
                 switch (remove_clause) {
                     .Property => |prop| {
                         if (rel_var != null and std.mem.eql(u8, prop.object, rel_var.?)) {
-                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse continue;
+                            const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse continue;
                             property_mutation.removeEdgeProperty(store, edge_ptr, prop.property);
                         } else if (left_node_var != null and std.mem.eql(u8, prop.object, left_node_var.?)) {
                             if (store.nodes.getOrHydratePtr(left_node.id) catch null) |node_ptr| {
@@ -8600,7 +8619,7 @@ pub fn applySetRemoveOverRows(
                         .Property => |prop| try property_mutation.setEdgePropertyFromValue(allocator, store, edge.label, edge.id, prop.target.property, value),
                         .Labels => unreachable, // refused by checkWriteTarget
                         .AllProperties => {
-                            const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                            const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable;
                             try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, value);
                         },
                     },
@@ -8623,7 +8642,7 @@ pub fn applySetRemoveOverRows(
                 },
                 .Edge => |edge| switch (rc) {
                     .Property => |prop| {
-                        const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                        const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable;
                         property_mutation.removeEdgeProperty(store, edge_ptr, prop.property);
                     },
                     .Labels => unreachable, // refused by checkWriteTarget
@@ -8690,7 +8709,7 @@ const WrittenElements = struct {
     fn freshEdge(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, rows: *ExecutionResult, id: u64) !*const graph_store.Edge {
         if (self.fresh_edges.get(id)) |edge| return edge;
         try self.fresh_edges.ensureUnusedCapacity(allocator, 1);
-        const stored = store.getEdgePtrHydrated(id) orelse return error.EdgeBodyUnresolvable;
+        const stored = (try store.getEdgePtrHydratedChecked(id)) orelse return error.EdgeBodyUnresolvable;
         const edge = try boxEdge(allocator, rows, stored);
         self.fresh_edges.putAssumeCapacity(id, edge);
         return edge;
@@ -9489,12 +9508,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=AggregationEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
                     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edge_ids_agg = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids_agg = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
+                    const outgoing_edge_ids_agg = if (rel_direction == 'r' or rel_direction == 'u') ((try store.getOutgoingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
+                    const incoming_edge_ids_agg = if (rel_direction == 'l' or rel_direction == 'u') ((try store.getIncomingEdgeIdsOrError(left_node.id)) orelse &[_]u64{}) else &[_]u64{};
 
                     // Process outgoing edges (use to_id as target)
                     for (outgoing_edge_ids_agg) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                        const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                         // Filter by relationship type
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -9592,7 +9611,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // Process incoming edges (use from_id as target) - for undirected patterns
                     for (incoming_edge_ids_agg) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+                        const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                         // Filter by relationship type
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
@@ -9891,7 +9910,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (rel_var) |vn| {
                                 const evs = try allocator.alloc(Value, path.edges.items.len);
                                 for (path.edges.items, 0..) |eid, ei| {
-                                    evs[ei] = if (store.getEdgePtrHydrated(eid)) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
+                                    evs[ei] = if ((try store.getEdgePtrHydratedChecked(eid))) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
                                 }
                                 edge_vals = evs;
                                 f_names[f_n] = vn;
@@ -9909,7 +9928,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 }
                                 var pe = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
                                 for (path.edges.items) |eid2| {
-                                    if (store.getEdgePtrHydrated(eid2)) |ep2| pe.append(allocator, ep2) catch {};
+                                    if ((try store.getEdgePtrHydratedChecked(eid2))) |ep2| pe.append(allocator, ep2) catch {};
                                 }
                                 path_nodes_slice = try pn.toOwnedSlice(allocator);
                                 path_edges_slice = try pe.toOwnedSlice(allocator);

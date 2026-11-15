@@ -16,6 +16,28 @@ pub const HostPort = struct {
     port: u16,
 };
 
+/// What a CLI client is and how long it waits (geode-client-zig v0.3.18
+/// applies both through `initFromConfig`).
+pub const ClientOptions = struct {
+    /// How long the client waits for the server, 1..3600000 ms (`connect`
+    /// refuses anything else with `error.InvalidTimeout`): the QUIC
+    /// handshake, the HELLO answer and, since geode-client-zig v0.3.19
+    /// (SONNY-6617), each request's answer and a blocked write.
+    timeout_ms: u32 = zig_client.config.DEFAULT_TIMEOUT_MS,
+    /// The HELLO `client_name` (`client_version` is geode's version).
+    hello_name: []const u8 = cli_hello_name,
+};
+
+/// The HELLO `client_name` of `geode query`, `shell` and `auth login`.
+pub const cli_hello_name = "geode-cli";
+
+/// `seconds` as a client timeout, within geode-client-zig's 1..3600000 ms.
+pub fn timeoutMsFromSeconds(seconds: u32) u32 {
+    const max_ms: u32 = 3_600_000;
+    const ms = std.math.mul(u32, @max(seconds, 1), std.time.ms_per_s) catch max_ms;
+    return @min(ms, max_ms);
+}
+
 fn initClientWithInsecureSetting(
     allocator: std.mem.Allocator,
     host: []const u8,
@@ -24,6 +46,7 @@ fn initClientWithInsecureSetting(
     username: ?[]const u8,
     password: ?[]const u8,
     insecure: bool,
+    opts: ClientOptions,
 ) !zig_client.GeodeClient {
     // SONNY-6494: geode-client-zig (v0.3.16) resolves the host itself: an
     // address literal is dialled as written (IPv6 bracketed, from a [::]:0
@@ -49,6 +72,11 @@ fn initClientWithInsecureSetting(
         cfg.client_key = try allocator.dupe(u8, path);
     }
     cfg.server_name = try allocator.dupe(u8, host);
+    // SONNY-6589 / SONNY-6606 (4): applied by initFromConfig since
+    // geode-client-zig v0.3.18. Static strings: cfg does not own them.
+    cfg.timeout_ms = opts.timeout_ms;
+    cfg.hello_name = opts.hello_name;
+    cfg.hello_ver = @import("build_options").version;
 
     return try zig_client.GeodeClient.initFromConfig(allocator, cfg);
 }
@@ -106,13 +134,19 @@ pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
         // InvalidDSN; `dsn_params.parse` names it.
         error.DsnFragment => "Invalid Geode endpoint DSN: a fragment (#...) is not allowed; a user name, password or graph name holding # must percent-encode it as %23",
         error.TimeoutOutOfRange => "Invalid Geode endpoint DSN: the timeout is out of range; connect_timeout takes 1-3600 seconds and timeout_ms 1-3600000",
-        // SONNY-6554/6569: dsn_params.parse, the one strict parser.
+        // SONNY-6554/6569: dsn_params.parse, the one strict parser; and
+        // (SONNY-6589) geode-client-zig's connect, for a timeout_ms outside
+        // 1..3600000.
         error.InvalidTimeout => "Invalid Geode endpoint DSN: a timeout must be a whole number; connect_timeout takes 1-3600 seconds and timeout_ms 1-3600000",
         error.InvalidPageSize, error.PageSizeOutOfRange => "Invalid Geode endpoint DSN: page_size takes a whole number 1-100000",
         error.UnknownDsnParameter => "Invalid Geode endpoint DSN: unknown query parameter; the parameters are page_size, hello_name, hello_ver, conformance, graph, username (user), password (pass), tls, insecure_tls_skip_verify (insecure, skip_verify), ca (ca_cert), cert (client_cert), key (client_key), server_name, connect_timeout (timeout), timeout_ms, tenant (tenant_id) and role (docs/DSN.md)",
         error.MalformedDsnParameter => "Invalid Geode endpoint DSN: a query parameter must be name=value, joined by &",
         error.InvalidDsnBoolean => "Invalid Geode endpoint DSN: a boolean parameter (insecure_tls_skip_verify, insecure, skip_verify, tls) takes true, false, 1, 0, yes, no, on or off",
         error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
+        // SONNY-6617 (3): geode-client-zig's gRPC client refuses TLS rather
+        // than send in plaintext; since v0.3.18 insecure=true no longer
+        // turns TLS off by itself.
+        error.TlsNotImplemented => "Geode endpoint: the gRPC client has no TLS, so a grpc:// endpoint needs tls=0 (plaintext, development only; insecure=true does not turn TLS off); use quic:// for an encrypted connection (docs/DSN.md)",
         error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",
         else => null,
     };
@@ -234,6 +268,20 @@ pub fn initClient(
     username: ?[]const u8,
     password: ?[]const u8,
 ) !zig_client.GeodeClient {
+    return initClientWithOptions(allocator, host, port, tls_config, username, password, .{});
+}
+
+/// `initClient` with the client's timeout and HELLO name (SONNY-6617:
+/// `geode query` and `geode shell` pass the DSN timeout / --timeout).
+pub fn initClientWithOptions(
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    port: u16,
+    tls_config: TlsConfig,
+    username: ?[]const u8,
+    password: ?[]const u8,
+    opts: ClientOptions,
+) !zig_client.GeodeClient {
     const policy = verificationPolicy(tls_config);
     if (policy == .skip_no_trust_material) {
         // SONNY-6453: the geode auth rule for every CLI command.
@@ -251,6 +299,7 @@ pub fn initClient(
         username,
         password,
         policy != .verify,
+        opts,
     );
 }
 
@@ -261,6 +310,7 @@ pub fn initClientStrictTls(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    opts: ClientOptions,
 ) !zig_client.GeodeClient {
     // SONNY-6453: with nothing to verify against, a verified connection can
     // only fail its handshake; under production posture say why up front.
@@ -276,6 +326,7 @@ pub fn initClientStrictTls(
         username,
         password,
         tls_config.insecure,
+        opts,
     );
 }
 

@@ -45,12 +45,17 @@ const user_management = geode.user_management;
 ///
 /// `verifyFn` returns an `Outcome.ok` on success, populating the username
 /// and an optional role string (which the caller maps through
-/// `user_management.Role.fromString`). It returns `Outcome.invalid` on
-/// any error path — auth errors are not differentiated at the LSP layer
-/// because the protocol surface is the same -32002 regardless.
+/// `user_management.Role.fromString`). It returns `Outcome.invalid` when
+/// the token was checked and is not valid, and `Outcome.err` when the
+/// check could not run (out of memory, ...): SONNY-6600, every error was
+/// `.invalid`, so a server-side fault told the client its token was bad.
 pub const Verifier = struct {
     ctx: *anyopaque,
     verifyFn: *const fn (ctx: *anyopaque, token: []const u8) Outcome,
+    /// SONNY-6589 (3): checks `initializationOptions.geode.username` /
+    /// `.password`, the credentials a QUIC HELLO carries. Null: a verifier
+    /// that takes no password (every such `initialize` is refused).
+    verifyCredentialsFn: ?*const fn (ctx: *anyopaque, username: []const u8, password: []const u8) Outcome = null,
 
     pub const Outcome = union(enum) {
         ok: struct {
@@ -62,8 +67,12 @@ pub const Verifier = struct {
             free_with: ?std.mem.Allocator = null,
         },
         invalid,
+        /// The check could not run (SONNY-6600): not a verdict on the token.
+        err: anyerror,
     };
 };
+
+const log = std.log.scoped(.lsp_auth);
 
 pub const AuthError = error{
     MissingToken,
@@ -71,6 +80,8 @@ pub const AuthError = error{
     ExpiredToken,
     BadFormat,
     OutOfMemory,
+    /// SONNY-6600: the token could not be checked (a server-side error).
+    AuthUnavailable,
 };
 
 pub const AuthState = struct {
@@ -80,6 +91,11 @@ pub const AuthState = struct {
     graph: ?[]const u8 = null,
     tenant_id: ?[]const u8 = null,
     verified: bool = false,
+    /// SONNY-6589 (3): `initializationOptions.geode.username` / `.password`
+    /// (owned; the password is zeroed when freed). The password is released
+    /// as soon as `verify` has checked it.
+    login_user: ?[]const u8 = null,
+    login_password: ?[]u8 = null,
 
     /// GAP-0818 follow-up: a derived, non-reversible session handle exposed
     /// to `LspContext.session_id`. It is the lowercase hex of a 64-bit
@@ -116,9 +132,16 @@ pub const AuthState = struct {
     /// `initialize` request's `initializationOptions`. Every owned
     /// slice is freshly duped; release them all via `deinit`.
     ///
+    /// SONNY-6589 (3): instead of `authToken`, `username` and `password`
+    /// (both strings, the credentials of a QUIC HELLO); `verify` checks them
+    /// through `Verifier.verifyCredentialsFn`. A token wins when both are
+    /// given.
+    ///
     /// Errors:
-    ///   - `MissingToken` — no `geode` block, or `geode.authToken` absent.
-    ///   - `BadFormat`    — `params` / `geode` / `authToken` wrong JSON kind.
+    ///   - `MissingToken` — no `geode` block, or neither `geode.authToken`
+    ///     nor both `geode.username` and `geode.password`.
+    ///   - `BadFormat`    — `params` / `geode` / `authToken` / `username` /
+    ///     `password` wrong JSON kind.
     pub fn fromInitializeOptions(
         allocator: std.mem.Allocator,
         params: std.json.Value,
@@ -126,11 +149,22 @@ pub const AuthState = struct {
         if (params != .object) return AuthError.BadFormat;
         const geode_obj = params.object.get("geode") orelse return AuthError.MissingToken;
         if (geode_obj != .object) return AuthError.BadFormat;
-        const tok = geode_obj.object.get("authToken") orelse return AuthError.MissingToken;
-        if (tok != .string) return AuthError.BadFormat;
-
-        var s = AuthState{ .token = try allocator.dupe(u8, tok.string) };
+        var s: AuthState = if (geode_obj.object.get("authToken")) |tok| blk: {
+            if (tok != .string) return AuthError.BadFormat;
+            break :blk .{ .token = try allocator.dupe(u8, tok.string) };
+        } else blk: {
+            const user = geode_obj.object.get("username") orelse return AuthError.MissingToken;
+            const password = geode_obj.object.get("password") orelse return AuthError.MissingToken;
+            if (user != .string or password != .string) return AuthError.BadFormat;
+            const token = try allocator.dupe(u8, "");
+            errdefer allocator.free(token);
+            const login_user = try allocator.dupe(u8, user.string);
+            errdefer allocator.free(login_user);
+            break :blk .{ .token = token, .login_user = login_user, .login_password = try allocator.dupe(u8, password.string) };
+        };
         errdefer allocator.free(s.token);
+        errdefer if (s.login_user) |u| allocator.free(u);
+        errdefer s.releasePassword(allocator);
 
         if (geode_obj.object.get("graph")) |g| {
             if (g == .string) s.graph = try allocator.dupe(u8, g.string);
@@ -150,6 +184,19 @@ pub const AuthState = struct {
         if (self.graph) |g| allocator.free(g);
         if (self.tenant_id) |t| allocator.free(t);
         if (self.user.len > 0) allocator.free(self.user);
+        if (self.login_user) |u| allocator.free(u);
+        if (self.login_password) |p| {
+            std.crypto.secureZero(u8, p);
+            allocator.free(p);
+        }
+    }
+
+    /// Zero and free the login password (SONNY-6589).
+    fn releasePassword(self: *AuthState, allocator: std.mem.Allocator) void {
+        const p = self.login_password orelse return;
+        std.crypto.secureZero(u8, p);
+        allocator.free(p);
+        self.login_password = null;
     }
 
     /// Validate the bearer token bound at construction time. On
@@ -188,11 +235,27 @@ pub const AuthState = struct {
         allocator: std.mem.Allocator,
         verifier: ?Verifier,
     ) AuthError!void {
-        if (self.token.len == 0) return AuthError.MissingToken;
-        const v = verifier orelse return AuthError.InvalidToken;
+        // SONNY-6589 (3): a user name and password, checked as a HELLO's.
+        const outcome: Verifier.Outcome = if (self.login_user) |login_user| blk: {
+            defer self.releasePassword(allocator);
+            const password = self.login_password orelse return AuthError.MissingToken;
+            if (login_user.len == 0 or password.len == 0) return AuthError.MissingToken;
+            const v = verifier orelse return AuthError.InvalidToken;
+            const check = v.verifyCredentialsFn orelse return AuthError.InvalidToken;
+            break :blk check(v.ctx, login_user, password);
+        } else blk: {
+            if (self.token.len == 0) return AuthError.MissingToken;
+            const v = verifier orelse return AuthError.InvalidToken;
+            break :blk v.verifyFn(v.ctx, self.token);
+        };
 
-        switch (v.verifyFn(v.ctx, self.token)) {
+        switch (outcome) {
             .invalid => return AuthError.InvalidToken,
+            // CANARY: REQ=REQ-SONNY-6600-LSP-AUTH-ERROR-OUTCOME; FEATURE="LspPermissionAwareCompletion"; ASPECT=VerifierErrorOutcome; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+            .err => |e| {
+                log.warn("LSP token check could not run (a server-side error, not an invalid token); session not bound: {s}", .{@errorName(e)});
+                return AuthError.AuthUnavailable;
+            },
             .ok => |ok| {
                 // Release owned outcome strings once copied (api-key path);
                 // borrowed-literal outcomes (stub verifiers) set free_with=null.
@@ -201,11 +264,14 @@ pub const AuthState = struct {
                     if (ok.role) |r| fa.free(r);
                 };
                 self.user = try allocator.dupe(u8, ok.username);
-                if (ok.role) |role_name| {
-                    if (user_management.Role.fromString(role_name)) |r| {
-                        self.role = r;
-                    }
-                }
+                // SONNY-6589 (3): a role this build does not assign
+                // ("none": a user with no stored role, which `fromString`
+                // refuses on purpose) is no role, not the `.ReadOnly`
+                // default. SONNY-6606 (6): and so is no role at all (an API
+                // key with no scopes): it kept `.ReadOnly`, a read grant on
+                // every graph nobody gave.
+                // CANARY: REQ=REQ-SONNY-6606-LSP-ROLE-DEFAULT; FEATURE="Embedded LSP"; ASPECT=NoRoleIsNone; STATUS=TESTED; TEST=tests/test_sonny6606_lsp_role_default.zig; OWNER=lsp; UPDATED=2026-11-15
+                self.role = if (ok.role) |role_name| user_management.Role.fromString(role_name) orelse .None else .None;
                 self.verified = true;
             },
         }
@@ -237,6 +303,16 @@ pub const AuthState = struct {
 // `auth_test.zig` already exercises.
 const authn = @import("geode").security.authn;
 
+/// SONNY-6600: the `AuthProvider.authenticate` errors that are a verdict
+/// on the token: not an API key at all, no key or session matches, an idle
+/// session. Any other error (out of memory, ...) means the check could not
+/// run.
+fn isTokenVerdict(err: anyerror) bool {
+    return err == error.AuthenticationRequired or
+        err == error.InvalidApiKeyFormat or
+        err == error.SessionIdleTimeout;
+}
+
 fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
     if (token.len == 0) return .invalid;
     const provider: *authn.AuthProvider = @ptrCast(@alignCast(ctx));
@@ -248,25 +324,26 @@ fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
         // release the result; AuthState.verify frees the copies after use.
         defer result.deinit(provider.allocator);
         const role_src: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
-        const user_dup = provider.allocator.dupe(u8, result.username) catch return .invalid;
+        const user_dup = provider.allocator.dupe(u8, result.username) catch |e| return .{ .err = e };
         const role_dup: ?[]const u8 = if (role_src) |rn|
-            (provider.allocator.dupe(u8, rn) catch {
+            (provider.allocator.dupe(u8, rn) catch |e| {
                 provider.allocator.free(user_dup);
-                return .invalid;
+                return .{ .err = e };
             })
         else
             null;
         return .{ .ok = .{ .username = user_dup, .role = role_dup, .free_with = provider.allocator } };
-    } else |_| {
-        // Fall through to session-token path.
+    } else |e| {
+        // Not an API key, or no key matches: try it as a session token.
+        if (!isTokenVerdict(e)) return .{ .err = e };
     }
 
     // 2. Try session token — rotating session issued by a prior login.
     if (provider.authenticate(.{ .session_token = token })) |result| {
         const role_name: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
         return .{ .ok = .{ .username = result.username, .role = role_name } };
-    } else |_| {
-        return .invalid;
+    } else |e| {
+        return if (isTokenVerdict(e)) .invalid else .{ .err = e };
     }
 }
 

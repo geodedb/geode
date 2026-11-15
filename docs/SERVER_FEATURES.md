@@ -952,10 +952,20 @@ pub fn evaluatePolicy(
 
 **Implementation**: `/src/security/mfa.zig`
 
-**Supported Methods**:
+**MFA is not enforced at login (SONNY-6602).** HELLO (QUIC and gRPC)
+never asks for a TOTP code or a recovery code, and
+`SecurityManager.authenticateWithMFA` has no production caller. The
+methods below are enrolled and checked on request by the
+`geode.auth.mfa_*` procedures (whose results carry a `warning` column
+saying so); wiring them into login is story SONNY-6604. See
+[USER_AUTH.md](USER_AUTH.md#mfa-is-not-enforced-at-login).
+
+**Supported Methods** (library and procedures; not at login):
 
 1. **TOTP**: Time-based one-time passwords (RFC 6238) — implemented (`src/security/mfa.zig`)
-2. **Recovery codes**: one-time backup codes — implemented
+2. **Recovery codes**: one-time backup codes — issued by `mfa_setup` and
+   redeemable only through `SecurityManager.authenticateWithMFA`, which
+   nothing calls yet
 
 Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 
@@ -973,11 +983,13 @@ Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 risk score from deterministic placeholder factors. Real signals (login
 location, device fingerprint, behavioral history) are planned, not wired.
 
-**Recovery Codes**:
+**Recovery Codes** (no login redeems them yet, SONNY-6604):
 
-- One-time use backup codes
-- Secure generation and storage
-- Rate limiting on recovery attempts
+- One-time use backup codes (in `SecurityManager.authenticateWithMFA`)
+- Secure generation; held as SHA-256 digests (SONNY-6600)
+- `geode.auth.mfa_verify` is rate limited (five failures, five-minute
+  lockout) and fails closed: an attempt that cannot be counted is refused
+  with 53000 without checking the code (SONNY-6602)
 
 ### 7.5 Audit Logging
 
@@ -1156,7 +1168,7 @@ Total CANARY markers: 1284 tracking governance compliance
 4. **Governance** (25 markers): CANARY system itself
 5. **PathCache**: not implemented (structural key only; see 4.5)
 6. **Cost-Based Optimizer** (20 markers): Query plan cost estimation
-7. **Authentication** (18 markers): RBAC/ABAC with MFA
+7. **Authentication** (18 markers): RBAC/ABAC (MFA library and procedures; not enforced at login, SONNY-6604)
 8. **Full-Text Search** (15 markers): BM25 ranking with inverted index
 9. **Storage Constraints** (13 markers): Schema validation engine
 10. **Transaction Management** (12 markers): markers on `src/transactions/manager.zig`, which only tests compile (no isolation levels or SSI in the server)

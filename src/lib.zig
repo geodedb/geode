@@ -364,6 +364,8 @@ pub const distributed = struct {
     pub const raft = @import("raft");
     /// GPS Phase 6 Task 6-3: Principal identity envelope for cluster RPCs.
     pub const principal_envelope = @import("distributed/principal_envelope.zig");
+    /// SEC-D009: the Raft frame replay check (SONNY-6600 regression).
+    pub const nonce_tracker = @import("distributed/nonce_tracker.zig");
 };
 
 // REPL modules

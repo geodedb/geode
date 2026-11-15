@@ -2364,7 +2364,14 @@ pub const IndexManager = struct {
         }
 
         try self.registerAdvancedPropertyIndex(index_name_copy, label_copy, property_copy, index_type);
-        const indexed = try self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?);
+        // SONNY-6594 (2): a backfill that fails (a body it cannot read) leaves
+        // no index behind: registered, it answered without the rows it never
+        // got. The catalog row stays; a vector index is rebuilt from it by the
+        // next query that needs it, any other is scanned around.
+        const indexed = self.populateAdvancedIndex(store, self.advanced_property_indexes.get(index_name_copy).?) catch |err| {
+            _ = self.dropAdvancedIndexLocked(index_name_copy, index_type) catch {};
+            return err;
+        };
         self.statistics.rebuild_count += 1;
         return indexed;
     }
@@ -2452,6 +2459,11 @@ pub const IndexManager = struct {
             const leftover = self.endRebuild(index_name, allocator) catch &[_]u64{};
             allocator.free(leftover);
         };
+        // SONNY-6594 (2): a rebuild that fails (a body it cannot read) leaves
+        // no index behind. The live one is what the rebuild replaces: empty
+        // after CREATE INDEX, stale after an undo or a REMOVE. The next query
+        // that needs it rebuilds it from the catalog row.
+        errdefer _ = self.dropAdvancedIndex(index_name, .vector_f32) catch false;
 
         // --- 1. Snapshot under the SHARED lock: ids plus a COPY of every
         //        indexed vector, into one flat owned buffer.
@@ -2470,7 +2482,9 @@ pub const IndexManager = struct {
             const node_ids = try store.getAllNodes(allocator);
             defer allocator.free(node_ids);
             for (node_ids) |nid| {
-                const node = store.getNodePtrHydrated(nid) orelse continue;
+                // SONNY-6594 (2): a body that cannot be read fails the build
+                // (it was skipped, and the index served without the row).
+                const node = (try store.getNodePtrHydratedChecked(nid)) orelse continue;
                 if (!nodeHasLabel(node.labels, label)) continue;
                 const prop = node.properties.get(property) orelse continue;
                 try self.snapshotVectorRow(allocator, prop, node.id, &dimension, &ids, &flat);
@@ -2479,7 +2493,7 @@ pub const IndexManager = struct {
             const edge_ids = try store.allEdgeIds(allocator);
             defer allocator.free(edge_ids);
             for (edge_ids) |eid| {
-                const edge = store.getEdgePtrHydrated(eid) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
                 if (!std.mem.eql(u8, edge.label, label)) continue;
                 const prop = edge.properties.get(property) orelse continue;
                 try self.snapshotVectorRow(allocator, prop, edge.id, &dimension, &ids, &flat);
@@ -2554,8 +2568,8 @@ pub const IndexManager = struct {
             defer graph_store.releaseGraphLock(lock);
             const store = graph_store.getGlobalStore(allocator);
             const prop = blk: {
-                if (store.getNodePtrHydrated(entity_id)) |node| break :blk node.properties.get(property);
-                if (store.getEdgePtrHydrated(entity_id)) |edge| break :blk edge.properties.get(property);
+                if (try store.getNodePtrHydratedChecked(entity_id)) |node| break :blk node.properties.get(property);
+                if (try store.getEdgePtrHydratedChecked(entity_id)) |edge| break :blk edge.properties.get(property);
                 break :blk null;
             } orelse continue; // deleted inside the window — nothing to index
             // Skips ids the shadow build already carries (`wrapper.contains`),
@@ -2726,7 +2740,8 @@ pub const IndexManager = struct {
         const adv_node_ids = try store.getAllNodes(self.allocator);
         defer self.allocator.free(adv_node_ids);
         for (adv_node_ids) |__nid| {
-            const node = store.getNodePtrHydrated(__nid) orelse continue;
+            // SONNY-6594 (2): a body that cannot be read fails the backfill.
+            const node = (try store.getNodePtrHydratedChecked(__nid)) orelse continue;
             if (!nodeHasLabel(node.labels, meta.label)) continue;
             const prop = node.properties.get(meta.property) orelse continue;
             if (try self.insertAdvancedPropertyValue(meta, node.id, prop)) indexed += 1;
@@ -2739,7 +2754,7 @@ pub const IndexManager = struct {
         const adv_edge_ids = try store.allEdgeIds(self.allocator);
         defer self.allocator.free(adv_edge_ids);
         for (adv_edge_ids) |__eid| {
-            const edge = store.getEdgePtrHydrated(__eid) orelse continue;
+            const edge = (try store.getEdgePtrHydratedChecked(__eid)) orelse continue;
             if (!std.mem.eql(u8, edge.label, meta.label)) continue;
             const prop = edge.properties.get(meta.property) orelse continue;
             if (try self.insertAdvancedPropertyValue(meta, edge.id, prop)) indexed += 1;

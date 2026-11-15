@@ -157,8 +157,29 @@ under FIPS with 0A000. `mfa_setup` with MFA turned off on the server
 answer success only for a code that verifies: a user with no TOTP secret
 fails with 55000 (`mfa_not_enrolled`), a code that does not verify with
 28000 (`invalid token`), and a user locked out after five failed
-verifications with 53400. They answered 00000 with a status row
+verifications with 53400. `mfa_verify` and `mfa_enable` share one per-user
+attempt count and lockout (SONNY-6623). They answered 00000 with a status row
 (`rate_limited`, `mfa_not_enrolled`, `invalid token`, or an `error` column).
+A `mfa_verify` whose attempt record cannot be made (out of memory) fails
+with 53000 without checking the code (SONNY-6602; it was checked and not
+counted toward the lockout).
+
+MFA is not enforced at login (SONNY-6602; story SONNY-6604): HELLO never
+asks for a TOTP code or a recovery code. `mfa_setup` (every shape:
+`mfa_secret`, `recovery_codes`; or `provisioning_uri`, `secret` with
+`show-uri`) and `mfa_enable` (`status`, `username`) answer an extra last
+column, `warning`, that says so; no procedure redeems the recovery codes
+`mfa_setup` issues.
+
+`mfa_setup` stores the enrollment in `__geode_security` (the secret in the
+user record, sealed with AES-256-GCM under a key derived from the HMAC key
+(SONNY-6609), the recovery codes as SHA-256 digests, MFA off until a code
+verifies), and `mfa_enable` / `mfa_disable` set the user's stored
+`mfa_enabled`; the server loads the enrollments back at startup and
+`DROP USER` removes them (SONNY-6608). A change that cannot be stored is
+refused with 58030 and not applied. See
+[USER_AUTH.md](USER_AUTH.md#mfa-is-not-enforced-at-login) for how the
+secret is protected at rest.
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
@@ -289,7 +310,9 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
 `AuthGraphManager` and survive a server restart. Specifically:
 
 - **`CREATE USER`** → a `User` node is created in `__geode_security`.
-- **`DROP USER`** → the `User` node is removed from `__geode_security`.
+- **`DROP USER`** → the `User` node is removed from `__geode_security`. A user
+  that does not exist fails with 42704 (SONNY-6609; it answered `deleted
+  <name>`); `DROP USER IF EXISTS` answers `no user <name>; nothing dropped`.
 - **`ALTER USER … SET PASSWORD`** → the `password_hash` property is updated on
   the `User` node and `auth_version` is bumped (invalidating live sessions).
 - **`ALTER USER … SET ROLE`** / **`GRANT ROLE … TO …`** → the user's built-in
@@ -305,6 +328,11 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
   `GraphGrant` node `(user_id, graph_name, action)` is created/removed in
   `__geode_security`, and the in-memory `GraphRBACPolicy` is updated immediately.
   See [Per-graph grant semantics](#per-graph-grant-semantics).
+- **`CALL geode.auth.mfa_setup`** → the user record's `mfa_secret` is set and
+  `mfa_enabled` cleared, and a `MfaRecoveryCodes` node `(user_id, digests)`
+  holds the recovery codes as SHA-256 digests (SONNY-6608).
+  **`mfa_enable`** / **`mfa_disable`** → `mfa_enabled` on the `User` node.
+  Both bump `auth_version`. `DROP USER` removes the `MfaRecoveryCodes` node.
 
 ### When a save fails (SONNY-1333)
 
@@ -515,10 +543,10 @@ the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
    `SHOW USERS` and `SHOW PERMISSIONS`. (Until SONNY-1333 there was no way to
    read a per-graph grant back.)
 
-6. **`IF EXISTS` on `DROP USER` / `DROP ROLE` is effectively always-satisfied.**
-   The underlying delete handlers (`geode.auth.user_delete`,
-   `geode.auth.role_delete`) degrade gracefully on a missing entity rather than
-   returning an error, so `IF EXISTS` acts as a no-op safeguard today.
+6. **`IF EXISTS` on `DROP ROLE` is effectively always-satisfied.** The
+   underlying `geode.auth.role_delete` degrades gracefully on a missing role
+   rather than returning an error. `DROP USER` of a missing user fails with
+   42704 (SONNY-6609), and `DROP USER IF EXISTS` is the no-op form.
 
 7. **`CREATE POLICY`, FLE DDL, and tenant DDL are not part of this surface.**
    Use `CALL geode.fle.*` for field-level encryption schema management and the

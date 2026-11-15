@@ -98,9 +98,68 @@ fn printUserUsage() void {
     printOut("      (a live server). Use ALTER USER ... SET PASSWORD over the wire, or pass --force.\n", .{});
 }
 
+// CANARY: REQ=REQ-SONNY-6602-MFA-CLI-HONESTY; FEATURE="MFA authentication"; ASPECT=OfflineCliWarning; STATUS=TESTED; TEST=tests/test_sonny6602_mfa_cli.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6602: MFA is not enforced at login (HELLO never asks for a code;
+/// SONNY-6604), and nothing redeems the recovery codes mfa-setup prints.
+/// mfa-setup, mfa enable and their help say so.
+const mfa_not_enforced_note =
+    \\Warning: MFA is not enforced at login yet (SONNY-6604). HELLO does not ask
+    \\for a TOTP code or a recovery code, so enrolling or enabling MFA protects
+    \\no login, and nothing redeems the recovery codes (they are stored only as
+    \\SHA-256 digests).
+    \\
+;
+
+// CANARY: REQ=REQ-SONNY-6614-OFFLINE-MFA-LIMIT; FEATURE="MFA authentication"; ASPECT=OfflineAttemptLimit; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6614 / SONNY-6619: before an offline command checks a TOTP code
+/// (`mfa-verify`, `mfa enable --code`), apply the online limit
+/// (geode.auth.mfa_verify: 5 failures, a 5-minute lockout, reset on
+/// success), kept in the sealed MfaAttempts record (each run of the
+/// command is a new process). Refuses (exits) a locked-out user; counts the
+/// attempt and saves it BEFORE the code is checked, so an attempt that
+/// cannot be counted is refused unchecked and an interrupted run leaves it
+/// counted. The caller resets the count after a code that verifies
+/// (`mgr.storage.setMfaAttempts(id, .{})`, saved with the command).
+fn beginOfflineMfaAttempt(allocator: std.mem.Allocator, mgr: anytype, user_id: u64, username: []const u8) void {
+    const geode_auth_dispatch = geode.auth_dispatch;
+    const now_ms = compat_milliTimestamp();
+    const prev = mgr.mfaAttempts(user_id) orelse @TypeOf(mgr.storage).MfaAttemptState{};
+    if (now_ms < prev.lockout_until_ms) {
+        std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    const counted = prev.fail_count +| 1;
+    mgr.storage.setMfaAttempts(user_id, .{
+        .fail_count = counted,
+        .lockout_until_ms = if (counted >= geode_auth_dispatch.mfa_max_attempts) now_ms + geode_auth_dispatch.mfa_lockout_ms else 0,
+    }) catch |err| {
+        std.debug.print("Error: the attempt could not be counted ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    cli_auth.sealAndSaveNow(allocator, mgr) catch |err| {
+        std.debug.print("Error: the attempt could not be saved ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6609: a user's TOTP secret in plaintext (the store holds it
+/// sealed), into `buf`; exits with an error when it has none or it does not
+/// open.
+fn openStoredMfaSecret(mgr: anytype, key: *const [32]u8, record: anytype, buf: []u8) []const u8 {
+    const stored = record.getMFASecret() orelse {
+        std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{record.getUsername()});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    return @TypeOf(mgr.*).openMfaSecretWithKey(key, record.id, stored, buf) catch |err| {
+        std.debug.print("Error: the stored MFA secret of '{s}' could not be opened ({s}); was the store sealed with another HMAC key?\n", .{ record.getUsername(), @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 fn printMfaSetupHelp() void {
     printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
     printOut("Generate MFA secret and recovery codes for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
     printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
     printOut("  --show-recovery   Show recovery codes\n", .{});
@@ -119,8 +178,9 @@ fn printMfaVerifyHelp() void {
 fn printMfaToggleHelp() void {
     printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
     printOut("Enable or disable MFA for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
-    printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
+    printOut("  --code <code>     TOTP code for verification (required to enable)\n", .{});
     printOut("  --help, -h        Show this help\n", .{});
     printOut("\nExamples:\n", .{});
     printOut("  geode user mfa enable alice --code 123456\n", .{});
@@ -280,6 +340,8 @@ fn subcommandMutatesAuthStore(subcommand: []const u8) bool {
         "create",      "import",          "delete",         "update",
         "assign-role", "disable",         "enable",         "mfa",
         "mfa-setup",   "change-password", "reset-password",
+        // SONNY-6614: it stores its attempt count.
+        "mfa-verify",
     };
     for (mutating) |m| {
         if (std.mem.eql(u8, subcommand, m)) return true;
@@ -654,6 +716,17 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 storedRoleName(&mgr, u),
                 if (u.is_active) "active" else "disabled",
             });
+            // CANARY: REQ=REQ-SONNY-6609-USER-SHOW-MFA; FEATURE="MFA authentication"; ASPECT=UserShowMfaState; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest_scan.zig; OWNER=security; UPDATED=2026-11-15
+            // SONNY-6609: the MFA state (it printed none). No login reads it
+            // yet (SONNY-6604).
+            const on = if (u.mfa_enabled) "enabled" else "disabled";
+            if (u.getMFASecret() != null) {
+                const digests = mgr.mfaRecoveryDigests(allocator, u.id) catch null;
+                defer if (digests) |d| allocator.free(d);
+                printOut("MFA: {s} (enrolled, {d} recovery codes; not enforced at login yet, SONNY-6604)\n", .{ on, if (digests) |d| d.len else 0 });
+            } else {
+                printOut("MFA: {s} (not enrolled)\n", .{on});
+            }
         } else {
             // SONNY-6367: it printed made-up details and exited 0.
             std.debug.print("Error: user '{s}' not found\n", .{username});
@@ -877,9 +950,27 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         };
         defer enrollment.deinit(allocator);
 
-        // Update user's MFA state in graph store
+        // CANARY: REQ=REQ-SONNY-6608-MFA-CLI-ENROLL; FEATURE="MFA authentication"; ASPECT=OfflineEnrollStored; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_restart.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6608: the secret is stored with MFA off (`geode user mfa
+        // enable --code` turns it on once a code verifies), and the recovery
+        // codes as SHA-256 digests (`hashScratchCode`, as SONNY-6600). It
+        // turned MFA on before any code was verified and stored no code.
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, null, true, enrollment.secret_base32);
+            var digests: [@TypeOf(mgr.storage).max_mfa_recovery_codes][32]u8 = undefined;
+            if (enrollment.scratch_codes.len > digests.len) {
+                std.debug.print("Error: MFA enrollment issued too many recovery codes\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            for (enrollment.scratch_codes, 0..) |code, ci| digests[ci] = ext_mfa.hashScratchCode(code);
+            // SONNY-6609: stored sealed under the store's HMAC key.
+            const key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to seal the MFA secret with ({s}); nothing was changed\n", .{@errorName(err)});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            var sealed_buf: [@TypeOf(mgr.storage).mfa_secret_field_len]u8 = undefined;
+            const sealed = try @TypeOf(mgr).sealMfaSecret(&key, existing.id, enrollment.secret_base32, &sealed_buf);
+            try mgr.storage.updateUser(existing.id, null, null, null, false, sealed);
+            try mgr.storage.setMfaRecoveryDigests(existing.id, digests[0..enrollment.scratch_codes.len]);
         }
 
         // Output secret
@@ -901,9 +992,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("  {s}\n", .{code});
         }
 
-        if (show_recovery) {
-            printOut("\nStore these recovery codes securely. Each can only be used once.\n", .{});
-        }
+        // SONNY-6602: --show-recovery added "Each can only be used once";
+        // nothing redeems them.
+        printOut("\n{s}", .{mfa_not_enforced_note});
 
         return;
     }
@@ -942,10 +1033,15 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        const secret = existing.getMFASecret() orelse {
-            std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+        const read_key = cli_auth.readKey(allocator) catch |err| {
+            std.debug.print("Error: no HMAC key to open the MFA secret with ({s})\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        var secret_buf: [64]u8 = undefined;
+        defer std.crypto.secureZero(u8, &secret_buf);
+        const secret = openStoredMfaSecret(&mgr, &read_key, existing, &secret_buf);
+
+        beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
         const code_str = token.?;
         if (code_str.len != 6) {
@@ -969,6 +1065,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
+        // Verified: the count starts again (saved by deinitAndSaveCliAuth).
+        try mgr.storage.setMfaAttempts(existing.id, .{});
         printOut("MFA token verified for {s}\n", .{username});
         return;
     }
@@ -1001,6 +1099,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
+        // SONNY-6608: an action other than enable / disable is refused (it
+        // disabled MFA), and enable needs --code: it turned MFA on with no
+        // proof the user holds the authenticator.
+        if (!enable and !std.mem.eql(u8, action, "disable")) {
+            std.debug.print("Error: user mfa requires <enable|disable> <username>, not '{s}'\n", .{action});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        if (enable and code == null) {
+            std.debug.print("Error: user mfa enable requires --code <6-digit TOTP code> from the user's authenticator; MFA was not enabled\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
         // Verify user exists
         const existing = mgr.storage.getUserByUsername(username) orelse {
             std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
@@ -1010,36 +1120,35 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Validate TOTP code format when enabling with --code
         if (enable and code != null) {
             const code_str = code.?;
-            // Validate code format: must be exactly 6 numeric digits
-            if (code_str.len != 6) {
-                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            var all_digits = true;
-            for (code_str) |c| {
-                if (c < '0' or c > '9') {
-                    all_digits = false;
-                    break;
-                }
-            }
-            if (!all_digits) {
-                std.debug.print("Error: invalid code format - must contain only digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
             if (!flags_mod.global().mfa.enabled()) {
                 std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
 
-            const secret = existing.getMFASecret() orelse {
-                std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+            // SONNY-6609: the stored secret is sealed.
+            const enable_key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to open the MFA secret with ({s}); MFA was not enabled\n", .{@errorName(err)});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };
+            var secret_buf: [64]u8 = undefined;
+            defer std.crypto.secureZero(u8, &secret_buf);
+            const secret = openStoredMfaSecret(&mgr, &enable_key, existing, &secret_buf);
+            // SONNY-6619: the code counts against the attempt limit, as
+            // mfa-verify's (it had none: an unlimited guessing route).
+            beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
-            const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
-                std.debug.print("Error: invalid code format\n", .{});
+            // SONNY-6623: a malformed code is a wrong code: checked after it
+            // is counted (it was refused first, uncounted), as mfa-verify and
+            // the online mfa_verify / mfa_enable do.
+            var all_digits = code_str.len == 6;
+            for (code_str) |c| {
+                if (c < '0' or c > '9') all_digits = false;
+            }
+            if (!all_digits) {
+                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
-            };
+            }
+            const code_int = std.fmt.parseInt(u32, code_str, 10) catch unreachable; // six digits
 
             const timestamp_ms = @as(u64, @intCast(compat_milliTimestamp()));
             const valid = ext_mfa.verifyCode(allocator, secret, timestamp_ms, code_int, mfa_policy.codeConfig(30, 6, 1)) catch {
@@ -1051,6 +1160,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Error: invalid code - TOTP verification failed\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+            // SONNY-6619: verified, the count starts again.
+            try mgr.storage.setMfaAttempts(existing.id, .{});
         }
         try mgr.storage.updateUser(existing.id, null, null, null, enable, null);
 
@@ -1058,6 +1169,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Users should use 'mfa-setup' command for initial MFA configuration with real secret
         if (enable) {
             printOut("MFA enabled for {s}.\n", .{username});
+            printOut("{s}", .{mfa_not_enforced_note});
         } else {
             printOut("MFA disabled for {s}.\n", .{username});
         }

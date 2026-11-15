@@ -128,7 +128,7 @@ fn writeValueShape(writer: anytype, props: ?[]planner_root.ast.Property) !void {
         // Property value is a non-optional pointer to an expression in current AST.
         const expr = p.value.*;
         const cls_index: usize = switch (expr) {
-            .Int, .Decimal => 0, // N
+            .Int, .Decimal, .DoubleLit => 0, // N
             .String => 1, // S
             .Bool => 2, // B
             .Null => 3, // U

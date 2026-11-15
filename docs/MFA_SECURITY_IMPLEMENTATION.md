@@ -4,6 +4,15 @@
 **Status**: TOTP + recovery codes implemented and tested; step-up uses explicit operation classification (GAP-0884). SMS/email/hardware methods and real risk signals are planned (see SERVER_FEATURES.md §7.4).
 **Security Audit**: Passed (January 2026)
 
+> **MFA is not enforced at login (SONNY-6602).** The QUIC and gRPC HELLO
+> never ask for a TOTP code or a recovery code, and
+> `SecurityManager.authenticateWithMFA` (the "Authentication Flow" below)
+> has no production caller: it is a library path only. No login is
+> protected by MFA until story SONNY-6604 wires it into HELLO. The
+> `geode.auth.mfa_*` procedures enroll a secret and check a code on request,
+> and answer a `warning` column saying so. See
+> [USER_AUTH.md](USER_AUTH.md#mfa-is-not-enforced-at-login).
+
 ## Overview
 
 Geode implements Multi-Factor Authentication (MFA) using the **RFC 6238 TOTP** (Time-based One-Time Password) algorithm with HMAC-SHA1. This document covers the security architecture, API reference, enrollment flows, and enforcement mechanisms.
@@ -383,11 +392,9 @@ Generates a TOTP code. Useful for testing.
 
 ---
 
-#### `verifyRecoveryCode(code, valid_codes) ?usize`
-
-Checks if a recovery code is valid using constant-time comparison.
-
-**Returns**: Index of matching code, or `null` if not found
+`verifyRecoveryCode` was removed (SONNY-6602): it matched 8-character
+codes only, the issued codes are 32 characters, and it had no caller.
+Recovery codes are redeemed by `SecurityManager.authenticateWithMFA` alone.
 
 ---
 

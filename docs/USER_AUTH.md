@@ -11,7 +11,6 @@ Geode implements a comprehensive authentication system with post-quantum ready s
 **Supported today:**
 
 - Password-based authentication (Argon2id, RFC 9106)
-- Multi-factor authentication (TOTP)
 - mTLS client-certificate requirement (a transport gate: the client then
   still authenticates with a user name and password)
 - Role-based access control (RBAC)
@@ -24,6 +23,8 @@ that claimed them, see "Session and API-key commands" below):**
   and no server keeps the session ids it issues, so a session can be
   neither reused, validated, rotated nor invalidated
 - API keys (see "API Key Authentication" below)
+- Multi-factor authentication at login (SONNY-6602; wiring it in is story
+  SONNY-6604): see "MFA is not enforced at login" below
 
 **Not supported (no implementation in `src/security/`):**
 
@@ -379,6 +380,16 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
   1 <= p <= 16; outside them, or unparseable, verification fails without
   running Argon2, so a corrupt stored hash cannot burn CPU or memory on
   every login (SONNY-6378)
+- **Stored hash format** (SONNY-6600): exactly
+  `$argon2id$v=19$m=<m>,t=<t>,p=<p>$<salt: 32 hex digits>$<hash: 64 hex digits>`,
+  the parameters in that order, each a decimal number with no sign and no
+  leading zero, and nothing after the hash. Anything else (a parameter
+  without `=`, an unknown, missing, duplicate or reordered parameter, a
+  trailing `$...`) is an unusable stored credential (`InvalidHashFormat`,
+  "the stored credential of this account cannot be used"). **Breaking:**
+  such hashes were parsed leniently (a missing parameter took the default,
+  the rest was ignored), so a record whose hash has extra text now cannot
+  log in until its password is reset. Every hash Geode writes has this form.
 - **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`,
   `geode.auth.user_import(..., 'blake2b')`) is accepted for migration only:
   64 hex digits of BLAKE2b-256 over the password followed by the static salt
@@ -703,7 +714,7 @@ This authentication system provides **enterprise-grade security** with **complet
 | Method | Status | Use Case | Security Level | Implementation |
 |--------|--------|----------|----------------|----------------|
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
-| **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
+| **MFA (TOTP)** | ❌ Not enforced at login | Two-factor auth | — | HELLO (QUIC and gRPC) never asks for a TOTP code or a recovery code; `SecurityManager.authenticateWithMFA` has no production caller. The `geode.auth.mfa_*` procedures enroll a secret and check a code on request only (SONNY-6602; login enforcement is SONNY-6604); see "MFA is not enforced at login" |
 | **Session Tokens** | ❌ Not on the server wire | Session continuity | — | The HELLO carries no token and no server keeps the session ids it issues (SONNY-6551, SONNY-6554); `src/security/authn.zig`'s session store is used only by the embedded LSP verifier, which nothing populates |
 | **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` only; `geode apikey` refuses everything but a format check (SONNY-6554); see below |
 | **mTLS (Certificate)** | ⚠️ Transport gate only (see below) | Zero-trust, service mesh | Very High | `GEODE_MTLS_REQUIRED` + `GEODE_MTLS_CLIENT_CA`; `src/security/mtls_provider.zig` |
@@ -973,5 +984,135 @@ a store read error) is reported as unverifiable, not as tampering: the server
 refuses to start with `AuthChainUnverifiable` (the reseal override does not
 apply), the offline CLI refuses with "could not be verified", and the periodic
 check logs it without the tampering alarm.
+
+SONNY-6600 carries the rule to the remaining checks:
+
+- A GQL procedure whose credential check could not run answers what HELLO
+  answers: `geode.auth.user_change_password` with an old-password check
+  the server could not run is GQLSTATUS `53000` "Authentication temporarily
+  unavailable" (retryable), and with an unusable stored hash `58000`
+  "Authentication unavailable: the stored credential of this account cannot
+  be used (server-side error; contact the administrator)". Both were the
+  generic `58000` with the error's name. A wrong old password stays `28000`.
+- The LSP `initialize` token check (API key, then session token) answers a
+  check that could not run (e.g. out of memory) with JSON-RPC `-32603`
+  "authentication temporarily unavailable ...", logged as a warning, instead
+  of `-32002` "invalid auth token". The session is not bound either way.
+- A Raft frame whose nonce the replay check cannot record (out of memory)
+  is still dropped, but logged at ERROR as that, not as a replay, and
+  counted in `nonce_tracker.record_errors_total`.
+- MFA recovery codes are held as SHA-256 digests, never in plaintext:
+  the codes `geode.auth.mfa_setup` issues (it kept them in plaintext) and
+  the `SecurityManager` codes (`setRecoveryCodes`; codes stored in
+  plaintext before are converted the first time they are checked). A
+  presented code is compared with every stored digest in constant time
+  (it was a byte-by-byte `std.mem.eql`), and is redeemed at most once,
+  concurrent logins included. The MFA secret a check uses is copied under
+  the MFA store's lock and zeroed after use, and the store allocates from
+  the process allocator (it kept the allocator of the first `mfa_*`
+  request). Note: no procedure redeems the codes `mfa_setup` issues.
+
+### MFA is not enforced at login
+
+**No login is protected by MFA today (SONNY-6602).** The QUIC and gRPC
+HELLO authenticate with a user name and password only (mTLS is a
+transport gate in front of it): neither asks for a TOTP code or a
+recovery code, and
+`SecurityManager.authenticateWithMFA`, the library's MFA login path, has
+no production caller. Wiring MFA into HELLO is story SONNY-6604.
+
+What exists:
+
+- `geode.auth.mfa_setup(user)` generates a TOTP secret and recovery codes.
+  Every result carries a `warning` column saying MFA is not enforced at
+  login and that no procedure redeems the recovery codes.
+- `geode.auth.mfa_verify(user, code)` checks a code against the stored
+  secret when it is called (an application may use it for its own step-up
+  check). It is rate limited: five failures lock the user's verifications
+  out for five minutes. The attempt is counted in a record made before the
+  code is checked; if that record cannot be made (out of memory) the
+  verification is refused with `53000` and the code is not checked, so the
+  limit cannot be bypassed under memory pressure (it failed open).
+- `geode.auth.mfa_enable(user, code)` checks the code under the same
+  limiter as `mfa_verify` (SONNY-6623: one per-user count and lockout; it
+  had none; a malformed code from an enrolled user counts and is still
+  22023, a missing code is an argument error and does not) and turns the
+  user's stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
+  `warning` column; `mfa_disable(user)` turns it off. No login reads the
+  flag yet.
+- The offline `geode user mfa-setup` and `geode user mfa enable` print the
+  same warning. `geode user mfa enable` needs `--code` with a code that
+  verifies (SONNY-6608: without it, it turned MFA on).
+- The offline `geode user mfa-verify` applies the same limit as
+  `geode.auth.mfa_verify` (five failures, a five-minute lockout, reset by a
+  code that verifies), kept in a sealed `MfaAttempts` record in
+  `__geode_security` (SONNY-6614): the server keeps its count in process
+  memory, and each run of the command is a new process, so before it had
+  no limit at all. The attempt is counted and saved before the code is
+  checked; one that cannot be saved is refused unchecked. Being a store
+  write, it is refused while a server holds the data directory (or pass
+  `--force`, as the other offline writers). `geode user mfa enable
+  --code` counts against the same record (SONNY-6619; it had no limit),
+  malformed codes included (SONNY-6623).
+- The server's lockout survives a restart (SONNY-6619): the fifth failure
+  stores the lockout in the same `MfaAttempts` record, and the first
+  success after a stored lockout stores the reset; the server loads the
+  records at startup. A failure below the limit is counted in memory
+  only: storing it would re-seal the whole HMAC chain (every security
+  record's HMAC rewritten) on every wrong guess, a cost an attacker could
+  impose at will. The trade-off: a restart forgets up to four failures
+  that had not reached the limit.
+- SecurityManager (library-only until SONNY-6604) follows `mfa_setup`
+  (new secret and codes, MFA off) and `mfa_enable` / `mfa_disable`, and
+  `DROP USER` removes the user from it entirely (SONNY-6619).
+- `geode user show` prints the stored MFA state, e.g. `MFA: disabled
+  (enrolled, 8 recovery codes; not enforced at login yet, SONNY-6604)` or
+  `MFA: disabled (not enrolled)` (SONNY-6609).
+- At startup `SecurityManager` is loaded with each user's opened secret and
+  stored recovery codes, so `authenticateWithMFA` (library-only until
+  SONNY-6604) can redeem a stored code once (SONNY-6609).
+
+**Where an enrollment is stored (SONNY-6608).** `mfa_setup` (and the
+offline `geode user mfa-setup`) writes the enrollment through to the
+HMAC-chained `__geode_security` graph, all of it or none of it (a store
+that fails refuses the procedure with `58030`): the TOTP secret in the
+user record's `mfa_secret`, the recovery codes as SHA-256 digests in a
+sealed `MfaRecoveryCodes` record, and the user's `mfa_enabled` turned off
+until `mfa_enable` verifies a code against the new secret. The server
+loads every enrollment back at startup (a record that cannot be loaded
+fails startup), and `DROP USER` removes it, so a user made again under the
+name is not enrolled. Before, the procedures' enrollments lived in process
+memory only and a restart lost them, and the offline `mfa-setup` turned
+MFA on before any code was verified and kept no recovery code.
+
+**How the secret is protected at rest (SONNY-6609).** The user record's
+`mfa_secret` holds the secret sealed: AES-256-GCM (through the
+`crypto_backend` seam: std.crypto, or OpenSSL under `-Dfips`) with a random
+96-bit nonce, under a key derived with HKDF-SHA256 from the security graph's
+HMAC key (`GEODE_AUTH_HMAC_KEY`, else derived from `GEODE_TDE_KEY`, else
+`<data dir>/.geode_hmac_key`), with the user id as associated data. Stored
+as `aesgcm1$` + base64url(nonce, ciphertext, tag). A secret stored in
+plaintext by an older binary is sealed the first time the server loads it
+(no auth-version bump; the secret is the same). The loop2 hydration
+snapshots (`hydration_*.snap`), which copy property values out of the
+engine's pages unencrypted, are no longer written for `__geode_security`
+(a file an older binary wrote is deleted at the next checkpoint).
+
+Why the HMAC key: it is the one key every server has (it already seals the
+chain), backups do not carry it (SONNY-6299), and it may live outside the
+data directory (environment, KMS-backed `GEODE_TDE_KEY`). What that buys:
+someone who reads the data directory, a backup, a snapshot side-car or a
+WAL **without** the key cannot recover the secret; a sealed value copied to
+another user's record does not open; a changed one does not open.
+**What it does not buy:** whoever holds both the data directory and the
+key, which by default is `.geode_hmac_key` **inside the data directory**,
+can derive the key and open every secret, exactly as the server does. To
+separate them, supply the key through `GEODE_AUTH_HMAC_KEY` or
+`GEODE_TDE_KEY` from outside the data directory. TDE (`GEODE_TDE_KEY`) still
+encrypts the pages themselves. The secret is in process memory while the
+server runs. Recovery codes are stored only as SHA-256 digests.
+
+- `mfa.verifyRecoveryCode`, which matched 8-character codes only (the
+  issued codes are 32), was removed: it had no caller.
 
 CANARY: REQ=REQ-DOC-SONNY-6598-AUTH-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-15

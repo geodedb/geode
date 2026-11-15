@@ -168,7 +168,7 @@ fn captureFingerprint(
 
     // Graph-level counters.
     try fp.print(allocator, "nodes={d} edges={d}\n", .{
-        store.countNodesForGraph(GRAPH, null),
+        try store.countNodesForGraph(GRAPH, null),
         store.countEdgesForGraph(GRAPH),
     });
     for (spec.edge_types) |t| {

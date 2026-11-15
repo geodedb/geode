@@ -749,15 +749,27 @@ fn refuseDsnParamsCliCannotApply(parsed: *const DsnParseResult, command: DsnComm
         std.debug.print("Error: the DSN parameter 'tls=false' is not supported by geode {s}: the CLI always uses TLS (docs/DSN.md)\n", .{name});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    const no_effect = [_]geode.dsn_params.Param{ .hello_name, .hello_ver, .conformance, .connect_timeout, .timeout_ms, .page_size };
+    // SONNY-6617 (2): connect_timeout / timeout / timeout_ms are applied
+    // (`dsnTimeoutMs`).
+    const no_effect = [_]geode.dsn_params.Param{ .hello_name, .hello_ver, .conformance, .page_size };
     for (no_effect) |p| {
         if (!present.contains(p)) continue;
         if (p == .page_size and command == .query) continue;
         std.debug.print("Warning: the DSN parameter '{s}' has no effect in geode {s} (docs/DSN.md){s}\n", .{
-            @tagName(p),                                                                                                                               name,
-            if (p == .connect_timeout or p == .timeout_ms) "; use --timeout" else if (p == .page_size) "; the shell has no page size setting" else "",
+            @tagName(p), name, if (p == .page_size) "; the shell has no page size setting" else "",
         });
     }
+}
+
+// CANARY: REQ=REQ-SONNY-6617-CLI-DSN-TIMEOUT; FEATURE="DSN parameters"; ASPECT=CliAppliesDsnTimeout; STATUS=TESTED; TEST=tests/test_sonny6617_cli_dsn_timeout.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6617 (2): the DSN's timeout in milliseconds (`connect_timeout`
+/// seconds, or `timeout` / `timeout_ms` milliseconds, geode-client-zig's
+/// rule; validated 1..3600000 by `dsn_params.parse`), or null when the DSN
+/// sets none. `geode query` and `geode shell` reported it as "no effect".
+fn dsnTimeoutMs(parsed: *const DsnParseResult) ?u32 {
+    const present = parsed.dsn.present;
+    if (!present.contains(.connect_timeout) and !present.contains(.timeout_ms)) return null;
+    return parsed.dsn.config.timeout_ms;
 }
 
 /// SONNY-6554: a DSN `insecure=true` (`insecure_tls_skip_verify`,
@@ -1321,6 +1333,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
         if (parsed.dsn.present.contains(.page_size)) page_size = parsed.dsn.config.page_size;
         if (parsed.dsn.config.role) |r| role = r;
+        // SONNY-6617 (2): the DSN timeout takes the place of --timeout
+        // (whole seconds, rounded up); it bounds the QUIC handshake too.
+        if (dsnTimeoutMs(parsed)) |ms| timeout_secs = (ms + std.time.ms_per_s - 1) / std.time.ms_per_s;
     }
 
     // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
@@ -2103,7 +2118,7 @@ fn executeBatchQueries(
     const max_connect_attempts: usize = 3;
     var connect_attempt: usize = 0;
     var raw_client = while (true) : (connect_attempt += 1) {
-        var c = zig_quic_bridge.initClient(
+        var c = zig_quic_bridge.initClientWithOptions(
             allocator,
             host,
             port,
@@ -2115,6 +2130,7 @@ fn executeBatchQueries(
             },
             null,
             null,
+            .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_secs) },
         ) catch |err| {
             const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
             stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
@@ -2679,7 +2695,7 @@ fn retryChunkStatementByStatement(
     const host = server_hp.host;
     const port = server_hp.port;
 
-    var raw_client = zig_quic_bridge.initClient(
+    var raw_client = zig_quic_bridge.initClientWithOptions(
         allocator,
         host,
         port,
@@ -2691,6 +2707,7 @@ fn retryChunkStatementByStatement(
         },
         null,
         null,
+        .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(opts.timeout_secs) },
     ) catch return error.ConnectionFailed;
     defer raw_client.deinit();
     raw_client.connect() catch return error.ConnectionFailed;
@@ -2860,7 +2877,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     };
 
     while (attempts < max_attempts) : (attempts += 1) {
-        var raw_client = zig_quic_bridge.initClient(
+        var raw_client = zig_quic_bridge.initClientWithOptions(
             allocator,
             host,
             port,
@@ -2872,6 +2889,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             },
             null,
             null,
+            .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(opts.timeout_secs) },
         ) catch |err| {
             last_error = @errorName(err);
             break;
@@ -3404,6 +3422,13 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         if (parsed.graph()) |g| graph = g;
         // SONNY-6554: insecure=true and the TLS paths (docs/DSN.md).
         applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
+        // SONNY-6617 (2): the shell has no --timeout; the DSN timeout bounds
+        // the QUIC handshake (this connection and \connect) and the wait
+        // for an answer.
+        if (dsnTimeoutMs(parsed)) |ms| {
+            repl_quic_transport.connect_timeout_ms = ms;
+            repl_quic_transport.read_idle_timeout_ms = ms;
+        }
     }
 
     // SONNY-6531: refuse a malformed --server / --dsn address before the
@@ -3738,6 +3763,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
         .{ .insecure = insecure, .ca_cert_path = ca_cert_path },
         null,
         null,
+        .{},
     );
 
     client.connect() catch |err| {

@@ -29,8 +29,8 @@ test "profile: memory block contains total_alloc_bytes (v2)" {
 // Invariant: the per-op "bytes_alloc" values sum to memory.total_alloc_bytes.
 // SONNY-6548: the token scan also summed the `{op, bytes_alloc}` entries of
 // peak_contributors (the top ops repeated), so it never held; parse the JSON
-// and sum `ops` only. A UNION takes the version-1 payload, whose memory
-// figures are the synthetic model (docs/EXPLAIN_PROFILE.md).
+// and sum `ops` only. A UNION takes the version-1 payload, which measures
+// no allocation (SONNY-6596: every figure 0; they were a fixed model).
 test "profile: per-op bytes_alloc sum equals memory.total_alloc_bytes" {
     const a = testing.allocator;
     const exe = geode_test_bin.geode_exe;
@@ -44,6 +44,6 @@ test "profile: per-op bytes_alloc sum equals memory.total_alloc_bytes" {
     var sum_ops: i64 = 0;
     for (profile.get("ops").?.array.items) |op| sum_ops += op.object.get("bytes_alloc").?.integer;
     const total = profile.get("memory").?.object.get("total_alloc_bytes").?.integer;
-    try testing.expect(total > 0);
+    try testing.expectEqual(@as(i64, 0), total);
     try testing.expectEqual(total, sum_ops);
 }

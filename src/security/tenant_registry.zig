@@ -308,6 +308,16 @@ pub const TenantRegistry = struct {
 
     // ── Reads ─────────────────────────────────────────────────────────────
 
+    /// SONNY-6607 (4): is `tenant_id` registered and marked as being dropped
+    /// (a drop that failed part-way, `markDropping`)? Its sessions are
+    /// refused (`tenancy.refuseDroppingTenant`).
+    pub fn isDropping(self: *TenantRegistry, tenant_id: []const u8) bool {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        const rec = self.tenants.get(tenant_id) orelse return false;
+        return !rec.active;
+    }
+
     pub fn contains(self: *TenantRegistry, tenant_id: []const u8) bool {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());

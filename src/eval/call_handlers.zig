@@ -79,6 +79,16 @@ pub fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
     };
 }
 
+/// SONNY-6587 item 4: an exact integer argument of range().
+fn rangeInt(value: Value) ?i64 {
+    return switch (value) {
+        .Int => |i| i,
+        .SmallInt => |i| i,
+        .BigInt => |i| i,
+        else => null,
+    };
+}
+
 fn textLike(value: Value) ?[]const u8 {
     return switch (value) {
         .Str => |s| s,
@@ -586,6 +596,17 @@ pub fn evalMathFunction(
                     const result = std.math.mul(i128, quotient, narrowing.pow10(@intCast(k)).?) catch return EvalError.IntegerOverflow;
                     return Value{ .Int = std.math.cast(i64, result) orelse return EvalError.IntegerOverflow };
                 }
+            },
+            // SONNY-6596: an approximate number rounds to an approximate
+            // number (as floor and ceil, 20.22 GR 12/13 b ii), half away from
+            // zero at 10^-precision.
+            .Double => |x| {
+                if (precision == 0) return Value{ .Double = @round(x) };
+                const p = std.math.cast(i32, precision) orelse return Value{ .Double = if (precision > 0) x else 0 };
+                const factor = std.math.pow(f64, 10.0, @floatFromInt(p));
+                if (!std.math.isFinite(factor) or factor == 0) return Value{ .Double = if (precision > 0) x else 0 };
+                const rounded = @round(x * factor) / factor;
+                return Value{ .Double = if (std.math.isFinite(rounded)) rounded else x };
             },
             .Null => return Value{ .Null = {} },
             else => return EvalError.TypeMismatch,
@@ -1609,7 +1630,10 @@ pub fn evalCollectionFunction(
                 if (l.len == 0) return Value{ .Null = {} };
                 return l[0];
             },
-            else => return Value{ .Null = {} },
+            // SONNY-6587 item 3: NULL in is NULL out, and a value that is no
+            // list is 22G03, as tail's (SONNY-6555 item 4); it was NULL.
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
@@ -1644,7 +1668,10 @@ pub fn evalCollectionFunction(
                 if (l.len == 0) return Value{ .Null = {} };
                 return l[l.len - 1];
             },
-            else => return Value{ .Null = {} },
+            // SONNY-6587 item 3: NULL in is NULL out, and a value that is no
+            // list is 22G03, as tail's (SONNY-6555 item 4); it was NULL.
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
     }
 
@@ -1680,27 +1707,19 @@ pub fn evalCollectionFunction(
         // fall through to evalAdvancedTypeFunction.
         if (args.len < 2 or args.len > 3) return null;
 
+        // CANARY: REQ=REQ-SONNY-6587-LIST-FUNCTION-ARGS; FEATURE="ListFunctions"; ASPECT=RangeArguments; STATUS=TESTED; TEST=tests/test_sonny6587_list_functions.zig; OWNER=eval; UPDATED=2026-11-15
+        // SONNY-6587 item 4: NULL in is NULL out; a value that is not an
+        // integer is 22G03 and a zero step 22023 (both answered NULL). The
+        // end stays exclusive, as documented (SONNY-6466).
         const start_val = try eval.evalExpr(allocator, args[0].*, env);
-        const start = switch (start_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
         const stop_val = try eval.evalExpr(allocator, args[1].*, env);
-        const stop = switch (stop_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
+        const step_val: Value = if (args.len == 3) try eval.evalExpr(allocator, args[2].*, env) else .{ .Int = 1 };
+        if (start_val == .Null or stop_val == .Null or step_val == .Null) return Value{ .Null = {} };
+        const start = rangeInt(start_val) orelse return EvalError.TypeMismatch;
+        const stop = rangeInt(stop_val) orelse return EvalError.TypeMismatch;
+        const step = rangeInt(step_val) orelse return EvalError.TypeMismatch;
 
-        const step = if (args.len == 3) blk: {
-            const step_val = try eval.evalExpr(allocator, args[2].*, env);
-            break :blk switch (step_val) {
-                .Int => |i| i,
-                else => return Value{ .Null = {} },
-            };
-        } else 1;
-
-        if (step == 0) return Value{ .Null = {} };
+        if (step == 0) return EvalError.InvalidArgs;
 
         // SONNY-2769: in i128, so a span or a step at the edge of i64
         // (`range(minInt, maxInt)`, a step of minInt) no longer overflows

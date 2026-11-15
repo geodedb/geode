@@ -231,22 +231,22 @@ test "SONNY-6367: offline user create / update --role and assign-role give the u
     const dir = try bootstrappedStore(aa, "roles");
     defer removeDir(dir);
 
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_pw, "--role", "readonly", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_pw, "--role", "readonly", "--data-dir", dir });
     // No --role: `user`, as CREATE USER gives.
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", carol_pw, "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", carol_pw, "--data-dir", dir });
     try expectRoles(dir, &.{ .{ .user = "bob", .role = .ReadOnly }, .{ .user = "carol", .role = .User } });
 
-    _ = try runOk(aa, &.{ binary_path, "user", "update", "bob", "--role", "readwrite", "--force", "--data-dir", dir });
-    _ = try runOk(aa, &.{ binary_path, "user", "assign-role", "carol", "admin", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "update", "bob", "--role", "readwrite", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "assign-role", "carol", "admin", "--data-dir", dir });
     try expectRoles(dir, &.{ .{ .user = "bob", .role = .ReadWrite }, .{ .user = "carol", .role = .Admin } });
 
     // A role that is not built in: refused, nothing changed.
     _ = try runOk(aa, &.{ binary_path, "role", "create", "auditors", "--data-dir", dir });
-    _ = try runRefused(aa, &.{ binary_path, "user", "assign-role", "bob", "auditors", "--force", "--data-dir", dir });
-    _ = try runRefused(aa, &.{ binary_path, "user", "update", "bob", "--role", "nosuchrole", "--force", "--data-dir", dir });
-    _ = try runRefused(aa, &.{ binary_path, "user", "create", "dan", "dan@example.com", "--password", dan_pw, "--role", "nosuchrole", "--force", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "assign-role", "bob", "auditors", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "update", "bob", "--role", "nosuchrole", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "create", "dan", "dan@example.com", "--password", dan_pw, "--role", "nosuchrole", "--data-dir", dir });
     // assign-role of a user that does not exist.
-    _ = try runRefused(aa, &.{ binary_path, "user", "assign-role", "nobody6367", "readonly", "--force", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "assign-role", "nobody6367", "readonly", "--data-dir", dir });
     try expectRoles(dir, &.{
         .{ .user = "bob", .role = .ReadWrite },
         .{ .user = "carol", .role = .Admin },
@@ -255,7 +255,7 @@ test "SONNY-6367: offline user create / update --role and assign-role give the u
     });
 
     // `user import` gives its --role too.
-    _ = try runOk(aa, &.{ binary_path, "user", "import", "erin", "--hash", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g", "--role", "readonly", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "import", "erin", "--hash", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g", "--role", "readonly", "--data-dir", dir });
     try expectRoles(dir, &.{.{ .user = "erin", .role = .ReadOnly }});
 }
 
@@ -267,8 +267,8 @@ test "SONNY-6367: offline user list / show print the stored role, show and enabl
     const dir = try bootstrappedStore(aa, "list");
     defer removeDir(dir);
 
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_pw, "--role", "readonly", "--force", "--data-dir", dir });
-    _ = try runOk(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", carol_pw, "--role", "readwrite", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", bob_pw, "--role", "readonly", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", carol_pw, "--role", "readwrite", "--data-dir", dir });
 
     const list = try runOk(aa, &.{ binary_path, "user", "list", "--data-dir", dir });
     try expectContains(list, "- bob (role: readonly)");
@@ -278,10 +278,10 @@ test "SONNY-6367: offline user list / show print the stored role, show and enabl
     try expectContains(show, "Role: readwrite");
     _ = try runRefused(aa, &.{ binary_path, "user", "show", "nobody6367", "--data-dir", dir });
 
-    _ = try runRefused(aa, &.{ binary_path, "user", "enable", "nobody6367", "--force", "--data-dir", dir });
-    _ = try runRefused(aa, &.{ binary_path, "user", "disable", "nobody6367", "--force", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "enable", "nobody6367", "--data-dir", dir });
+    _ = try runRefused(aa, &.{ binary_path, "user", "disable", "nobody6367", "--data-dir", dir });
     // An existing user still works.
-    _ = try runOk(aa, &.{ binary_path, "user", "disable", "bob", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "disable", "bob", "--data-dir", dir });
     const shown = try runOk(aa, &.{ binary_path, "user", "show", "bob", "--data-dir", dir });
     try expectContains(shown, "Status: disabled");
 }
@@ -310,7 +310,7 @@ test "SONNY-6367: a user imported with --algorithm blake2b logs in over QUIC wit
     defer removeDir(dir);
 
     const hex = legacyBlake2bHex(legacy_pw);
-    _ = try runOk(aa, &.{ binary_path, "user", "import", "legacy", "--hash", &hex, "--algorithm", "blake2b", "--role", "readwrite", "--force", "--data-dir", dir });
+    _ = try runOk(aa, &.{ binary_path, "user", "import", "legacy", "--hash", &hex, "--algorithm", "blake2b", "--role", "readwrite", "--data-dir", dir });
 
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
@@ -506,9 +506,10 @@ test "SONNY-6367: mfa_setup / mfa_verify / mfa_enable / mfa_disable failures are
     try fx.expectRuns(ga, w.admin, "CALL geode.auth.mfa_setup('mfa6367')");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('mfa6367', '000000')", "28000");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "28000");
-    // Locked out after the fifth failure: 53400.
+    // Locked out after the fifth failure: 53400. SONNY-6623: the mfa_enable
+    // above counts too (one limiter), so three more reach five.
     var i: usize = 0;
-    while (i < 4) : (i += 1) {
+    while (i < 3) : (i += 1) {
         try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "28000");
     }
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "53400");

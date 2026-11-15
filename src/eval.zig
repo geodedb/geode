@@ -688,6 +688,34 @@ fn floatPower(base: f64, exp: i64) EvalError!Value {
     return decimalFromF64(result);
 }
 
+// CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-ARITHMETIC; FEATURE="NumericValueExpression"; ASPECT=ApproximateOperands; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=eval; UPDATED=2026-11-15
+/// SONNY-6596: the operands of a dyadic arithmetic operator as f64 when one
+/// of them is approximate (REAL or DOUBLE) and the other a number: ISO/IEC
+/// 39075:2024 20.21 <numeric value expression>, SR 2: then the result is
+/// approximate (Geode's DOUBLE). Null otherwise (both exact, or a
+/// non-number), and the exact arms decide.
+fn approximateOperands(l: Value, r: Value) ?[2]f64 {
+    const a = value_order.numberOf(l) orelse return null;
+    const b = value_order.numberOf(r) orelse return null;
+    if (a != .float and b != .float) return null;
+    return .{ numberAsF64(a), numberAsF64(b) };
+}
+
+fn numberAsF64(n: value_order.Number) f64 {
+    return switch (n) {
+        .float => |f| f,
+        .exact => |e| @as(f64, @floatFromInt(e.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(e.scale)),
+    };
+}
+
+/// An approximate result: a DOUBLE, or 22003 when it is not a finite number
+/// (20.21 GR 4: a result out of the type's range is a numeric value out of
+/// range).
+fn approximateResult(f: f64) EvalError!Value {
+    if (!std.math.isFinite(f)) return EvalError.NumericOutOfRange;
+    return .{ .Double = f };
+}
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -745,6 +773,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = std.math.add(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk try approximateResult(p[0] + p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // An instant (date, time, zoned time, local or zoned datetime)
             // plus a duration, in either order, and a duration plus a
@@ -775,6 +804,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const diff = std.math.sub(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk2 try approximateResult(p[0] - p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // An instant minus a duration, a duration minus a duration, and
             // the duration between two instants of one type (SONNY-2797).
@@ -801,6 +831,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
+            if (approximateOperands(l, r)) |p| break :blk3 try approximateResult(p[0] * p[1]);
             // A duration times a number, either order (SONNY-2797).
             if (try temporal_ops.evalTemporal(.Mul, l, r)) |v| break :blk3 v;
             return EvalError.TypeMismatch;
@@ -839,6 +870,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 
                 break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
             }
+            if (approximateOperands(l, r)) |p| {
+                // 20.21 GR 3: a zero divisor is 22012.
+                if (p[1] == 0) return EvalError.DivisionByZero;
+                break :blk4 try approximateResult(p[0] / p[1]);
+            }
             // A duration divided by a number (SONNY-2797).
             if (try temporal_ops.evalTemporal(.Div, l, r)) |v| break :blk4 v;
             return EvalError.TypeMismatch;
@@ -866,6 +902,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (l == .Decimal and r == .Int) {
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
                 break :blk_pow try floatPower(base, r.Int);
+            }
+            if (approximateOperands(l, r)) |p| {
+                if (p[0] == 0 and p[1] < 0) return EvalError.DivisionByZero;
+                break :blk_pow try approximateResult(std.math.pow(f64, p[0], p[1]));
             }
             return EvalError.TypeMismatch;
         },
@@ -1267,10 +1307,16 @@ fn applyUnary(op: ast.UnaryOp, v: Value) EvalError!Value {
         .Neg => return switch (v) {
             .Int => |i| .{ .Int = std.math.negate(i) catch return EvalError.IntegerOverflow },
             .Decimal => |d| .{ .Decimal = .{ .coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow, .scale = d.scale, .orig_scale = d.orig_scale } },
+            // SONNY-6596: every number has a monadic minus (ISO/IEC
+            // 39075:2024 20.21); `-1.5E0` is a DOUBLE.
+            .SmallInt => |i| .{ .SmallInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .BigInt => |i| .{ .BigInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .Real => |f| .{ .Real = -f },
+            .Double => |f| .{ .Double = -f },
             else => EvalError.TypeMismatch,
         },
         .Pos => return switch (v) {
-            .Int, .Decimal => v,
+            .Int, .Decimal, .SmallInt, .BigInt, .Real, .Double => v,
             else => EvalError.TypeMismatch,
         },
     }
@@ -3346,8 +3392,16 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // here is NOT fatal: the scan below is a correct (if O(n)) answer, which is
     // exactly the behaviour that shipped before, so a rebuild that cannot
     // allocate must not turn a working query into an error.
+    // SONNY-6607 (3): not silently: an index that cannot be rebuilt is logged
+    // with its cause (the scan below still answers).
     @import("execution/statement_dispatcher.zig")
-        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch {};
+        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch |err| {
+        const logging = @import("logging");
+        logging.scoped("eval").warn("knn: the vector index for the property could not be rebuilt; answering by a scan", &.{
+            logging.Attr.string("property", property_name),
+            logging.Attr.string("error", @errorName(err)),
+        });
+    };
 
     // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
     // geode#877 (b): this used to COMMIT to any index registered for the
@@ -3574,10 +3628,12 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     };
 
     // Counted by id: the node itself is not read again.
-    const edge_ids = switch (direction) {
-        .incoming => store.getIncomingEdgeIds(node_id),
-        .outgoing => store.getOutgoingEdgeIds(node_id),
-    } orelse return absent;
+    // SONNY-6607 (1): an adjacency list that cannot be read fails the call;
+    // it read as "no edges" (a degree of 0, or absent).
+    const edge_ids = (switch (direction) {
+        .incoming => store.getIncomingEdgeIdsOrError(node_id),
+        .outgoing => store.getOutgoingEdgeIdsOrError(node_id),
+    } catch |err| return value_types.storageReadFailed(err)) orelse return absent;
     const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
     if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };
 
@@ -3585,7 +3641,9 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     for (edge_ids) |edge_id| {
         // By value: a copy taken under the edge shard's lock
         // (`getEdgeHydrated`), safe against a concurrent edge writer.
-        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+        // SONNY-6594 (4): an unreadable edge fails the call; it was skipped
+        // (a degree short by the edges that could not be read).
+        const edge = (store.getEdgeHydratedChecked(edge_id) catch |err| return value_types.storageReadFailed(err)) orelse continue;
         const neighbour = switch (direction) {
             .incoming => edge.from_id,
             .outgoing => edge.to_id,

@@ -6,6 +6,8 @@ const graph_store = @import("../graph_store.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
 const tenant_visibility = @import("tenant_visibility.zig");
+/// SONNY-6606 (1): SHOW TABLES lists the session graph's labels, as db.labels.
+const meta_dispatch = @import("meta_dispatch.zig");
 const value_types = @import("../value_types.zig");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
@@ -260,7 +262,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SONNY-6541-SHOW-TABLES-ERRORS; FEATURE="SHOW TABLES"; ASPECT=ListingErrorPropagates; STATUS=TESTED; TEST=tests/test_sonny6541_show_tables_errors.zig; OWNER=execution; UPDATED=2026-11-14
             // SONNY-6541 (4): a listing that fails fails the statement; it
             // answered no rows (out of memory, a quarantined graph).
-            const labels = try tenant_visibility.listNodeLabelsVisible(allocator, read_store, session_tenant);
+            // SONNY-6606 (1): of the session's graph only (it listed every
+            // graph's, __geode_security's included).
+            const labels = try meta_dispatch.sessionGraphLabels(allocator, read_store, context, session_tenant);
             defer {
                 for (labels) |label| {
                     allocator.free(label);
@@ -615,6 +619,24 @@ fn executeForBody(
     std.debug.assert(base_names.len == base_values.len);
     std.debug.assert(context.query_param_names.len == context.query_param_values.len);
 
+    var acc = ForBodyAccumulator{};
+    errdefer acc.deinit(allocator);
+    try runForBodyInto(allocator, for_stmt, body, items, base_names, base_values, context, &acc);
+    return acc.finish(allocator);
+}
+
+/// `body` once per element of `items` with `base_values` bound, each run's
+/// result absorbed into `acc` (`executeForBody`'s loop).
+fn runForBodyInto(
+    allocator: std.mem.Allocator,
+    for_stmt: ast.ForStatement,
+    body: *const ast.Query,
+    items: []const Value,
+    base_names: []const []const u8,
+    base_values: []const Value,
+    context: ExecutionContext,
+    acc: *ForBodyAccumulator,
+) !void {
     const loop_binding_count = 1 +
         (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
         (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
@@ -624,9 +646,6 @@ fn executeForBody(
     defer param_names.deinit(allocator);
     var param_values = try std.ArrayList(Value).initCapacity(allocator, binding_capacity);
     defer param_values.deinit(allocator);
-
-    var acc = ForBodyAccumulator{};
-    errdefer acc.deinit(allocator);
 
     for (items, 0..) |item, idx| {
         param_names.clearRetainingCapacity();
@@ -665,8 +684,6 @@ fn executeForBody(
         errdefer iter_result.deinit(allocator);
         try acc.absorb(allocator, &iter_result);
     }
-
-    return acc.finish(allocator);
 }
 
 /// SONNY-3144: `body` once per element of `items`, with `variable` bound to
@@ -694,8 +711,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     if (readsOnlyBody(body)) return @import("query_execution.zig").runReadForBody(allocator, for_stmt, body, with_result.columns, with_result.rows, context);
 
     // geode#876: a composed body (CREATE / MERGE / MATCH ... SET) runs once per
-    // element with the WITH bindings still in scope. We expect only one row
-    // from the WITH clause, and use it as the environment.
+    // element with the WITH bindings still in scope.
     if (with_result.rows.len == 0) {
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
@@ -704,20 +720,30 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         };
     }
 
-    // Create environment from WITH results, with the request params in scope so
-    // a `$param` collection (FOR..IN parameter-bound list) resolves to the bound
-    // value instead of Null.
-    const env = Env{
-        .names = with_result.columns,
-        .values = with_result.rows[0], // Use first row
-        .allocator = allocator,
-        .param_names = context.query_param_names,
-        .param_values = context.query_param_values,
-    };
-    const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
-    const items = try forElements(allocator, collection_value);
-    defer if (items.owned) allocator.free(items.values);
-    return executeForBody(allocator, for_stmt, body, items.values, with_result.columns, with_result.rows[0], context);
+    // CANARY: REQ=REQ-SONNY-6587-FOR-WRITE-EVERY-ROW; FEATURE="ForStatement"; ASPECT=WriteBodyAfterWith; STATUS=TESTED; TEST=tests/test_sonny6587_for_write_after_with.zig; OWNER=engine; UPDATED=2026-11-15
+    // SONNY-6587 item 5: every row of the WITH, each with its own list (ISO/IEC
+    // 39075:2024 14.8); the first row only was used. The write allowlist
+    // admits a one-row WITH here today (write_shape.allowWithFor). The list
+    // is the statement's (`lentAllocator`), as a header's in
+    // `expandForTable` (SONNY-6449): it leaked on every run.
+    var acc = ForBodyAccumulator{};
+    errdefer acc.deinit(allocator);
+    for (with_result.rows) |row| {
+        // The request params are in scope so a `$param` collection resolves
+        // to the bound value instead of Null.
+        const env = Env{
+            .names = with_result.columns,
+            .values = row,
+            .allocator = allocator,
+            .param_names = context.query_param_names,
+            .param_values = context.query_param_values,
+        };
+        const collection_value = try eval.evalExpr(value_utilities.lentAllocator(allocator), for_stmt.collection, env);
+        const items = try forElements(allocator, collection_value);
+        defer if (items.owned) allocator.free(items.values);
+        try runForBodyInto(allocator, for_stmt, body, items.values, with_result.columns, row, context, &acc);
+    }
+    return acc.finish(allocator);
 }
 
 /// The elements a FOR iterates for its list's value: a list's elements; none

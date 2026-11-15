@@ -30,7 +30,7 @@ This document provides the implementation status for Geode as of October 2025, w
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | TDE (Transparent Data Encryption) | Implemented (global keys; per-tenant keys deferred, GAP-0873) | AES-256-GCM, src/security/tde.zig |
-| Authentication | Implemented | RBAC/ABAC; TOTP MFA with scoped step-up classification (`zig build test-gap0884`) |
+| Authentication | Implemented | RBAC/ABAC; TOTP MFA library and procedures (not enforced at login, SONNY-6602/SONNY-6604) with scoped step-up classification (`zig build test-gap0884`) |
 | Audit Logging | Implemented | HMAC-chained audit trails |
 | Row-Level Security (RLS) | Implemented (GQL→bytecode policy compilation path still manual) | Policy-based access control; durable policy DDL (`zig build test-gap0858`) |
 | Field-Level Encryption | Implemented | Searchable encryption support; per-request role/tenant context (GAP-0852) |

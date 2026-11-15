@@ -179,7 +179,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
 
         // ---- (b) read parity BEFORE shutdown. ----
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         var s: usize = 0;
         while (s < N) : (s += SAMPLE) {
             const got = try store.getNodePropertyValue(seed_ids[s], "name");
@@ -213,7 +213,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
 
         // Counts (triggers hydration of the reopened slab-backed graph).
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
         // Node property parity: hydrate-on-miss reads through the adapter's
         // slab-aware engine readers.

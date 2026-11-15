@@ -359,7 +359,6 @@ const ConnectionContext = struct {
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
@@ -460,7 +459,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
-        ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
         false,
         ctx.security_manager,
@@ -511,8 +509,9 @@ fn runLeakedConnReaper(context: *anyopaque) void {
 // a single accept-and-run loop the way standalone `geode lsp --listen`
 // does.
 //
-// Every session verifies its `initialize` token against `provider`
-// (through `verifier`); the TCP-embedded path always requires auth.
+// Every session verifies its `initialize` against `provider` (a token,
+// through `verifier`) or the user store (a user name and password, as a
+// QUIC HELLO, SONNY-6589); the TCP-embedded path always requires auth.
 //
 // CANARY: REQ=REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME; FEATURE="Embedded LSP"; ASPECT=ListenerOwnsProviderLifetime; STATUS=TESTED; TEST=tests/test_sonny6374_lsp_auth_provider_lifetime.zig; OWNER=lsp; UPDATED=2026-11-12
 // SONNY-6374: the provider used to be freed by a `defer` inside the `if`
@@ -552,8 +551,10 @@ const EmbeddedLsp = struct {
     fn create(allocator: std.mem.Allocator, port: u16, loopback_only: bool) !*EmbeddedLsp {
         const provider = try allocator.create(authn_mod.AuthProvider);
         errdefer allocator.destroy(provider);
-        // Empty stores. Nothing populates this provider yet (no procedure
-        // or CLI reaches it), so every `initialize` token is rejected.
+        // Empty stores: the server issues no API keys or session tokens
+        // (SONNY-6554), so every `initialize` token is rejected. Sessions
+        // log in with a user name and password instead (SONNY-6589,
+        // `lspCredentialsVerifyFn`).
         provider.* = authn_mod.AuthProvider.init(allocator);
         errdefer provider.deinit();
         const self = try allocator.create(EmbeddedLsp);
@@ -730,6 +731,7 @@ fn runLspListener(self: *EmbeddedLsp) void {
             .stream = accepted,
             .verifier = self.verifier,
         };
+        session_args.setPeerIp(accepted.socket.address);
         {
             self.sessions_mutex.lockUncancelable(io);
             defer self.sessions_mutex.unlock(io);
@@ -777,7 +779,87 @@ const LspSessionArgs = struct {
     // `AuthState.verify` call can validate the client's bearer / session
     // token against the live AuthProvider.
     verifier: lsp_auth_mod.Verifier,
+    // SONNY-6589: the peer's IP, the rate limiter's key for a login.
+    peer_ip_buf: [64]u8 = undefined,
+    peer_ip_len: usize = 0,
+
+    fn setPeerIp(self: *LspSessionArgs, address: std.Io.net.IpAddress) void {
+        var a = address;
+        a.setPort(0);
+        const text = std.fmt.bufPrint(&self.peer_ip_buf, "{f}", .{a}) catch {
+            self.peer_ip_len = 0;
+            return;
+        };
+        // "<ip>:0" / "[<ip6>]:0": the address without the port.
+        var ip = if (std.mem.endsWith(u8, text, ":0")) text[0 .. text.len - 2] else text;
+        if (ip.len >= 2 and ip[0] == '[' and ip[ip.len - 1] == ']') ip = ip[1 .. ip.len - 1];
+        std.mem.copyForwards(u8, self.peer_ip_buf[0..ip.len], ip);
+        self.peer_ip_len = ip.len;
+    }
+
+    fn peerIp(self: *const LspSessionArgs) []const u8 {
+        return if (self.peer_ip_len == 0) "unknown" else self.peer_ip_buf[0..self.peer_ip_len];
+    }
+
+    /// The session's verifier: a token goes to the listener's provider; a
+    /// user name and password to `lspCredentialsVerifyFn`. `self` outlives
+    /// the session's Server (freed last in `runLspSession`).
+    fn sessionVerifier(self: *LspSessionArgs) lsp_auth_mod.Verifier {
+        return .{
+            .ctx = self,
+            .verifyFn = lspTokenVerifyFn,
+            .verifyCredentialsFn = lspCredentialsVerifyFn,
+        };
+    }
 };
+
+fn lspTokenVerifyFn(ctx: *anyopaque, token: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    return args.verifier.verifyFn(args.verifier.ctx, token);
+}
+
+// CANARY: REQ=REQ-SONNY-6589-LSP-PASSWORD-AUTH; FEATURE="Embedded LSP"; ASPECT=HelloCredentialsAuthenticateLsp; STATUS=TESTED; TEST=tests/test_sonny6589_lsp_auth.zig; OWNER=lsp; UPDATED=2026-11-15
+/// SONNY-6589 (3): an embedded LSP `initialize` logs in with a user name and
+/// password, checked as a QUIC HELLO's: `user_management.authenticate`
+/// behind the same per-(peer IP, user) rate limiter, a checked-and-rejected
+/// credential counting against it. A user who must change their password
+/// first is refused (the HELLO admits it only to change the password). The
+/// LSP's AuthProvider had no credential at all, so every `initialize` was
+/// refused.
+fn lspCredentialsVerifyFn(ctx: *anyopaque, username: []const u8, password: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    const user_mgmt = geode.user_management;
+    const auth_rate_limiter = @import("auth_rate_limiter.zig");
+    if (!auth_rate_limiter.credentialsPresent(username, password)) return .invalid;
+    const peer_ip = args.peerIp();
+    const limiter = quic_connection_handler.getAuthRateLimiter();
+    if (limiter) |l| {
+        if (l.isLockedForPrincipal(peer_ip, username)) {
+            log.warn("LSP login refused: too many failed authentication attempts", &.{
+                Attr.string("peer_ip", peer_ip),
+                Attr.string("username", username),
+            });
+            return .invalid;
+        }
+    }
+    const result = user_mgmt.authenticate(username, password) catch |err| {
+        if (auth_rate_limiter.shouldCountFailedAttempt(err)) {
+            if (limiter) |l| l.recordFailureForPrincipal(peer_ip, username);
+        }
+        log.warn("LSP login refused", &.{
+            Attr.string("peer_ip", peer_ip),
+            Attr.string("username", username),
+            Attr.string("error", @errorName(err)),
+        });
+        return .invalid;
+    };
+    if (limiter) |l| l.recordSuccessForPrincipal(peer_ip, username);
+    if (result.password_reset_required) {
+        log.warn("LSP login refused: the user must change their password first", &.{Attr.string("username", username)});
+        return .invalid;
+    }
+    return .{ .ok = .{ .username = username, .role = result.role.toString() } };
+}
 
 fn runLspSession(args: *LspSessionArgs) void {
     const owner = args.owner;
@@ -797,7 +879,7 @@ fn runLspSession(args: *LspSessionArgs) void {
         args.stream.close(args.io);
         return;
     };
-    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.verifier, false) catch |err| {
+    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.sessionVerifier(), false) catch |err| {
         log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
         owner.unregister(args.io, args);
         tx.deinit();
@@ -1244,11 +1326,22 @@ fn rehydrateTenantDerivedState(
             made_progress = true;
         }
     }
+    // SONNY-6607 (4): a tenant whose parent is not registered (or a parent
+    // cycle) cannot be placed in the hierarchy; it was a warning and the
+    // server ran with the tenant outside it (its parent did not see its
+    // rows; a cascade drop missed it). The registry never writes one, so it
+    // is damage: refuse to start, naming each, as for any other part of the
+    // tenant state that cannot be rebuilt.
     if (added.count() < recs.len) {
-        log.warn("tenant_registry.rehydrate_incomplete_orphan_parents", &.{
-            Attr.int("added", @intCast(added.count())),
-            Attr.int("total", @intCast(recs.len)),
-        });
+        for (recs, 0..) |rec, i| {
+            if (added.contains(i)) continue;
+            log.err("tenant_registry.rehydrate_orphan_parent; refusing to start", &.{
+                Attr.string("tenant", rec.tenant_id),
+                Attr.string("parent", rec.parent orelse ""),
+            });
+            std.debug.print("geode: tenant registry: tenant '{s}' names parent '{s}', which is not registered; refusing to start (restore the registry, or remove or re-parent the tenant)\n", .{ rec.tenant_id, rec.parent orelse "" });
+        }
+        return error.TenantRegistryOrphanParent;
     }
 
     // Replay quota overrides into the live manager (order-independent).
@@ -1642,6 +1735,28 @@ pub fn main() !void {
             std.process.exit(1);
         };
     }
+    // CANARY: REQ=REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG; FEATURE="ClusterAuth"; ASPECT=StartupRefusal; STATUS=TESTED; TEST=tests/test_sonny6600_cluster_token.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6600: refuse a cluster token too short to be a secret before any
+    // listener binds (GEODE_CLUSTER_TOKEN=t turned cluster mode on with a
+    // one-byte shared secret). Printed as well as logged, as above.
+    {
+        const cluster_auth = geode.distributed.cluster_auth;
+        cluster_auth.validateClusterTokenEnv() catch |err| {
+            const name = if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS";
+            const value: ?[]const u8 = posixGetenv(if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS");
+            const len: usize = if (value) |v| v.len else 0;
+            std.debug.print(
+                "SECURITY: refusing to start — {s} is {d} bytes; a cluster token must be at least {d} bytes (generate one with `openssl rand -hex 32`). See src/distributed/README.md.\n",
+                .{ name, len, cluster_auth.min_token_len },
+            );
+            log.err("SECURITY: refusing to start — the cluster token is too short", &.{
+                Attr.string("variable", name),
+                Attr.int("length", @intCast(len)),
+                Attr.int("minimum", @intCast(cluster_auth.min_token_len)),
+            });
+            std.process.exit(1);
+        };
+    }
     if (config.insecure_allow_all) {
         gps.setInsecureAllowAll(true);
         // CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08
@@ -1945,7 +2060,6 @@ pub fn main() !void {
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
-    const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const disable_estimates = init_ctx.env_config.disable_estimates;
     const compact_profile = init_ctx.env_config.compact_profile;
@@ -2546,7 +2660,6 @@ pub fn main() !void {
         const grpc_address = grpc_bind.address;
 
         const grpc_config = grpc_transport.GrpcConfig{
-            .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
             .disable_estimates = disable_estimates,
             .compact_profile = compact_profile,
@@ -3061,7 +3174,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -3796,7 +3909,6 @@ pub fn main() !void {
                 .disable_estimates = disable_estimates,
                 .compact_profile = compact_profile,
                 .memcurve_profile = memcurve_profile,
-                .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,

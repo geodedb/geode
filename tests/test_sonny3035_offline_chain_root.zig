@@ -119,7 +119,7 @@ fn makeStore(aa: std.mem.Allocator, tag: []const u8, change: Change) ![]const u8
     const kr = try AuthGraphManager.resolveHmacKey(pa, dir);
     _ = try mgr.bootstrapDefaultAdmin(&kr.key);
     try mgr.verifyChain(&kr.key);
-    try testing.expect(mgr.storage.loadChainRoot() != null);
+    try testing.expect((try mgr.storage.loadChainRoot()) != null);
     switch (change) {
         .remove_all_records => {
             var users: std.ArrayList(u64) = .empty;
@@ -184,7 +184,7 @@ test "SONNY-3035: a store whose records were all removed at rest keeps its chain
         std.debug.print("auth init was not refused (exit {d}):\n{s}\n", .{ init.code, init.output });
         return error.AuthInitNotRefused;
     }
-    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--force", "--data-dir", dir });
+    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--data-dir", dir });
     if (create.code == 0 or std.mem.indexOf(u8, create.output, "does not verify") == null) {
         std.debug.print("user create was not refused (exit {d}):\n{s}\n", .{ create.code, create.output });
         return error.UserCreateNotRefused;
@@ -218,7 +218,7 @@ test "SONNY-3035: verification with no key available writes no key file, and ref
     }
     try testing.expect(!try keyFilePresent(aa, dir));
 
-    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--force", "--data-dir", dir });
+    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--data-dir", dir });
     try testing.expect(create.code != 0);
     const verify = try runGeode(aa, io, &.{ binary_path, "auth", "verify", "--data-dir", dir });
     try testing.expect(verify.code != 0);

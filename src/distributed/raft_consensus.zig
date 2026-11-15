@@ -378,6 +378,11 @@ pub const Statistics = struct {
     decode_errors: u64,
     snapshots_sent: u64,
     snapshots_received: u64,
+    // CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=ApplyCriticalSectionMeasured; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6631: the longest a Ready's committed entries took to apply
+    /// (`finishReady`, under `inner_mutex`), in nanoseconds. While they
+    /// apply the node takes no tick, heartbeat or message.
+    apply_max_ns: u64,
 };
 
 // ---- RPC / Transport stubs ----
@@ -2165,7 +2170,14 @@ pub const AppendEntries = struct {
 pub const AppendEntriesResponse = struct {
     term: u64,
     success: bool,
+    /// On success the last index the follower matches; on a rejection the
+    /// rejected AppendEntries' prev_log_index (raft v0.2.2).
     match_index: u64,
+    /// SONNY-6622: a rejection's backtracking hint (raft v0.2.2): where the
+    /// leader may resume, and the follower's term at the rejected index (0:
+    /// its log is too short). 0 and 0 from a peer that does not send them.
+    conflict_index: u64 = 0,
+    conflict_term: u64 = 0,
 };
 
 pub const InstallSnapshot = struct {
@@ -2394,6 +2406,8 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .term = aer.term,
             .success = aer.success,
             .match_index = aer.match_index,
+            .conflict_index = aer.conflict_index,
+            .conflict_term = aer.conflict_term,
         } },
         .install_snapshot => |is| .{ .install_snapshot = .{
             .term = is.term,
@@ -2497,6 +2511,8 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .term = aer.term,
             .success = aer.success,
             .match_index = aer.match_index,
+            .conflict_index = aer.conflict_index,
+            .conflict_term = aer.conflict_term,
         } },
         .install_snapshot => |is| .{ .install_snapshot = .{
             .term = is.term,
@@ -2544,10 +2560,10 @@ fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
 }
 
 /// Task A6e (2026-05-26): free heap-owned slices inside an outbound
-/// `Message`.  Today only `append_entries.entries` is owned (allocated
-/// by `raftLibMessageToGeode`).  Vote / vote-response / install-snapshot
-/// variants either own no slices or share slices with the raft library
-/// (which manages their lifetime independently of the outbox).
+/// `Message` built by `raftLibMessageToGeode`: `append_entries.entries`
+/// with each entry's command copy, and `install_snapshot.data` (SONNY-6592:
+/// it aliased the raft library's snapshot chunk, freed before the outbox
+/// sent it). Vote and response variants own no slices.
 pub fn freeOutboundMessage(allocator: Allocator, msg: Message) void {
     switch (msg) {
         .append_entries => |ae| {
@@ -2559,6 +2575,7 @@ pub fn freeOutboundMessage(allocator: Allocator, msg: Message) void {
             }
             if (ae.entries.len > 0) allocator.free(ae.entries);
         },
+        .install_snapshot => |is| if (is.data.len > 0) allocator.free(is.data),
         else => {},
     }
 }
@@ -2945,15 +2962,53 @@ pub const RaftNode = struct {
     txn_coordinator: ?*TxnCoordinator,
     pending_responses: std.StringHashMap(ClientResponse),
 
-    // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=HeldUntilPersisted; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-14
-    /// SONNY-6563: what the inner library sent through the bridge during
-    /// `step` / `tick` / `propose`, held (under `inner_mutex`) until
-    /// `drainReady`'s `advance()` has made the hard state and entries they
-    /// announce durable. The library sends a RequestVote grant from inside
-    /// `step()`, before `advance()` fsyncs the vote; queued at once, the
-    /// outbox thread could put it on the wire first, and a crash then lost
-    /// the vote (the node could grant the term again after restart).
-    held_outbound: std.ArrayList(OutboundEntry) = .empty,
+    /// The raft library Transport given to `setInnerTransport` (in-process
+    /// tests), or null. `drainReady` sends `Ready.messages` through it when
+    /// no wrapper `transport` is set: raft v0.2.0 hands votes and replies to
+    /// the consumer instead of sending them from `step()` / `tick()`.
+    inner_transport: ?raft_lib.Transport = null,
+
+    // CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreFromReadySnapshot; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6622: restores the state machine from a snapshot this node
+    /// installed (raft v0.2.2 `Ready.snapshot`: InstallSnapshot from the
+    /// leader, `data` as the leader passed it to `reportSnapshot`). Called
+    /// under `inner_mutex`, before the snapshot is persisted and before any
+    /// entry after it is applied. An error pauses the node as a failed
+    /// persist does (`stalled_ready`): it must not apply later entries onto
+    /// a state machine without the snapshot's contents. With an
+    /// `apply_callback` and no restore callback a snapshot is refused the
+    /// same way.
+    snapshot_restore_callback: ?*const fn (allocator: Allocator, data: []const u8, index: u64, term: u64) anyerror!void = null,
+    // CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=PrehydrateWhereEntriesEnterTheLog; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6631: hydrates the graphs a command's apply writes. Called
+    /// without `inner_mutex` wherever entries enter this node's log
+    /// (`handleMessage`, `stepInner`; a proposer calls it itself) and for
+    /// the entries a restarted node replays (`prehydrateUnapplied`), so the
+    /// apply under `inner_mutex` finds them hydrated: its time does not
+    /// depend on the graphs' size.
+    prehydrate_callback: ?*const fn (cmd: Command) void = null,
+    /// SONNY-6622: the last index this node's state machine applied (or
+    /// restored a snapshot up to), set when a Ready is finished. The raft
+    /// library moves its own `log.applied` to a snapshot's index as soon as
+    /// it installs the snapshot, before the state machine is restored, so
+    /// that one overstates a node whose restore failed. Atomic: read
+    /// without `inner_mutex` (`appliedIndex`).
+    applied_index: u64 = 0,
+
+    // CANARY: REQ=REQ-SONNY-6617-RAFT-PERSIST-RETRY; FEATURE="Raft Consensus Persistence"; ASPECT=PersistFailureRetried; STATUS=TESTED; TEST=tests/test_sonny6617_raft_persist_failure.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6617: the Ready whose `advancePersist()` failed, kept (with
+    /// the inner node untouched) until a retry writes it; null otherwise.
+    /// While set the node takes no Raft input (`step`, `tick`, `propose`):
+    /// stepping would mutate the log the Ready's committed entries borrow
+    /// from. `tick` retries the write with backoff (`persist_retry_wait`).
+    stalled_ready: ?raft_lib.Ready = null,
+    /// Ticks to wait before the next persist retry, and the next backoff.
+    persist_retry_wait: u32 = 0,
+    persist_backoff: u32 = 1,
+    /// Failed persist attempts since the last success (for logs and stats).
+    persist_failures: u64 = 0,
+    /// `stalled_ready != null`, readable without `inner_mutex`.
+    persist_stalled: bool = false,
 
     pub fn init(
         allocator: Allocator,
@@ -3065,6 +3120,11 @@ pub const RaftNode = struct {
                         waited_ns += lock_retry_step_ns;
                         continue;
                     },
+                    // SONNY-6622: raft v0.2.2 refuses a log it cannot read
+                    // in full and leaves it as it is; never repaired here.
+                    error.LogCorrupted => return error.RaftStorageLogCorrupted,
+                    error.LogAuthFailed => return error.RaftStorageLogAuthFailed,
+                    error.LogEncryptionMismatch => return error.RaftStorageLogEncryptionMismatch,
                     else => return err,
                 };
             };
@@ -3126,6 +3186,7 @@ pub const RaftNode = struct {
             .stats = std.mem.zeroes(Statistics),
             .txn_coordinator = null,
             .pending_responses = std.StringHashMap(ClientResponse).init(allocator),
+            .applied_index = inner.log.applied,
         };
 
         return node;
@@ -3155,66 +3216,26 @@ pub const RaftNode = struct {
             },
         }
         self.pending_responses.deinit();
-        self.dropHeldOutbound();
-        self.held_outbound.deinit(self.allocator);
-    }
-
-    /// SONNY-6563: hand what `step` / `tick` / `propose` sent to the network,
-    /// now that `advance()` has persisted the state it announces. The
-    /// network is the peer's outbox (its thread sends without
-    /// `inner_mutex`), or a test's `send_override`, called in place.
-    fn releaseHeldOutbound(self: *RaftNode) void {
-        defer self.held_outbound.clearRetainingCapacity();
-        const transport = self.transport orelse {
-            for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
-            return;
-        };
-        for (self.held_outbound.items) |held| {
-            if (transport.send_override != null) {
-                transport.send(held.peer, held.from, held.term, held.msg) catch |err| {
-                    log.warn("raft bridge: synchronous send failed", &.{
-                        Attr.string("error", @errorName(err)),
-                        Attr.uint("to", held.peer.id),
-                    });
-                };
-                freeOutboundMessage(self.allocator, held.msg);
-                continue;
-            }
-            transport.enqueueOutbound(held.peer, held.from, held.term, held.msg) catch |err| {
-                log.warn("raft bridge: enqueueOutbound failed; dropping message", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.uint("to", held.peer.id),
-                });
-                freeOutboundMessage(self.allocator, held.msg);
-            };
-        }
-    }
-
-    /// SONNY-6563: the state these messages announce is not durable (ready()
-    /// or advance() failed): they are not sent. Raft resends what matters
-    /// (a candidate asks again, a leader re-replicates).
-    fn dropHeldOutbound(self: *RaftNode) void {
-        for (self.held_outbound.items) |held| freeOutboundMessage(self.allocator, held.msg);
-        self.held_outbound.clearRetainingCapacity();
     }
 
     /// Wire the wrapper's geode-level `Transport` (typically QUIC+TLS in
     /// production) so that outbound raft traffic produced by the inner raft
     /// library reaches its peers.
     ///
-    /// Why this is non-trivial: raft-0.1.3 dispatches messages via its own
-    /// `raft_lib.Transport` interface — when the inner node calls
-    /// `sendMsg(to, msg)` it invokes the inner transport's vtable directly
-    /// rather than buffering into `Ready.messages`.  Without a bridge, the
-    /// wrapper's `transport` field would be set but no raft traffic would
-    /// flow over it, which is exactly the bug A5b of the 2026-05-25
-    /// distributed cluster testing plan addresses.
+    /// The raft library (v0.2.0) produces outbound traffic two ways. Leader
+    /// replication (AppendEntries, heartbeats, InstallSnapshot) goes to its
+    /// own `raft_lib.Transport` straight from `step()` / `tick()` /
+    /// `propose()`; votes, a candidate's RequestVote and every reply are
+    /// queued in `Ready.messages`, which `drainReady` sends once
+    /// `advancePersist()` has made the state they announce durable.
     ///
-    /// The fix: install a tiny adapter that implements
+    /// For the first kind this installs a tiny adapter that implements
     /// `raft_lib.Transport.VTable` and forwards each `(to, msg)` to the
-    /// wrapper transport's `send(peer, from, term, geode_msg)` after
-    /// looking up the peer's endpoint by id and converting the raft_lib
-    /// Message into the geode Message union.
+    /// wrapper transport (`queueOutbound`) after looking up the peer's
+    /// endpoint by id and converting the raft_lib Message into the geode
+    /// Message union. Without it the wrapper's `transport` field would be
+    /// set but no raft traffic would flow over it (A5b of the 2026-05-25
+    /// distributed cluster testing plan).
     ///
     /// Tests that drive multiple raft nodes in-process should call
     /// `setInnerTransport` instead — that path bypasses this bridge.
@@ -3231,8 +3252,10 @@ pub const RaftNode = struct {
     /// 2026-05-25 distributed cluster testing plan) to wire several inner
     /// raft nodes together via `raft_lib.InProcessTransport` without going
     /// through the QUIC layer.  Production code wires QUIC via the outer
-    /// `setTransport` instead.
+    /// `setTransport` instead. `drainReady` sends `Ready.messages` through
+    /// `t` too when no wrapper transport is set.
     pub fn setInnerTransport(self: *RaftNode, t: raft_lib.Transport) void {
+        self.inner_transport = t;
         self.inner.setTransport(t);
     }
 
@@ -3244,9 +3267,15 @@ pub const RaftNode = struct {
     /// through `handleMessage` (which decodes the geode Message wire
     /// format first).
     pub fn stepInner(self: *RaftNode, from: u64, msg: raft_lib.Message) !void {
+        // SONNY-6631: before `inner_mutex` (see `prehydrate_callback`).
+        if (self.prehydrate_callback) |hydrate| switch (msg) {
+            .append_entries => |ae| for (ae.entries) |entry| prehydrateEntry(hydrate, entry),
+            else => {},
+        };
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
+        if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         try self.inner.step(from, msg);
         self.drainReady();
     }
@@ -3255,11 +3284,22 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
+        // SONNY-6617: no election or heartbeat timer runs while a persist
+        // failure is pending (a stalled leader lets the cluster fail over).
+        if (self.stalled_ready != null) return self.retryStalledPersist();
         try self.inner.tick(null);
         self.drainReady();
     }
 
     pub fn handleMessage(self: *RaftNode, from: u64, msg: Message) !void {
+        // SONNY-6567 (6b), SONNY-6631: the graphs the carried entries'
+        // applies write are hydrated here, on the receiving thread, before
+        // `inner_mutex` (see `prehydrate_callback`). An entry not committed
+        // yet only builds the resident indexes any first read builds.
+        if (self.prehydrate_callback) |hydrate| switch (msg) {
+            .append_entries => |ae| for (ae.entries) |entry| hydrate(entry.command),
+            else => {},
+        };
         // Map geode Message to external raft library Message, preserving all data.
         var converted_entries: ?[]raft_lib.Entry = null;
         defer if (converted_entries) |ce| self.allocator.free(ce);
@@ -3303,8 +3343,8 @@ pub const RaftNode = struct {
                 .term = aer.term,
                 .success = aer.success,
                 .match_index = aer.match_index,
-                .conflict_index = 0,
-                .conflict_term = 0,
+                .conflict_index = aer.conflict_index,
+                .conflict_term = aer.conflict_term,
             } },
             .install_snapshot => |is| .{ .install_snapshot = .{
                 .term = is.term,
@@ -3333,6 +3373,14 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
         defer self.inner_mutex.unlock(io);
+
+        // SONNY-6617: dropped while a persist failure is pending; the sender
+        // retries (Raft tolerates message loss).
+        if (self.stalled_ready != null) {
+            if (converted_entries) |ce| for (ce) |entry| self.allocator.free(entry.data);
+            log.debug("raft message dropped: Raft storage write pending retry", &.{Attr.uint("from", from)});
+            return;
+        }
 
         // raft-0.1.3 RaftNode.step takes (from, msg); the older 3-arg form
         // (with a trailing thread-pool param) is gone.
@@ -3379,6 +3427,8 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         if (!self.lockInnerForRequest()) return error.GraphNotFound;
         defer self.inner_mutex.unlock(io);
+        // SONNY-6617: a node whose Raft storage write failed takes no write.
+        if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         if (self.inner.role != .leader) return error.NotLeader;
         try self.inner.propose(cmd_bytes);
         const new_index = self.inner.log.lastIndex();
@@ -3386,14 +3436,50 @@ pub const RaftNode = struct {
         return new_index;
     }
 
+    /// SONNY-6631: hydrate, without `inner_mutex`, the graphs of every entry
+    /// in the log this node has not applied: a restarted node replays its
+    /// committed log, and nothing received or proposed those entries in
+    /// this process. Call once `prehydrate_callback` is set, before the node
+    /// is ticked (`ClusterCoordinator.init`). Best effort: an entry it cannot
+    /// read is hydrated by its apply, as before.
+    pub fn prehydrateUnapplied(self: *RaftNode) void {
+        const hydrate = self.prehydrate_callback orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var next: u64 = undefined;
+        var last: u64 = undefined;
+        {
+            self.inner_mutex.lockUncancelable(io);
+            defer self.inner_mutex.unlock(io);
+            next = self.inner.log.applied + 1;
+            last = self.inner.log.lastIndex();
+        }
+        const chunk: u64 = 256;
+        while (next <= last) {
+            const hi = @min(last + 1, next + chunk);
+            const entries = blk: {
+                self.inner_mutex.lockUncancelable(io);
+                defer self.inner_mutex.unlock(io);
+                break :blk self.inner.log.slice(next, hi) catch |err| {
+                    log.warn("raft: entries to replay not hydrated ahead; their applies hydrate them", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("from_index", next),
+                    });
+                    return;
+                };
+            };
+            defer raft_lib.freeEntries(self.allocator, entries);
+            for (entries) |entry| prehydrateEntry(hydrate, entry);
+            next = hi;
+        }
+    }
+
     /// Returns the index of the most recently applied log entry on this
-    /// node.  Reads `inner.log.applied` directly -- this is monotonic and
-    /// only advances inside `drainReady()` after an entry is committed and
-    /// applied by `apply_callback`.  Safe to call from any thread; the
-    /// underlying u64 read is atomic on supported targets and a torn read
-    /// would at worst cause a spurious wait iteration.
+    /// node: monotonic, advanced only when `drainReady()` finishes a Ready,
+    /// after its entries were applied by `apply_callback` (and a snapshot
+    /// restored, SONNY-6622: not `inner.log.applied`, which moves to a
+    /// snapshot's index before the restore). Safe to call from any thread.
     pub fn appliedIndex(self: *RaftNode) u64 {
-        return self.inner.log.applied;
+        return @atomicLoad(u64, &self.applied_index, .acquire);
     }
 
     /// Returns the COMMIT watermark of this node's inner Raft log -- the highest
@@ -3464,30 +3550,49 @@ pub const RaftNode = struct {
     fn lockInnerForRequest(self: *RaftNode) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         if (self.inner_mutex.tryLock()) return true;
-        if (!graph_storage_adapter.threadHoldsAnyGraphLock()) {
+        if (!graph_storage_adapter.threadHoldsAnyGraphOrStoreLock()) {
             self.inner_mutex.lockUncancelable(io);
             return true;
         }
         var sleep_ns: u64 = 20 * std.time.ns_per_us;
         while (true) {
-            if (graph_storage_adapter.threadHoldsGraphAwaitedByReplicatedDrop()) return false;
+            if (graph_storage_adapter.threadMustYieldToReplicatedApply()) return false;
             io.sleep(.fromNanoseconds(sleep_ns), .awake) catch {};
             if (self.inner_mutex.tryLock()) return true;
             sleep_ns = @min(sleep_ns * 2, 500 * std.time.ns_per_us);
         }
     }
 
-    pub fn startElection(self: *RaftNode) void {
-        self.stats.elections_called += 1;
-        self.drainReady();
-    }
-
+    // CANARY: REQ=REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY; FEATURE="Raft Consensus Persistence"; ASPECT=ApplyAfterAdvancePersist; STATUS=TESTED; TEST=tests/test_sonny6611_raft_persist_before_apply.zig; OWNER=distributed; UPDATED=2026-11-15
+    // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=SentAfterAdvancePersist; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// Process one raft Ready, under `inner_mutex`, in the order Raft's
+    /// durability rules need (raft v0.2.0):
+    ///
+    /// 1. `ready()`;
+    /// 1b. SONNY-6622: restore the state machine from `Ready.snapshot`, a
+    ///    snapshot this node installed from the leader (raft v0.2.2), before
+    ///    it is persisted and before any entry after it applies;
+    /// 2. `advancePersist()`: the Ready's hard state (term, vote) and its
+    ///    unstable entries reach storage (FileStorage: written and fsynced);
+    /// 3. send `Ready.messages` (votes, a candidate's RequestVote, every
+    ///    vote / append / snapshot reply), which announce that state
+    ///    (SONNY-6563, SONNY-6592);
+    /// 4. apply `Ready.committed_entries` (SONNY-6611 item 7: a follower can
+    ///    receive an entry and its commit in one AppendEntries, and it was
+    ///    applied while it was only in memory);
+    /// 5. `advanceApply()`, which releases the Ready (and the committed
+    ///    entries' data).
+    ///
+    /// If restoring or persisting fails nothing is sent or applied, and the node pauses
+    /// (SONNY-6617): it keeps the Ready, takes no Raft input, and `tick`
+    /// retries the write with backoff (`retryStalledPersist`). Retrying,
+    /// not stopping the node, because the write is idempotent and the
+    /// usual causes (a full or read-only disk) clear without a restart; a
+    /// paused leader stops heartbeating, so the cluster fails over to a
+    /// node that can write meanwhile.
     fn drainReady(self: *RaftNode) void {
-        // raft-0.1.3 RaftNode.ready now returns `!rd.Ready`; surface the
-        // error in the log so we don't silently drop committed entries.
         const rd = self.inner.ready() catch |err| {
             log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
-            self.dropHeldOutbound();
             return;
         };
 
@@ -3505,7 +3610,135 @@ pub const RaftNode = struct {
             self.current_term = self.inner.current_term;
         }
 
+        // SONNY-6622: a snapshot this node installed is restored into the
+        // state machine first, so a refused snapshot is never persisted
+        // (a restart would skip it) and no entry applies past it.
+        if (rd.snapshot) |snap| self.restoreSnapshot(snap) catch |err| {
+            self.stall(rd);
+            log.err("raft snapshot restore failed: this node sends no vote or reply, applies nothing and takes no Raft input until the restore succeeds (retried every few ticks); applying later entries without the snapshot's contents would diverge from the cluster", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("node_id", self.id),
+                Attr.uint("snapshot_index", snap.metadata.index),
+                Attr.uint("snapshot_term", snap.metadata.term),
+            });
+            return;
+        };
+        self.inner.advancePersist() catch |err| {
+            self.stall(rd);
+            log.err("raft storage write failed: this node sends no vote or reply, applies nothing and takes no Raft input until the write succeeds (retried every few ticks); check the Raft data directory (disk full, read-only, permissions)", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("node_id", self.id),
+                Attr.uint("term", self.inner.current_term),
+            });
+            return;
+        };
+        self.finishReady(rd);
+    }
+
+    /// SONNY-6617: keep `rd` and pause the node until `retryStalledPersist`
+    /// gets it through.
+    fn stall(self: *RaftNode, rd: raft_lib.Ready) void {
+        self.stalled_ready = rd;
+        @atomicStore(bool, &self.persist_stalled, true, .release);
+        self.persist_failures = 1;
+        self.persist_backoff = 1;
+        self.persist_retry_wait = 0;
+    }
+
+    /// SONNY-6622: restore the state machine from `snap` (see
+    /// `snapshot_restore_callback`). Under `inner_mutex`.
+    fn restoreSnapshot(self: *RaftNode, snap: raft_lib.Snapshot) !void {
+        const restore = self.snapshot_restore_callback orelse {
+            // No state machine, nothing to restore (in-process tests).
+            if (self.apply_callback == null) return;
+            return error.RaftSnapshotRestoreUnavailable;
+        };
+        try restore(self.allocator, snap.data, snap.metadata.index, snap.metadata.term);
+        self.stats.snapshots_received += 1;
+        log.info("raft: state machine restored from the leader's snapshot", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("snapshot_index", snap.metadata.index),
+            Attr.uint("snapshot_term", snap.metadata.term),
+            Attr.uint("bytes", snap.data.len),
+        });
+    }
+
+    /// SONNY-6617: the most ticks between two persist retries.
+    const persist_backoff_max_ticks: u32 = 64;
+
+    /// SONNY-6617: retry the stalled Ready's `advancePersist()`. It is
+    /// idempotent: it re-writes the hard state (still unacknowledged by
+    /// `advanceApply`) and re-appends the unstable entries, truncating the
+    /// storage from their first index. On success the Ready is sent and
+    /// applied as `drainReady` would have; on failure the wait doubles, up
+    /// to `persist_backoff_max_ticks`. Under `inner_mutex`.
+    fn retryStalledPersist(self: *RaftNode) void {
+        if (self.persist_retry_wait > 0) {
+            self.persist_retry_wait -= 1;
+            return;
+        }
+        const rd = self.stalled_ready orelse return;
+        // SONNY-6622: the snapshot restore first, as in `drainReady`; both
+        // steps are idempotent.
+        const retried: anyerror!void = blk: {
+            if (rd.snapshot) |snap| self.restoreSnapshot(snap) catch |err| break :blk err;
+            break :blk self.inner.advancePersist();
+        };
+        retried catch |err| {
+            self.persist_failures += 1;
+            self.persist_retry_wait = self.persist_backoff;
+            self.persist_backoff = @min(self.persist_backoff * 2, persist_backoff_max_ticks);
+            log.err("raft storage write or snapshot restore still failing; node remains paused", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("node_id", self.id),
+                Attr.uint("attempts", self.persist_failures),
+                Attr.uint("next_retry_ticks", self.persist_retry_wait),
+            });
+            return;
+        };
+        log.info("raft storage write and snapshot restore succeeded; node resumes", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("attempts", self.persist_failures + 1),
+        });
+        self.stalled_ready = null;
+        @atomicStore(bool, &self.persist_stalled, false, .release);
+        self.persist_failures = 0;
+        self.persist_backoff = 1;
+        self.persist_retry_wait = 0;
+        self.finishReady(rd);
+    }
+
+    /// SONNY-6617: true while a failed Raft storage write (or, SONNY-6622, a
+    /// failed snapshot restore) is pending retry (the node takes no Raft
+    /// input and sends nothing). For health checks.
+    pub fn persistStalled(self: *RaftNode) bool {
+        return @atomicLoad(bool, &self.persist_stalled, .acquire);
+    }
+
+    /// Steps 3-5 of `drainReady` for a Ready that `advancePersist()` wrote.
+    fn finishReady(self: *RaftNode, rd: raft_lib.Ready) void {
+
+        // CANARY: REQ=REQ-DIST-RAFT-DRAINREADY-DISPATCH; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=DrainReadyMessages; STATUS=TESTED; TEST=tests/test_drainready_dispatch.zig; OWNER=distributed; UPDATED=2026-11-15
+        for (rd.messages) |out| {
+            if (self.transport != null) {
+                self.dispatchRaftLibMessageWithDest(out.to, out.msg) catch |err| {
+                    // Dropped: raft retries (a candidate asks again, a
+                    // leader re-sends AppendEntries).
+                    log.warn("raft message dispatch failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.uint("to", out.to),
+                    });
+                };
+            } else if (self.inner_transport) |t| {
+                t.send(out.to, out.msg);
+            } else {
+                log.debug("raft drainReady has a message but no transport set", &.{Attr.uint("to", out.to)});
+            }
+        }
+
         // Apply committed entries -- deserialize the tag-prefixed command bytes
+        const apply_io = std.Io.Threaded.global_single_threaded.io();
+        const apply_start = std.Io.Clock.awake.now(apply_io);
         for (rd.committed_entries) |entry| {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
@@ -3534,47 +3767,15 @@ pub const RaftNode = struct {
             }
             self.stats.entries_applied += 1;
         }
+        const apply_ns: u64 = @intCast(@max(0, apply_start.durationTo(std.Io.Clock.awake.now(apply_io)).nanoseconds));
+        if (apply_ns > self.stats.apply_max_ns) self.stats.apply_max_ns = apply_ns;
 
-        // Dispatch outbound raft messages produced by this tick to their
-        // target peers.  In raft-0.1.3 the inner node sends messages directly
-        // via its own Transport vtable (see RaftLibTransportBridge below), so
-        // `rd.messages` is currently always empty — but the API exposes the
-        // field and a future version may buffer here, so we treat it as a
-        // legitimate dispatch surface.  For in-process tests the inner
-        // transport vtable (set via `setInnerTransport`) handles routing
-        // before drain ever runs; for production, `setTransport` installs
-        // the bridge so this loop is a defensive secondary path.
-        // CANARY: REQ=REQ-DIST-RAFT-DRAINREADY-DISPATCH; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=DrainReadyMessages; STATUS=TESTED; TEST=tests/test_drainready_dispatch.zig; OWNER=distributed; UPDATED=2026-05-25
-        if (rd.messages.len > 0) {
-            if (self.transport != null) {
-                for (rd.messages) |msg| {
-                    self.dispatchRaftLibMessage(msg) catch |err| {
-                        log.warn("raft message dispatch failed", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
-                        // Drop the message — raft will retry on next heartbeat.
-                    };
-                }
-            } else {
-                log.debug("raft drainReady has messages but no wrapper transport set", &.{
-                    Attr.uint("message_count", rd.messages.len),
-                });
-            }
-        }
-
-        // raft-0.1.3 advance() is zero-arg and returns `!void`.  We can't
-        // propagate the error from this void fn, so log on failure — the
-        // next ready() call will report ReadyNotAdvanced if we silently
-        // skipped the call.
-        self.inner.advance() catch |err| {
+        // `advanceApply()` returns `!void`; this void fn logs on failure —
+        // the next ready() reports ReadyNotAdvanced if it was skipped.
+        self.inner.advanceApply() catch |err| {
             log.warn("raft advance error", &.{Attr.string("error", @errorName(err))});
-            // SONNY-6563: nothing that announces unpersisted state is sent.
-            self.dropHeldOutbound();
-            return;
         };
-        // SONNY-6563: the hard state and entries are durable; what the inner
-        // library sent during this step / tick / propose may now leave.
-        self.releaseHeldOutbound();
+        @atomicStore(u64, &self.applied_index, self.inner.log.applied, .release);
     }
 
     /// Look up a peer by id.  Returns null if the id isn't in `self.peers`.
@@ -3595,120 +3796,78 @@ pub const RaftNode = struct {
         return null;
     }
 
-    /// Forward a raft_lib.Message to a known destination through the wrapper
-    /// transport.  Used by both the bridge (where the raft library tells us
-    /// `to` via its vtable callback) and the `drainReady` defensive loop
-    /// (where we derive `to` from the message body).
+    /// Forward a raft_lib.Message to peer `to` through the wrapper
+    /// transport: converted to a geode Message (which owns copies of the
+    /// entry and snapshot data, `raftLibMessageToGeode`) and queued on the
+    /// peer's outbox, whose drain thread sends it without `inner_mutex`
+    /// (A6e: a QUIC write inline stalled the receive thread for the length
+    /// of a handshake). A test's `send_override` is called in place. Used by
+    /// `drainReady` for `Ready.messages` and by the bridge for leader
+    /// replication.
     ///
-    /// Note: we read `current_term` from `self.inner` rather than the
-    /// wrapper mirror.  The wrapper's `self.current_term` is only refreshed
-    /// inside `drainReady`, but the bridge can fire while `inner.step` is
-    /// still mid-call (the raft library dispatches messages synchronously
-    /// as they're emitted), so the inner term is the only authoritative
-    /// source at this point.
+    /// The term is read from `self.inner`: the wrapper's `current_term`
+    /// mirror is refreshed only in `drainReady`, and the bridge fires while
+    /// `inner.step` / `inner.tick` is still running.
     fn dispatchRaftLibMessageWithDest(self: *RaftNode, to: u64, msg: raft_lib.Message) !void {
         const t = self.transport orelse return error.NoTransport;
         const peer = self.findPeerById(to) orelse return error.PeerNotFound;
         const geode_msg = try raftLibMessageToGeode(self.allocator, msg);
-        try t.send(peer, self.id, self.inner.current_term, geode_msg);
-    }
-
-    /// drainReady-driven dispatch: the inner raft library hands us a
-    /// `Ready.messages` slice with no per-message destination, so we
-    /// recover it from the message body (candidate_id for RequestVote,
-    /// leader_id for AppendEntries / InstallSnapshot).  Response messages
-    /// can't be routed this way — the raft library always pairs responses
-    /// with the original sender at message-emit time and never buffers
-    /// them into `Ready.messages` in raft-0.1.3.  Returns
-    /// MessageWithoutDestination if the type is unsupported here.
-    fn dispatchRaftLibMessage(self: *RaftNode, msg: raft_lib.Message) !void {
-        const to = raftLibMessageDestination(msg) orelse return error.MessageWithoutDestination;
-        return self.dispatchRaftLibMessageWithDest(to, msg);
+        const term = self.inner.current_term;
+        if (t.send_override != null) {
+            defer freeOutboundMessage(self.allocator, geode_msg);
+            return t.send(peer, self.id, term, geode_msg);
+        }
+        t.enqueueOutbound(peer, self.id, term, geode_msg) catch |err| {
+            freeOutboundMessage(self.allocator, geode_msg);
+            return err;
+        };
     }
 };
+
+/// SONNY-6631: `hydrate` the graphs a raft library entry's command writes.
+fn prehydrateEntry(hydrate: *const fn (cmd: Command) void, entry: raft_lib.Entry) void {
+    if (entry.kind != .normal or entry.data.len == 0) return;
+    const cmd = deserializeCommand(entry.data) catch return;
+    hydrate(cmd);
+}
 
 /// Adapter that implements `raft_lib.Transport` and forwards every send
 /// through the wrapper `Transport` field of the surrounding `RaftNode`.
 ///
-/// Installed by `RaftNode.setTransport` so that messages produced by the
-/// inner raft library (RequestVote, AppendEntries, etc.) reach their target
-/// peers over the wrapper's transport (QUIC+TLS in production).  Without
-/// this adapter, the inner raft library has no way to send anywhere — it
-/// only knows about `raft_lib.Transport`, not the geode-level `Transport`.
+/// Installed by `RaftNode.setTransport`. Since raft v0.2.0 the library sends
+/// only leader replication (AppendEntries, heartbeats, InstallSnapshot)
+/// through it, straight from `step()` / `tick()` / `propose()` (Raft thesis
+/// §10.2.1: a leader may replicate before its own write is durable); votes
+/// and replies come out of `Ready.messages` in `drainReady`, after
+/// `advancePersist()`. The library frees an AppendEntries' entry data and a
+/// snapshot's chunk data as soon as `send` returns, so the message is
+/// converted, with its own copies, before it is queued.
 ///
-/// The `to` parameter supplied by the raft library is authoritative: it is
-/// set correctly for every message type, including responses where the
-/// destination cannot be recovered from the body.
+/// The `to` parameter supplied by the raft library is authoritative.
 const RaftLibTransportBridge = struct {
     pub const vtable = raft_lib.Transport.VTable{ .send = &sendImpl };
 
     fn sendImpl(ptr: *anyopaque, to: u64, msg: raft_lib.Message) void {
         const node: *RaftNode = @ptrCast(@alignCast(ptr));
-        // Task A6e (2026-05-26): the bridge runs synchronously from
-        // inside `inner.step()` / `inner.tick()`, which the wrapper
-        // calls while `inner_mutex` is held.  Performing the QUIC
-        // write inline (the previous behaviour) stalled the receive
-        // thread for as long as the network handshake / poll loop
-        // took — easily 10-100 ms on the first peer connect.  We now
-        // do the cheap part inline (raft_lib -> geode conversion,
-        // peer lookup) and hand the actual `send` off to the
-        // Transport's dispatch thread.
-        if (node.transport == null) {
-            log.debug("raft bridge: no transport set", &.{Attr.uint("to", to)});
-            return;
-        }
-        const peer = node.findPeerById(to) orelse {
-            log.debug("raft bridge: unknown destination peer", &.{Attr.uint("to", to)});
-            return;
-        };
-        const geode_msg = raftLibMessageToGeode(node.allocator, msg) catch |err| {
-            log.warn("raft bridge: conversion failed", &.{
+        node.dispatchRaftLibMessageWithDest(to, msg) catch |err| switch (err) {
+            error.NoTransport, error.PeerNotFound => log.debug("raft bridge: no route to peer", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("to", to),
-            });
-            return;
-        };
-        // SONNY-6563: held until `drainReady` has persisted the state this
-        // message announces (a vote grant is sent from inside `step()`,
-        // before `advance()` fsyncs the vote). `releaseHeldOutbound` then
-        // queues it on the outbox (or calls a test's `send_override`).
-        node.held_outbound.append(node.allocator, .{ .peer = peer, .from = node.id, .term = node.inner.current_term, .msg = geode_msg }) catch |err| {
-            log.warn("raft bridge: cannot hold outbound message; dropping it", &.{
+            }),
+            else => log.warn("raft bridge: send failed; dropping message", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("to", to),
-            });
-            freeOutboundMessage(node.allocator, geode_msg);
+            }),
         };
     }
 };
 
-/// Recover the destination node id from a raft_lib.Message body for the
-/// message types where it is unambiguous.  Returns null for response
-/// messages, which carry no destination of their own — the raft library
-/// always knows the destination at the point of emit, but a buffered
-/// Ready.messages slice has no way to encode it.
-fn raftLibMessageDestination(msg: raft_lib.Message) ?u64 {
-    return switch (msg) {
-        .request_vote => |rv| rv.candidate_id,
-        .append_entries => |ae| ae.leader_id,
-        .install_snapshot => |is| is.leader_id,
-        // For response messages there is no destination embedded in the
-        // body.  The bridge path uses the `to` argument from the vtable
-        // and never reaches this branch; the drainReady fallback returns
-        // MessageWithoutDestination here so the message is dropped (raft
-        // will retry on the next heartbeat).
-        .request_vote_response,
-        .append_entries_response,
-        .install_snapshot_response,
-        => null,
-    };
-}
-
 /// Convert a raft_lib.Message into the geode wire-format Message used by
 /// `Transport.send` / `writeRaftFrame`.  Allocates only where the geode
-/// representation owns a copy (append_entries.entries is deep-copied).
-/// Caller (the wrapper Transport) is responsible for freeing any
-/// allocations attached to the returned Message once the send completes.
+/// representation owns a copy: append_entries.entries, each entry's data
+/// included, and install_snapshot.data (the raft library frees both when
+/// its `send` returns, SONNY-6592). The caller frees the returned Message
+/// with `freeOutboundMessage` once the send completes.
 ///
 /// The geode Message variants carry strictly more fields than the
 /// raft_lib counterparts (e.g. `voter_id`); we fill those with defaults
@@ -3802,14 +3961,20 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
             .term = aer.term,
             .success = aer.success,
             .match_index = aer.match_index,
+            .conflict_index = aer.conflict_index,
+            .conflict_term = aer.conflict_term,
         } },
+        // SONNY-6592: `is.data` is a chunk of the snapshot the leader loaded
+        // in `sendSnapshotTo`, freed when the bridge's `send` returns; the
+        // outbox encodes the message later, on the peer's drain thread, so
+        // the message owns a copy (freed in `freeOutboundMessage`).
         .install_snapshot => |is| Message{ .install_snapshot = .{
             .term = is.term,
             .leader_id = is.leader_id,
             .last_included_index = is.last_included_index,
             .last_included_term = is.last_included_term,
             .offset = is.offset,
-            .data = is.data,
+            .data = if (is.data.len > 0) try allocator.dupe(u8, is.data) else &.{},
             .done = is.done,
         } },
         .install_snapshot_response => |isr| Message{ .install_snapshot_response = .{
@@ -3864,8 +4029,8 @@ pub fn geodeMessageToRaftLib(msg: Message) raft_lib.Message {
             .term = aer.term,
             .success = aer.success,
             .match_index = aer.match_index,
-            .conflict_index = 0,
-            .conflict_term = 0,
+            .conflict_index = aer.conflict_index,
+            .conflict_term = aer.conflict_term,
         } },
         .install_snapshot => |is| raft_lib.Message{ .install_snapshot = .{
             .term = is.term,

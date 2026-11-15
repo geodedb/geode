@@ -189,6 +189,13 @@ pub fn passwordInterceptApplies(authenticated_user: ?[]const u8, target: []const
     return std.mem.eql(u8, user, target);
 }
 
+/// SONNY-6600: the HELLO refusal messages of `auth_rate_limiter`
+/// (`hello_unavailable_message`, `hello_credential_invalid_message`; that
+/// module is the server executable's, so they are repeated here and kept
+/// equal by a comptime check in quic_connection_handler.zig).
+pub const auth_unavailable_message = "Authentication temporarily unavailable";
+pub const auth_credential_invalid_message = "Authentication unavailable: the stored credential of this account cannot be used (server-side error; contact the administrator)";
+
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
         // SONNY-2675: grouping_error (42803), the class every other grouping
@@ -549,6 +556,19 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // (ISO/IEC 39075:2024 4.7.3 step 4).
         error.WrongArgumentCount => .{ .code = "42000", .message = "Wrong number of arguments: the function does not take that many operands" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
+        // CANARY: REQ=REQ-SONNY-6600-AUTH-ERROR-GQLSTATUS; FEATURE="AuthOutcomeClassification"; ASPECT=ProcedureGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6600: a credential check that could not run, reaching a
+        // procedure (geode.auth.user_change_password's old-password check),
+        // answers what HELLO answers (SONNY-6598), not the generic 58000
+        // with the error's name. AuthUnavailable is retryable (the KDF or the
+        // user store could not run, e.g. out of memory under load): 53000,
+        // insufficient resources, the class OutOfMemory (53200) and the MFA
+        // lockout (53400) use. AuthCredentialInvalid is the account's stored
+        // hash being unusable, which a retry does not cure: 58000, the class
+        // of the other damaged-stored-data errors (DataCorruption, ...).
+        // Neither is 28000: the credential was not checked.
+        error.AuthUnavailable => .{ .code = "53000", .message = auth_unavailable_message },
+        error.AuthCredentialInvalid => .{ .code = "58000", .message = auth_credential_invalid_message },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
         // GAP-0840: strict-tenancy rejected a tenant-scoped operation with no
         // concrete tenant scope (unset/empty/"default"). Surface as a
@@ -600,6 +620,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidMfaCode => .{ .code = "28000", .message = "invalid token: the MFA code does not verify against the user's TOTP secret" },
         error.MfaNotEnrolled => .{ .code = "55000", .message = "mfa_not_enrolled: the user has no TOTP secret; run geode.auth.mfa_setup first" },
         error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
+        // SONNY-6608: an MFA enrollment or on/off change that could not be
+        // stored in the security graph was not applied.
+        error.MfaChangeNotPersisted => .{ .code = "58030", .message = "The MFA change could not be saved to the security graph; it was not applied. Retry it" },
         error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
         error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
         // SONNY-3135 (N7d): geode.auth.grant(..., '*') (it stored a grant on a

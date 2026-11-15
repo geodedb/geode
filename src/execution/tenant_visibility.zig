@@ -382,6 +382,34 @@ pub fn listPropertiesForLabelVisible(allocator: std.mem.Allocator, store: *graph
     }.list);
 }
 
+/// SONNY-6589 (3): `listNodeLabelsVisible` of graph `graph_name` only.
+pub fn listNodeLabelsVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, graph_name, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, g: []const u8) anyerror![][]const u8 {
+            return s.listNodeLabelsInGraph(a, g, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6589 (3): `listEdgeTypesVisible` of graph `graph_name` only.
+pub fn listEdgeTypesVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, graph_name, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, g: []const u8) anyerror![][]const u8 {
+            return s.listEdgeTypesInGraph(a, g, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6589 (3): `listPropertiesForLabelVisible` of graph `graph_name` only.
+pub fn listPropertiesForLabelVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8, label: []const u8) ![][]const u8 {
+    const GraphLabel = struct { graph: []const u8, label: []const u8 };
+    return unionOverVisibleTags(allocator, store, filter_tenant, GraphLabel{ .graph = graph_name, .label = label }, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, gl: GraphLabel) anyerror![][]const u8 {
+            return s.listPropertiesForLabelInGraph(a, gl.graph, tag, gl.label);
+        }
+    }.list);
+}
+
 fn unionOverVisibleTags(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -527,7 +555,7 @@ pub fn edgeIdTraversable(
     store: *graph_store.GraphStore,
     edge_id: u64,
     filter_tenant: ?[]const u8,
-) bool {
+) !bool {
     if (filter_tenant == null) return true;
     // Review R1 — read the edge BY VALUE. `getEdgePtrHydrated` hands back a raw
     // `*Edge` pointing into the bounded edge-body cache; `graph_store.zig`
@@ -536,7 +564,7 @@ pub fn edgeIdTraversable(
     // safe accessor — it copies the body under the per-shard map lock SHARED,
     // which is exactly what `getNeighbors` already uses. This predicate runs on
     // analytical reads that overlap ingest, so it takes the by-value accessor.
-    const edge = store.getEdgeHydrated(edge_id) orelse return false;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return false;
     return edgeTraversable(store, edge, filter_tenant);
 }
 

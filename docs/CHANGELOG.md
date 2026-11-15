@@ -4,6 +4,212 @@
 
 ### Security
 
+- **`geode.auth.mfa_enable` is under the MFA attempt limiter; removing a
+  SecurityManager user cannot leave its sessions; offline `mfa enable`
+  counts malformed codes (SONNY-6623).** `mfa_enable` checked the TOTP
+  code with no attempt limit (Admin only, but an unlimited guessing
+  route): it now shares `mfa_verify`'s limiter (one per-user count and
+  lockout, the stored lockout transitions of SONNY-6619). **User-visible:**
+  failures through either procedure count toward the same lockout, and a
+  malformed `mfa_enable` code from an enrolled user counts (still 22023;
+  a missing code does not). `SecurityManager.removeUserByName` collected
+  the user's sessions into an allocated list and left them when the
+  allocation failed; they are removed in place now. The offline
+  `geode user mfa enable --code` refused a malformed code before counting
+  it; it is counted now, as `mfa-verify` counts it. Regressions: `zig build
+  test-sonny6623-mfa-enable-limit`, `zig build test-sonny6623-offline`.
+
+- **Offline `geode user mfa enable --code` counts against the attempt
+  limit; the server's MFA lockout survives a restart; SecurityManager
+  follows the MFA procedures and drops a dropped user; an in-process store
+  no longer holds the data directory (SONNY-6619).** `geode user mfa enable
+  --code` checked the code with no attempt limit; it now counts against the
+  sealed `MfaAttempts` record with `mfa-verify` (5 failures, 5-minute
+  lockout, counted before the check). `geode.auth.mfa_verify` kept its
+  lockout in process memory; the transition into lockout (the fifth
+  failure) and the reset after a stored lockout are now stored in
+  `MfaAttempts` and loaded at startup. Failures below the limit stay in
+  memory: storing each would re-seal the whole chain per wrong guess.
+  SecurityManager now takes mfa_setup's new secret and codes and
+  mfa_enable / mfa_disable's flag, and DROP USER removes the user from it
+  (record, roles, sessions). timeseries-storage opens each graph's
+  `timeseries` directory for its WAL and never closes it, so a process
+  that had opened the store (the offline CLI, test fixtures) kept a
+  descriptor in the data directory and the offline CLI's live-server guard
+  treated it as a holder; geode's timeseries `Store.deinit` now closes it
+  (the library fix is owed upstream). The offline-CLI regression tests no
+  longer pass `--force`. Regressions: `zig build test-sonny6619-mfa-limits`,
+  `zig build test-sonny6619-offline`.
+
+- **The SecurityManager load frees everything when it fails, DROP USER
+  clears the user's MFA state from SecurityManager, and the offline
+  `geode user mfa-verify` has the online attempt limit (SONNY-6614).** The
+  startup load of SecurityManager (now
+  `auth_startup_hydration.hydrateSecurityManager`) had no errdefer: an
+  allocation failure part way leaked the SecurityManager and every record
+  it had copied (shown under every allocation failure: 208 leaked
+  allocations), and `SecurityManager.hydrateUser` leaked the copies it had
+  made; both free them now, and a role-membership entry whose list cannot
+  be made is removed instead of left undefined. DROP USER left the user's
+  TOTP secret, recovery codes and MFA flag in SecurityManager; it clears
+  them. The offline `geode user mfa-verify` had no attempt limit (the
+  server's count lives in its process memory; each run of the command is a
+  new process): it now keeps a sealed `MfaAttempts` record in
+  `__geode_security` with the online rule (five failures, a five-minute
+  lockout, reset on success), counting the attempt before the code is
+  checked. **User-visible:** `geode user mfa-verify` writes the store now,
+  so it is refused while a server holds the data directory unless
+  `--force` is given (it takes `--force` now). Test harness:
+  `proto_test_util.ServerHandle.stopGracefully` (SIGTERM, wait, then
+  SIGKILL past a bound); `deinit` stays SIGKILL. Regressions: `zig build
+  test-sonny6614-auth-residuals`, `zig build test-sonny6614-offline-verify`.
+
+- **The TOTP secret is encrypted at rest; no loop2 snapshot of the
+  security graph; SecurityManager gets the stored recovery codes; DROP
+  USER reports a missing user; `geode user show` prints the MFA state
+  (SONNY-6609).** The user record's `mfa_secret` held the TOTP secret in
+  plaintext (in the security graph's pages and WAL without TDE). It is now
+  sealed with AES-256-GCM (through the `crypto_backend` seam) under a key
+  derived with HKDF-SHA256 from the security graph's HMAC key, with a random
+  nonce and the user id as associated data; a plaintext secret written by
+  an older binary is sealed when the server loads it. Whoever holds both
+  the data directory and the HMAC key (by default `.geode_hmac_key` inside
+  the data directory) can still open it; supply the key from outside the
+  data directory (`GEODE_AUTH_HMAC_KEY` / `GEODE_TDE_KEY`) to separate them.
+  The loop2 hydration snapshots copied the security graph's property values
+  into unencrypted side-car files; they are no longer written for
+  `__geode_security` (an old one is deleted). The `mfa_secret` field grew
+  from 64 to 128 bytes. SecurityManager is loaded with each user's opened
+  secret and stored recovery codes (it got neither code). **BREAKING:**
+  `DROP USER` / `geode.auth.user_delete` of a user that does not exist
+  fails with 42704 (it answered `deleted <name>`), and any other failure is
+  reported; `DROP USER IF EXISTS` stays a no-op. `geode user show` prints
+  `MFA: enabled|disabled (enrolled, N recovery codes; ...)` or `(not
+  enrolled)`. Regressions: `zig build test-sonny6609-mfa-at-rest`, `zig
+  build test-sonny6609-mfa-at-rest-scan`.
+
+- **MFA enrollments and the MFA on/off state are stored in
+  `__geode_security`, the offline CLI turns MFA on only with a verified
+  code, and the mfa_* results no longer leak (SONNY-6608).**
+  `geode.auth.mfa_setup` kept the enrollment in process memory only (a
+  restart lost it, and a user re-created under the name inherited it), and
+  `mfa_enable` / `mfa_disable` changed no stored state. The enrollment is
+  now written through to the HMAC-chained security graph, all of it or none
+  of it: the TOTP secret in the user record's `mfa_secret`, the recovery
+  codes as SHA-256 digests in a new sealed `MfaRecoveryCodes` record, and
+  `mfa_enabled` turned off until `mfa_enable` verifies a code against the
+  new secret; `mfa_enable` / `mfa_disable` set the stored flag. The server
+  loads every enrollment at startup (one that cannot be loaded fails
+  startup) and `DROP USER` removes it. A change that cannot be stored is
+  refused with GQLSTATUS 58030. **User-visible:** these changes bump the
+  user's `auth_version`, so the user's live sessions end. The secret gets
+  the protection every user record field gets: the HMAC chain for
+  integrity and page-level TDE when `GEODE_TDE_KEY` is set; **without TDE it
+  is plaintext on disk** (no field-level encryption). The offline
+  `geode user mfa-setup` turned `mfa_enabled` on before any code was
+  verified and stored none of the recovery codes it printed; it now stores
+  the secret with MFA off and the codes as digests. **BREAKING:**
+  `geode user mfa enable <user>` without `--code` is refused (exit 2; it
+  turned MFA on with no proof of the authenticator), as is an action other
+  than `enable` / `disable` (it disabled MFA). The `mfa_setup` /
+  `mfa_enable` / `mfa_disable` results did not own their strings, so every
+  call over gRPC leaked them (shown under a leak-checking allocator); they
+  now own them. `mfa.MfaChallenge` / `MfaResponse` (no user) were removed.
+  Login still does not ask for MFA (SONNY-6604). Regressions: `zig build
+  test-sonny6608-mfa-persist`, `zig build test-sonny6608-mfa-restart`.
+
+- **MFA says it is not enforced at login, the MFA rate limiter fails
+  closed, and the dead 8-character recovery-code matcher is gone
+  (SONNY-6602).** No login is protected by MFA: the QUIC and gRPC HELLO
+  never ask for a TOTP code or a recovery code, and
+  `SecurityManager.authenticateWithMFA` has no production caller (wiring
+  MFA into HELLO is story SONNY-6604). `geode.auth.mfa_setup` nonetheless
+  answered a TOTP secret and recovery codes, and `geode.auth.mfa_enable`
+  "MFA enabled for <user>", with nothing saying so. **User-visible:** both
+  now answer an extra last column, `warning`, that says MFA is not enforced
+  at login and that no procedure redeems the recovery codes; the offline
+  `geode user mfa-setup`, `geode user mfa enable` and their `--help` print
+  the same warning, and `mfa-setup --show-recovery` no longer says each
+  code "can only be used once" (the CLI does not even store them).
+  `geode.auth.mfa_verify` counted a failed attempt after checking the code,
+  and when the attempt record could not be made (out of memory) the attempt
+  was logged and not counted: unlimited guesses. The record is now made
+  before the code is checked; a verification whose record cannot be made
+  is refused with GQLSTATUS 53000 without checking the code, and counting a
+  failure in an existing record allocates nothing (a successful
+  verification resets the record instead of dropping it).
+  `mfa.verifyRecoveryCode` matched 8-character codes only while the issued
+  codes are 32 characters, and only a test called it; it was removed.
+  The gRPC Execute result a session retains (`active_result_values`) was
+  checked for a use-after-free: grpc_zig hands every handler
+  `GrpcServer.allocator`, the allocator geode's `GeodeGrpcServer.init` was
+  given, which is the one the session store and every session use (the
+  server's process allocator), not a per-request one, so there is none.
+  Regressions: `zig build test-sonny6602-mfa`, `zig build
+  test-sonny6602-mfa-cli`.
+
+- **Cluster tokens are compared in full and must be at least 16 bytes;
+  MFA recovery codes are held as digests; auth checks that could not run
+  are errors, not verdicts; stored password hashes are parsed strictly
+  (SONNY-6600).** The cluster token comparison copied both tokens into
+  256-byte zero-padded buffers, so a token longer than 256 bytes was
+  accepted from a peer that knew only its first 256 bytes (and the token
+  truncated to 256 bytes was accepted); both are now hashed with SHA-256
+  and the digests compared in constant time. **BREAKING:** `geode serve`
+  refuses to start (exit 1, naming the variable and its length) when
+  `GEODE_CLUSTER_TOKEN` or `GEODE_CLUSTER_TOKEN_PREVIOUS` is set and
+  shorter than 16 bytes, empty included (`GEODE_CLUSTER_TOKEN=t` turned
+  cluster mode on); generate one with `openssl rand -hex 32`. MFA recovery
+  codes were compared with `std.mem.eql` (a timing side channel) and held
+  in plaintext, by `SecurityManager` and by the `geode.auth.mfa_setup`
+  store; they are now SHA-256 digests compared in constant time, plaintext
+  ones converted on their first check (`SecurityManager.setRecoveryCodes`
+  stores new ones), still redeemed once under concurrent logins. The MFA
+  store kept the allocator of the first `mfa_*` request (a request-scoped
+  allocator left it in freed memory) and handed out its secret after
+  releasing its lock; it now allocates from the process allocator, copies
+  the secret under its lock and zeroes the copy after use, and frees the
+  MFA attempt record's key (it leaked). The LSP `initialize` token check
+  answered every error of the auth provider, out of memory included,
+  "invalid auth token" (-32002); a check that could not run is now
+  -32603 "authentication temporarily unavailable" and logged. A Raft frame
+  whose nonce could not be recorded was dropped as a replay (and the
+  tracker's ring and set disagreed after it); it is still dropped, logged
+  at ERROR as that and counted (`nonce_tracker.record_errors_total`), and
+  the tracker is unchanged. `geode.auth.user_change_password` (and any
+  procedure) answers `AuthUnavailable` with GQLSTATUS 53000 "Authentication
+  temporarily unavailable" and `AuthCredentialInvalid` with 58000 and the
+  HELLO path's message (both were 58000 with the error's name).
+  **BREAKING:** the Argon2id PHC parser accepts only
+  `$argon2id$v=19$m=..,t=..,p=..$<32 hex>$<64 hex>`: a parameter without
+  `=`, an unknown, missing (it defaulted), duplicate or reordered
+  parameter, a sign or leading zero, or anything after the hash is now an
+  unusable stored credential (`InvalidHashFormat`), and that account
+  cannot log in until its password is reset; every hash Geode writes has
+  this form. Regressions: `zig build test-sonny6600-cluster-token`
+  (validator, a real two-node in-process cluster, a spawned server),
+  `test-sonny6600-mfa`, `test-sonny6600-auth-outcomes`. See
+  src/distributed/README.md and docs/USER_AUTH.md.
+- **The embedded LSP authenticates with the HELLO's user name and password
+  and completes only what the user may read (SONNY-6589).** `geode serve`'s
+  LSP listener checked every `initialize` token against an `AuthProvider`
+  that nothing populated (the server issues no API keys or session tokens,
+  SONNY-6554), so no client could ever authenticate and schema-aware
+  completion over TCP did not work. An `initialize` now carries
+  `initializationOptions.geode.username` and `.password` (and optionally
+  `graph`, `tenant`), checked as a QUIC HELLO's
+  (`user_management.authenticate`, behind the same per-(peer IP, user) rate
+  limiter); a wrong or missing credential, or a user who must change their
+  password first, gets JSON-RPC -32002 and no schema. **BREAKING:** the
+  session's labels, edge types and properties are those of the session's
+  graph only (they were the union over every graph, `__geode_security`
+  included), and none at all for a graph the user may not bind and read
+  (`session_graph.mayBind`, `gps.graphReadPermitted`, as for HELLO and
+  MATCH). A verified principal whose role this build does not assign (no
+  stored role) is no role, not ReadOnly. Stdio `geode lsp` and
+  `geode lsp --listen` have no user store: they authenticate nobody (stdio
+  `--no-auth` is the local developer mode). docs/LSP_FEATURES.md.
+
 - **CDC procedures answer the engine's state or refuse, Admin only, audited
   (SONNY-6570).** Change capture is not implemented (SONNY-6572): no write
   path feeds the CDC engine, so no change is ever captured. The `CALL cdc.*`
@@ -2825,6 +3031,314 @@
 
 ### Fixed
 
+- **Cluster Raft on raft v0.2.2 / wal v0.1.24: a lagging follower restores
+  the leader's snapshot, rejections carry the backtracking hint over the
+  wire, a damaged Raft log refuses startup by name, and a follower's or
+  replaying node's apply no longer hydrates graphs under the Raft lock
+  (SONNY-6622, SONNY-6628 item 4, SONNY-6631).** raft v0.2.2 delivers a
+  snapshot a follower installed in `Ready.snapshot`; `drainReady` ignored
+  it, so the raft log jumped to the snapshot point while the graph kept its
+  old contents and later entries applied on top. It is now restored first
+  (`RaftNode.snapshot_restore_callback`, wired to
+  `raft_apply.restoreSnapshotCallbackFn`), before the snapshot is persisted
+  or any entry after it applies; a restore that fails pauses the node as a
+  failed persist does (SONNY-6617), and `appliedIndex()` no longer reports
+  the snapshot as applied (the library moves its own applied index at
+  install). A snapshot cannot yet be restored into the durable store (the
+  in-memory rebuild does not rewrite the storage engine): such a node
+  refuses it and stops. Nothing in the server takes Raft snapshots yet, so
+  a leader never sends one. A rejected AppendEntries carries
+  `conflict_index` / `conflict_term` (new protobuf fields 4 and 5; an older
+  peer sends neither, reads as 0 and is backed off from as before) on both
+  receive paths, so a new leader resumes a short follower where its log
+  ends. `FileStorage` now refuses a log with a damaged record
+  (`LogCorrupted`, `LogAuthFailed`, `LogEncryptionMismatch`) instead of
+  cutting it there; startup fails with `RaftStorageLogCorrupted` /
+  `RaftStorageLogAuthFailed` / `RaftStorageLogEncryptionMismatch` and an
+  error naming the directory, which is left as it is (it reported
+  `InvalidNodeId`). A Raft apply runs under `inner_mutex`; a follower
+  applying a statement batch whose entries write a graph not hydrated yet,
+  and a restarted node replaying its log, scanned the graph there (220-262
+  ms for 20,000 nodes, at the 250 ms election timeout). The Raft node now
+  hydrates the graphs of every entry it receives (`handleMessage`,
+  `stepInner`), a batch's entries included, and of every entry it will
+  replay (`prehydrateUnapplied`, at coordinator start), before it takes
+  `inner_mutex`; `stats.apply_max_ns` records the longest apply. The leader
+  counts only persisted entries toward commit (a commit shows one Ready
+  later); no geode test needed to change for it. **BREAKING (operators):**
+  a node whose Raft log is damaged no longer starts with the log cut at the
+  damage; rebuild its data from the cluster. graph-storage and
+  timeseries-storage still pin wal v0.1.23; geode compiles them against its
+  wal v0.1.24 until they re-pin. Regressions: `zig build
+  test-sonny6622-raft-v022-adapt`, `zig build
+  test-sonny6631-apply-hydration-off-mutex` (under one spinning thread per
+  CPU: apply 1 ms and 0 ms, was 664 ms and 351 ms), `zig build
+  test-sonny6567-raft-apply-hydration` (now at most 50 ms; was under 250 ms
+  and flaky).
+
+- **A cluster node whose Raft storage write fails pauses and retries
+  instead of stopping for good; `geode query` / `geode shell` apply a DSN
+  timeout; `geode mcp` says what to do about a gRPC endpoint with TLS on
+  (SONNY-6617).** When `advancePersist()` failed (a full or read-only disk)
+  `drainReady` logged and returned, leaving the raft library's Ready
+  un-advanced: every later `ready()` failed with `ReadyNotAdvanced` and the
+  node never voted, acknowledged or applied again until restarted, even once
+  the disk was writable. The node now keeps the Ready and pauses: it sends
+  nothing, applies nothing, drops inbound Raft messages, refuses proposals
+  (`RaftStoragePersistFailed`) and runs no election or heartbeat timer,
+  while each tick retries the write with backoff (1 to 64 ticks); the first
+  failure is logged at error level with what to check, each retry with its
+  attempt count, and the recovery once. Retrying rather than stopping the
+  node because the write is idempotent (hard state rewritten, unstable
+  entries re-appended from their first index) and the usual causes clear
+  without a restart; a paused leader stops heartbeating, so the cluster
+  fails over meanwhile. `RaftNode.persistStalled()` reports the state.
+  **User-visible:** `geode query --dsn` takes the DSN's `connect_timeout` /
+  `timeout` / `timeout_ms` in place of `--timeout` (whole seconds, rounded
+  up; it bounds the QUIC handshake too, which `--timeout` now also does),
+  and `geode shell --dsn` waits that long for the handshake and for each
+  answer; both warned "has no effect" and waited 30 s on a server that did
+  not answer. A `geode mcp` `grpc://` endpoint with TLS on answers its
+  tools and resources with "the gRPC client has no TLS, so a grpc://
+  endpoint needs tls=0 ... use quic://" instead of `ConnectionFailed` or
+  the schema/stats offline documents. Regressions: `zig build
+  test-sonny6617-raft-persist-failure` (the node's FileStorage directory
+  made read-only, then writable), `zig build test-sonny6617-cli-dsn-timeout`.
+  geode-client-zig v0.3.19 (SONNY-6617) applies the timeout to every wait:
+  query, transaction and ping answers and a write held up by flow control
+  (they waited a fixed 30 s), and the gRPC connect, reads and writes (they
+  waited for the kernel or the server); its HELLO defaults send its version
+  and conformance `min`.
+
+- **Cluster Raft: a committed entry is durable before it is applied, and
+  votes and replies leave a node only after the state they announce is
+  durable (SONNY-6611 item 7, SONNY-6592; raft v0.2.0).** `RaftNode.drainReady`
+  applied a Ready's committed entries to the graph before the raft
+  library's `advance()` wrote the Ready's entries to storage. A follower
+  that gets an entry and its commit in one AppendEntries held the entry only
+  in memory when it applied it, so a crash at that moment left the mutation
+  in the graph with no log entry for it. `drainReady` now persists
+  (`advancePersist()`), then sends the Ready's messages, then applies, then
+  calls `advanceApply()`. raft v0.2.0 queues votes, a candidate's
+  RequestVote and every vote / append / snapshot reply in `Ready.messages`
+  instead of sending them from `step()` / `tick()`, so geode's SONNY-6563
+  workaround (holding everything the library sent until `advance()`) is
+  gone; leader AppendEntries, heartbeats and InstallSnapshot still go out
+  at once, as before. The library's log slices now own their entry data
+  (it leaked every stable entry's data on each read). geode's InstallSnapshot
+  conversion kept a pointer to the snapshot chunk the library frees as soon
+  as its send returns, and the outbox encoded it later; the queued message
+  now owns a copy. A node outside its own voter set no longer starts
+  elections. In-process tests wired with `setInnerTransport` get their
+  votes and replies through `drainReady`. Regression: `zig build
+  test-sonny6611-raft-persist-before-apply` (FileStorage and TDE storage;
+  before the fix "entry 1 was applied while storage held last index 0").
+
+- **`geode mcp` applies an endpoint DSN's timeout; backup and restore no
+  longer run the QUIC handshake on a thread of their own (SONNY-6589 item 2,
+  SONNY-6606 item 4; geode-client-zig v0.3.18).** The client library now
+  applies `Config.timeout_ms` to the QUIC handshake and the HELLO wait, and
+  `page_size`, `tls` and `hello_name` / `hello_ver` / `conformance` through
+  `initFromConfig`. **User-visible:** `geode mcp --endpoint` takes
+  `connect_timeout` / `timeout` / `timeout_ms` again (it refused them with
+  "cannot apply connect_timeout" while the library ignored them): a tool or
+  resource on a server that does not answer reports `Timeout` after that
+  time instead of after 30 s. `timeout` is read as milliseconds, like
+  `timeout_ms` (the library's rule). The library's query, transaction and
+  ping requests still wait a fixed 30 s for their answers. `geode backup
+  create --server` and `geode restore --server` pass `--timeout` (at most an
+  hour) to the client, which gives up on the handshake itself; the message
+  ("no QUIC handshake within N s") is unchanged. geode's clients name
+  themselves in the library's HELLO: `geode-mcp` (unless the DSN sets
+  `hello_name`), `geode-cli`, `geode-backup`, `geode-restore`,
+  `geode-migrate`, with geode's version. **BREAKING:** a `geode mcp`
+  `grpc://` endpoint with `insecure=true` but without `tls=0` now fails with
+  `TlsNotImplemented` (the library's gRPC client has no TLS) instead of
+  connecting in plaintext. Regressions: `zig build test-sonny6589-mcp-timeout`
+  (timeouts of 2 s and 4 s honoured, in process and through `geode mcp
+  --stdio`), `test-sonny6606-backup-handshake-timeout`.
+
+- **A graph's first-read hydration no longer quarantines a healthy graph,
+  or hydrates stale data, when a checkpoint runs at the same time
+  (SONNY-6597).** The hydration scan (`hydration_scan.scanShard`) reads
+  store pages straight from disk and sent through the buffer pool only the
+  pages its snapshot found dirty. A checkpoint flush or a dirty eviction
+  clears a page's dirty flag and then writes the page with the pool unlocked,
+  so a snapshot taken in that window read the older disk image: a node
+  created since the last checkpoint was missing, the shard held fewer live
+  records than its manifest counts, and the graph was quarantined as
+  `58000 DataCorruption` (every read and write refused until a restart);
+  a property SET since then hydrated with its old value and reads answered
+  OK. Seen after a restart in `test-sonny6591-fts-write-paths` under load,
+  where the periodic light checkpoints run during the lazy first-read
+  hydration. The scan now reads every page resident in the pool at its
+  snapshot through the pool (cache hits; bounded by the pool, not the
+  store), which covers the window whatever the flush order. The live-count
+  check is unchanged and still detects lost or zeroed node pages
+  (`test-sonny2409-zeroed-page-header`, `test-canary-recovery-corrupt-latency`).
+  Regression: `zig build test-sonny6597-hydration-flush-race` (holds the
+  window open with the graph's own engine thread pool; before the fix the
+  scan found 8 of 9 nodes with DataCorruption, and the old property value).
+
+- **The SONNY-6589 follow-ups (SONNY-6606).** **BREAKING (security):**
+  `CALL db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()` and
+  `SHOW TABLES` list the schema of the session's graph only; they listed
+  every graph's, the internal `__geode_security` graph's `User`, `Role`,
+  `AuthChainRoot`, `HAS_ROLE`, `password_hash` and `hmac` included, to every
+  session, a readonly user granted one graph too. The batch property writes
+  (`setNodePropertiesBatch`, and the write fast path's `CREATE (n:L {k: v})`
+  through `setNodePropertiesBatchInMemoryOnly`) count the keys they write
+  in the label-property index, so `listPropertiesForLabel` and the LSP's
+  `n.` completion list them (they listed none). A graph whose manifest
+  cannot be read is reported once per boot, not at every registry save and
+  full checkpoint. `geode backup create` and `geode restore --server` give
+  up on a server that does not answer the QUIC handshake within
+  `--timeout` (it took geode-client-zig's fixed 30 s). `geode shell`'s
+  `\connect` authenticates with the credentials the shell logged in with
+  (its HELLO carried none, so an authenticating server refused it). An LSP
+  principal a token verifier reports with no role is None, not ReadOnly.
+  The uncalled `RaftNode.startElection` (it started no election) is
+  removed with its test. Regressions: `zig build
+  test-sonny6606-meta-schema-scope`, `-batch-property-counters`,
+  `-broken-graph-logs`, `-backup-handshake-timeout`,
+  `-repl-connect-credentials`, `-lsp-role-default`,
+  `test-sonny6589-lsp-auth`.
+- **CLI, MCP and storage residuals (SONNY-6589).** **BREAKING:** a
+  `geode mcp` endpoint DSN carrying `connect_timeout` (`timeout`) or
+  `timeout_ms` is refused ("Invalid Geode endpoint DSN: geode mcp cannot
+  apply connect_timeout (timeout) or timeout_ms ..."), by the tools at once
+  and by `geode mcp --endpoint` at startup: geode-client-zig copies no
+  timeout into its client, whose QUIC handshake and HELLO each wait a fixed
+  30 s, so `timeout=2000` waited 30 s on a server that did not answer. A
+  refused `\connect` in `geode shell` prints the endpoint message (never the
+  address) instead of a bare error name (`UnencodedCredentialDelimiter`,
+  `InvalidPort`), and the shell keeps its working session (it had torn it
+  down first, so the next statement failed too). `geode backup create` and
+  `geode restore --server` name the address they dial (`--server :3141`
+  is `127.0.0.1:3141`), not `--server` as typed. A graph whose engine cannot
+  be opened is opened, and the failure logged, once per boot (it was opened
+  again on every access: four times in one boot, re-reading its store); it
+  still answers 58000, and a restart tries again (SONNY-6554 item 7).
+  Regressions: `zig build test-sonny6589-mcp-timeout`,
+  `test-sonny6589-cli-messages`, `test-sonny6589-broken-graph-open`,
+  `test-sonny6589-lsp-auth`.
+- **`RaftNode.startElection` drains under `inner_mutex` (SONNY-6592).** It
+  ran `drainReady` (apply committed entries, dispatch messages) without the
+  lock every other caller holds, racing a `tick` or `step` on another
+  thread. Outgoing messages are still held until `advance()` has persisted
+  the hard state (SONNY-6563). Docs that described distributed modules
+  deleted in SONNY-6279 and SONNY-6563 as delivered now say they were
+  removed. Regression: `zig build test-sonny6592-start-election-lock`.
+- **A PROFILE'd point write names the index its seek used (SONNY-6587).**
+  `MATCH (n:L) WHERE n.k = 'v' SET ...` on a persisted graph is served by an
+  exact-property seek (`pointWriteFastPath`); its version-1 PROFILE named no
+  index on either transport. It now reports `NodeIndexScan` with the catalog
+  btree or hash index on the label and key (the version-2 rule, SONNY-1335)
+  and the nodes the seek returned; with no catalog index, none. Regression:
+  `zig build test-sonny6587-profile-point-write-seek` (QUIC and gRPC).
+
+- **A writing FOR after a WITH leaks nothing and runs for every WITH row
+  (SONNY-6587).** `WITH 7 AS k FOR x IN [10, 20] CREATE ...` leaked the list
+  the FOR header computed on every run (SONNY-6449 fixed the same leak for a
+  FOR that reads). executeForWithBindings ran a writing body for the WITH's
+  first row only; the write allowlist admits only a one-row WITH there
+  (`MATCH (z) WITH z FOR x IN z.l CREATE ...` is refused whole, 0A000,
+  before any write), so no wrong write was reachable, and it now runs every
+  row. Regression: `zig build test-sonny6587-for-write-after-with` (every
+  session kind).
+
+- **range() refuses a non-integer argument and a zero step (SONNY-6587).**
+  `range(start, end[, step])` (a Geode extension; its end stays exclusive,
+  as documented since SONNY-6466) answered NULL for `range(1.5, 3)`,
+  `range(1, '3')` and `range(1, 4, 0)`. **BREAKING:** a value that is not an
+  integer is now 22G03 and a zero step 22023; a NULL argument still gives
+  NULL. docs/TYPES_AND_FUNCTIONS.md says so. Regression:
+  `zig build test-sonny6587-list-functions`.
+
+- **head() and last() of a value that is no list are 22G03 (SONNY-6587).**
+  They answered NULL for `head(1)`, `last('ab')` or `head({a: 1})`; tail()
+  raised 22G03 since SONNY-6555. NULL in is still NULL out, and an empty
+  list still gives NULL. **BREAKING** for a query that relied on the NULL.
+  Regression: `zig build test-sonny6587-list-functions`.
+
+- **A procedure call's RETURN takes GROUP BY and HAVING; the graph
+  algorithm guide's examples parse (SONNY-6596).** ISO/IEC 39075:2024 14.11
+  puts the `<group by clause>` in the `<return statement body>`, so `CALL
+  algo.louvain.stream() YIELD nodeId, community RETURN community,
+  collect(nodeId) AS members, count(*) AS n GROUP BY community` is valid; it
+  was a syntax error after `CALL ... YIELD` (it worked after MATCH and
+  `CALL { }`). The GROUP BY and HAVING now group the yielded rows.
+  docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md had 15 examples Geode refused: the
+  GROUP BY ones, `AS size` (SIZE is a reserved word, SONNY-6564), a `CALL`
+  followed by `MATCH` (now `MATCH ... CALL ... FILTER`), fragments ending in
+  a WITH, and a query chaining three procedure calls (a query part runs one;
+  the guide now says so). Regression:
+  `zig build test-sonny6596-doc-examples-parse` parses every ```gql example
+  of the guide through the real parser and runs a grouped procedure call.
+
+- **The spill-threshold environment variables are no longer read
+  (SONNY-6596).** The server read `GEODE_SPILL_THRESHOLD_BYTES` /
+  `GEODE_QUERY_MEM_LIMIT_BYTES` at startup and copied the value into every
+  QUIC and gRPC session (`ServerState.query_mem_limit_bytes`), where nothing
+  read it: the executor never spills and enforces no per-query memory
+  limit. The plumbing is removed and the docs say the variables are not
+  read. Regression: `zig build test-sonny6596-spill-plumbing`.
+
+- **A double-quoted delimited identifier names what a backquoted one does
+  (SONNY-6596).** ISO/IEC 39075:2024 21.3: `<delimited identifier> ::=
+  <double quoted character sequence> | <accent quoted character sequence>`.
+  Geode read `"x"` as a string literal everywhere, so `("n":L)`, `:"My
+  Label"`, `n."k"`, `$"p"` and `FOR "i" IN ...` were syntax errors, and
+  `RETURN 1 AS "x""y"` named the column `x""y`. Where only a name can stand
+  (a variable, label, relationship type, property, alias or parameter
+  name) a double-quoted sequence is now a delimited identifier: a doubled
+  quote stands for one, an empty one is refused (SR 4). Where an expression
+  starts it stays a string literal (`RETURN "x"`): the grammar admits both
+  readings there (docs/GQL_COMPLIANCE.md). Regression:
+  `zig build test-sonny6596-double-quoted-identifiers`.
+
+- **A version-1 PROFILE reports the measured execution, nothing invented
+  (SONNY-6596).** The version-1 payload (a PROFILE the planned read runtime
+  does not serve: a data change, a UNION, a tenant-bound or RLS session)
+  was a fixed model: a `PROFILE CREATE` listed `NodeScan`, `Expand` and
+  `Project`, a UNION `UnionLeft` / `UnionTails` / `UnionDedup` /
+  `SetOpUnion`, each with `time_ns = 10 * (i + 1)`, `cpu_time_ns = 5 * (i +
+  1)`, 64 bytes allocated, planner estimates, and a UNION's `input_rows` as
+  the part count times the output rows. **BREAKING:** the legacy executor's
+  statement is now one `LegacyExecute` operator (phase `EXECUTE`, the name
+  the version-2 trace uses) with the wall-clock time measured around it on
+  QUIC and gRPC and the rows it returned; CPU time, bytes, memory, the
+  memory curve and a UNION's input rows are 0, `planner_estimates` and
+  `distinct_fill_pct` are absent, and the `U:UnionPhaseTimings` flag is no
+  longer sent (no UNION phase is timed). Regression:
+  `zig build test-sonny6596-profile-v1-measured`; the revived
+  `e2e_protocol_union_*` and `profile_allocator_sums` tests
+  (`test-sonny6542-revived`) and `test-sonny1335-profile-access-path` now
+  check the measured shape.
+
+- **A numeric literal with an exponent is an approximate number, a DOUBLE
+  (SONNY-6596).** ISO/IEC 39075:2024 21.2 makes `1.5E0`, `1E3` and `2.5e-1`
+  <approximate numeric literal>s, whose declared type is an approximate
+  numeric type (SR 19 c; Geode's is DOUBLE). The parser evaluated them as
+  exact DECIMALs at scale 15 (`RETURN 1.5E0` answered `1.500000000000000`,
+  declared DECIMAL on the wire), fell back to a scale-0 DECIMAL past 10^23
+  and refused `1.0e308`, a DOUBLE value. **BREAKING:** such a literal is now
+  a DOUBLE (`1.5E0` answers 1.5, declared `DOUBLE`; a stored one reads back
+  as a DOUBLE); `1.0e308` evaluates; a literal past the DOUBLE range
+  (`1e309`) is still a parse error. A literal without an exponent (`1.25`)
+  stays an exact DECIMAL. Arithmetic now takes an approximate operand
+  (20.21 SR 2: one approximate operand makes the result a DOUBLE): `+`,
+  `-`, `*`, `/`, `^` and monadic minus answered 22G03 for any DOUBLE or REAL
+  (a `$d` parameter, a `CAST(... AS DOUBLE)`, a stored double); a zero
+  divisor is 22012 and a non-finite result 22003. `round()` and
+  `st_point()` take a DOUBLE (they answered 22G03), and `vectorf32()`
+  refuses a component past the REAL range (it stored an infinity).
+  Regression: `zig build test-sonny6596-approximate-literal`; expectations
+  that relied on the exact reading (`1.5e38 + 1.5e38` overflowing a
+  DECIMAL, `floor(1e30)` past i64) now use exact operands
+  (`test-gap0905`, `test-sonny2739-float-narrowing`,
+  `test-sonny2769-integer-overflow`).
+
 - **Fulltext indexes are kept current by every write path, after a restart
   too (SONNY-6591).** Two write paths skipped the fulltext maintenance
   hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no
@@ -2894,6 +3408,159 @@
   ran. Behaviour is unchanged. Regression:
   `zig build test-sonny6595-standalone-delete`.
 
+- **A traversal whose adjacency list cannot be read, and a MATCH fast path
+  whose property read fails, fail instead of answering short (SONNY-6607
+  item 1).** **BREAKING (behaviour):** `getOutgoingEdgeIds` /
+  `getIncomingEdgeIds` return null both for a node with no edges and for
+  one whose evicted adjacency list could not be rebuilt, so the MATCH
+  executor, var-length / `COUNT { }` / comprehension walks, `shortestPath`,
+  BFS / DFS / Dijkstra, the centrality procedures and `indegree()` /
+  `outdegree()` took an unreadable node for a dead end. They now use
+  `getOutgoingEdgeIdsOrError` / `getIncomingEdgeIdsOrError` (null still
+  means "no edges") and fail with the read's error. Degree centrality reads
+  every degree on the calling thread (a worker read them, reaching the
+  storage adapter and counting an unreadable list as 0). The aggregate,
+  count, group-by and top-k MATCH fast paths over a bounded cache dropped a
+  row whose engine property read failed (`catch continue`) and read a
+  failed tenant-tag read as the default tenant's; both now fail. The role
+  resolver fails closed (no global role) on an unreadable HAS_ROLE
+  adjacency or role node, and `canUserAccessGraph` reads grant properties
+  with `getNodePropertyOrError`. Regression: `zig build
+  test-sonny6607-adjacency-property-read-failure`.
+- **A void store write that fails reports its real error (SONNY-6607 item
+  2).** `GraphStore.removeNodeProperty` / `removeEdgeProperty` return
+  nothing; a failure inside them reached the statement as `OutOfMemory`
+  (53200) whatever had happened (`undoRecordFailed`), and an engine error
+  that was not out of memory reached it not at all (`voidWriteFailed`): the
+  statement succeeded without the write. A body that cannot be read now
+  fails the statement with `StorageReadFailed` (58000, the cause logged),
+  and a non-OOM engine write failure inside a statement with
+  `StorageWriteFailed` (58000). `removeNodeProperty` on a node whose body
+  cannot be read was a silent no-op; it now fails. Outside a statement (the
+  undo replay, a Raft apply) a non-OOM write failure is only logged, as
+  before. Regression: `zig build test-sonny6607-void-write-errors`.
+- **A CREATE INDEX whose backfill fails over QUIC or gRPC tells the client
+  (SONNY-6607 item 3).** The handlers run an advanced index's backfill after
+  the statement, once the graph lock is released, and only logged a failure:
+  the client saw a clean success while the index was dropped or empty. The
+  statement has committed its catalog row by then, so it is not failed; its
+  result now carries the flagger finding `IndexBackfillFailed: ...` (status
+  `flagger_findings`), and the log names the index and the error. A failed
+  `knn()` index rebuild is logged with its cause (the scan still answers)
+  instead of being swallowed. Regression: `zig build
+  test-sonny6607-index-backfill-warning`.
+- **Tenant lifecycle fails closed (SONNY-6607 item 4).** **BREAKING
+  (operator):**
+  - `geode.tenant.create` whose hierarchy add fails (out of memory) now
+    fails and removes the tenant from the registry again; it logged the
+    failure and reported success with a tenant the RLS hierarchy did not
+    know. `HierarchyManager.addTenant` is failure-atomic: a failed child
+    registration freed the key and path the map still held (a crash at
+    shutdown) and left the node without its parent's child entry.
+  - A statement whose session tenant is registered and marked as being
+    dropped (a DROP that failed part-way) is refused with `TenantDropping`
+    at statement entry; it went on reading and writing that tenant.
+  - Startup refuses a tenant registry holding a tenant whose parent is not
+    registered (`TenantRegistryOrphanParent`, naming each tenant on stderr
+    and in the log); it was a warning and the tenant ran outside the
+    hierarchy.
+  Regression: `zig build test-sonny6607-tenant-lifecycle`,
+  `test-sonny6607-tenant-orphan-startup`.
+- **The gRPC client's negotiated max frame size is per connection
+  (SONNY-6607 item 5).** It was a thread-local, so two connections used
+  from one thread shared it: once one learned a larger
+  SETTINGS_MAX_FRAME_SIZE, a request on the other went out in frames its
+  peer never allowed (FRAME_SIZE_ERROR, RFC 9113 4.2). It is now kept per
+  socket; a connection with no learned value uses the 16384 default every
+  peer accepts. Regression: `zig build test-sonny6607-grpc-frame-size`.
+- **ROLLBACK that cannot read a body it must undo fails instead of
+  reporting success (SONNY-6594 item 1).** **BREAKING (behaviour):** the
+  undo asked whether the node or edge a change was on still exists, and a
+  body that could not be READ (an engine read error, out of memory while
+  rebuilding an evicted body) answered "gone": the change was skipped and
+  ROLLBACK (and a failed statement's or transaction body's undo) reported
+  success with the transaction's write still in place. The existence check
+  now fails with the read's error, so the rollback continues past it and
+  ends with `RollbackIncomplete` / `StatementUndoIncomplete` (40003, "may
+  be partly applied"), as for any change it cannot undo. A write whose
+  "before" image cannot be read (the statement undo record) now fails
+  instead of recording nothing; the undo's index repair repairs every
+  index when it cannot read which ones a change touched. Regression: `zig
+  build test-sonny6594-undo-read-failure`.
+- **An advanced-index build that cannot read a body fails and leaves no
+  index without the row (SONNY-6594 item 2).** **BREAKING (behaviour):**
+  the vector / spatial / network / JSONB / ... index backfill
+  (`populateAdvancedIndex`, behind CREATE INDEX and every rebuild) and the
+  vector index's non-blocking shadow build (run by the QUIC and gRPC
+  handlers after CREATE INDEX, an undo's index repair and a REMOVE) skipped
+  a node or edge whose body could not be READ, registered the index without
+  it, and answered `knn()` (and every index-served lookup) without that row
+  until the next rebuild. The build now fails with the read's error, and the
+  runtime index is dropped instead of being left partial or stale: an
+  in-process / embedded CREATE INDEX fails with that error; over QUIC and
+  gRPC the backfill runs after the statement, so CREATE INDEX still succeeds,
+  the failure is logged ("Advanced index backfill failed"), and the next
+  `knn()` rebuilds the index from the catalog row (or scans). Exact and
+  ordered property indexes do not read bodies through these getters.
+  Regression: `zig build test-sonny6594-index-build-read-failure`.
+- **A write that cannot read its target edge fails with the read's own
+  error (SONNY-6594 item 3).** **BREAKING (behaviour):** the write paths
+  took an edge body that could not be READ (an engine read error, out of
+  memory while rebuilding an evicted body) for an absent edge. `SET` on a
+  relationship then succeeded without changing it; MERGE's edge probe
+  skipped it (and could create a second edge beside it); `DELETE r` and
+  `DETACH DELETE` failed with `EdgeBodyUnresolvable` /
+  `IncidentEdgeUnresolvable` (58000, the error's bare name) for what was out
+  of memory or an engine read error. Each now fails with the read's error
+  (out of memory: 53200) and changes nothing. Regression: `zig build
+  test-sonny6594-write-read-failure`.
+- **A read that cannot read an edge body fails instead of answering short
+  (SONNY-6594 item 4).** **BREAKING (behaviour):** a statement that used to
+  return rows (fewer of them) now fails. The MATCH executor, the
+  variable-length expansion, `COUNT { }` / `EXISTS { }` / pattern
+  comprehensions, `shortestPath`, `indegree()` / `outdegree()` under a
+  restricting scope, `algo.bfs` / `dfs` / `dijkstra` and the centrality
+  procedures skipped an edge whose body could not be read, so a count, a
+  path, a distance or a score silently left it out. Each now fails with the
+  read's error (out of memory: 53200; an engine read error inside an
+  expression: `StorageReadFailed`, 58000, the cause logged). An edge that is
+  absent (deleted), in another graph or tenant, or hidden by RLS is still
+  skipped. Regression: `zig build test-sonny6594-read-failure`.
+- **An auth decision that cannot read a security record reports the read
+  failure (SONNY-6594 item 5).** Fail closed as before, but no longer
+  misreported: `canUserAccessGraph` (schema / LSP visibility) skipped a
+  grant it could not read and answered "no access", a deny an operator
+  could not tell from a missing grant; it now fails with the read's error.
+  `verifyChain` (the periodic HMAC verify, `geode auth verify`, the offline
+  commands' verify-before-change, restore) took an unreadable chain root
+  for a missing one and raised `MissingChainRoot` ("POSSIBLE TAMPERING");
+  it now fails with the read's error. Loading the auth store at start
+  skipped a user whose record it could not read (the user then did not
+  exist for the run); it now fails. A username lookup still falls back to
+  the engine-direct read, and answers the read's error instead of "no such
+  user" when that finds nothing. `canUserAccessGraph` and
+  `UserStorageBackend.loadChainRoot` now return error unions. Regression:
+  `zig build test-sonny6594-auth-read-failure`.
+- **A tenant scan that cannot read a row's tenant tag or body fails
+  instead of listing the row for the wrong tenant or dropping it
+  (SONNY-6594 item 6).** **SECURITY / BREAKING (behaviour):** with a
+  bounded node cache, `getAllNodesForTenant` and the tenant-filtered
+  `count(n)` fast path (`countNodesForGraph`) resolve an evicted node's
+  tenant from its persisted tag, and a tag read that FAILED was taken for
+  an absent tag, the default tenant: another tenant's nodes were listed,
+  and counted, as the default tenant's. `getAllEdgesForTenant` and the
+  typed edge scan dropped an edge whose body could not be read (the DROP
+  TENANT cascade's input among others), and the snapshot writer
+  (`serializeSnapshot`) left it out. Each now fails with the read's error.
+  At graph hydration (cold open) a node or edge tenant tag that cannot be
+  read now fails the hydration, so the graph is quarantined (58000) instead
+  of the row loading as the default tenant's; an absent tag still means the
+  default tenant. `countNodesForGraph` now returns an error union. The edge
+  write methods (`setEdgeProperty`, `setEdgePropertiesBatch`,
+  `removeEdgeProperty`, the `*NoSave` setter) and the adjacency helpers
+  (`getOutgoingEdges`, `getNeighbors`, ...) fail on an unreadable edge body
+  instead of skipping it. Regression: `zig build
+  test-sonny6594-tenant-scan-read-failure`.
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,
@@ -3174,6 +3841,7 @@
   `range_overlaps`, `jsonb_get` / `jsonb_exists` functions, which raised
   22G03 for a NULL argument: each now answers NULL. Regression: `zig build
   test-sonny6555-null-arguments`.
+
 - **Startup refuses to run with part of its auth state; per-graph grants
   load under the right graph (SONNY-6567 item 5).** **BREAKING (operator):**
   a server whose stored custom roles, per-graph grants, FLE role grants, GPS

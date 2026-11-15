@@ -11,9 +11,10 @@
 //   * A mocked Transport (using Transport.send_override) captures the
 //     (peer, from, term, msg) tuple of each outbound dispatch.
 //   * Forcing an inner.step with a vote request from a peer drives the
-//     candidate-state response path; the bridge fires sendImpl which
-//     converts the raft_lib.Message to a geode Message and hands it to
-//     the captured mock.
+//     candidate-state response path; raft v0.2.0 queues the response in
+//     Ready.messages and drainReady, after advancePersist(), converts it
+//     to a geode Message and hands it to the captured mock (leader
+//     replication still goes through the bridge's sendImpl).
 //
 // What this test does NOT exercise (deferred):
 //   * AppendEntries entries payload (raft_schema.AppendEntries.entries
@@ -117,9 +118,9 @@ test "drainReady-and-bridge: wrapper transport receives RequestVoteResponse from
     try std.testing.expect(node.transport == &transport);
 
     // Feed node 1 a vote request from peer 2.  Inner raft will respond
-    // with a request_vote_response back to candidate_id=2.  raft-0.1.3
-    // emits the response via the transport vtable immediately during
-    // step() — our bridge picks it up and routes through the mock.
+    // with a request_vote_response back to candidate_id=2.  raft v0.2.0
+    // queues it in Ready.messages; drainReady sends it once the vote is
+    // persisted, through the wrapper transport (the mock).
     const vote_req = raft_lib.Message{ .request_vote = .{
         .term = 5,
         .candidate_id = 2,
@@ -195,10 +196,10 @@ test "drainReady fallback: empty rd.messages with no transport is a no-op" {
         a.destroy(node);
     }
 
-    // No transport, no inner transport — just tick the node.  Since
-    // raft-0.1.3 never populates rd.messages, this exercises only the
-    // committed_entries / hard_state paths, but it also confirms the new
-    // drainReady code doesn't dereference a null transport pointer.
+    // No transport, no inner transport — just tick the node.  A single
+    // node with no peers queues no messages, so this exercises the
+    // committed_entries / hard_state paths, and confirms drainReady
+    // doesn't dereference a null transport pointer.
     try node.tick();
     try node.tick();
     try node.tick();

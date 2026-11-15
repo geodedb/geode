@@ -111,7 +111,6 @@ const log = logging.scoped("grpc");
 const Attr = logging.Attr;
 
 pub const GrpcConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     disable_estimates: bool = false,
     compact_profile: bool = false,
@@ -229,10 +228,18 @@ fn throttleInvalidSessionProbe() void {
     std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 }
 
+/// SONNY-6607 (3): the flagger finding a statement's result carries when an
+/// index backfill run after it failed. The statement has committed (its
+/// catalog row is written) before the backfill runs, so it is not failed;
+/// the client is told instead. A literal, so a result that does not own its
+/// flags can carry it.
+pub const index_backfill_failed_flag = "IndexBackfillFailed: an index this statement created or changed could not be built (its backfill failed; see the server log). The index is not in use until it is rebuilt: the next query that needs it rebuilds it, or run the statement again";
+
 fn rebuildPendingIndexes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
     pending_index_rebuilds: *std.StringHashMap(void),
+    warn_into: ?*execution.ExecutionResult,
 ) void {
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
@@ -249,6 +256,7 @@ fn rebuildPendingIndexes(
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
+            if (warn_into) |r| appendFlagToResult(allocator, r, index_backfill_failed_flag) catch {};
             continue;
         };
         log.info("Advanced index backfill complete", &.{
@@ -866,7 +874,6 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
     // GAP-0756: Wire the shared query optimizer so the gRPC handler hits the
@@ -3215,9 +3222,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             for (base_flags) |flag| {
                 try appendFlagIfMissing(allocator, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(allocator, &flags, server_flags.F_UNION_PHASES);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
@@ -3558,7 +3564,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     if (graph_lock_handle) |h| {
                         // GAP-0511: Release lock before index rebuild
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                     }
                 }
                 // GAP-0753: Always pop the active-store thread-local and
@@ -3688,7 +3694,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
                                     lock_released = true;
-                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &owned_planned.result);
                                 }
                             }
 
@@ -3721,6 +3727,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3728,7 +3737,16 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(allocator);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(allocator, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| allocator.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3755,7 +3773,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 
@@ -3780,6 +3798,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         .graph_store_dirty = store_ptr.isDirty(),
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
@@ -3831,7 +3852,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
                                             lock_released = true;
-                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                                         }
                                     }
 
@@ -3916,7 +3937,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 
@@ -3953,6 +3974,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // Deep-copy result to prevent use-after-free when AST is freed
                     // (gRPC streaming builds data pages after handleExecute returns)
+                    // SONNY-6602: `allocator` is not request-scoped. grpc_zig
+                    // calls every handler with `GrpcServer.allocator`
+                    // (server.zig, `handler.handler_fn(.., self.allocator)`),
+                    // the allocator `GeodeGrpcServer.init` passed it, which is
+                    // also the SessionStore's and so `state.allocator`: the
+                    // process allocator `geode serve` hands in (main.zig). The
+                    // retained result is freed by `resetResult` with the
+                    // allocator that made it.
                     var duped = try execution.duplicateResult(allocator, exec_result);
                     // SONNY-3385: the stored result outlives this request, and
                     // the nodes and relationships it holds may live in the

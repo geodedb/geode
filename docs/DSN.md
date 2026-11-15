@@ -1,6 +1,6 @@
 # Geode DSN (Data Source Name) Specification
 
-**Version**: 1.2.1
+**Version**: 1.2.3
 **Status**: Official Specification
 **Last Updated**: 2026-11-15
 
@@ -291,8 +291,8 @@ parameter's value.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `page_size` (alias `pageSize`) | integer | 1000 | Results page size (1-100,000) |
-| `hello_name` | string | varies | Client name sent in HELLO handshake |
-| `hello_ver` | string | varies | Client version sent in HELLO handshake |
+| `hello_name` | string | varies | Client name sent in HELLO handshake (`geode mcp`: `geode-mcp` when not given) |
+| `hello_ver` | string | varies | Client version sent in HELLO handshake (`geode mcp`: geode's version when not given) |
 | `conformance` | string | "min" | GQL conformance level ("min", "full") |
 | `graph` | string | - | Graph name, an alternative to the path; when both are given, `graph=` wins (geode-client-zig) |
 | `tenant` (alias `tenant_id`) | string | - | Tenant sent in HELLO (the MCP endpoint; the CLI refuses it, see below) |
@@ -309,7 +309,7 @@ parameter's value.
 
 | Parameter | Aliases | Type | Default | Description |
 |-----------|---------|------|---------|-------------|
-| `tls` | - | boolean | true | Enable/disable TLS (gRPC only, QUIC always uses TLS) |
+| `tls` | - | boolean | true | Enable/disable TLS (gRPC only, QUIC always uses TLS). geode-client-zig's gRPC client has no TLS: with `tls` true it fails with `TlsNotImplemented` rather than send in plaintext, so a `geode mcp` gRPC endpoint needs `tls=0` (development only); its tools and resources say so (SONNY-6617). Since v0.3.18 `insecure=true` no longer turns TLS off by itself |
 | `insecure_tls_skip_verify` | `insecure`, `skip_verify` | boolean | false | Skip TLS certificate verification (testing only). Same rule as `--insecure-tls-skip-verify`: refused under production posture (release build or `GEODE_ENV=production`) unless `GEODE_ALLOW_INSECURE_TLS=1` |
 | `ca` | `ca_cert` | string | - | Path to CA certificate file |
 | `cert` | `client_cert` | string | - | Path to client certificate file (for mTLS) |
@@ -320,7 +320,7 @@ parameter's value.
 
 | Parameter | Aliases | Type | Default | Description |
 |-----------|---------|------|---------|-------------|
-| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds (geode-client-zig v0.3.17 reads `timeout` as milliseconds, SONNY-6569; geode validates it with the library's rule until the library is fixed) |
+| `connect_timeout` | `timeout` | integer | 30 | Connection timeout in seconds (geode-client-zig, v0.3.19 included, reads `timeout` as milliseconds, SONNY-6569; geode validates it with the library's rule until the library is fixed) |
 | `timeout_ms` | - | integer | 30000 | Connection timeout in milliseconds |
 
 **Note**: When both `connect_timeout` (seconds) and `timeout_ms` (milliseconds) are specified, `timeout_ms` takes precedence.
@@ -333,8 +333,24 @@ refuses a value outside it with `TimeoutOutOfRange`, including
 `parseDSN` keeps the default timeout for an overflowing `connect_timeout`.
 geode parses the `geode mcp --endpoint` DSN and the CLI's `--dsn` strictly
 (SONNY-6569; the MCP endpoint was parsed leniently, so an out-of-range
-value silently became the default). Neither applies a timeout parameter
-yet: the CLI says so (`Warning: ... has no effect`; use `--timeout`).
+value silently became the default).
+
+**What the timeout bounds.** `geode mcp` applies the endpoint's timeout
+(SONNY-6589, SONNY-6617, geode-client-zig v0.3.19): it is how long the
+client waits for the server — the QUIC handshake or gRPC connect, the
+HELLO answer, the first answer to a query, begin, commit, rollback or ping,
+and a write held up by flow control (a query's later pages wait at most
+5 s each, or the timeout if shorter) — so a tool or resource on a server
+that does not answer reports `Timeout` after that time. Before v0.3.18 the
+library ignored it and waited 30 s, and `geode mcp` refused the parameter;
+v0.3.18 applied it to the handshake and HELLO only. `timeout` is read as
+milliseconds, like `timeout_ms` (geode-client-zig's rule). The library's
+lenient parser (not used by geode) falls back to the default for an
+out-of-range value; geode parses strictly and refuses it. `geode query --dsn` takes the DSN timeout in
+place of `--timeout` (rounded up to whole seconds), which bounds the QUIC
+handshake and the whole query; `geode shell --dsn`, which has no
+`--timeout`, waits that long for the handshake (also on `\connect`) and
+for each answer (SONNY-6617; both used to warn "has no effect").
 
 ### Boolean Parameter Values
 
@@ -504,7 +520,8 @@ geode parses every DSN this way (SONNY-6554, SONNY-6569): the CLI's
 | `role` | applied as `--role` | refused (exit 2) |
 | `tenant`, `server_name`, `tls=false` | refused (exit 2): the CLI cannot apply them | same |
 | `tls=true` | accepted (the CLI always uses TLS) | same |
-| `hello_name`, `hello_ver`, `conformance`, `connect_timeout`, `timeout_ms` | warning: no effect | same |
+| `connect_timeout` / `timeout` / `timeout_ms` | applied as `--timeout` (whole seconds, rounded up; also bounds the QUIC handshake) | bounds the QUIC handshake and the wait for each answer |
+| `hello_name`, `hello_ver`, `conformance` | warning: no effect | same |
 
 A DSN value takes the place of the matching flag. Before SONNY-6554 the
 CLI read only the credentials and the graph, so a harness DSN's
@@ -566,6 +583,8 @@ The error messages for a malformed DSN never include the DSN.
 | 1.1.0 | 2026-03-25 | Add graph path support, graph-bound sessions, auto-create semantics |
 | 1.2.0 | 2026-11-14 | Userinfo ends at the last `@` of the authority; strict percent-decoding of credentials, graph path and query values (`+` literal); fragments, an `@` after the authority and port 0 refused; userinfo takes precedence over query credentials; timeout range |
 | 1.2.1 | 2026-11-15 | geode: one strict parser for the CLI and the MCP endpoint (unknown parameter, parameter without `=`, bad boolean, malformed number refused); the CLI applies `insecure`, `ca`/`cert`/`key`, `page_size`, `role` and refuses `tenant`, `server_name`, `tls=false`; `tenant`, `role`, `pageSize`, `insecure`, `skip_verify` documented; an `@` or other non-host byte in a client host refused |
+| 1.2.3 | 2026-11-15 | geode query and geode shell apply `connect_timeout` / `timeout` / `timeout_ms` (SONNY-6617); a `geode mcp` gRPC endpoint with TLS on says to use `tls=0` or `quic://` |
+| 1.2.2 | 2026-11-15 | geode mcp applies `connect_timeout` / `timeout` / `timeout_ms` to the handshake and HELLO wait (geode-client-zig v0.3.18) instead of refusing them; `hello_name` / `hello_ver` default to `geode-mcp` and geode's version |
 
 ## License
 

@@ -331,7 +331,8 @@ DROP CONSTRAINT IF EXISTS person_email;  -- no error
 > once, at `--output` (until SONNY-6323 it also left `full_<id>.backup` and
 > `metadata.json` beside it). The CLI waits up to 300 s for the server's
 > answer to a backup or a server restore; `--timeout <seconds>` changes
-> that (SONNY-6300; it was a fixed 30 s). A server restore cannot replace a
+> that (SONNY-6300; it was a fixed 30 s), and the QUIC handshake counts
+> against it, up to an hour (SONNY-6606). A server restore cannot replace a
 > running server's live store: there is no in-place restore.
 >
 > The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):

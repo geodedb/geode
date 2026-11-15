@@ -76,7 +76,7 @@ test "SONNY-6384: a write after a checkpoint, a hard crash and a reopen survives
     {
         const store = try graph_store.initGlobalStore(ta, data_dir);
         defer graph_store.deinitGlobalStore();
-        const n = store.countNodesForGraph(graph, null);
+        const n = try store.countNodesForGraph(graph, null);
         if (n != 2) std.debug.print("after the second hard crash the graph holds {d} node(s), want 2\n", .{n});
         try testing.expectEqual(@as(usize, 2), n);
     }
@@ -244,7 +244,7 @@ test "SONNY-6384: security-graph writes after an offline user change survive a S
         s.kill(allocator);
     }
     // 2. An offline change.
-    try runOk(aa, &.{ binary_path, "user", "create", "off6384", "off6384@example.com", "--password", offline_pw, "--role", "readwrite", "--force", "--data-dir", dir });
+    try runOk(aa, &.{ binary_path, "user", "create", "off6384", "off6384@example.com", "--password", offline_pw, "--role", "readwrite", "--data-dir", dir });
     // 3. The server writes the security graph over the wire, then dies.
     {
         var s = try Server.start(allocator, dir);

@@ -188,7 +188,7 @@ fn validateGroupBy(allocator: std.mem.Allocator, q: ast.Query) PlanError!void {
 /// P2-3: Now accepts allocator for temporary string allocations
 fn exprAllowedInGroup(allocator: std.mem.Allocator, e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
-        .Int, .Bool, .Null, .String, .Decimal => true,
+        .Int, .Bool, .Null, .String, .Decimal, .DoubleLit => true,
         .Ident => |id| allowed.contains(id.orig),
         .Member => blk: {
             const ss = printer.stringifyExprAlloc(allocator, e, .{}) catch break :blk false;

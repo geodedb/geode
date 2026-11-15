@@ -132,7 +132,7 @@ test "GAP-0891 RC-1: worker-path node and edge writes tag the request tenant" {
     // ---- Read the way the native-tenant reader does: exact filter t_DEMO ----
     // countNodesForGraph(graph, tenant) is the bare-MATCH count fast path
     // (match_operations.zig). Expect all 7 application nodes (1 + 6).
-    try testing.expectEqual(@as(usize, 7), store.countNodesForGraph(GRAPH, T_DEMO));
+    try testing.expectEqual(@as(usize, 7), try store.countNodesForGraph(GRAPH, T_DEMO));
 
     // Edge visibility under the same exact-match filter; expect all 6 edges.
     var visible_edges: usize = 0;
@@ -227,7 +227,7 @@ test "GAP-0891 RC-2: restart hydration preserves tenant tags" {
     // What a t_DEMO reader counts after the reload. It is the first read of
     // the graph, so it hydrates it; the explicit chokepoint call below keeps
     // the resident reads that follow independent of how the count is served.
-    try testing.expectEqual(@as(usize, 2), store.countNodesForGraph(GRAPH, T_DEMO));
+    try testing.expectEqual(@as(usize, 2), try store.countNodesForGraph(GRAPH, T_DEMO));
     store.ensureGraphHydrated(GRAPH);
 
     const reloaded_node = store.nodes.get(a1) orelse return error.NodeNotFoundAfterReload;
@@ -279,7 +279,7 @@ test "GAP-0891 RC-2: a clean restart keeps tenant tags on by-id reads" {
     try testing.expectEqualStrings(T_DEMO, node.tenant_id);
     const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeNotFoundAfterRestart;
     try testing.expectEqualStrings(T_DEMO, edge.tenant_id);
-    try testing.expectEqual(@as(usize, 2), store.countNodesForGraph(GRAPH, T_DEMO));
+    try testing.expectEqual(@as(usize, 2), try store.countNodesForGraph(GRAPH, T_DEMO));
 }
 
 // SONNY-2693 (supersedes the GAP-0891 defense-in-depth bridge): an edge whose
@@ -351,12 +351,12 @@ test "GAP-0891 invariant: default-tagged rows stay invisible under a t_DEMO filt
 
     // The t_DEMO reader sees exactly the one t_DEMO node — the "default" node is
     // excluded by the exact-match filter (isolation must not leak).
-    try testing.expectEqual(@as(usize, 1), store.countNodesForGraph(GRAPH, T_DEMO));
+    try testing.expectEqual(@as(usize, 1), try store.countNodesForGraph(GRAPH, T_DEMO));
 
     // And adding more "default" rows never increases the t_DEMO count.
-    const before = store.countNodesForGraph(GRAPH, T_DEMO);
+    const before = try store.countNodesForGraph(GRAPH, T_DEMO);
     _ = try store.createNodeWithGraphAndTenant(&labels, GRAPH, graph_store.DEFAULT_TENANT_ID);
-    const after = store.countNodesForGraph(GRAPH, T_DEMO);
+    const after = try store.countNodesForGraph(GRAPH, T_DEMO);
     try testing.expectEqual(before, after);
 }
 

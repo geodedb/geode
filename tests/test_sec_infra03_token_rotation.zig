@@ -49,16 +49,15 @@ test "rotation: empty previous token never matches an empty password" {
     try std.testing.expect(!cluster_auth.validateTokenWithRotation("", "new-token", ""));
 }
 
-test "rotation: tokens longer than the 256-byte pad still compare correctly" {
+test "rotation: tokens longer than 256 bytes compare in full" {
     const long_a = "x" ** 300;
     const long_b = "x" ** 299 ++ "y";
     // Same token matches itself.
     try std.testing.expect(cluster_auth.validateTokenWithRotation(long_a, long_a, null));
-    // NOTE: bytes beyond the 256-byte constant-time pad window are not
-    // compared (documented SEC-07 behavior) — both inputs differ only at
-    // byte 299, so they compare equal within the window. Pin that behavior
-    // so a future pad-size change is a conscious decision.
-    try std.testing.expect(cluster_auth.validateTokenWithRotation(long_b, long_a, null));
+    // SONNY-6600: every byte counts. Bytes beyond 256 were not compared (a
+    // 256-byte zero-padded compare), so these two tokens, which differ only
+    // at byte 299, were accepted as each other.
+    try std.testing.expect(!cluster_auth.validateTokenWithRotation(long_b, long_a, null));
 }
 
 // ---------------------------------------------------------------------------

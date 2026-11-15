@@ -32,6 +32,9 @@ pub const GeodeClientError = error{
     ServerError,
     InvalidParams,
     UnsupportedParamType,
+    /// SONNY-6617 (3): a gRPC endpoint with TLS on (geode-client-zig's gRPC
+    /// client has no TLS); `endpointErrorMessage` says what to do.
+    TlsNotImplemented,
 };
 
 /// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
@@ -54,10 +57,24 @@ pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
 /// zone (`error.Ipv6ZoneUnsupported`), and gives a userinfo credential
 /// precedence over a `user=` / `pass=` parameter (docs/DSN.md, SONNY-6550).
 /// The returned config's host slices `endpoint`.
+///
+/// CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-APPLIED; FEATURE="MCPBackendTools"; ASPECT=EndpointTimeoutApplied; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
+/// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is the
+/// config's `timeout_ms`, which geode-client-zig v0.3.18 `initFromConfig`
+/// applies to the QUIC handshake and the HELLO wait (geode refused the
+/// parameter while the library ignored it). Since v0.3.19 (SONNY-6617) the
+/// query, begin, commit, rollback and ping answers wait it too.
+/// Without a `hello_name` / `hello_ver` the HELLO names geode's MCP client.
 fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
     const parsed = try geode.dsn_params.parse(allocator, endpoint);
-    return parsed.config;
+    var cfg = parsed.config;
+    if (!parsed.present.contains(.hello_name)) cfg.hello_name = hello_name;
+    if (!parsed.present.contains(.hello_ver)) cfg.hello_ver = build_options.version;
+    return cfg;
 }
+
+/// The HELLO `client_name` of geode's MCP backend client.
+pub const hello_name = "geode-mcp";
 
 /// SONNY-6494: check an endpoint DSN without building a client (`geode mcp`
 /// startup). The error maps through `endpointErrorMessage`.
@@ -143,6 +160,7 @@ pub const GeodeClient = struct {
             error.ReceiveTimeout, error.ConnectionTimeout => GeodeClientError.Timeout,
             error.WriteError => GeodeClientError.StreamError,
             error.OutOfMemory => GeodeClientError.OutOfMemory,
+            error.TlsNotImplemented => GeodeClientError.TlsNotImplemented,
             else => GeodeClientError.ConnectionFailed,
         };
     }

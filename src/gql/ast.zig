@@ -547,6 +547,10 @@ pub const CallProcedure = struct {
     // pointer: an inline Expr grew every Query and parseQuery frame.
     filter: ?*const Expr = null,
     return_clause: ?ReturnClause = null, // Optional RETURN clause
+    // SONNY-6596: the RETURN's GROUP BY and HAVING (ISO/IEC 39075:2024
+    // 14.11: the <group by clause> is part of the <return statement body>).
+    group_by: ?GroupBy = null,
+    having: ?*const Expr = null,
     order_by: ?OrderBy = null, // ORDER BY clause
     limit: ?usize = null, // LIMIT clause
     offset: ?usize = null, // OFFSET clause

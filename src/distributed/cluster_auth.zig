@@ -12,28 +12,51 @@ const log = logging.scoped("cluster_auth");
 
 // CANARY: REQ=REQ-CLUSTER-AUTH-001; FEATURE="ClusterAuth"; ASPECT=SharedModule; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
 
-/// SEC-07: Constant-time token comparison with 256-byte padded buffers.
-/// No early length check — pad both to 256 bytes and compare in constant time.
-/// Different lengths produce different zero-padded buffers, caught by
-/// timing_safe.eql without leaking which input was shorter. Bytes beyond the
-/// 256-byte pad window are not compared (documented; pinned by the
-/// SEC-INFRA-03 regression test).
+// CANARY: REQ=REQ-SONNY-6600-CLUSTER-TOKEN-FULL-COMPARE; FEATURE="ClusterAuth"; ASPECT=FullLengthConstantTimeCompare; STATUS=TESTED; TEST=tests/test_sonny6600_cluster_token.zig; OWNER=security; UPDATED=2026-11-15
+/// SEC-07 / SONNY-6600: constant-time comparison of the whole token. Both
+/// inputs are hashed with SHA-256 and the fixed-size digests compared with
+/// `timing_safe.eql`, so every byte of both tokens counts and the time taken
+/// depends only on the two lengths, never on where they differ. It used to
+/// compare 256-byte zero-padded copies: two tokens equal in their first 256
+/// bytes (or a long token and its first 256 bytes) compared equal.
 fn tokenEqlConstantTime(password: []const u8, expected: []const u8) bool {
     if (expected.len == 0 or password.len == 0) return false;
-    var buf_a: [256]u8 = [_]u8{0} ** 256;
-    var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n_pw = @min(password.len, 256);
-    const n_ex = @min(expected.len, 256);
-    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
-    @memcpy(buf_b[0..n_ex], expected[0..n_ex]);
-    return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b); // fips-exempt: non-security (timing-safe memcmp for token comparison; not a crypto primitive)
+    const Sha256 = std.crypto.hash.sha2.Sha256; // fips-exempt: non-security (digest used only to compare two tokens in constant time; not key material)
+    var d_pw: [Sha256.digest_length]u8 = undefined;
+    var d_ex: [Sha256.digest_length]u8 = undefined;
+    Sha256.hash(password, &d_pw, .{});
+    Sha256.hash(expected, &d_ex, .{});
+    return std.crypto.timing_safe.eql([Sha256.digest_length]u8, d_pw, d_ex); // fips-exempt: non-security (timing-safe memcmp of the two digests)
+}
+
+/// SONNY-6600: the shortest GEODE_CLUSTER_TOKEN / GEODE_CLUSTER_TOKEN_PREVIOUS
+/// `geode serve` starts with (16 bytes: 128 bits if random; generate one with
+/// `openssl rand -hex 32`).
+pub const min_token_len: usize = 16;
+
+pub const TokenConfigError = error{ ClusterTokenTooShort, ClusterTokenPreviousTooShort };
+
+// CANARY: REQ=REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG; FEATURE="ClusterAuth"; ASPECT=StartupTokenCheck; STATUS=TESTED; TEST=tests/test_sonny6600_cluster_token.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6600: the startup check of the configured cluster tokens (null:
+/// the variable is not set). A token that is set must be at least
+/// `min_token_len` bytes: GEODE_CLUSTER_TOKEN=t turned cluster mode on with a
+/// one-byte shared secret. Set but empty is refused too (it authenticated
+/// nothing, silently).
+pub fn validateTokenConfig(primary: ?[]const u8, previous: ?[]const u8) TokenConfigError!void {
+    if (primary) |p| if (p.len < min_token_len) return error.ClusterTokenTooShort;
+    if (previous) |p| if (p.len < min_token_len) return error.ClusterTokenPreviousTooShort;
+}
+
+/// `validateTokenConfig` on the process environment.
+pub fn validateClusterTokenEnv() TokenConfigError!void {
+    return validateTokenConfig(posixGetenv("GEODE_CLUSTER_TOKEN"), posixGetenv("GEODE_CLUSTER_TOKEN_PREVIOUS"));
 }
 
 /// SEC-INFRA-03: Dual-token validation for zero-downtime bearer rotation.
 /// Accepts the password if it matches the primary token OR the optional
 /// previous token (overlap window). A null/empty primary never authenticates
 /// — the previous token cannot keep cluster auth alive on its own.
-/// Both comparisons use the constant-time padded compare; both are evaluated
+/// Both comparisons use the full-length constant-time compare; both are evaluated
 /// unconditionally so timing does not reveal which token matched.
 // CANARY: REQ=REQ-SEC-INFRA-03-TOKEN-ROTATION; FEATURE="ClusterTokenRotation"; ASPECT=DualTokenValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-06-10
 pub fn validateTokenWithRotation(password: []const u8, primary: ?[]const u8, previous: ?[]const u8) bool {
@@ -59,9 +82,10 @@ pub fn validateTokenWithRotation(password: []const u8, primary: ?[]const u8, pre
 ///      rolling restart (senders switch to new; old still accepted).
 ///   C. Drop GEODE_CLUSTER_TOKEN_PREVIOUS; rolling restart.
 ///
-/// Uses constant-time comparison with 256-byte padded buffers to prevent
-/// timing side-channels. Returns true only if the password matches the
-/// primary token or (when set) the previous token.
+/// Uses a full-length constant-time comparison (SHA-256 digests compared
+/// with timing_safe.eql) to prevent timing side-channels. Returns true only
+/// if the password matches the primary token or (when set) the previous
+/// token.
 pub fn validateClusterToken(password: []const u8) bool {
     const primary = posixGetenv("GEODE_CLUSTER_TOKEN");
     const previous: ?[]const u8 = if (posixGetenv("GEODE_CLUSTER_TOKEN_PREVIOUS")) |p| p else null;

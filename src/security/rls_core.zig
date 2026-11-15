@@ -2979,7 +2979,19 @@ pub const HierarchyManager = struct {
         path[built] = try self.allocator.dupe(u8, tenant_id);
         built += 1;
 
-        try self.tenant_hierarchy.put(owned_key, .{
+        // SONNY-6607 (4): everything that can fail happens before the node is
+        // committed. The child append ran after the `put`, and when it failed
+        // the errdefers above freed the key and path the map still held
+        // (`deinit` then freed them again: a crash), and the node stayed
+        // without its parent's child entry.
+        const child_dup: ?[]const u8 = if (parent != null) try self.allocator.dupe(u8, tenant_id) else null;
+        errdefer if (child_dup) |c| self.allocator.free(c);
+        try self.tenant_hierarchy.ensureUnusedCapacity(1);
+        // The parent's node, looked up after any rehash of the map.
+        const parent_node: ?*TenantNode = if (parent) |p| self.tenant_hierarchy.getPtr(p).? else null;
+        if (parent_node) |pn| try pn.children.ensureUnusedCapacity(self.allocator, 1);
+
+        self.tenant_hierarchy.putAssumeCapacityNoClobber(owned_key, .{
             .id = owned_key,
             .parent_id = parent_key,
             .children = std.ArrayList([]const u8).empty,
@@ -2987,16 +2999,8 @@ pub const HierarchyManager = struct {
             .path = path,
             .metadata = std.StringHashMap([]const u8).init(self.allocator),
         });
-
-        // Register self in the parent's children list (owned dupe). If this
-        // fails we've already committed the node; leave it consistent by
-        // surfacing the error to the caller without rolling back the put.
-        if (parent) |p| {
-            const parent_node = self.tenant_hierarchy.getPtr(p).?;
-            const child_dup = try self.allocator.dupe(u8, tenant_id);
-            errdefer self.allocator.free(child_dup);
-            try parent_node.children.append(self.allocator, child_dup);
-        }
+        // Register self in the parent's children list (owned dupe).
+        if (parent_node) |pn| pn.children.appendAssumeCapacity(child_dup.?);
     }
 
     pub fn getTenantPath(self: *HierarchyManager, tenant_id: []const u8) ![]const []const u8 {

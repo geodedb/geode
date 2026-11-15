@@ -1430,7 +1430,10 @@ pub const Server = struct {
         // Ownership transfers to publishVerifiedState — it deinits on
         // its own error path. On success the state lives on as
         // Server.auth.
-        return self.publishVerifiedState(state);
+        try self.publishVerifiedState(state);
+        // SONNY-6589 (3): an authenticated principal sees a graph's schema
+        // only when it may bind and read the graph (schema_introspection).
+        self.schema.?.ctx.authenticated = true;
     }
 
     /// Task 13: `--no-auth` stdio path. Synthesize a local-admin
@@ -1600,8 +1603,12 @@ pub const Server = struct {
             auth_mod.AuthError.ExpiredToken => "expired auth token",
             auth_mod.AuthError.BadFormat => "malformed initializationOptions.geode block",
             auth_mod.AuthError.OutOfMemory => "out of memory",
+            auth_mod.AuthError.AuthUnavailable => "authentication temporarily unavailable: the token could not be checked (a server-side error, not an invalid token); retry",
         };
-        try self.sendError(id, -32002, msg);
+        // SONNY-6600: a check that could not run is a server-side error
+        // (-32603 InternalError), not the -32002 refusal of a bad token.
+        const code: i32 = if (err == auth_mod.AuthError.AuthUnavailable) -32603 else -32002;
+        try self.sendError(id, code, msg);
     }
 
     /// GAP-0817: choose the session position encoding from the client's

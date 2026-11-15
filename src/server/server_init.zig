@@ -21,7 +21,7 @@ fn storeHasAuthRecords(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     if (persisted > 0) return true;
     var agm = try auth_graph_manager.AuthGraphManager.init(allocator, store);
     defer agm.deinit();
-    return agm.countAuthRecords() > 0 or agm.storage.loadChainRoot() != null;
+    return agm.countAuthRecords() > 0 or (try agm.storage.loadChainRoot()) != null;
 }
 
 /// SONNY-6322: the startup refusal when auth records exist and no HMAC key
@@ -258,7 +258,6 @@ const Attr = logging.Attr;
 
 /// Environment-derived configuration flags
 pub const EnvironmentConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     memcurve_profile: bool = false,
     compact_profile: bool = false,
@@ -361,6 +360,8 @@ pub const InitContext = struct {
         // Wire SecurityManager's opaque pointer and callbacks to AuthGraphManager
         // so that runtime mutations (user create, login state, password change) are
         // persisted to the auth graph store for durability across restarts.
+        // SONNY-6614: DROP USER clears the user's MFA state here too.
+        if (self.security_manager) |sm| auth_dispatch.setSecurityManagerHooks(auth_startup_hydration.securityManagerHooks(sm));
         if (self.security_manager) |sm| {
             if (self.auth_graph_mgr) |agm| {
                 sm.auth_graph_mgr = @ptrCast(agm);
@@ -381,6 +382,8 @@ pub const InitContext = struct {
     }
 
     pub fn deinit(self: *InitContext) void {
+        // SONNY-6614: nothing reaches SecurityManager once it is freed.
+        auth_dispatch.setSecurityManagerHooks(.{});
         // Clean up index catalog (selectivity estimator + stats map)
         index_catalog.deinitIndexCatalog();
 
@@ -426,12 +429,6 @@ fn getenvSlice(name: []const u8) ?[]const u8 {
 pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profile_ref: *bool) !EnvironmentConfig {
     _ = allocator;
     var config = EnvironmentConfig{};
-
-    if (getenvSlice("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
-        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-    } else if (getenvSlice("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
-        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-    }
 
     if (getenvSlice("GEODE_NULLS_LAST")) |_| {
         server_flags.setNullsLast(true);
@@ -967,84 +964,20 @@ pub fn initialize(
 
 // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-009; FEATURE="AuthGraphManager Integration"; ASPECT=Hydration; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
 /// Hydrate SecurityManager from AuthGraphManager's stored records.
-/// Creates an empty SecurityManager and populates it with users from the auth graph.
+/// SONNY-6614: the load is `auth_startup_hydration.hydrateSecurityManager`
+/// (a named module, so the regression drives it under allocation failure).
 fn hydrateSecurityManagerFromGraph(
     allocator: std.mem.Allocator,
     agm: *auth_graph_manager.AuthGraphManager,
     hmac_key_result: ?auth_graph_manager.HmacKeyResult,
 ) !geode_auth.SecurityManager {
-    var sm = try geode_auth.SecurityManager.initEmpty(allocator);
-
-    // Hydrate roles first so user-role memberships can be restored without side effects.
-    var role_count: usize = 0;
-    var role_it = agm.storage.roleIterator();
-    while (role_it.next()) |record| {
-        const role = geode_auth.Role{
-            .id = record.id,
-            .name = try allocator.dupe(u8, record.getName()),
-            .description = try allocator.dupe(u8, record.getDescription()),
-            .permissions = std.ArrayList(geode_auth.PermissionId).empty,
-            .created_at = record.created_at,
-            .is_system = record.is_system,
-            .priority = record.priority,
-            .parent_role = if (record.parent_role == 0) null else record.parent_role,
-        };
-        try sm.roles.put(record.id, role);
-        role_count += 1;
-    }
-
-    // Hydrate users from auth graph storage
-    var user_count: usize = 0;
-    var it = agm.storage.userIterator();
-    while (it.next()) |record| {
-        try sm.hydrateUser(
-            record.id,
-            record.getUsername(),
-            record.getEmail(),
-            record.getPasswordHash(),
-            record.is_superuser,
-            record.is_active,
-            record.is_default_user,
-            record.password_reset_required,
-            record.mfa_enabled,
-            record.getMFASecret(),
-            record.auth_version,
-            record.getAttributesJson(),
-        );
-        user_count += 1;
-    }
-
-    var assignment_count: usize = 0;
-    var membership_it = agm.storage.userIterator();
-    while (membership_it.next()) |record| {
-        const role_ids = try agm.storage.listUserRoleIds(allocator, record.id);
-        defer allocator.free(role_ids);
-
-        if (role_ids.len == 0) continue;
-        var entry = try sm.rbac.user_roles.getOrPut(record.id);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = try std.ArrayList(geode_auth.RoleId).initCapacity(allocator, role_ids.len);
-        }
-        for (role_ids) |role_id| {
-            try entry.value_ptr.append(allocator, role_id);
-            assignment_count += 1;
-        }
-    }
-
-    // Set auth_graph_mgr and hmac_key on SecurityManager for future runtime mutations (Task 5)
-    // NOTE: auth_graph_mgr pointer will be fixed up after InitContext is moved via fixupSelfPointers.
-    // The actual pointer is set in fixupSelfPointers via the InitContext fields.
-    if (hmac_key_result) |kr| {
-        sm.hmac_key = kr.key;
-    }
-
+    const loaded = try auth_startup_hydration.hydrateSecurityManager(allocator, agm, if (hmac_key_result) |kr| kr.key else null);
     log.info("Hydrated SecurityManager from auth graph", &.{
-        Attr.int("role_count", @intCast(role_count)),
-        Attr.int("user_count", @intCast(user_count)),
-        Attr.int("assignment_count", @intCast(assignment_count)),
+        Attr.int("role_count", @intCast(loaded.role_count)),
+        Attr.int("user_count", @intCast(loaded.user_count)),
+        Attr.int("assignment_count", @intCast(loaded.assignment_count)),
     });
-
-    return sm;
+    return loaded.sm;
 }
 
 // -- Graph Persistence Callbacks for SecurityManager --
@@ -1320,6 +1253,15 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         return err;
     };
     if (fle_loaded > 0) log.info("Auth DDL startup: hydrated FLE role grants", &.{Attr.int("count", @intCast(fle_loaded))});
+
+    // 4c. SONNY-6608: MFA enrollments and the MFA on/off state, stored and
+    // loaded (every one, or startup fails).
+    auth_dispatch.setMfaPersistCallbacks(auth_startup_hydration.mfaPersistCallbacks(agm));
+    const mfa_loaded = auth_startup_hydration.hydrateMfaEnrollments(allocator, agm) catch |err| {
+        log.err("Auth DDL startup: the MFA enrollments could not be loaded; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
+    if (mfa_loaded > 0) log.info("Auth DDL startup: hydrated MFA enrollments", &.{Attr.int("count", @intCast(mfa_loaded))});
 
     // 5. Per-graph grant check function for execution.zig fallback path.
     geode.execution.graph_grant_check_fn = &graphGrantCheck;

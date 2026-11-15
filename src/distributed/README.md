@@ -25,6 +25,19 @@ overlap window (`src/distributed/cluster_auth.zig`):
   `GEODE_CLUSTER_TOKEN` is unset the node stays in standalone mode and
   rejects everything, regardless of `GEODE_CLUSTER_TOKEN_PREVIOUS`.
 
+Token requirements (SONNY-6600):
+
+- Each token that is set must be at least **16 bytes**; `geode serve`
+  refuses to start otherwise (exit 1, naming the variable and its
+  length). Set but empty is refused too. Use a random token, for example
+  `openssl rand -hex 32` (64 characters, 256 bits); no other entropy check
+  is made.
+- Tokens are compared in full: both are hashed with SHA-256 and the
+  digests compared in constant time, so the time taken depends only on
+  the two lengths. Until SONNY-6600 only the first 256 bytes were
+  compared, so a token longer than 256 bytes was accepted from a peer that
+  knew its first 256 bytes. Regression: `zig build test-sonny6600-cluster-token`.
+
 Rotation procedure (no flag-day, no quorum loss). A running process only
 sees the env values it started with, so the accept-both phase must complete
 on **every** node before any node starts *sending* the new token:
@@ -125,8 +138,28 @@ SONNY-6279.
 
 - **Consensus:** Raft leader election and log replication are functional.
   With a data directory the term, vote and log survive a restart
-  (`zig build test-raft-hardstate-durability`), and a vote is durable before
-  the grant leaves the node (`test-sonny6563-vote-persist-before-send`).
+  (`zig build test-raft-hardstate-durability`). `RaftNode.drainReady`
+  persists each Ready (raft v0.2.0 `advancePersist()`) before it sends the
+  votes and replies the Ready holds and before it applies committed entries:
+  a vote is durable before the grant leaves the node
+  (`test-sonny6563-vote-persist-before-send`), and an entry is durable
+  before it is applied or acknowledged
+  (`test-sonny6611-raft-persist-before-apply`). Leader AppendEntries,
+  heartbeats and InstallSnapshot go out at once, each with its own copy of
+  the entry and snapshot data. If the Raft storage write fails, the node
+  pauses (no Raft input, nothing sent or applied, proposals refused with
+  `RaftStoragePersistFailed`) and each tick retries the write with backoff
+  until it succeeds (`test-sonny6617-raft-persist-failure`). raft v0.2.2:
+  a snapshot a follower installs is restored into the store before it is
+  persisted or anything after it applies, and a store that cannot take it
+  (the durable store, for now) pauses the node the same way; nothing in
+  the server takes Raft snapshots yet. A rejected AppendEntries carries the
+  follower's `conflict_index` / `conflict_term`. A Raft log with a damaged
+  record refuses startup (`RaftStorageLogCorrupted`, `...LogAuthFailed`,
+  `...LogEncryptionMismatch`) and is left as it is
+  (`test-sonny6622-raft-v022-adapt`). The graphs an entry's apply writes are
+  hydrated when the entry enters the log or before a restarted node
+  replays it, not under `inner_mutex` (`test-sonny6631-apply-hydration-off-mutex`).
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and

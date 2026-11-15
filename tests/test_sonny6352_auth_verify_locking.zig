@@ -75,7 +75,7 @@ const Reader = struct {
     }
 
     fn access(self: *Reader) void {
-        self.can_access = self.agm.canUserAccessGraph("alice", "g1");
+        self.can_access = self.agm.canUserAccessGraph("alice", "g1") catch false;
         self.done.store(true, .release);
     }
 };
@@ -148,7 +148,7 @@ const Race = struct {
     fn accessor(self: *Race) void {
         while (!self.stop.load(.acquire)) {
             // alice's g1 grant is never touched by the writer.
-            if (!self.w.agm.canUserAccessGraph("alice", "g1")) @panic("alice lost g1 while GRANT/REVOKE ran on other graphs");
+            if (!(self.w.agm.canUserAccessGraph("alice", "g1") catch false)) @panic("alice lost g1 while GRANT/REVOKE ran on other graphs");
         }
     }
 };

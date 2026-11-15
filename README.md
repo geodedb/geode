@@ -17,7 +17,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 - **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **Transactions** - `START TRANSACTION` / `COMMIT` / `ROLLBACK` with undo-log rollback; writes are serialized per graph and each read sees one snapshot. There are no isolation levels and no SSI (see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md))
-- **Enterprise Security** - Row-level security, TDE, audit logging, MFA support
+- **Enterprise Security** - Row-level security, TDE, audit logging (MFA is not enforced at login yet)
 
 ### **Advanced Capabilities**
 
@@ -217,7 +217,7 @@ COMMIT;
 
 - **Row-Level Security (RLS)** - Policy-based access control with expression evaluation
 - **RBAC/ABAC** - Role and attribute-based access control
-- **Multi-Factor Authentication** - Integrated MFA support
+- **Multi-Factor Authentication** - TOTP enrollment and on-request verification procedures; not enforced at login yet (SONNY-6604, see [docs/USER_AUTH.md](docs/USER_AUTH.md#mfa-is-not-enforced-at-login))
 - **Session Management** - Secure session handling with timeout controls
 
 ### **Data Protection**

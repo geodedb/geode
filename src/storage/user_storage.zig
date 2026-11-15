@@ -59,6 +59,10 @@ const HAS_ROLE_EDGE = "HAS_ROLE";
 pub const GRAPH_GRANT_LABEL = "GraphGrant";
 /// SONNY-6341: a user's permission to act under one FLE role.
 pub const FLE_ROLE_GRANT_LABEL = "FleRoleGrant";
+/// SONNY-6608: a user's MFA recovery codes, as SHA-256 digests.
+pub const MFA_RECOVERY_CODES_LABEL = "MfaRecoveryCodes";
+/// SONNY-6614: a user's offline MFA verification attempts.
+pub const MFA_ATTEMPTS_LABEL = "MfaAttempts";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     // error-policy: D — computeRecordHmac's only error is TooManyProperties
@@ -151,6 +155,10 @@ pub const UserStorageBackend = struct {
     graph_grant_nodes: std.AutoHashMap(u64, u64),
     /// SONNY-6341: FLE role grant id (`fleRoleGrantId`) -> node id.
     fle_role_grant_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6608: user id -> its MfaRecoveryCodes node id.
+    mfa_recovery_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6614: user id -> its MfaAttempts node id.
+    mfa_attempt_nodes: std.AutoHashMap(u64, u64),
 
     // AuthChainRoot singleton node ID (null if not yet created)
     chain_root_node: ?u64,
@@ -158,6 +166,10 @@ pub const UserStorageBackend = struct {
     const Self = @This();
 
     // Persistent record structures
+    /// SONNY-6609: room for a sealed TOTP secret (it was 64, a plaintext
+    /// base32 secret).
+    pub const mfa_secret_field_len = 128;
+
     pub const UserRecord = extern struct {
         id: u64,
         username: [64]u8,
@@ -170,7 +182,10 @@ pub const UserStorageBackend = struct {
         is_active: bool,
         is_superuser: bool,
         mfa_enabled: bool,
-        mfa_secret: [64]u8,
+        /// SONNY-6609: the TOTP secret sealed (`AuthGraphManager.sealMfaSecret`,
+        /// "aesgcm1$" + base64url(nonce || ciphertext || tag)); a store
+        /// written before holds it in plaintext until the server loads it.
+        mfa_secret: [mfa_secret_field_len]u8,
         mfa_secret_len: u16,
         failed_login_attempts: u16,
         lockout_until: i64,
@@ -414,6 +429,8 @@ pub const UserStorageBackend = struct {
             .policy_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .graph_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .fle_role_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .mfa_recovery_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .mfa_attempt_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .chain_root_node = null,
         };
 
@@ -432,6 +449,8 @@ pub const UserStorageBackend = struct {
         self.policy_nodes.deinit();
         self.graph_grant_nodes.deinit();
         self.fle_role_grant_nodes.deinit();
+        self.mfa_recovery_nodes.deinit();
+        self.mfa_attempt_nodes.deinit();
     }
 
     fn ensureSecurityGraph(store: *graph_store.GraphStore) !void {
@@ -448,6 +467,8 @@ pub const UserStorageBackend = struct {
         try self.loadPoliciesFromGraph();
         try self.loadGraphGrantsFromGraph();
         try self.loadFleRoleGrantsFromGraph();
+        try self.loadMfaRecoveryCodesFromGraph();
+        try self.loadMfaAttemptsFromGraph();
         // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
         // a subsequent `persistChainRoot` call (e.g. during offline
         // reset-password rewriting the seal) updates the existing node
@@ -455,7 +476,7 @@ pub const UserStorageBackend = struct {
         // invocations against the same data dir leave multiple
         // AuthChainRoot nodes, and `verifyChain` on reload picks the
         // stale one and reports `ChainHashMismatch`.
-        _ = self.loadChainRoot();
+        _ = try self.loadChainRoot();
     }
 
     fn loadUsersFromGraph(self: *Self) !void {
@@ -463,13 +484,13 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const record = loadUserRecordFromNode(self.store, node_id) orelse continue;
+            const record = (try loadUserRecordFromNode(self.store, node_id)) orelse continue;
             try self.putCachedUser(record.id, record);
             try self.user_nodes.put(record.id, node_id);
         }
     }
 
-    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
+    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) !?UserRecord {
         // Gap 0034 discipline, extended (merge interaction with the loop2
         // warm-hydration path): a snapshot-served reopen restores the label
         // postings WITHOUT materializing resident node bodies (engine scan
@@ -478,8 +499,10 @@ pub const UserStorageBackend = struct {
         // security record became invisible after a clean-shutdown reopen
         // (admin login failed, bootstrap refused fail-closed). Read the body
         // HYDRATE-ON-MISS like loadChainRoot: null now really means the node
-        // is absent from cache AND engine.
-        const node = store.getNodePtrHydrated(node_id) orelse return null;
+        // is absent from cache AND engine. SONNY-6594 (5): and a body that
+        // cannot be read is the read's error: the user was left out of the
+        // store loaded at start (and did not exist for the rest of the run).
+        const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         const id_val = getIntProp(store, node_id, "id", -1);
@@ -693,9 +716,16 @@ pub const UserStorageBackend = struct {
     /// `error.Unauthenticated` upstream, which the per-IP limiter COUNTS.
     /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-29
     pub fn findUserByUsernameInGraphChecked(store: *graph_store.GraphStore, username: []const u8) !?UserRecord {
+        // SONNY-6594 (5): a body that cannot be read is not "no such user":
+        // the engine-direct fallback below may still find the user; if it
+        // does not, the read's error is the answer.
+        var read_error: ?anyerror = null;
         if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
             for (nodes) |node_id| {
-                const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                const record = (loadUserRecordFromNode(store, node_id) catch |err| {
+                    read_error = err;
+                    continue;
+                }) orelse continue;
                 if (std.mem.eql(u8, record.getUsername(), username)) {
                     return record;
                 }
@@ -709,7 +739,9 @@ pub const UserStorageBackend = struct {
         // enumeration, "no such user" is not a supportable answer. The verdict is
         // identical for every unresolvable principal, so this adds no
         // username-enumeration oracle (#829).
-        return try findUserByUsernameEngineDirect(store.allocator, username);
+        if (try findUserByUsernameEngineDirect(store.allocator, username)) |record| return record;
+        if (read_error) |err| return err;
+        return null;
     }
 
     /// Legacy option-returning lookup, kept for the non-auth callers (bootstrap,
@@ -726,7 +758,7 @@ pub const UserStorageBackend = struct {
                 var records = std.ArrayList(UserRecord).empty;
                 defer records.deinit(allocator);
                 for (nodes) |node_id| {
-                    const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                    const record = (try loadUserRecordFromNode(store, node_id)) orelse continue;
                     try records.append(allocator, record);
                 }
                 return records.toOwnedSlice(allocator);
@@ -1008,7 +1040,7 @@ pub const UserStorageBackend = struct {
     /// removal (policy, role, user, permission) goes through it.
     fn deleteNodeChecked(self: *Self, node_id: u64) !void {
         if (!takeDeleteFault()) self.store.deleteNode(node_id);
-        if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+        if (try self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
     }
 
     /// SONNY-6293: a test-only fault hook. While non-zero, each checked
@@ -1154,6 +1186,145 @@ pub const UserStorageBackend = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6608-MFA-RECOVERY-STORE; FEATURE="MFA authentication"; ASPECT=DurableRecoveryDigests; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6608: a user's MFA recovery codes, held as SHA-256 digests
+    /// (`mfa.hashRecoveryCode`, SONNY-6600), never in plaintext: one
+    /// (:MfaRecoveryCodes {id, user_id, digests, created_at}) node per user
+    /// in the security graph, counted in and sealed by the HMAC chain like a
+    /// GraphGrant. `digests` is the digests in lower-case hex, comma
+    /// separated, in the order the codes were issued.
+    pub const max_mfa_recovery_codes = 32;
+
+    /// The map key of a node whose `user_id` is unusable: still mapped (so
+    /// the chain check sees it, and fails it), never equal to a user id.
+    fn mfaRecoveryKeyFromNode(store: *graph_store.GraphStore, node_id: u64) u64 {
+        const uid = getIntProp(store, node_id, "user_id", -1);
+        if (uid < 0) return node_id | (@as(u64, 1) << 63);
+        return @intCast(uid);
+    }
+
+    fn loadMfaRecoveryCodesFromGraph(self: *Self) !void {
+        const nodes = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, MFA_RECOVERY_CODES_LABEL) orelse return;
+        for (nodes) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            try self.mfa_recovery_nodes.put(mfaRecoveryKeyFromNode(self.store, node_id), node_id);
+        }
+    }
+
+    /// Store `digests` as `user_id`'s recovery codes, replacing any it had;
+    /// none removes the record.
+    pub fn setMfaRecoveryDigests(self: *Self, user_id: u64, digests: []const [32]u8) !void {
+        if (digests.len == 0) {
+            _ = self.removeMfaRecoveryDigests(user_id);
+            return;
+        }
+        if (digests.len > max_mfa_recovery_codes) return error.FieldTooLong;
+        var buf: [max_mfa_recovery_codes * 65]u8 = undefined;
+        var n: usize = 0;
+        for (digests, 0..) |d, i| {
+            if (i > 0) {
+                buf[n] = ',';
+                n += 1;
+            }
+            const hex = std.fmt.bytesToHex(d, .lower);
+            @memcpy(buf[n..][0..64], &hex);
+            n += 64;
+        }
+        const joined = buf[0..n];
+        if (self.mfa_recovery_nodes.get(user_id)) |node_id| {
+            try self.store.setNodeProperty(node_id, "digests", .{ .String = joined });
+            try self.store.setNodeProperty(node_id, "created_at", .{ .Int = compat_timestamp() });
+            return;
+        }
+        const node_id = try self.createEntityNode(MFA_RECOVERY_CODES_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "digests", .{ .String = joined });
+        try self.store.setNodeProperty(node_id, "created_at", .{ .Int = compat_timestamp() });
+        try self.mfa_recovery_nodes.put(user_id, node_id);
+    }
+
+    /// `user_id`'s stored recovery-code digests (the caller frees them), or
+    /// null when it has none. `error.CorruptMfaRecoveryRecord` for a record
+    /// that does not parse.
+    pub fn mfaRecoveryDigests(self: *Self, allocator: Allocator, user_id: u64) !?[][32]u8 {
+        const node_id = self.mfa_recovery_nodes.get(user_id) orelse return null;
+        const joined = getStringProp(self.store, node_id, "digests", "");
+        if (joined.len == 0) return error.CorruptMfaRecoveryRecord;
+        var out: std.ArrayList([32]u8) = .empty;
+        errdefer out.deinit(allocator);
+        var it = std.mem.splitScalar(u8, joined, ',');
+        while (it.next()) |hex| {
+            if (hex.len != 64) return error.CorruptMfaRecoveryRecord;
+            var d: [32]u8 = undefined;
+            _ = std.fmt.hexToBytes(&d, hex) catch return error.CorruptMfaRecoveryRecord;
+            try out.append(allocator, d);
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6614-MFA-ATTEMPT-STORE; FEATURE="MFA authentication"; ASPECT=DurableAttemptRecord; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6614: a user's MFA verification attempts as the offline
+    /// `geode user mfa-verify` counts them (each run is a new process, so an
+    /// in-memory count, as the server's, carries nothing from one run to the
+    /// next): one (:MfaAttempts {id, user_id, fail_count, lockout_until_ms})
+    /// node per user, sealed by the HMAC chain.
+    pub const MfaAttemptState = struct {
+        fail_count: u32 = 0,
+        lockout_until_ms: i64 = 0,
+    };
+
+    fn loadMfaAttemptsFromGraph(self: *Self) !void {
+        const nodes = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, MFA_ATTEMPTS_LABEL) orelse return;
+        for (nodes) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            try self.mfa_attempt_nodes.put(mfaRecoveryKeyFromNode(self.store, node_id), node_id);
+        }
+    }
+
+    /// `user_id`'s stored attempts, or null when it has no record.
+    pub fn getMfaAttempts(self: *Self, user_id: u64) ?MfaAttemptState {
+        const node_id = self.mfa_attempt_nodes.get(user_id) orelse return null;
+        const count = getIntProp(self.store, node_id, "fail_count", 0);
+        return .{
+            .fail_count = std.math.cast(u32, count) orelse std.math.maxInt(u32),
+            .lockout_until_ms = getIntProp(self.store, node_id, "lockout_until_ms", 0),
+        };
+    }
+
+    /// Store `user_id`'s attempts (the record made if it has none).
+    pub fn setMfaAttempts(self: *Self, user_id: u64, state: MfaAttemptState) !void {
+        if (self.mfa_attempt_nodes.get(user_id)) |node_id| {
+            try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+            try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+            return;
+        }
+        const node_id = try self.createEntityNode(MFA_ATTEMPTS_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+        try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+        try self.mfa_attempt_nodes.put(user_id, node_id);
+    }
+
+    /// Remove `user_id`'s attempt record; false when it had none.
+    pub fn removeMfaAttempts(self: *Self, user_id: u64) bool {
+        const kv = self.mfa_attempt_nodes.fetchRemove(user_id) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
+    /// Remove `user_id`'s recovery codes; false when it had none.
+    pub fn removeMfaRecoveryDigests(self: *Self, user_id: u64) bool {
+        const kv = self.mfa_recovery_nodes.fetchRemove(user_id) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
     // User operations
     pub fn persistUser(self: *Self, user_id: u64, username: []const u8, email: []const u8, password_hash: []const u8, salt: []const u8) !void {
         if (username.len > 63 or email.len > 127 or password_hash.len > 255 or salt.len > 31) {
@@ -1209,7 +1380,7 @@ pub const UserStorageBackend = struct {
         }
 
         if (mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
             if (record.getMFASecret()) |existing| {
                 if (!std.mem.eql(u8, existing, secret)) bump_auth_version = true;
             } else {
@@ -1246,7 +1417,7 @@ pub const UserStorageBackend = struct {
             return error.FieldTooLong;
         }
         if (opts.mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
         }
         if (opts.attributes_json) |attrs| {
             if (attrs.len > 2047) return error.FieldTooLong;
@@ -1303,7 +1474,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1320,7 +1491,7 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1328,7 +1499,7 @@ pub const UserStorageBackend = struct {
                 if (edge.to_id == role_node_id) {
                     // SONNY-6293: checked, as a record's node delete.
                     if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
-                    if (self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
+                    if (try self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }
@@ -1341,7 +1512,7 @@ pub const UserStorageBackend = struct {
         var result = std.ArrayList(u64).empty;
         defer result.deinit(allocator);
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
                 const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
@@ -1373,6 +1544,10 @@ pub const UserStorageBackend = struct {
             _ = self.user_nodes.remove(user_id);
         }
         _ = self.removeCachedUser(user_id);
+        // SONNY-6608: the user's MFA recovery codes go with it, SONNY-6614:
+        // and its MFA attempt record.
+        _ = self.removeMfaRecoveryDigests(user_id);
+        _ = self.removeMfaAttempts(user_id);
     }
 
     /// A copy of the cached record (SONNY-6329: under `user_cache_lock`).
@@ -1478,7 +1653,7 @@ pub const UserStorageBackend = struct {
         node_id: ?u64, // graph store node ID, null if not yet created
     };
 
-    pub fn loadChainRoot(self: *Self) ?ChainRootRecord {
+    pub fn loadChainRoot(self: *Self) !?ChainRootRecord {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, AUTH_CHAIN_ROOT_LABEL);
         if (nodes_opt == null) return null;
         const nodes = nodes_opt.?;
@@ -1494,8 +1669,10 @@ pub const UserStorageBackend = struct {
         // perfectly healthy fresh store, every 5 minutes until restart.
         // Hydration rebuilds the body from the durable engine, so null here
         // now really means "no chain root exists" — the genuine tamper
-        // signal (root deleted/corrupted on disk) stays loud.
-        const node = self.store.getNodePtrHydrated(node_id) orelse return null;
+        // signal (root deleted/corrupted on disk) stays loud. SONNY-6594 (5):
+        // a root that cannot be READ is the read's error, not "no root" (which
+        // `verifyChain` reports as MissingChainRoot, "POSSIBLE TAMPERING").
+        const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         self.chain_root_node = node_id;
@@ -1786,7 +1963,7 @@ pub const UserStorageBackend = struct {
             .is_active = true,
             .is_superuser = false,
             .mfa_enabled = false,
-            .mfa_secret = [_]u8{0} ** 64,
+            .mfa_secret = [_]u8{0} ** mfa_secret_field_len,
             .mfa_secret_len = 0,
             .failed_login_attempts = 0,
             .lockout_until = 0,
@@ -2249,7 +2426,7 @@ test "loadChainRoot returns null when no chain root exists" {
     var backend = try UserStorageBackend.init(testing.allocator, &store);
     defer backend.deinit();
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root == null);
 }
 
@@ -2265,7 +2442,7 @@ test "persistChainRoot creates and loadChainRoot retrieves" {
     try backend.persistChainRoot(chain_hash_hex, 5, "key-id-001");
 
     // Load and verify
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 5), r.record_count);
@@ -2288,7 +2465,7 @@ test "persistChainRoot updates existing chain root" {
     try backend.persistChainRoot(hash1, 3, "key-v1");
     try backend.persistChainRoot(hash2, 7, "key-v2");
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 7), r.record_count);

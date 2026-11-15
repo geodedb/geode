@@ -13,10 +13,12 @@
 // `step()` returns. Geode's Transport bridge (`RaftLibTransportBridge`)
 // queued the reply on the per-peer outbox at once, and the outbox thread
 // sends without the raft mutex, so the reply could be on the wire before the
-// fsync. This test drives the production wiring (`RaftNode.setTransport` +
-// the bridge) on a FileStorage directory and reads the on-disk hard state at
-// the moment the reply is handed to the network (`Transport.send`, which the
-// outbox calls; `send_override` is the test's network).
+// fsync. Since raft v0.2.0 (SONNY-6592) the library queues the reply in
+// `Ready.messages`, and `drainReady` sends it after `advancePersist()`. This
+// test drives the production wiring (`RaftNode.setTransport`) on a
+// FileStorage directory and reads the on-disk hard state at the moment the
+// reply is handed to the network (`Transport.send`, which the outbox calls;
+// `send_override` is the test's network).
 //
 // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=VoteDurableBeforeReply; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-14
 

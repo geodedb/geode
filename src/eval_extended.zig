@@ -730,6 +730,7 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
         // `list.len` panicked the process for a 65536-element literal.
         if (list.len > std.math.maxInt(u16)) return error.VectorTooLarge;
         var data = try allocator.alloc(f32, list.len);
+        errdefer allocator.free(data);
 
         for (list, 0..) |item, i| {
             data[i] = switch (item) {
@@ -746,6 +747,10 @@ fn constructVectorF32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
                 },
                 else => return error.TypeMismatch,
             };
+            // SONNY-6596: a component past the f32 range (an approximate
+            // literal such as 1e39 is now a DOUBLE, not a refused decimal)
+            // is refused (22003), never stored as an infinity.
+            if (!std.math.isFinite(data[i])) return error.NumericOutOfRange;
         }
 
         return .{ .VectorF32 = .{ .dim = @intCast(list.len), .data = data } };
@@ -1833,6 +1838,9 @@ fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const x: f64 = switch (args[0]) {
         .Int => |i| @floatFromInt(i),
         .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @floatFromInt(d.scale)),
+        // SONNY-6596: an approximate coordinate (`1.5E0`, a DOUBLE parameter).
+        .Double => |v| v,
+        .Real => |v| v,
         else => return error.TypeMismatch,
     };
 
@@ -1840,6 +1848,9 @@ fn stPoint(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const y: f64 = switch (args[1]) {
         .Int => |i| @floatFromInt(i),
         .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @floatFromInt(d.scale)),
+        // SONNY-6596: an approximate coordinate (`1.5E0`, a DOUBLE parameter).
+        .Double => |v| v,
+        .Real => |v| v,
         else => return error.TypeMismatch,
     };
 
