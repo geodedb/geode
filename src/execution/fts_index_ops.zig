@@ -22,6 +22,7 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const tokenizer = @import("../index/fts_tokenizer.zig");
 const adapter_mod = @import("../storage/fts_storage_adapter.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const catalog_mod = @import("../schema/catalog.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
 const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig");
@@ -396,7 +397,8 @@ var queued_count: std.atomic.Value(usize) = .init(0);
 pub fn queueRebuildForRemovedText(graph_name: []const u8, labels: []const []const u8, property: []const u8) void {
     const adapter = graph_store.getGlobalAdapter() orelse return;
     const mg = adapter.lookupManagedGraph(graph_name) catch return;
-    if (mg.fts_adapter == null) return;
+    const fa = mg.fts_adapter orelse return;
+    armLabelRegistry(adapter, mg, fa, graph_name); // SONNY-6591
     for (labels) |label| {
         const specs = mg.coveringFtsIndexes(label) orelse continue;
         for (specs) |spec| {
@@ -421,7 +423,8 @@ pub fn queueRebuildForRemovedText(graph_name: []const u8, labels: []const []cons
 pub fn queueRebuildForRemovedLabel(store: *graph_store.GraphStore, graph_name: []const u8, node_id: u64, label: []const u8) void {
     const adapter = graph_store.getGlobalAdapter() orelse return;
     const mg = adapter.lookupManagedGraph(graph_name) catch return;
-    if (mg.fts_adapter == null) return;
+    const fa = mg.fts_adapter orelse return;
+    armLabelRegistry(adapter, mg, fa, graph_name); // SONNY-6591
     const specs = mg.coveringFtsIndexes(label) orelse return;
     for (specs) |spec| {
         for (spec.properties) |p| {
@@ -661,6 +664,77 @@ pub fn dropFulltextIndex(
 /// A4b: the kind of node write that triggered maintenance.
 pub const FtsWriteOp = enum { create, upsert, update, delete };
 
+// CANARY: REQ=REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART; FEATURE="FullText"; ASPECT=RegistryArmedFromCatalog; STATUS=TESTED; TEST=tests/test_sonny6591_fts_write_paths.zig; OWNER=fts; UPDATED=2026-11-15
+/// SONNY-6591: fill `mg`'s label -> fulltext index registry from the catalog
+/// and open each index's engine, once per opened graph.
+///
+/// The registry every maintenance hook reads (`coveringFtsIndexes`) lives in
+/// memory and was filled only by CREATE INDEX and `rebuildFulltextIndex`. A
+/// restart left it empty while the catalog still recorded the index and its
+/// engine re-opened on the first search, so after a restart no write reached
+/// the index: CREATE, SET and MERGE indexed nothing, DELETE left the node's
+/// postings, and REMOVE queued no rebuild. The catalog row (written by every
+/// CREATE INDEX, removed by DROP INDEX) is the durable record; the hooks call
+/// this first, so the first write after a restart finds the index.
+///
+/// One atomic load once armed. Until the catalog exists, or while an engine
+/// that is on disk cannot be opened, the graph stays unarmed and the next
+/// hook tries again. A catalog row whose engine is not on this graph (no
+/// directory: `IndexNotFound`, e.g. mid-rebuild, which re-arms the index
+/// itself) is skipped. The catalog lock is held only to copy the rows; no
+/// graph lock is taken (callers may hold one: graph locks are below the
+/// catalog in the lock order).
+fn armLabelRegistry(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    mg: *graph_storage_adapter.ManagedGraph,
+    fa: *adapter_mod.FtsStorageAdapter,
+    graph_name: []const u8,
+) void {
+    if (mg.fts_registry_armed.load(.acquire)) return;
+    const execution = @import("../execution.zig");
+    const catalog = if (execution.getActiveContext()) |ctx| ctx.catalog else (execution.getCatalogInstanceIfPresent() orelse return);
+
+    var arena = std.heap.ArenaAllocator.init(adapter.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Row = struct { name: []const u8, label: []const u8, properties: []const []const u8 };
+    var rows: std.ArrayListUnmanaged(Row) = .empty;
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.indexes.valueIterator();
+        while (it.next()) |info| {
+            if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
+            if (!catalog_mod.rowInGraph(info.graph, graph_name)) continue;
+            var row: Row = .{ .name = undefined, .label = undefined, .properties = undefined };
+            dupeSpec(a, info.table_name, info.columns, &row.label, &row.properties) catch return;
+            row.name = a.dupe(u8, info.name) catch return;
+            rows.append(a, row) catch return;
+        }
+    }
+
+    var complete = true;
+    for (rows.items) |row| {
+        if (fa.getIndex(row.name) == null) {
+            fa.openIndex(row.name) catch |err| switch (err) {
+                adapter_mod.Error.IndexNotFound => continue,
+                adapter_mod.Error.IndexExists => {}, // opened by a concurrent search
+                else => {
+                    log.warn("fulltext index '{s}' could not be opened for write maintenance: {}; writes do not reach it until it opens", .{ row.name, err });
+                    complete = false;
+                    continue;
+                },
+            };
+        }
+        mg.addFtsLabelIndex(adapter.allocator, row.label, row.name, row.properties) catch |err| {
+            log.warn("fulltext index '{s}' could not be registered for write maintenance: {}", .{ row.name, err });
+            complete = false;
+        };
+    }
+    if (complete) mg.fts_registry_armed.store(true, .release);
+}
+
 /// A4b: keep fulltext indexes current after a single-node write. CHEAP-EXITS
 /// when no fulltext index covers any of `labels` (the dominant case → near-zero
 /// overhead for non-FTS graphs).
@@ -712,6 +786,7 @@ pub fn maintainFulltextOnWrite(
 
     const mg = adapter.lookupManagedGraph(gname) catch return;
     const fa = mg.fts_adapter orelse return; // no FTS on this graph → free exit
+    armLabelRegistry(adapter, mg, fa, gname); // SONNY-6591: one atomic load once armed
 
     // De-dup index names across labels so a node carrying two labels both
     // covered by the same index is maintained exactly once (otherwise `.create`

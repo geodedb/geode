@@ -2497,6 +2497,32 @@
 
 ### Fixed
 
+- **Fulltext indexes are kept current by every write path, after a restart
+  too (SONNY-6591).** Two write paths skipped the fulltext maintenance
+  hook. (1) Over QUIC, a single-statement `CREATE (n:L {k: v})` with no
+  RETURN is served by the default write fast path
+  (`executeBulkSimpleCreate`), which wrote the node through the storage
+  adapter and indexed nothing: the node was not found by
+  `geode.fts.search` / `phrase` until a later REMOVE, ROLLBACK or
+  `geode.fts.rebuild` rebuilt the index. (2) The label -> fulltext index
+  registry that every maintenance hook reads lived in memory and was filled
+  only by CREATE INDEX and `geode.fts.rebuild`, so after any restart (clean
+  or crash) no write reached the index on either transport. CREATE, SET and
+  MERGE (executor, fast path, `/*+BATCH*/`) appended nothing, a DELETE left
+  the node's postings, and a REMOVE or a SET replacing indexed text queued
+  no rebuild, so the removed text stayed findable. Search kept answering
+  the pre-restart contents, because the engine re-opens on the first
+  search. The fast path now runs the hook on the connection thread before
+  it answers, as the bulk MERGE paths do. The first maintenance hook on a
+  graph after it is opened now fills the registry from the catalog's
+  fulltext rows and opens their engines
+  (`fts_index_ops.armLabelRegistry`; once per graph, one atomic load
+  afterwards). TDE played no part. Regression:
+  `zig build test-sonny6591-fts-write-paths` (a real server, QUIC and
+  gRPC, with and without TDE: every write path looked up right after its
+  write and after SIGKILL and SIGTERM restarts; 264 of 592 cells failed
+  before).
+
 - **A cluster node's vote is on disk before its grant can leave the node
   (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
   its transport from inside `step()` and writes the hard state (term,
