@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T18:05:41.795160791Z",
+  "generated_at": "2026-11-15T18:09:18.77254719Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78712,6 +78712,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6612-ERROR-MESSAGES",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_error_messages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_error_messages.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6612-UNREADABLE-NODE-WRITE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_unreadable_node_write.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_unreadable_node_write.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -83802,7 +83840,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4163
+      "TESTED": 4165
     },
     "by_aspect": {
       "2PC": 3,
@@ -86579,7 +86617,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 378,
+      "Regression": 380,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

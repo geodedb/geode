@@ -4984,6 +4984,8 @@ REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,DroppingTenantRefused,TESTED,src
 REQ-SONNY-6607-TENANT-LIFECYCLE,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_lifecycle.zig,tests/test_sonny6607_tenant_lifecycle.zig,,security,2026-11-15
 REQ-SONNY-6607-TENANT-ORPHAN-STARTUP,TenantLifecycle,Regression,TESTED,tests/test_sonny6607_tenant_orphan_startup.zig,tests/test_sonny6607_tenant_orphan_startup.zig,,security,2026-11-15
 REQ-SONNY-6607-VOID-WRITE-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6607_void_write_errors.zig,tests/test_sonny6607_void_write_errors.zig,,storage,2026-11-15
+REQ-SONNY-6612-ERROR-MESSAGES,StorageIntegrity,Regression,TESTED,tests/test_sonny6612_error_messages.zig,tests/test_sonny6612_error_messages.zig,,transport,2026-11-15
+REQ-SONNY-6612-UNREADABLE-NODE-WRITE,StorageIntegrity,Regression,TESTED,tests/test_sonny6612_unreadable_node_write.zig,tests/test_sonny6612_unreadable_node_write.zig,,execution,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
