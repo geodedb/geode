@@ -1120,22 +1120,6 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Validate TOTP code format when enabling with --code
         if (enable and code != null) {
             const code_str = code.?;
-            // Validate code format: must be exactly 6 numeric digits
-            if (code_str.len != 6) {
-                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            var all_digits = true;
-            for (code_str) |c| {
-                if (c < '0' or c > '9') {
-                    all_digits = false;
-                    break;
-                }
-            }
-            if (!all_digits) {
-                std.debug.print("Error: invalid code format - must contain only digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
             if (!flags_mod.global().mfa.enabled()) {
                 std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1153,10 +1137,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             // mfa-verify's (it had none: an unlimited guessing route).
             beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
-            const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
-                std.debug.print("Error: invalid code format\n", .{});
+            // SONNY-6623: a malformed code is a wrong code: checked after it
+            // is counted (it was refused first, uncounted), as mfa-verify and
+            // the online mfa_verify / mfa_enable do.
+            var all_digits = code_str.len == 6;
+            for (code_str) |c| {
+                if (c < '0' or c > '9') all_digits = false;
+            }
+            if (!all_digits) {
+                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
-            };
+            }
+            const code_int = std.fmt.parseInt(u32, code_str, 10) catch unreachable; // six digits
 
             const timestamp_ms = @as(u64, @intCast(compat_milliTimestamp()));
             const valid = ext_mfa.verifyCode(allocator, secret, timestamp_ms, code_int, mfa_policy.codeConfig(30, 6, 1)) catch {

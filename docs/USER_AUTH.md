@@ -1033,8 +1033,11 @@ What exists:
   code is checked; if that record cannot be made (out of memory) the
   verification is refused with `53000` and the code is not checked, so the
   limit cannot be bypassed under memory pressure (it failed open).
-- `geode.auth.mfa_enable(user, code)` checks the code and turns the user's
-  stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
+- `geode.auth.mfa_enable(user, code)` checks the code under the same
+  limiter as `mfa_verify` (SONNY-6623: one per-user count and lockout; it
+  had none; a malformed code from an enrolled user counts and is still
+  22023, a missing code is an argument error and does not) and turns the
+  user's stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
   `warning` column; `mfa_disable(user)` turns it off. No login reads the
   flag yet.
 - The offline `geode user mfa-setup` and `geode user mfa enable` print the
@@ -1049,7 +1052,8 @@ What exists:
   checked; one that cannot be saved is refused unchecked. Being a store
   write, it is refused while a server holds the data directory (or pass
   `--force`, as the other offline writers). `geode user mfa enable
-  --code` counts against the same record (SONNY-6619; it had no limit).
+  --code` counts against the same record (SONNY-6619; it had no limit),
+  malformed codes included (SONNY-6623).
 - The server's lockout survives a restart (SONNY-6619): the fifth failure
   stores the lockout in the same `MfaAttempts` record, and the first
   success after a stored lockout stores the reset; the server loads the

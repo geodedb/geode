@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T20:32:14.629300641Z",
+  "generated_at": "2026-11-15T20:37:48.267158854Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80724,6 +80724,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6623-MFA-ENABLE-LIMIT",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6623_mfa_enable_limit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6623_mfa_enable_limit.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6623-OFFLINE-MALFORMED",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6623_offline.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6623_offline.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6623-SHARED-MFA-LIMITER",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "OneLimiterForEveryCodeCheck",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6623_mfa_enable_limit.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -85815,7 +85872,7 @@
       "EXEMPT": 209,
       "IMPL": 534,
       "STUB": 18,
-      "TESTED": 4256
+      "TESTED": 4259
     },
     "by_aspect": {
       "2PC": 3,
@@ -88033,6 +88090,7 @@
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,
       "OneImplementation": 1,
+      "OneLimiterForEveryCodeCheck": 1,
       "OneNumericEqualityRule": 1,
       "OneReadPolicyForNodesAndEdges": 1,
       "OneRequestContextForQuicAndGrpc": 1,
@@ -88654,7 +88712,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 390,
+      "Regression": 392,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

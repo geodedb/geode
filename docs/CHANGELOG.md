@@ -4,6 +4,21 @@
 
 ### Security
 
+- **`geode.auth.mfa_enable` is under the MFA attempt limiter; removing a
+  SecurityManager user cannot leave its sessions; offline `mfa enable`
+  counts malformed codes (SONNY-6623).** `mfa_enable` checked the TOTP
+  code with no attempt limit (Admin only, but an unlimited guessing
+  route): it now shares `mfa_verify`'s limiter (one per-user count and
+  lockout, the stored lockout transitions of SONNY-6619). **User-visible:**
+  failures through either procedure count toward the same lockout, and a
+  malformed `mfa_enable` code from an enrolled user counts (still 22023;
+  a missing code does not). `SecurityManager.removeUserByName` collected
+  the user's sessions into an allocated list and left them when the
+  allocation failed; they are removed in place now. The offline
+  `geode user mfa enable --code` refused a malformed code before counting
+  it; it is counted now, as `mfa-verify` counts it. Regressions: `zig build
+  test-sonny6623-mfa-enable-limit`, `zig build test-sonny6623-offline`.
+
 - **Offline `geode user mfa enable --code` counts against the attempt
   limit; the server's MFA lockout survives a restart; SecurityManager
   follows the MFA procedures and drops a dropped user; an in-process store

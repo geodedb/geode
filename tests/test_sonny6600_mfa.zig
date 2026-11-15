@@ -349,6 +349,9 @@ const Verifier = struct {
 
     fn run(self: *Verifier) void {
         while (!self.stop.load(.acquire)) {
+            // SONNY-6623: mfa_enable is under the MFA attempt limiter now;
+            // this race is about the secret read, not the lockout.
+            auth_dispatch.resetMfaAttemptsForTests(USERNAME) catch {};
             const resp = fx.execute(self.ga, self.session, "CALL geode.auth.mfa_enable('" ++ USERNAME ++ "', '000000')") catch |e| {
                 self.bad = @errorName(e);
                 return;

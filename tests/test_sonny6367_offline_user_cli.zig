@@ -506,9 +506,10 @@ test "SONNY-6367: mfa_setup / mfa_verify / mfa_enable / mfa_disable failures are
     try fx.expectRuns(ga, w.admin, "CALL geode.auth.mfa_setup('mfa6367')");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('mfa6367', '000000')", "28000");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "28000");
-    // Locked out after the fifth failure: 53400.
+    // Locked out after the fifth failure: 53400. SONNY-6623: the mfa_enable
+    // above counts too (one limiter), so three more reach five.
     var i: usize = 0;
-    while (i < 4) : (i += 1) {
+    while (i < 3) : (i += 1) {
         try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "28000");
     }
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfa6367', '000000')", "53400");
