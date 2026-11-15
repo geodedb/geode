@@ -111,6 +111,8 @@ pub fn endpointErrorMessage(err: anyerror) ?[]const u8 {
         error.InvalidPageSize, error.PageSizeOutOfRange => "Invalid Geode endpoint DSN: page_size takes a whole number 1-100000",
         error.UnknownDsnParameter => "Invalid Geode endpoint DSN: unknown query parameter; the parameters are page_size, hello_name, hello_ver, conformance, graph, username (user), password (pass), tls, insecure_tls_skip_verify (insecure, skip_verify), ca (ca_cert), cert (client_cert), key (client_key), server_name, connect_timeout (timeout), timeout_ms, tenant (tenant_id) and role (docs/DSN.md)",
         error.MalformedDsnParameter => "Invalid Geode endpoint DSN: a query parameter must be name=value, joined by &",
+        // SONNY-6589 (2): geode mcp only; the CLI warns instead.
+        error.DsnTimeoutUnsupported => "Invalid Geode endpoint DSN: geode mcp cannot apply connect_timeout (timeout) or timeout_ms: geode-client-zig waits a fixed 30 s for the QUIC handshake and for the HELLO answer; remove the parameter (docs/DSN.md)",
         error.InvalidDsnBoolean => "Invalid Geode endpoint DSN: a boolean parameter (insecure_tls_skip_verify, insecure, skip_verify, tls) takes true, false, 1, 0, yes, no, on or off",
         error.Ipv6ZoneUnsupported => "Invalid Geode endpoint DSN: an IPv6 address with a zone (%eth0) cannot be dialled; use a global or loopback IPv6 address, an IPv4 address or a host name",
         error.InsecureTlsRefused => "Refused: the endpoint DSN sets insecure=true under production posture (release build or GEODE_ENV=production); give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to accept the risk",

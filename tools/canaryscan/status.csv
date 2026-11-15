@@ -4995,6 +4995,15 @@ REQ-SONNY-6570-CDC-WORKER-SLEEPS,CDC Engine,IdleWorkerSleeps,TESTED,src/streamin
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI Backup,BackupServerNamedAsDialled,TESTED,src/cli/backup_cli.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
+REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI,RefusedConnectKeepsSession,TESTED,src/client/repl/repl_dispatch.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
+REQ-SONNY-6589-CLI-ADDRESS-MESSAGES,CLI,RefusedConnectAndBackupServerNamed,TESTED,tests/test_sonny6589_cli_messages.zig,tests/test_sonny6589_cli_messages.zig,,cli,2026-11-15
+REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,GraphScopedSchemaListing,TESTED,src/graph_store.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
+REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,HelloCredentialsAuthenticateLsp,TESTED,src/server/main.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
+REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,PasswordAuthAndPerUserSchema,TESTED,tests/test_sonny6589_lsp_auth.zig,tests/test_sonny6589_lsp_auth.zig,,lsp,2026-11-15
+REQ-SONNY-6589-MCP-TIMEOUT-REFUSED,MCPBackendTools,UnappliedTimeoutRefused,TESTED,tests/test_sonny6589_mcp_timeout.zig,tests/test_sonny6589_mcp_timeout.zig,,mcp,2026-11-15
+REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6589_broken_graph_open.zig,,storage,2026-11-15
+REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,tests/test_sonny6589_broken_graph_open.zig,,,storage,2026-11-15
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,tests/test_sonny6591_fts_write_paths.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
@@ -5025,6 +5034,18 @@ REQ-SONNY-6600-MFA-STORE-LIFETIME,MFA authentication,StoreOwnsItsMemory,TESTED,s
 REQ-SONNY-6600-NONCE-RECORD-ERROR,Nonce Replay Protection,RecordFailureIsAnError,TESTED,src/distributed/nonce_tracker.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
 REQ-SONNY-6600-RECOVERY-CODE-DIGESTS,MFA recovery code,DigestAtRest,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6600_mfa.zig,,security,2026-11-15
 REQ-SONNY-6600-STRICT-PHC,Canonical Argon2id Hashing,StrictPhcParse,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6600_auth_outcomes.zig,,security,2026-11-15
+REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT,CLI Backup,TimeoutBoundsHandshake,TESTED,src/cli/backup_cli.zig,tests/test_sonny6606_backup_handshake_timeout.zig,,cli,2026-11-15
+REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT,CLI Backup,TimeoutBoundsHandshake,TESTED,tests/test_sonny6606_backup_handshake_timeout.zig,,,cli,2026-11-15
+REQ-SONNY-6606-BATCH-PROPERTY-COUNTERS,LspIntrospectionIndex,BatchWritesCountKeys,TESTED,src/graph_store.zig,tests/test_sonny6606_batch_property_counters.zig,,perf,2026-11-15
+REQ-SONNY-6606-BATCH-PROPERTY-COUNTERS,LspIntrospectionIndex,BatchWritesCountKeys,TESTED,tests/test_sonny6606_batch_property_counters.zig,,,perf,2026-11-15
+REQ-SONNY-6606-BROKEN-GRAPH-LOG-ONCE,StorageIntegrity,UnreadableGraphLoggedOnce,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6606_broken_graph_logs.zig,,storage,2026-11-15
+REQ-SONNY-6606-BROKEN-GRAPH-LOG-ONCE,StorageIntegrity,UnreadableGraphLoggedOnce,TESTED,tests/test_sonny6606_broken_graph_logs.zig,,,storage,2026-11-15
+REQ-SONNY-6606-LSP-ROLE-DEFAULT,Embedded LSP,NoRoleIsNone,TESTED,src/cli/lsp/auth.zig,tests/test_sonny6606_lsp_role_default.zig,,lsp,2026-11-15
+REQ-SONNY-6606-LSP-ROLE-DEFAULT,Embedded LSP,NoRoleIsNone,TESTED,tests/test_sonny6606_lsp_role_default.zig,,,lsp,2026-11-15
+REQ-SONNY-6606-META-SCHEMA-SCOPE,GPS Metadata Isolation,SessionGraphOnly,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6606_meta_schema_scope.zig,,security,2026-11-15
+REQ-SONNY-6606-META-SCHEMA-SCOPE,GPS Metadata Isolation,SessionGraphOnly,TESTED,tests/test_sonny6606_meta_schema_scope.zig,,,security,2026-11-15
+REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS,CLI,ConnectAuthenticates,TESTED,src/client/repl/repl_dispatch.zig,tests/test_sonny6606_repl_connect_credentials.zig,,cli,2026-11-15
+REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS,CLI,ConnectAuthenticates,TESTED,tests/test_sonny6606_repl_connect_credentials.zig,,,cli,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

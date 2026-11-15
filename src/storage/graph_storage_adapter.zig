@@ -4066,6 +4066,14 @@ pub const StorageAdapter = struct {
     /// answer GraphNotFound for them instead of creating the graph again; only
     /// `createGraph` (CREATE GRAPH) does, and takes the name out.
     dropped_graph_names: std.StringHashMapUnmanaged(void) = .empty,
+    /// SONNY-6589 (6): graphs whose engine could not be opened since this
+    /// adapter opened (owned keys), with the uuid tried and the error, under
+    /// `mutex` (`openGraphRememberingFailureLocked`).
+    open_failures: std.StringHashMapUnmanaged(OpenFailure) = .empty,
+    /// SONNY-6606 (3): registry entries (owned names, with the uuid) whose
+    /// unreadable manifest `refreshRegistryHeaderNextIdsLocked` has logged,
+    /// under `mutex`: once per boot, not at every registry save.
+    unreadable_manifests_logged: std.StringHashMapUnmanaged([16]u8) = .empty,
 
     // GAP-0900 (observability + checkpoint-cadence): the group-commit bulk
     // fast paths (bulkInsertNodeWithReservedId* / bulkMergeNode*) write through
@@ -4377,7 +4385,7 @@ pub const StorageAdapter = struct {
         }
 
         if (self.findRegistryEntryLocked(name)) |entry| {
-            return self.openGraphLocked(name, entry.uuid);
+            return self.openGraphRememberingFailureLocked(name, entry.uuid);
         }
 
         if (self.dropped_graph_names.contains(name)) return error.GraphNotFound;
@@ -4476,6 +4484,15 @@ pub const StorageAdapter = struct {
         while (it.next()) |k| self.allocator.free(k.*);
         self.dropped_graph_names.deinit(self.allocator);
         self.dropped_graph_names = .empty;
+        // SONNY-6589 (6): torn down with it (both deinit paths).
+        var fit = self.open_failures.keyIterator();
+        while (fit.next()) |k| self.allocator.free(k.*);
+        self.open_failures.deinit(self.allocator);
+        self.open_failures = .empty;
+        var uit = self.unreadable_manifests_logged.keyIterator();
+        while (uit.next()) |k| self.allocator.free(k.*);
+        self.unreadable_manifests_logged.deinit(self.allocator);
+        self.unreadable_manifests_logged = .empty;
     }
 
     // CANARY: REQ=REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE; FEATURE="MultiGraphIsolation"; ASPECT=DurableDroppedNames; STATUS=TESTED; TEST=tests/test_sonny6523_dropped_graph_restart.zig; OWNER=storage; UPDATED=2026-11-13
@@ -4560,7 +4577,7 @@ pub const StorageAdapter = struct {
             return mg;
         }
 
-        return self.openGraphLocked(name, graph_uuid);
+        return self.openGraphRememberingFailureLocked(name, graph_uuid);
     }
 
     /// Return the stored UUID for a loaded graph, or null if not loaded.
@@ -4783,7 +4800,7 @@ pub const StorageAdapter = struct {
         const mg = if (self.engines.get("default")) |existing|
             existing
         else if (self.findRegistryEntryLocked("default")) |entry|
-            try self.openGraphLocked("default", entry.uuid)
+            try self.openGraphRememberingFailureLocked("default", entry.uuid)
         else
             try self.createGraphLocked("default");
 
@@ -9968,6 +9985,10 @@ pub const StorageAdapter = struct {
             n += 1;
         }
         for (names_buf[0..n]) |nm| {
+            // SONNY-6606 (3): a graph whose open already failed (and was
+            // logged, `openGraphRememberingFailureLocked`) is not reported
+            // again at every checkpoint.
+            if (self.open_failures.contains(nm)) continue;
             _ = self.requireExistingGraphLocked(nm) catch |err| {
                 log.warn("full checkpoint: could not load graph '{s}' to persist its exact index: {s}", .{ nm, @errorName(err) });
                 continue;
@@ -11882,12 +11903,45 @@ pub const StorageAdapter = struct {
         return mg;
     }
 
+    const OpenFailure = struct { uuid: [16]u8, err: anyerror };
+
+    // CANARY: REQ=REQ-SONNY-6589-OPEN-FAILURE-CACHED; FEATURE="StorageIntegrity"; ASPECT=GraphOpenFailureRemembered; STATUS=TESTED; TEST=tests/test_sonny6589_broken_graph_open.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6589 (6) / SONNY-6554 (7): `openGraphLocked`, once per graph
+    /// per adapter. A graph whose engine could not be opened is not in
+    /// `engines`, so every access opened it again (re-reading its store) and
+    /// logged the failure again: at startup, twice on the first query and in
+    /// the shutdown checkpoint. Its failure is remembered (by name and the
+    /// uuid tried) and answered from then on; a restart, or a DROP GRAPH and
+    /// a new graph under the name (a new uuid), tries again. Reads of it
+    /// still fail closed with the SONNY-6523 quarantine (58000). Running out
+    /// of memory is not remembered. Caller holds `mutex`.
+    fn openGraphRememberingFailureLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
+        if (self.open_failures.get(name)) |f| {
+            if (std.mem.eql(u8, &f.uuid, &graph_uuid)) return f.err;
+        }
+        return self.openGraphLocked(name, graph_uuid) catch |err| {
+            if (err != error.OutOfMemory) self.rememberOpenFailureLocked(name, graph_uuid, err);
+            return err;
+        };
+    }
+
+    fn rememberOpenFailureLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8, err: anyerror) void {
+        if (self.open_failures.getPtr(name)) |f| {
+            f.* = .{ .uuid = graph_uuid, .err = err };
+            return;
+        }
+        // error-policy: A — out of memory only costs the cache: the next
+        // access opens (and logs) again, as before.
+        const key = self.allocator.dupe(u8, name) catch return;
+        self.open_failures.put(self.allocator, key, .{ .uuid = graph_uuid, .err = err }) catch self.allocator.free(key);
+    }
+
     fn requireExistingGraphLocked(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
         if (self.engines.get(graph_name)) |mg| {
             return mg;
         }
         if (self.findRegistryEntryLocked(graph_name)) |entry| {
-            return self.openGraphLocked(graph_name, entry.uuid);
+            return self.openGraphRememberingFailureLocked(graph_name, entry.uuid);
         }
         return error.GraphNotFound;
     }
@@ -12087,10 +12141,15 @@ pub const StorageAdapter = struct {
             }
 
             const manifest = self.loadPersistedManifestLocked(entry.uuid) catch |err| {
-                slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
-                    SAttr.string("graph", entry.name),
-                    SAttr.err("error", err),
-                });
+                // CANARY: REQ=REQ-SONNY-6606-BROKEN-GRAPH-LOG-ONCE; FEATURE="StorageIntegrity"; ASPECT=UnreadableGraphLoggedOnce; STATUS=TESTED; TEST=tests/test_sonny6606_broken_graph_logs.zig; OWNER=storage; UPDATED=2026-11-15
+                // SONNY-6606 (3): once per entry per boot; it was logged at
+                // every registry save (each graph open, every ~30 s).
+                if (self.noteUnreadableManifestLocked(entry.name, entry.uuid)) {
+                    slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
+                        SAttr.string("graph", entry.name),
+                        SAttr.err("error", err),
+                    });
+                }
                 next_node_id = @max(next_node_id, self.registry.next_node_id);
                 next_edge_id = @max(next_edge_id, self.registry.next_edge_id);
                 continue;
@@ -12101,6 +12160,22 @@ pub const StorageAdapter = struct {
 
         self.registry.next_node_id = next_node_id;
         self.registry.next_edge_id = next_edge_id;
+    }
+
+    /// SONNY-6606 (3): true the first time `name` / `graph_uuid` is noted
+    /// (log it then). Out of memory logs it again next time.
+    fn noteUnreadableManifestLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) bool {
+        if (self.unreadable_manifests_logged.get(name)) |u| {
+            if (std.mem.eql(u8, &u, &graph_uuid)) return false;
+        }
+        if (self.unreadable_manifests_logged.getPtr(name)) |u| {
+            u.* = graph_uuid;
+            return true;
+        }
+        // error-policy: A — out of memory only costs the dedup.
+        const key = self.allocator.dupe(u8, name) catch return true;
+        self.unreadable_manifests_logged.put(self.allocator, key, graph_uuid) catch self.allocator.free(key);
+        return true;
     }
 
     fn saveRegistryLocked(self: *StorageAdapter) !void {

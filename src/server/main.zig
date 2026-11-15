@@ -511,8 +511,9 @@ fn runLeakedConnReaper(context: *anyopaque) void {
 // a single accept-and-run loop the way standalone `geode lsp --listen`
 // does.
 //
-// Every session verifies its `initialize` token against `provider`
-// (through `verifier`); the TCP-embedded path always requires auth.
+// Every session verifies its `initialize` against `provider` (a token,
+// through `verifier`) or the user store (a user name and password, as a
+// QUIC HELLO, SONNY-6589); the TCP-embedded path always requires auth.
 //
 // CANARY: REQ=REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME; FEATURE="Embedded LSP"; ASPECT=ListenerOwnsProviderLifetime; STATUS=TESTED; TEST=tests/test_sonny6374_lsp_auth_provider_lifetime.zig; OWNER=lsp; UPDATED=2026-11-12
 // SONNY-6374: the provider used to be freed by a `defer` inside the `if`
@@ -552,8 +553,10 @@ const EmbeddedLsp = struct {
     fn create(allocator: std.mem.Allocator, port: u16, loopback_only: bool) !*EmbeddedLsp {
         const provider = try allocator.create(authn_mod.AuthProvider);
         errdefer allocator.destroy(provider);
-        // Empty stores. Nothing populates this provider yet (no procedure
-        // or CLI reaches it), so every `initialize` token is rejected.
+        // Empty stores: the server issues no API keys or session tokens
+        // (SONNY-6554), so every `initialize` token is rejected. Sessions
+        // log in with a user name and password instead (SONNY-6589,
+        // `lspCredentialsVerifyFn`).
         provider.* = authn_mod.AuthProvider.init(allocator);
         errdefer provider.deinit();
         const self = try allocator.create(EmbeddedLsp);
@@ -730,6 +733,7 @@ fn runLspListener(self: *EmbeddedLsp) void {
             .stream = accepted,
             .verifier = self.verifier,
         };
+        session_args.setPeerIp(accepted.socket.address);
         {
             self.sessions_mutex.lockUncancelable(io);
             defer self.sessions_mutex.unlock(io);
@@ -777,7 +781,87 @@ const LspSessionArgs = struct {
     // `AuthState.verify` call can validate the client's bearer / session
     // token against the live AuthProvider.
     verifier: lsp_auth_mod.Verifier,
+    // SONNY-6589: the peer's IP, the rate limiter's key for a login.
+    peer_ip_buf: [64]u8 = undefined,
+    peer_ip_len: usize = 0,
+
+    fn setPeerIp(self: *LspSessionArgs, address: std.Io.net.IpAddress) void {
+        var a = address;
+        a.setPort(0);
+        const text = std.fmt.bufPrint(&self.peer_ip_buf, "{f}", .{a}) catch {
+            self.peer_ip_len = 0;
+            return;
+        };
+        // "<ip>:0" / "[<ip6>]:0": the address without the port.
+        var ip = if (std.mem.endsWith(u8, text, ":0")) text[0 .. text.len - 2] else text;
+        if (ip.len >= 2 and ip[0] == '[' and ip[ip.len - 1] == ']') ip = ip[1 .. ip.len - 1];
+        std.mem.copyForwards(u8, self.peer_ip_buf[0..ip.len], ip);
+        self.peer_ip_len = ip.len;
+    }
+
+    fn peerIp(self: *const LspSessionArgs) []const u8 {
+        return if (self.peer_ip_len == 0) "unknown" else self.peer_ip_buf[0..self.peer_ip_len];
+    }
+
+    /// The session's verifier: a token goes to the listener's provider; a
+    /// user name and password to `lspCredentialsVerifyFn`. `self` outlives
+    /// the session's Server (freed last in `runLspSession`).
+    fn sessionVerifier(self: *LspSessionArgs) lsp_auth_mod.Verifier {
+        return .{
+            .ctx = self,
+            .verifyFn = lspTokenVerifyFn,
+            .verifyCredentialsFn = lspCredentialsVerifyFn,
+        };
+    }
 };
+
+fn lspTokenVerifyFn(ctx: *anyopaque, token: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    return args.verifier.verifyFn(args.verifier.ctx, token);
+}
+
+// CANARY: REQ=REQ-SONNY-6589-LSP-PASSWORD-AUTH; FEATURE="Embedded LSP"; ASPECT=HelloCredentialsAuthenticateLsp; STATUS=TESTED; TEST=tests/test_sonny6589_lsp_auth.zig; OWNER=lsp; UPDATED=2026-11-15
+/// SONNY-6589 (3): an embedded LSP `initialize` logs in with a user name and
+/// password, checked as a QUIC HELLO's: `user_management.authenticate`
+/// behind the same per-(peer IP, user) rate limiter, a checked-and-rejected
+/// credential counting against it. A user who must change their password
+/// first is refused (the HELLO admits it only to change the password). The
+/// LSP's AuthProvider had no credential at all, so every `initialize` was
+/// refused.
+fn lspCredentialsVerifyFn(ctx: *anyopaque, username: []const u8, password: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    const user_mgmt = geode.user_management;
+    const auth_rate_limiter = @import("auth_rate_limiter.zig");
+    if (!auth_rate_limiter.credentialsPresent(username, password)) return .invalid;
+    const peer_ip = args.peerIp();
+    const limiter = quic_connection_handler.getAuthRateLimiter();
+    if (limiter) |l| {
+        if (l.isLockedForPrincipal(peer_ip, username)) {
+            log.warn("LSP login refused: too many failed authentication attempts", &.{
+                Attr.string("peer_ip", peer_ip),
+                Attr.string("username", username),
+            });
+            return .invalid;
+        }
+    }
+    const result = user_mgmt.authenticate(username, password) catch |err| {
+        if (auth_rate_limiter.shouldCountFailedAttempt(err)) {
+            if (limiter) |l| l.recordFailureForPrincipal(peer_ip, username);
+        }
+        log.warn("LSP login refused", &.{
+            Attr.string("peer_ip", peer_ip),
+            Attr.string("username", username),
+            Attr.string("error", @errorName(err)),
+        });
+        return .invalid;
+    };
+    if (limiter) |l| l.recordSuccessForPrincipal(peer_ip, username);
+    if (result.password_reset_required) {
+        log.warn("LSP login refused: the user must change their password first", &.{Attr.string("username", username)});
+        return .invalid;
+    }
+    return .{ .ok = .{ .username = username, .role = result.role.toString() } };
+}
 
 fn runLspSession(args: *LspSessionArgs) void {
     const owner = args.owner;
@@ -797,7 +881,7 @@ fn runLspSession(args: *LspSessionArgs) void {
         args.stream.close(args.io);
         return;
     };
-    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.verifier, false) catch |err| {
+    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.sessionVerifier(), false) catch |err| {
         log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
         owner.unregister(args.io, args);
         tx.deinit();

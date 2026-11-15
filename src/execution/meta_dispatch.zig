@@ -128,6 +128,33 @@ fn sessionLabelPolicies(allocator: std.mem.Allocator, ctx: ExecutionContext) !?r
     return try engine.snapshotLabelPolicies(allocator, graph, username);
 }
 
+// CANARY: REQ=REQ-SONNY-6606-META-SCHEMA-SCOPE; FEATURE="GPS Metadata Isolation"; ASPECT=SessionGraphOnly; STATUS=TESTED; TEST=tests/test_sonny6606_meta_schema_scope.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6606 (1): the graph whose schema `db.labels`, `db.relationshipTypes`
+/// and `db.propertyKeys` (and SHOW TABLES) list: the one the session is on,
+/// which it was allowed to bind and read. They listed every graph's, the
+/// internal `__geode_security` included (`User`, `Role`, `password_hash`,
+/// `hmac`), to every session. Null for an internal graph (no session is
+/// on one): its listing is empty.
+pub fn listingGraph(ctx: ExecutionContext) ?[]const u8 {
+    const graph = session_graph.current(ctx);
+    if (graph_store.isInternalGraphName(graph)) return null;
+    return graph;
+}
+
+/// SONNY-6606 (1): is a node or edge of `item_graph` in `graph`? One written
+/// with no graph name is in the default graph.
+fn inGraph(item_graph: []const u8, graph: []const u8) bool {
+    if (std.mem.eql(u8, item_graph, graph)) return true;
+    return item_graph.len == 0 and std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
+}
+
+/// SONNY-6606 (1): the session graph's node labels visible to the tenant
+/// scope (none for an internal graph). Caller frees.
+pub fn sessionGraphLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext, filter_tenant: ?[]const u8) ![][]const u8 {
+    const graph = listingGraph(ctx) orelse return try allocator.alloc([]const u8, 0);
+    return tenant_visibility.listNodeLabelsVisibleInGraph(allocator, store, graph, filter_tenant);
+}
+
 fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // GAP-0840: route through the shared strict-tenancy decision instead of
     // passing raw ctx.tenant_id. An unscoped/"default" session would otherwise
@@ -136,7 +163,8 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
     // SONNY-6344: a parent tenant also sees its descendants' labels, as its MATCH does.
-    const labels = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
+    // SONNY-6606 (1): of the session's graph only.
+    const labels = try sessionGraphLabels(allocator, store, ctx, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -183,7 +211,12 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
     // SONNY-6344: hierarchy-aware, as executeDbLabels.
-    const types = try tenant_visibility.listEdgeTypesVisible(allocator, store, filter_tenant);
+    // SONNY-6606 (1): of the session's graph only.
+    const graph = listingGraph(ctx);
+    const types = if (graph) |g|
+        try tenant_visibility.listEdgeTypesVisibleInGraph(allocator, store, g, filter_tenant)
+    else
+        try allocator.alloc([]const u8, 0);
     defer {
         for (types) |t| allocator.free(t);
         allocator.free(types);
@@ -209,6 +242,7 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
             // SONNY-6567 (2): an edge that cannot be read fails the listing
             // (it was skipped, as if absent).
             const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
+            if (!inGraph(edge.graph_name, graph orelse break)) continue;
             if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
             if (!try edgeVisible(store, p, edge)) continue;
             for (types, reached) |t, *r| {
@@ -288,14 +322,17 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     var policies = try sessionLabelPolicies(allocator, ctx);
     defer if (policies) |*p| p.deinit();
     const denies = if (policies) |p| p.denied.count() > 0 else false;
+    // SONNY-6606 (1): the session graph's keys only (none for an internal graph).
+    const graph = listingGraph(ctx);
 
-    if (denies) {
-        // Every graph's nodes, then the MATCH tenant rule (a parent sees
-        // its descendants' rows, SONNY-6344).
+    if (denies) if (graph) |g| {
+        // Every graph's nodes, those of the session's graph, then the MATCH
+        // tenant rule (a parent sees its descendants' rows, SONNY-6344).
         const node_ids = try store.getAllNodesForTenant(allocator, null);
         defer allocator.free(node_ids);
         for (node_ids) |node_id| {
             const node = (try store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!inGraph(node.graph_name, g)) continue;
             if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
             if (nodeDenied(&policies.?, node.labels)) continue;
             var prop_iter = node.properties.iterator();
@@ -309,12 +346,12 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
                 try ordered.append(allocator, owned);
             }
         }
-    }
+    };
 
     // --- Node property keys via the tenant-indexed PERF-C structures ---
     // 1. Get the labels visible to this tenant (or all if admin).
     // SONNY-6344: hierarchy-aware (a parent also sees its descendants' rows).
-    const labels = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
+    const labels = try sessionGraphLabels(allocator, store, ctx, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -323,7 +360,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     // 2. For each label, collect the property keys indexed under that label+tenant.
     for (labels) |label| {
         if (denies) break;
-        const keys = try tenant_visibility.listPropertiesForLabelVisible(allocator, store, filter_tenant, label);
+        const keys = try tenant_visibility.listPropertiesForLabelVisibleInGraph(allocator, store, graph.?, filter_tenant, label);
         defer {
             for (keys) |k| allocator.free(k);
             allocator.free(keys);
@@ -348,6 +385,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     defer allocator.free(edge_ids_for_keys);
     for (edge_ids_for_keys) |__eid| {
         const edge = (try store.getEdgePtrHydratedChecked(__eid)) orelse continue;
+        if (!inGraph(edge.graph_name, graph orelse break)) continue;
         // Honour tenant filter; null means admin sees everything. SONNY-6344:
         // the edge's own tag by the MATCH rule (a parent sees its
         // descendants' edges), not the exact tag.

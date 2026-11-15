@@ -144,6 +144,17 @@ All Won't Do items require either architectural design decisions, external infra
 
 **13 files modified** across 9 commits.
 
+> **Correction (2026-11-15, SONNY-6592):** of these 13 files only
+> `raft_consensus.zig` and `cluster.zig` still exist. No build artifact
+> compiled the others, and they were removed, so the fixes this report lists
+> for them never ran in the server: `query_transport.zig`, `federation.zig`,
+> `query_coordinator.zig` and `enhanced_query_coordinator.zig` (SONNY-6279,
+> `78362bdae`); `federation_root.zig` (`35eaaad98`);
+> `federation_latency_aggregate.zig` (SONNY-6374, `5f7f09ddd`); `twophase.zig`,
+> `network_transport.zig`, `sharding.zig`, `enhanced_query_transport.zig` and
+> `federation_flag.zig` (SONNY-6563, `ba55c57f8`). `src/distributed/README.md`
+> lists the files the server reaches.
+
 ---
 
 *Generated 2026-04-01*

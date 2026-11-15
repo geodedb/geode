@@ -29,6 +29,20 @@ This document contains gaps that have been verified as resolved from previous ga
 > AES-256-GCM `users.dat` file it describes was never written by Geode. User
 > records are stored in the HMAC-chained `__geode_security` graph (read by
 > `src/server/persistent_auth_resolver.zig`; see `docs/GQL_AUTH_DDL.md`).
+> The distributed modules cited below as delivered are gone too, and no
+> build artifact compiled them, so the fixes cited only in them never ran in
+> the server: `federation.zig`, `query_transport.zig`,
+> `query_coordinator.zig`, `enhanced_query_coordinator.zig` and `mod.zig`
+> (SONNY-6279); `twophase.zig`, `network_transport.zig`,
+> `enhanced_query_transport.zig`, `sharding.zig`, `node_registry.zig`,
+> `federation_flag.zig`, `query_planner.zig` and `raft_persistent.zig`
+> (SONNY-6563: it persisted the term, not the vote); `federation_root.zig`
+> (`35eaaad98`). That covers the 2PC, query-transport, federation and
+> scatter-gather resolutions below (e.g. the `twophase.zig`,
+> `query_transport.zig`, `federation.zig` and `enhanced_query_transport.zig`
+> evidence), the `raft_persistent.zig` half of GAP-0889, and the
+> enhanced-query-transport half of GAP-0870. The server's distributed code is
+> listed in `src/distributed/README.md` (SONNY-6592).
 > `src/security/rls_enhanced.zig`, cited for GAP-0047, GAP-0287 and GAP-0294,
 > was never compiled either (removed in SONNY-6298). The RLS code the server
 > runs is `src/security/rls_core.zig`: it has `current_user()` / `has_role()`

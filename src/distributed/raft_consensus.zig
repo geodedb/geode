@@ -3477,11 +3477,6 @@ pub const RaftNode = struct {
         }
     }
 
-    pub fn startElection(self: *RaftNode) void {
-        self.stats.elections_called += 1;
-        self.drainReady();
-    }
-
     fn drainReady(self: *RaftNode) void {
         // raft-0.1.3 RaftNode.ready now returns `!rd.Ready`; surface the
         // error in the log so we don't silently drop committed entries.

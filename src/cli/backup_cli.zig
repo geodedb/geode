@@ -200,6 +200,27 @@ fn loadMigrationHmacKeyChecked(out: *[32]u8, migrations_dir: []const u8, allocat
     return out;
 }
 
+// CANARY: REQ=REQ-SONNY-6589-CLI-ADDRESS-MESSAGES; FEATURE="CLI Backup"; ASPECT=BackupServerNamedAsDialled; STATUS=TESTED; TEST=tests/test_sonny6589_cli_messages.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6589 (5): `--server` as a remote backup or restore dials it: parsed
+/// by `zig_quic_bridge.parseHostPort` (port 3141 when none is given,
+/// 127.0.0.1 for an empty host), an IPv6 host bracketed. It was printed as
+/// typed, so `--server :3141` named no host. A `--server` that does not
+/// parse never reaches a dial; it is shown redacted.
+const ServerLabel = struct {
+    server: []const u8,
+
+    pub fn format(self: ServerLabel, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const hp = zig_quic_bridge.parseHostPort(self.server, 3141) catch
+            return w.print("{f}", .{geode.dsn_credentials.redacted(self.server)});
+        if (std.mem.indexOfScalar(u8, hp.host, ':') != null) return w.print("[{s}]:{d}", .{ hp.host, hp.port });
+        return w.print("{s}:{d}", .{ hp.host, hp.port });
+    }
+};
+
+fn serverLabel(server: []const u8) ServerLabel {
+    return .{ .server = server };
+}
+
 /// Backup command handler - routes to specific backup subcommands
 /// Handles: backup create, backup list, backup info, backup cleanup
 /// How long `geode backup create` and `geode restore --server` wait for the
@@ -500,7 +521,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
             // SONNY-6531: executeRemoteBackup said what is wrong with --server.
             if (err == error.InvalidServerAddress) std.process.exit(@intFromEnum(ExitCode.general_error));
-            std.debug.print("Error: Backup from server {f} failed: {}. No backup was created.\n", .{ geode.dsn_credentials.redacted(server), err });
+            std.debug.print("Error: Backup from server {f} failed: {}. No backup was created.\n", .{ serverLabel(server), err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
@@ -2113,6 +2134,47 @@ fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 // Helper Functions for Backup/Restore Execution
 // ============================================================================
 
+// CANARY: REQ=REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT; FEATURE="CLI Backup"; ASPECT=TimeoutBoundsHandshake; STATUS=TESTED; TEST=tests/test_sonny6606_backup_handshake_timeout.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6606 (4): `client.connect()` within --timeout. geode-client-zig
+/// waits a fixed 30 s for the QUIC handshake and takes no deadline, so
+/// `--timeout 2` against a server that did not answer took 30 s. The
+/// handshake runs on its own thread; past the deadline the command reports
+/// it and exits (`what`: "Backup" or "Restore"; `server`: --server, named as
+/// dialled), leaving the thread and the client to the process exit rather
+/// than freeing a client still in use.
+fn connectWithin(client: *zig_client.GeodeClient, timeout_s: u32, what: []const u8, server: []const u8) !void {
+    const Handshake = struct {
+        client: *zig_client.GeodeClient,
+        done: std.atomic.Value(bool) = .init(false),
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.client.connect() catch |e| {
+                self.err = e;
+            };
+            self.done.store(true, .release);
+        }
+    };
+    // smp_allocator: abandoned (not freed) when the deadline passes.
+    const hs = try std.heap.smp_allocator.create(Handshake);
+    hs.* = .{ .client = client };
+    const thread = try std.Thread.spawn(.{}, Handshake.run, .{hs});
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const start = std.Io.Clock.awake.now(io).toMilliseconds();
+    const limit: i64 = @as(i64, timeout_s) * std.time.ms_per_s;
+    while (!hs.done.load(.acquire)) {
+        if (std.Io.Clock.awake.now(io).toMilliseconds() - start >= limit) {
+            std.debug.print("Error: {s} from server {f} failed: no QUIC handshake within {d} s (--timeout). Nothing was changed.\n", .{ what, serverLabel(server), timeout_s });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        io.sleep(.fromNanoseconds(20 * std.time.ns_per_ms), .awake) catch {};
+    }
+    thread.join();
+    const err = hs.err;
+    std.heap.smp_allocator.destroy(hs);
+    if (err) |e| return e;
+}
+
 // CANARY: REQ=REQ-BACKUP-REMOTE-001; FEATURE="RemoteBackup"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server backup execution function using QUIC protocol
@@ -2155,7 +2217,7 @@ fn executeRemoteBackup(
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
     }
 
-    client.connect() catch |err| {
+    connectWithin(&client, timeout_s, "Backup", server) catch |err| {
         std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
         return err;
     };
@@ -2224,7 +2286,7 @@ fn executeRemoteBackup(
     }
 
     const backup_size = backup_resp.size_bytes;
-    std.debug.print("Receiving backup ({} bytes) from {f}...\n", .{ backup_size, geode.dsn_credentials.redacted(server) });
+    std.debug.print("Receiving backup ({} bytes) from {f}...\n", .{ backup_size, serverLabel(server) });
 
     // CANARY: REQ=REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC; FEATURE="CLI Backup"; ASPECT=RemoteOutputAtomicDurable; STATUS=TESTED; TEST=tests/test_sonny6386_remote_backup_atomic_output.zig; OWNER=cli; UPDATED=2026-11-12
     // SONNY-6386: the backup used to be streamed into --output in place
@@ -2381,7 +2443,7 @@ fn executeRemoteRestore(
         zig_quic_bridge.printEndpointError(err);
         return error.InvalidServerAddress;
     };
-    std.debug.print("RESTORE: Connecting to server {f} for remote restore...\n", .{geode.dsn_credentials.redacted(server)});
+    std.debug.print("RESTORE: Connecting to server {f} for remote restore...\n", .{serverLabel(server)});
 
     var client = zig_quic_bridge.initClientStrictTls(
         allocator,
@@ -2405,7 +2467,7 @@ fn executeRemoteRestore(
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
     }
 
-    client.connect() catch |err| {
+    connectWithin(&client, timeout_s, "Restore", server) catch |err| {
         std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
         return error.ConnectionFailed;
     };

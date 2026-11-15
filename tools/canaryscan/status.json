@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T17:34:27.265198189Z",
+  "generated_at": "2026-11-15T17:52:59.76944982Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78865,6 +78865,139 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6589-CLI-ADDRESS-MESSAGES",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "BackupServerNamedAsDialled",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_cli_messages.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "CLI",
+          "aspect": "RefusedConnectKeepsSession",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_cli_messages.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "CLI",
+          "aspect": "RefusedConnectAndBackupServerNamed",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6589_cli_messages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_cli_messages.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6589-LSP-PASSWORD-AUTH",
+      "features": [
+        {
+          "feature": "Embedded LSP",
+          "aspect": "GraphScopedSchemaListing",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_lsp_auth.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Embedded LSP",
+          "aspect": "HelloCredentialsAuthenticateLsp",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_lsp_auth.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Embedded LSP",
+          "aspect": "PasswordAuthAndPerUserSchema",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6589_lsp_auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_lsp_auth.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6589-MCP-TIMEOUT-REFUSED",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "UnappliedTimeoutRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6589_mcp_timeout.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_mcp_timeout.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6589-OPEN-FAILURE-CACHED",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "GraphOpenFailureRemembered",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig",
+            "tests/test_sonny6589_broken_graph_open.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6589_broken_graph_open.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6591-FTS-FAST-CREATE",
       "features": [
         {
@@ -79392,6 +79525,126 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "TimeoutBoundsHandshake",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig",
+            "tests/test_sonny6606_backup_handshake_timeout.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_backup_handshake_timeout.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-BATCH-PROPERTY-COUNTERS",
+      "features": [
+        {
+          "feature": "LspIntrospectionIndex",
+          "aspect": "BatchWritesCountKeys",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig",
+            "tests/test_sonny6606_batch_property_counters.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_batch_property_counters.zig"
+          ],
+          "benches": [],
+          "owner": "perf",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-BROKEN-GRAPH-LOG-ONCE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "UnreadableGraphLoggedOnce",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig",
+            "tests/test_sonny6606_broken_graph_logs.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_broken_graph_logs.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-LSP-ROLE-DEFAULT",
+      "features": [
+        {
+          "feature": "Embedded LSP",
+          "aspect": "NoRoleIsNone",
+          "status": "TESTED",
+          "files": [
+            "src/cli/lsp/auth.zig",
+            "tests/test_sonny6606_lsp_role_default.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_lsp_role_default.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-META-SCHEMA-SCOPE",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "SessionGraphOnly",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig",
+            "tests/test_sonny6606_meta_schema_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_meta_schema_scope.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS",
+      "features": [
+        {
+          "feature": "CLI",
+          "aspect": "ConnectAuthenticates",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_dispatch.zig",
+            "tests/test_sonny6606_repl_connect_credentials.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6606_repl_connect_credentials.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
           "updated": "2026-11-15"
         }
       ]
@@ -84488,7 +84741,7 @@
       "EXEMPT": 209,
       "IMPL": 533,
       "STUB": 18,
-      "TESTED": 4185
+      "TESTED": 4199
     },
     "by_aspect": {
       "2PC": 3,
@@ -84704,6 +84957,7 @@
       "BackupExcludesSecrets": 1,
       "BackupListNoTmp": 1,
       "BackupNeedsDataDir": 1,
+      "BackupServerNamedAsDialled": 1,
       "BackwardCompat": 2,
       "BackwardsCompatibility": 1,
       "BadgeGeneration": 1,
@@ -84720,6 +84974,7 @@
       "BatchParsing": 1,
       "BatchSealOnce": 1,
       "BatchTxnGate": 1,
+      "BatchWritesCountKeys": 1,
       "BatchedCountFastPathResponse": 1,
       "BatchedEmptyMutationSuccess": 1,
       "BatchedExecuteResponseWrite": 1,
@@ -85057,6 +85312,7 @@
       "ConfusableIdentifierSqlstate42004": 1,
       "ConfusableNeverSelf": 1,
       "Congestion": 1,
+      "ConnectAuthenticates": 1,
       "ConnectCompile": 1,
       "ConnectHelloRetry": 1,
       "ConnectHelper": 1,
@@ -85900,10 +86156,12 @@
       "GraphLockFreeLabelCount": 2,
       "GraphMismatch": 1,
       "GraphNames": 1,
+      "GraphOpenFailureRemembered": 1,
       "GraphPatternQuantifier": 1,
       "GraphReadGate": 1,
       "GraphSAGE": 1,
       "GraphScope": 1,
+      "GraphScopedSchemaListing": 1,
       "GraphScopingParity": 1,
       "GraphStore": 3,
       "GraphStoreCheckedRead": 1,
@@ -86002,6 +86260,7 @@
       "HeldUntilPersisted": 1,
       "HelloAuthCheck": 1,
       "HelloCheck": 1,
+      "HelloCredentialsAuthenticateLsp": 1,
       "HelloFanout": 1,
       "HelloGate": 1,
       "HelloInterrupt": 1,
@@ -86582,6 +86841,7 @@
       "NoRetainedNodeCopies": 1,
       "NoReturnClause": 2,
       "NoRoleBypasses": 1,
+      "NoRoleIsNone": 1,
       "NoRolesUnauthorized": 1,
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
@@ -86796,6 +87056,7 @@
       "PartialRollback": 1,
       "PartialRollbackMechanism": 1,
       "PartialSubmitWaitGroup": 1,
+      "PasswordAuthAndPerUserSchema": 1,
       "PasswordChange": 2,
       "PasswordChangeFailClosed": 1,
       "PasswordPolicy": 1,
@@ -87286,6 +87547,8 @@
       "RefuseWhatIsNotSupported": 1,
       "RefusedAsUnsupported": 2,
       "RefusedCommitOnQuicWire": 1,
+      "RefusedConnectAndBackupServerNamed": 1,
+      "RefusedConnectKeepsSession": 1,
       "RefusedDropFailsApply": 1,
       "RefusedReplicatedDropHaltsApply": 1,
       "RegistryArmedFromCatalog": 1,
@@ -87586,6 +87849,7 @@
       "SessionGraph": 1,
       "SessionGraphBound": 1,
       "SessionGraphGate": 1,
+      "SessionGraphOnly": 1,
       "SessionIsolation": 1,
       "SessionManagement": 2,
       "SessionParamPrefixDeclaration": 1,
@@ -87948,6 +88212,7 @@
       "Throughput": 2,
       "Throughput+ReshardCorrectness": 1,
       "ThroughputBenchmark": 1,
+      "TimeoutBoundsHandshake": 1,
       "TimeoutEdgeReadySettle": 1,
       "TimeseriesCallHandlers": 1,
       "Timestamp": 1,
@@ -88019,6 +88284,7 @@
       "TypedGroupKeys": 2,
       "Types": 10,
       "UbuntuVersionFallback": 1,
+      "UnappliedTimeoutRefused": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
       "UnboundDeleteDeletesNothing": 1,
@@ -88075,6 +88341,7 @@
       "UnknownPropertyDiagnostic": 1,
       "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
+      "UnreadableGraphLoggedOnce": 1,
       "UnreadableHitFailsSearch": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,

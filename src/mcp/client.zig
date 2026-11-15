@@ -54,8 +54,18 @@ pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
 /// zone (`error.Ipv6ZoneUnsupported`), and gives a userinfo credential
 /// precedence over a `user=` / `pass=` parameter (docs/DSN.md, SONNY-6550).
 /// The returned config's host slices `endpoint`.
+///
+/// CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-REFUSED; FEATURE="MCPBackendTools"; ASPECT=UnappliedTimeoutRefused; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
+/// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is
+/// refused (`error.DsnTimeoutUnsupported`): geode-client-zig's
+/// `initFromConfig` copies no timeout into the client, whose QUIC handshake
+/// and HELLO each wait a fixed 30 s, so the parameter had no effect.
 fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
-    const parsed = try geode.dsn_params.parse(allocator, endpoint);
+    var parsed = try geode.dsn_params.parse(allocator, endpoint);
+    if (parsed.present.contains(.connect_timeout) or parsed.present.contains(.timeout_ms)) {
+        parsed.deinit(allocator);
+        return error.DsnTimeoutUnsupported;
+    }
     return parsed.config;
 }
 

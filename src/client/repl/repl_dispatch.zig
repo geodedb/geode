@@ -30,6 +30,8 @@ const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 /// SONNY-6544: \connect prints its address through dsn_credentials.redacted.
 const dsn_credentials = @import("../dsn_credentials.zig");
+/// SONNY-6589: a refused \connect prints the shared endpoint message.
+const zig_quic_bridge = @import("../zig_quic_bridge.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 const spinner_mod = @import("spinner.zig");
@@ -2347,12 +2349,50 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stdout.writeStreamingAll(replIo(), "\x1b[2J\x1b[H"); // Clear screen and home cursor
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
-            // Save the current transport before deinit
+            // CANARY: REQ=REQ-SONNY-6589-CLI-ADDRESS-MESSAGES; FEATURE="CLI"; ASPECT=RefusedConnectKeepsSession; STATUS=TESTED; TEST=tests/test_sonny6589_cli_messages.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6589 (4): the new session is connected before the
+            // current one is replaced, so a refused \connect leaves the
+            // shell where it was; the refusal is the endpoint message
+            // (`zig_quic_bridge.endpointErrorMessage`), never the address,
+            // which may carry a password. It reached the user as a bare
+            // error name, with the working session already torn down.
             const current_transport = state.session.transport orelse return error.NoTransport;
+            var next = try ClientSession.init(state.allocator, args, current_transport);
+            // CANARY: REQ=REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS; FEATURE="CLI"; ASPECT=ConnectAuthenticates; STATUS=TESTED; TEST=tests/test_sonny6606_repl_connect_credentials.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6606 (5): the HELLO carries the credentials the shell
+            // logged in with, as its automatic reconnect does; it carried
+            // none, so a server with authentication on (the default) refused
+            // every \connect ("AuthenticationRequired").
+            var refusal: ?[]const u8 = null;
+            defer if (refusal) |r| state.allocator.free(r);
+            const connected: ?anyerror = blk: {
+                next.connect() catch |err| break :blk err;
+                const user = state.session.cached_username orelse {
+                    next.hello() catch |err| break :blk err;
+                    break :blk null;
+                };
+                const password = state.session.cached_password orelse "";
+                const auth = next.helloWithAuth(user, password) catch |err| break :blk err;
+                if (auth.session_token) |t| state.allocator.free(t);
+                if (!auth.success) {
+                    refusal = auth.error_message;
+                    break :blk error.AuthenticationFailed;
+                }
+                if (auth.error_message) |m| state.allocator.free(m);
+                next.cacheCredentials(user, password) catch |err| break :blk err;
+                break :blk null;
+            };
+            if (connected) |err| {
+                next.deinit();
+                const why = refusal orelse zig_quic_bridge.endpointErrorMessage(err) orelse @errorName(err);
+                const stderr = platform.getStderrHandle();
+                const msg = try std.fmt.allocPrint(state.allocator, "Error [GEODE-E2002]: \\connect failed: {s}; still connected to the previous server\r\n", .{why});
+                defer state.allocator.free(msg);
+                try stderr.writeStreamingAll(replIo(), msg);
+                return;
+            }
             state.session.deinit();
-            state.session.* = try ClientSession.init(state.allocator, args, current_transport);
-            try state.session.connect();
-            try state.session.hello();
+            state.session.* = next;
             try writeFmt(stdout, state.allocator, "Connected to {f}\r\n", .{dsn_credentials.redacted(args)});
         } else {
             const stderr = platform.getStderrHandle();
