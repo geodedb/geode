@@ -20,6 +20,18 @@ Each response frame includes:
 ## Result Frames
 
 - `SCHEMA` — column descriptors `{name,type}` (always first for a new statement, including PROFILE mode).
+  `type` describes every value the column holds in the result (SONNY-6562): the
+  ISO/IEC 39075:2024 22.18 / 22.19 combination of the types of all its values.
+  A decimal is `DECIMAL` (exact numeric, 21.2), an integer `INTEGER`, an
+  approximate number `DOUBLE` / `REAL`; exact numerics combine to the wider one
+  (`DECIMAL` over the integer types), any approximate value makes the column
+  `DOUBLE`, character strings `STRING`, a zoned and a local datetime or time the
+  zoned type, lists `LIST`; values of different base types make it `ANY` (18.9's
+  open dynamic union type); NULL adds nothing, and a column of only NULLs is
+  `NULL`. The node-scan stream (`MATCH (n:L) RETURN n.p` served without the
+  executor) sends this frame after its first 10 rows: when those are all its
+  rows it declares their combined type, as the executor would, and when more
+  follow it declares each property column `ANY` (a bare node column `NODE`).
 - `BINDINGS` — page of rows plus ordering + pagination metadata (not produced for PROFILE statements).
 - `EXPLAIN` — logical operator array JSON.
 - `PROFILE` — per‑operator metrics JSON (staged: emitted only after the first `PULL` following the SCHEMA line; no BINDINGS lines are sent in PROFILE mode).
@@ -51,7 +63,7 @@ Constraints:
 - `page_size=0` defaults to 1000.
 - Interleaving multiple active result sets is not supported; a second `PULL` after `final:true` yields `NoResult`.
 - PROFILE: first `PULL` after `SCHEMA` returns a `PROFILE` frame (not BINDINGS) and completes the statement (`NoResult` thereafter).
-- `ordered` / `order_keys` propagate logical ordering guarantees; server does not reorder inside a page.
+- `ordered` / `order_keys` propagate logical ordering guarantees; server does not reorder inside a page. `ordered` is true exactly when the statement that returns the rows ends in an ORDER BY (14.10; a UNION's trailing ORDER BY, 14.2), whatever its shape (a query, a chain's last part, FOR, `CALL ... RETURN`), and `order_keys` are that ORDER BY's keys; a WITH's ORDER BY earlier in a chain orders nothing in the result (SONNY-6562).
 
 ## Extended Frames
 
@@ -67,52 +79,83 @@ Current (v0.15.x) JSON fields:
 
 ### PROFILE
 
-Additive JSON payload describing per-operator performance & memory. Clients SHOULD treat unknown keys as ignorable. Stable core fields marked (S). Everything else is additive and may evolve without a breaking version bump (unless explicitly labeled breaking in release notes).
+The `PROFILE` result is a `ProfilePayload` message (src/proto/geode.proto);
+the CLI and the client library render it as the JSON object below
+(`profile_payload.profilePayloadToJson`). Consumers must ignore unknown keys.
+`profile_version` says which builder produced it:
 
-- `ops`: array of operator metric objects (S). Each object currently includes:
+- **Version 2** (`buildProfilePayloadFromTrace`): a query the planned read
+  runtime runs (`planned_read_runtime.executeProfiledIfSupported`). Each op is
+  an operator the runtime executed, with its measured wall-clock time and row
+  counts.
+- **Version 1** (`buildProfilePayload`): every other statement a PROFILE wraps
+  (data changes, UNION and the other shapes the planned runtime declines). Its
+  op list is derived from the statement's traits (`NodeScan`, `Expand`, then
+  `AggregateBuild` / `AggregateEmit`, `Distinct`, `Sort`, `Project`, `Limit`,
+  `UnionLeft` / `UnionTails` / `UnionDedup` / `SetOpUnion` as the statement
+  has them) and its timings and byte counts are a deterministic synthetic
+  model, not measurements (GAP-0874; docs/EXPLAIN_PROFILE.md).
 
-  - `op` (S): name — e.g. `NodeScan`, `Expand`, `Project`, `Distinct`, `Sort`, `Offset`, `Limit`, `AggregateBuild`, `AggregateEmit`, `UnionLeft`, `UnionTails`, `UnionDedup`
-  - `phase`: coarse phase bucket (`SCAN`,`EXPAND`,`PROJECT`,`DISTINCT`,`ORDER`,`PAGE`,`AGGREGATE`,`OTHER`)
-  - `id` / `op_index` (S): monotonic index (both present for v1; `id` is canonical going forward)
-  - `input_rows` (S): logical rows consumed
-  - `rows` (S): logical rows produced
-  - `time_ns` (S): wall clock duration for the op
-  - `cpu_time_ns`: CPU approximation (prototype = same as `time_ns` until multi-threading lands)
-  - `bytes_out`: approximate payload bytes produced (JSON row bytes heuristic)
-  - `bytes_alloc`: attributed allocated bytes (deterministic synthetic model, NOT measured — GAP-0874 decision; see docs/EXPLAIN_PROFILE.md Current Limitations)
-  - `estimate_bytes`: planner estimate (0 when estimates disabled)
-  - `estimate_vs_actual`: `(actual/estimate * 100)` when estimate available
-  - `percent_peak`: share of peak bytes attributable to this op
-  - `percent_net`: share of net bytes at measurement point
-  - `cumulative_time_ns`: running total time up to and including this op
-  - `freed_bytes`: bytes released since prior op (captured via synthetic allocations + allocator net deltas)
-  - `net_after_op`: allocator net bytes after this op
-  - `error_bytes`: absolute difference between estimate and actual (if estimated)
-  - `error_abs_pct`: `(error_bytes/estimate_bytes * 100)` when estimate > 0
+Top-level keys, in the order sent:
 
-- `peak_contributors`: top (≤3) ops by `bytes_alloc` with `{ op, bytes_alloc }`.
-- `totals`: { `time_ns`, `peak_bytes` } (S)
-- `total_time_ns`: legacy duplicate of `totals.time_ns` (may be deprecated later)
-- `spills`: { `sort_spills`, `distinct_spills`, `union_spills` } — counters for forced or threshold spills
-- `spill_reason`: one of `forced` | `threshold` (present only if any spill counter > 0)
-- `peak_bytes_at_spill`: peak bytes at time of first spill (if any)
-- `first_spill_op_index`: op index where first spill triggered (may omit if indeterminate)
-- `mem_curve`: optional array of `{ op_index, net_after_op }` points when memory curve profiling enabled
-- `memory`: { `net_bytes`, `peak_bytes`, `total_alloc_bytes` } (S)
-- `planner_estimates`: summary statistics when estimates enabled:
-  - `sum_estimate_bytes`, `sum_actual_bytes`, `count_estimated_ops`
-  - `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`, `median_error_abs_pct`, `stddev_error_abs_pct`
-  - `adjusted_estimate_factor`: factor to scale future estimates (prototype calibration)
+- `profile_version`: 1 or 2.
+- `ops`: one object per operator:
+  - `op`: version 2: `ConstProjection`, `AllNodesScan`, `LabelScan`,
+    `IndexSeek`, `ExpandOut`, `ExpandIn`, `ExpandEither`, `OptionalMatch`,
+    `VarLengthExpand`, `ShortestPath`, `PathModeExpand`, `PathCapture`,
+    `CallProcedure`, `CallSubquery`, `Create`, `Merge`, `Unwind`, `Set`,
+    `Remove`, `Delete`, `RecursiveCTE`, `QueryChain`, `LegacyExecute`,
+    `Filter`, `Aggregate`, `Project`, `Distinct`, `Limit`, `Sort`; version 1:
+    the names above, plus `NodeIndexScan` only for a catalog index the
+    executor seeked (SONNY-1335).
+  - `phase`: `SCAN`, `EXPAND`, `MATCH`, `PROJECT`, `CALL`, `WRITE`, `UNWIND`,
+    `CTE`, `CHAIN`, `EXECUTE`, `FILTER`, `AGGREGATE`, `DISTINCT`, `ORDER`,
+    `PAGE` or `OTHER`.
+  - `id` (always 0), `op_index` (0-based position).
+  - `input_rows`, `rows`: rows consumed and produced (version 1: the
+    statement's result row count for every op).
+  - `time_ns`, `cpu_time_ns`, `cumulative_time_ns`: version 2 measured
+    (`cpu_time_ns` equals `time_ns`); version 1 synthetic.
+  - `bytes_out`, `bytes_alloc`, `estimate_bytes`, `estimate_vs_actual`,
+    `percent_peak`, `percent_net`, `freed_bytes`, `net_after_op`,
+    `error_bytes`, `error_abs_pct`: version 1 synthetic; version 2 all 0.
+    With `GEODE_PROFILE_COMPACT` set, `estimate_bytes`, `estimate_vs_actual`,
+    `percent_peak` and `percent_net` are omitted when 0.
+  - `index_name`, `selectivity_est`: present only on an op that seeked a
+    catalog index.
+- `peak_contributors`: up to 3 `{ op, bytes_alloc }` (version 1; empty in
+  version 2).
+- `totals`: `{ time_ns, peak_bytes }`; `total_time_ns` repeats
+  `totals.time_ns`.
+- `spills`: `{ sort_spills, distinct_spills, union_spills }`, followed by
+  `spill_reason`, `peak_bytes_at_spill` and `first_spill_op_index` only when
+  a counter is above 0. The executor never spills a sort, DISTINCT, UNION or
+  GROUP BY to disk, so every counter is 0 and `spill_reason` is absent in both
+  versions; `GEODE_SPILL_THRESHOLD_BYTES` / `GEODE_QUERY_MEM_LIMIT_BYTES`
+  change nothing (until SONNY-6562 version 1 reported a spill when its
+  synthetic peak passed the threshold).
+- `memory`: `{ net_bytes, peak_bytes, total_alloc_bytes }` (version 1
+  synthetic; version 2 all 0).
+- `planner_estimates` (version 1, unless `GEODE_DISABLE_ESTIMATES` is set):
+  `sum_estimate_bytes`, `sum_actual_bytes`, `count_estimated_ops`,
+  `min_error_abs_pct`, `max_error_abs_pct`, `mean_error_abs_pct`,
+  `median_error_abs_pct`, `stddev_error_abs_pct`, `adjusted_estimate_factor`.
+- `mem_curve`: `[{ op_index, net_after_op }]`, version 1 with
+  `GEODE_PROFILE_MEMCURVE` set; absent when empty.
+- `setop` (version 1, UNION only): `{ type: "UNION", mode, input_rows,
+  output_rows }`, plus `hash_dedup_size` and (when above 0)
+  `distinct_fill_pct` for `mode: "DISTINCT"`.
+- `hashagg_spills`: always 0 (`hashagg_spill_reason` only when it is not).
+- `committed_txns`, `graph_store_nodes`, `graph_store_edges`,
+  `graph_store_dirty`: server counters read when the PROFILE ran.
+- `flagger_findings`: the statement's findings (also on the outer frame).
 
 Flags remain on the outer frame (`flagger_findings`). Typical flags: `I:IllegalOrderKeyPolicy=ident-only`, `U:NullsFirstPolicy`, `U:OrderTiebreak=LexJSON`, `U:DistinctOutputUnordered`, `U:UnionPhaseTimings`.
 
 ### Notes
 
-- Timing is nanosecond resolution (`time_ns`). Earlier drafts referenced `time_ms`; documentation updated to match implementation.
-- Aggregation PROFILE emits no detail rows — only operator metrics.
-- Flag `U:UnionPhaseTimings` may appear when UNION phase timings are present.
-
-Planned additions (not yet present): per-op `input_rows`, memory metrics, allocation counters.
+- Timing is nanosecond resolution (`time_ns`).
+- A PROFILE returns no detail rows, only the payload.
 
 ## Raft Replication & Cluster Control Framing (Internal over QUIC)
 

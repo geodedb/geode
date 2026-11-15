@@ -1528,7 +1528,7 @@ REQ-GPU-TELEMETRY-001,GPUTelemetryMetrics,OccupancyBandwidth,EXEMPT,src/gpu/tele
 REQ-GPU-VK-001,Vulkan FFI,Foundation,TESTED,src/gpu/vulkan_ffi.zig,,,gpu,2025-10-26
 REQ-GQL-001,Binary Protocol Frames,Wire,TESTED,src/canary.zig,TestCANARY_REQ_GQL_001_WireMalformedFrame,,wire,2025-09-20
 REQ-GQL-001,Binary Protocol Frames,Wire,TESTED,,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
-REQ-GQL-001,KeywordsAsIdentifiers,ParserSupport,TESTED,src/gql/parser.zig,,,parser,2025-10-09
+REQ-GQL-001,KeywordsAsIdentifiers,ParserSupport,TESTED,src/gql/parser.zig,,,parser,2026-11-15
 REQ-GQL-001,GQLCompliance,ISOCompliance,IMPL,tests/test_gap_0193_batch2_testing.zig,,,parser,2026-11-12
 REQ-GQL-002,HELLO Capabilities,Wire,TESTED,src/canary.zig,TestCANARY_REQ_GQL_002_WireUnsupportedCapability,,wire,2025-09-20
 REQ-GQL-002,HELLO Capabilities,Wire,TESTED,,TestCANARY_REQ_GQL_005_HelloRoundTrip,,wire,2025-09-20
@@ -2164,8 +2164,10 @@ REQ-GQL-ISO-SEC-13-001,ISOTypeSystem,Types,TESTED,tests/gql_iso_conformance.zig,
 REQ-GQL-ISO-SEC-14-001,ISONullSemantics,ThreeValuedLogic,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-15-001,ISOPathPatterns,Paths,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-16-001,ISOAggregation,GroupBy,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
+REQ-GQL-ISO-SEC-16-11-001,ISOGraphPatternQuantifier,QuantifiedEdges,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-11-15
 REQ-GQL-ISO-SEC-17-001,ISOOrdering,OrderByLimit,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-18-001,ISOSetOperations,Union,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
+REQ-GQL-ISO-SEC-21-3-001,ISOIdentifierWords,ReservedWords,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-11-15
 REQ-GQL-ISO-SEC-7-001,ISOGraphPatternMatching,MATCH,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-9-001,ISODataManipulation,DML,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-KATZ-001,KatzCentrality,Centrality,TESTED,src/execution/centrality_algorithms.zig,geodetestlab/specs/geode_graph_algorithms.yml,,graph,2026-01-03
@@ -2174,7 +2176,7 @@ REQ-GQL-KCORE-001,KCoreDecomposition,Community,TESTED,src/execution/centrality_a
 REQ-GQL-KEYS-001,GQLProperties,Keys,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
 REQ-GQL-KEYS-002,KeysFunction,NodeEdgeMapKeys,TESTED,src/eval/call_handlers.zig,geodetestlab/specs/gql_type_system_comprehensive.yml,,eval,2025-12-28
 REQ-GQL-KEYS-002,GQLProperties,KeysFilter,TESTED,tests/test_shell_requirements_verification.zig,test_shell_requirements_verification.zig,,engine,2026-01-15
-REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,tests/gql_keyword_regression_test.zig,tests/gql_keyword_regression_test.zig,,parser,2026-11-14
+REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,tests/gql_keyword_regression_test.zig,tests/gql_keyword_regression_test.zig,,parser,2026-11-15
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,TESTED,src/execution/centrality_algorithms.zig,geodetestlab/specs/geode_graph_algorithms.yml,,graph,2026-01-03
 REQ-GQL-LARGE-DATASET,LargeDataset,Scalability,TESTED,tests/integration/test_large_social_network.zig,TestCANARY_REQ_GQL_LARGE_DATASET,,team,2026-11-14
 REQ-GQL-LAST-001,ListFunctions,LastElement,TESTED,src/eval/call_handlers.zig,geodetestlab/specs/geode_functions_comprehensive.yml,,eval,2025-12-24
@@ -4944,9 +4946,17 @@ REQ-SONNY-6560-UNKNOWN-OPTION,CliOptions,UnknownOptionRefused,TESTED,src/cli/opt
 REQ-SONNY-6561-CDC-ENABLE-ENV,CDCProcedures,StartupEnable,TESTED,src/server/main.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
 REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,SharedAnswers,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
 REQ-SONNY-6561-CDC-WIRE-PARITY,CDCControlProtocol,GrpcRefusalStatus,TESTED,src/transport/grpc_server.zig,tests/test_sonny6561_cdc_transport_parity.zig,,cdc,2026-11-14
+REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,TypeCombination,TESTED,src/eval/type_helpers.zig,tests/test_sonny6562_wire_metadata.zig,,types,2026-11-15
+REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,StreamSchemaUnread,TESTED,src/server/node_scan_stream.zig,tests/test_sonny6562_wire_metadata.zig,,engine,2026-11-15
+REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,ColumnTypeFromAllRows,TESTED,src/server/proto_util.zig,tests/test_sonny6562_wire_metadata.zig,,server,2026-11-15
+REQ-SONNY-6562-PROFILE-SPILLS,PROFILE,NoFabricatedSpill,TESTED,src/server/profile_payload.zig,tests/test_sonny6562_wire_metadata.zig,,engine,2026-11-15
+REQ-SONNY-6562-RESULT-ORDER,ResultMetadata,OrderedTruthful,TESTED,src/query/query_traits.zig,tests/test_sonny6562_wire_metadata.zig,,query,2026-11-15
 REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,HeldUntilPersisted,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,tests/test_sonny6563_vote_persist_before_send.zig,tests/test_sonny6563_vote_persist_before_send.zig,,distributed,2026-11-14
+REQ-SONNY-6564-BINDING-NAMES,GQLParser,ReservedWordRefusal,TESTED,src/gql/parser.zig,tests/test_sonny6564_identifier_words.zig,,parser,2026-11-15
+REQ-SONNY-6564-IDENTIFIER-WORDS,GQLParser,ReservedWords,TESTED,src/gql/identifier_words.zig,tests/test_sonny6564_identifier_words.zig,,parser,2026-11-15
+REQ-SONNY-6564-PATH-QUANTIFIER,GQLParser,GraphPatternQuantifier,TESTED,src/gql/parser.zig,tests/test_sonny6564_identifier_words.zig,,parser,2026-11-15
 REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,CustomRoleHydrationFailsClosed,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
 REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,StartupHydrationFailsClosed,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15
 REQ-SONNY-6567-AUTH-HYDRATION,AuthDDLPersistence,StartupRefusesPartialAuthState,TESTED,src/server/server_init.zig,tests/test_sonny6567_auth_hydration.zig,,security,2026-11-15

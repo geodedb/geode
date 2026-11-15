@@ -1,5 +1,6 @@
-//! SONNY-6548 reproductions (intentionally red until fixed; KNOWN_TEST_ISSUES):
-//! metadata the server sends with a result contradicts the result.
+//! SONNY-6548 reproductions, fixed by SONNY-6562 (the full regression is
+//! tests/test_sonny6562_wire_metadata.zig): metadata the server sent with a
+//! result contradicted the result.
 //!
 //! 1. Exact numeric typed FLOAT, and a column typed from its first value.
 //!    ISO/IEC 39075:2024 21.2 SR: an <exact numeric literal> such as `1.25`

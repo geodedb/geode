@@ -1,4 +1,5 @@
-//! SONNY-6548 reproductions (intentionally red until fixed; KNOWN_TEST_ISSUES):
+//! SONNY-6548 reproductions, fixed by SONNY-6564 (the full regression is
+//! tests/test_sonny6564_identifier_words.zig):
 //! the parser applies ISO/IEC 39075:2024 21.3's identifier rule backwards.
 //! 21.3 lists the <reserved word>s (COUNT, MATCH, PATH, RETURN, ...) and
 //! the <non-reserved word>s (TYPE, PROPERTY, NODE, EDGE, ...); its Syntax

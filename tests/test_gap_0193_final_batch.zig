@@ -467,7 +467,7 @@ test "GAP-0193: Statistics - Histogram maintenance" {
 
 // CANARY: REQ=REQ-TYPES-001; FEATURE="Types"; ASPECT=TypeCoercion; STATUS=IMPL; OWNER=engine; UPDATED=2026-11-14
 test "GAP-0193: Types - Type coercion" {
-    var result = try geode.parse(testing.allocator, "RETURN 1 + 1.5 AS float, toString(42) AS str", .{});
+    var result = try geode.parse(testing.allocator, "RETURN 1 + 1.5 AS `float`, toString(42) AS str", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

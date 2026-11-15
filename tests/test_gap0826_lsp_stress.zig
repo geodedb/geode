@@ -116,7 +116,7 @@ test "GAP-0826: large document (>=1 MiB) didOpen + completion/hover, no leak" {
     try text.appendSlice(alloc, "RETURN '");
     var r: usize = 0;
     while (r < target_bytes) : (r += 1) try text.append(alloc, 'x');
-    try text.appendSlice(alloc, "' AS big");
+    try text.appendSlice(alloc, "' AS `big`");
     try testing.expect(text.items.len >= target_bytes);
 
     // Construct the didOpen notification with a properly JSON-escaped text.

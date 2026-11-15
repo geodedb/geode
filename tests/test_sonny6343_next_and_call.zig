@@ -38,7 +38,7 @@ const cases = [_]Case{
     .{ .q = "MATCH (n:N6343) RETURN n.k AS k ORDER BY k DESC LIMIT 2 NEXT RETURN k", .want = &.{ "3", "2" } },
     .{ .q = "MATCH (n:N6343) RETURN n.k AS k ORDER BY k SKIP 1 NEXT RETURN k ORDER BY k", .want = &.{ "2", "3" }, .ordered = true },
     .{ .q = "MATCH (n:N6343) RETURN count(*) AS c NEXT RETURN c * 2 AS d", .want = &.{"6"} },
-    .{ .q = "MATCH (n:N6343) RETURN DISTINCT n.k > 1 AS big NEXT RETURN count(*) AS c", .want = &.{"2"} },
+    .{ .q = "MATCH (n:N6343) RETURN DISTINCT n.k > 1 AS `big` NEXT RETURN count(*) AS c", .want = &.{"2"} },
     .{ .q = "RETURN 1 AS a NEXT RETURN a + 1 AS b NEXT RETURN b * 10 AS c", .want = &.{"20"} },
     // Only the result table's columns continue (9.2 SR). A name the RETURN
     // before NEXT does not project is refused with 42000, as after a WITH

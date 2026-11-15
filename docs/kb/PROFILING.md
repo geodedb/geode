@@ -8,7 +8,7 @@
 - `ops[]`: Ordered list of stage objects.
 - `peak_contributors[]`: Top 3 allocation deltas (bytes_alloc) with op names.
 - `total_time_ns`: Wall-clock pipeline time.
-- `spills`: `{sort_spills, distinct_spills, union_spills}` plus optional `spill_reason` (`forced|threshold`).
+- `spills`: `{sort_spills, distinct_spills, union_spills}`, plus `spill_reason` only when a counter is above 0. The executor never spills to disk, so every counter is 0 and `spill_reason` is absent (SONNY-6562).
 - `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — deterministic synthetic model on the fallback (v1) path, honest zeros on the trace-backed (v2) path; NOT measured allocations (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations).
 - `planner_estimates` (optional if estimates enabled):
   - `sum_estimate_bytes`
@@ -41,10 +41,9 @@
 | Variable                      | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
 | `GEODE_NULLS_LAST`            | Nulls last ordering policy                             |
-| `GEODE_SPILL_THRESHOLD_BYTES` | Triggers spill counters when `peak_bytes >= threshold` |
-| `GEODE_FORCE_SORT_SPILL`      | Force sort spill counter                               |
-| `GEODE_FORCE_DISTINCT_SPILL`  | Force distinct spill counter                           |
-| `GEODE_FORCE_UNION_SPILL`     | Force union spill counter                              |
+| `GEODE_SPILL_THRESHOLD_BYTES` | Read at startup; changes no output. The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
+| `GEODE_QUERY_MEM_LIMIT_BYTES` | The same setting under another name (it wins when both are set); changes no output |
+| `GEODE_FORCE_SORT_SPILL`, `GEODE_FORCE_DISTINCT_SPILL`, `GEODE_FORCE_UNION_SPILL` | Not read by the server (SONNY-6435) |
 
 ## CLI Flags
 

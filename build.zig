@@ -751,9 +751,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-wire-result-metadata", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): DECIMAL typed FLOAT, UNION column typed from its first row, FOR ORDER BY metadata, PROFILE spill_reason without a spill; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6548-gql-identifier-words", .reason = "intentionally red TDD reproduction (SONNY-6548, KNOWN_TEST_ISSUES): SET/REMOVE refuse a non-reserved-word variable, a reserved word is accepted as one; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -18996,10 +18994,7 @@ pub fn build(b: *std.Build) void {
     // by test-compile and stays out of shardDep until the commit that fixes
     // it registers it there. They get tests/all_tests.zig's module graph; the
     // e2e ones spawn this build's geode.
-    const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{
-        .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 reproduction (intentionally red: an exact numeric column is typed FLOAT, a UNION column INTEGER although it holds 1.25; FOR ... ORDER BY reports ordered:false; PROFILE reports spill_reason with no spill)" },
-        .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 reproduction (intentionally red: SET and REMOVE refuse a variable named with an ISO/IEC 39075 non-reserved word such as type or property, which MATCH binds and RETURN reads; a reserved word such as MATCH is accepted as a variable)" },
-    };
+    const sonny6548_repros = [_]struct { file: []const u8, step: []const u8, desc: []const u8 }{};
     for (sonny6548_repros) |repro| {
         const repro_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(repro.file), .target = target, .optimize = optimize }) });
         var it = custom_tests.root_module.import_table.iterator();
@@ -19013,12 +19008,16 @@ pub fn build(b: *std.Build) void {
         if (g_test_compile_step) |c| c.dependOn(&repro_tests.step);
         b.step(repro.step, repro.desc).dependOn(&b.addRunArtifact(repro_tests).step);
     }
-    // SONNY-6561 / SONNY-6563 regressions, with tests/all_tests.zig's module
-    // graph (the e2e ones spawn this build's geode).
+    // SONNY-6561 / SONNY-6562 / SONNY-6563 / SONNY-6564 regressions, with
+    // tests/all_tests.zig's module graph (the e2e ones spawn this build's geode).
     const sonny656x_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, weight: usize }{
         .{ .file = "tests/test_sonny6548_quic_cdc_control.zig", .step = "test-sonny6548-quic-cdc-control", .desc = "Run SONNY-6548 regression (with CDC running, QUIC CDC_CONTROL resets the running engine's guardrails and answers UNSUPPORTED to an unknown or empty action; fixed by SONNY-6561)", .weight = 1 },
         .{ .file = "tests/test_sonny6571_raft_tde_storage.zig", .step = "test-sonny6571-raft-tde-storage", .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY, the cluster's Raft entry and snapshot data reach the raft library's FileStorage files only sealed and read back across reopens; a record moved to another term or a plaintext record fails closed; a Raft directory written without TDE is refused and left unchanged, an encrypted one without the key or under another key; a granted vote is still on disk before the grant is sent, SONNY-6563)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
+        .{ .file = "tests/test_sonny6548_wire_result_metadata.zig", .step = "test-sonny6548-wire-result-metadata", .desc = "Run SONNY-6548 regression (RETURN 1.25 and a UNION mixing it with an integer are declared exact numeric; FOR ... ORDER BY reports ordered:true with its key; PROFILE reports no spill_reason without a spill; fixed by SONNY-6562)", .weight = 1 },
+        .{ .file = "tests/test_sonny6562_wire_metadata.zig", .step = "test-sonny6562-wire-metadata", .desc = "Run SONNY-6562 regression (over QUIC and gRPC against a real geode serve: every declared column type is the ISO/IEC 39075 22.18/22.19 combination of the column's values - an exact numeric DECIMAL, not FLOAT; a UNION, ORDER BY, CASE, collect() or OPTIONAL MATCH column from all its rows; ANY across base types; a streamed node scan never declares a type its later rows contradict; ordered/order_keys exactly when the result's statement ends in an ORDER BY, FOR, chains, UNION and CALL included; PROFILE reports no spill under GEODE_SPILL_THRESHOLD_BYTES)", .weight = 2 },
+        .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 regression (SET and REMOVE take a variable named with an ISO/IEC 39075 non-reserved word such as type or property; a reserved word such as MATCH is refused as a variable; fixed by SONNY-6564)", .weight = 1 },
+        .{ .file = "tests/test_sonny6564_identifier_words.zig", .step = "test-sonny6564-identifier-words", .desc = "Run SONNY-6564 regression (ISO/IEC 39075 21.3: every non-reserved word names a variable in every binding position - SET, REMOVE, DELETE, FOR, UNWIND, aliases, parameters included; every reserved and pre-reserved word is refused there with a 42000 naming the delimited form, which works; labels, types and property names take any word; 16.11 quantifiers {m,n} {n} {m,} {,n} + * read into the *m..n bounds; over QUIC and gRPC against a real geode serve)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
     };
     for (sonny656x_regressions) |reg| {

@@ -154,7 +154,7 @@ test "GAP-0426: 10+ sequential queries do not crash" {
         "RETURN 'hello' AS greeting",
         "RETURN true AS flag",
         "RETURN 42 AS answer",
-        "RETURN 1 + 2 AS sum",
+        "RETURN 1 + 2 AS `sum`",
         "RETURN 'world' AS word",
         "RETURN 100 AS century",
         "RETURN false AS done",

@@ -176,7 +176,65 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
         }
     }
     if (selector_only) analysis.preamble_graph_selector = selector_graph;
+    // SONNY-6562: a result's rows are ordered by the ORDER BY of the statement
+    // that produces them, whatever its shape (FOR, CALL, a chain); `target`
+    // is only ever a Query or a UNION, so it alone missed a FOR's.
+    if (analysis.kind == .rows) analysis.traits.ordered = resultOrderBy(program) != null;
     return analysis;
+}
+
+// CANARY: REQ=REQ-SONNY-6562-RESULT-ORDER; FEATURE="ResultMetadata"; ASPECT=OrderedTruthful; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=query; UPDATED=2026-11-15
+/// SONNY-6562: the ORDER BY that orders the rows a program returns, or null
+/// when the server does not guarantee their order. The result is the last
+/// statement's (transaction control returns none), and its rows are ordered
+/// only by that statement's final ORDER BY (ISO/IEC 39075:2024 14.10 <order by
+/// and page statement>; 14.2 for a UNION's trailing ORDER BY). A WITH's ORDER
+/// BY earlier in a chain does not order the result. The transports send
+/// `ordered` / `order_keys` from this, so the flag is set exactly when the
+/// keys are.
+pub fn resultOrderBy(program: *const ast.Program) ?*const ast.OrderBy {
+    var idx: usize = program.statements.len;
+    while (idx > 0) : (idx -= 1) {
+        const stmt = &program.statements[idx - 1];
+        switch (stmt.*) {
+            .StartTransaction, .Commit, .Rollback => continue,
+            else => return statementOrderBy(stmt),
+        }
+    }
+    return null;
+}
+
+/// SONNY-6562: the ORDER BY that orders the rows `stmt` returns (see
+/// `resultOrderBy`), for every statement that returns rows.
+pub fn statementOrderBy(stmt: *const ast.Statement) ?*const ast.OrderBy {
+    return switch (stmt.*) {
+        .Query => |*q| queryOrderBy(q),
+        .Union => |*u| u.order_by,
+        .For => |*f| forOrderBy(f),
+        .Call => |*c| switch (c.*) {
+            .Procedure => |*p| if (p.order_by) |*ob| ob else null,
+            .Subquery => null,
+        },
+        .Values => |*v| if (v.next_statement) |next| statementOrderBy(next) else null,
+        else => null,
+    };
+}
+
+/// The last part of a chain returns the rows (`next_query` links the parts;
+/// the head's `order_by` is an initial WITH's when it has a next part).
+fn queryOrderBy(head: *const ast.Query) ?*const ast.OrderBy {
+    var q = head;
+    while (q.next_query) |next| q = next;
+    if (q.for_statement) |f| {
+        if (f.body != null) return forOrderBy(f);
+    }
+    return if (q.order_by) |*ob| ob else null;
+}
+
+/// A FOR's RETURN, or the last part of the body that follows it.
+fn forOrderBy(f: *const ast.ForStatement) ?*const ast.OrderBy {
+    if (f.body) |body| return queryOrderBy(body);
+    return if (f.order_by) |*ob| ob else null;
 }
 
 // CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=TxnControl; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
@@ -298,7 +356,7 @@ fn preambleGraphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
 fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void {
     switch (stmt.*) {
         .Query => |q| {
-            analysis.traits.ordered = q.order_by != null;
+            analysis.traits.ordered = statementOrderBy(stmt) != null;
             analysis.traits.limit = if (q.limit) |l| @as(?usize, @intCast(l)) else null;
             analysis.traits.offset = if (q.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.traits.has_group_by = q.group_by != null;
@@ -312,7 +370,7 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
         },
         .Union => |u| {
             analysis.traits.has_union = true;
-            analysis.traits.ordered = u.order_by != null;
+            analysis.traits.ordered = statementOrderBy(stmt) != null;
             analysis.traits.limit = if (u.limit) |l| @as(?usize, @intCast(l)) else null;
             analysis.traits.offset = if (u.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.union_part_count = u.tails.len + 1;

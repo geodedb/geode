@@ -2527,23 +2527,8 @@ fn replaceOwnedOptionalString(allocator: std.mem.Allocator, slot: *?[]const u8, 
 }
 
 fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
-    var idx: usize = program.statements.len;
-    while (idx > 0) : (idx -= 1) {
-        const stmt_ptr = &program.statements[idx - 1];
-        switch (stmt_ptr.*) {
-            .Query => |*q| {
-                if (q.order_by) |*ob| return ob;
-                return null;
-            },
-            .Union => |*u| {
-                if (u.order_by) |ob_ptr| return ob_ptr;
-                return null;
-            },
-            .StartTransaction, .Commit, .Rollback => continue,
-            else => return null,
-        }
-    }
-    return null;
+    // SONNY-6562: the ORDER BY `traits.ordered` is decided from.
+    return query_traits.resultOrderBy(program);
 }
 
 fn buildOrderKeys(
@@ -8688,7 +8673,6 @@ fn handleClientMessage(
                                 .compact = compact_profile,
                                 .include_mem_curve = memcurve_profile,
                                 .disable_estimates = disable_estimates,
-                                .spill_threshold = state.query_mem_limit_bytes,
                                 .committed_txns = state.global_commit_ts,
                                 .graph_store_nodes = profile_node_count,
                                 .graph_store_edges = profile_edge_count,
@@ -8767,7 +8751,6 @@ fn handleClientMessage(
                         .compact = compact_profile,
                         .include_mem_curve = memcurve_profile,
                         .disable_estimates = disable_estimates,
-                        .spill_threshold = state.query_mem_limit_bytes,
                         .committed_txns = state.global_commit_ts,
                         .graph_store_nodes = profile_node_count,
                         .graph_store_edges = profile_edge_count,

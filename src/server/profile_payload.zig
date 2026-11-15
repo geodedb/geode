@@ -8,7 +8,6 @@ pub const ProfileOptions = struct {
     compact: bool = false,
     include_mem_curve: bool = false,
     disable_estimates: bool = false,
-    spill_threshold: usize = 0,
     committed_txns: u64 = 0,
     graph_store_nodes: u64 = 0,
     graph_store_edges: u64 = 0,
@@ -216,28 +215,21 @@ pub fn buildProfilePayload(
         .peak_bytes = peak_bytes,
     };
 
-    const spill_active = opts.spill_threshold > 0 and peak_bytes > opts.spill_threshold;
-    const spill_reason: ?[]const u8 = if (spill_active) "threshold" else null;
-    const spill_sort: u64 = if (spill_active and traits.ordered) 1 else 0;
-    const spill_distinct: u64 = if (spill_active and traits.distinct) 1 else 0;
-    const spill_union: u64 = if (spill_active and traits.has_union) 1 else 0;
-
-    var spills = schema.ProfileSpills{
-        .sort_spills = spill_sort,
-        .distinct_spills = spill_distinct,
-        .union_spills = spill_union,
+    // CANARY: REQ=REQ-SONNY-6562-PROFILE-SPILLS; FEATURE="PROFILE"; ASPECT=NoFabricatedSpill; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=engine; UPDATED=2026-11-15
+    // SONNY-6562: Geode's executor never spills a sort, DISTINCT, UNION or
+    // GROUP BY to disk, so no spill is reported: every counter 0, no
+    // `spill_reason` (docs/BINARY_PROTOCOL.md: present only when a counter is
+    // above 0). With GEODE_SPILL_THRESHOLD_BYTES set, the synthetic peak above
+    // passing the threshold set `spill_reason:"threshold"` and a counter of 1
+    // for the operators the query had, though nothing spilled.
+    const spills = schema.ProfileSpills{
+        .sort_spills = 0,
+        .distinct_spills = 0,
+        .union_spills = 0,
         .spill_reason = "",
         .peak_bytes_at_spill = 0,
         .first_spill_op_index = 0,
     };
-    if (spill_reason) |reason| {
-        spills.spill_reason = try allocator.dupe(u8, reason);
-        spills.peak_bytes_at_spill = peak_bytes;
-        if (firstSpillIndex(ops.items, .{ .sort = spill_sort, .distinct = spill_distinct, .set_union = spill_union })) |first_idx| {
-            spills.first_spill_op_index = @intCast(first_idx);
-        }
-    }
-    errdefer spills.deinit(allocator);
 
     const memory = schema.ProfileMemory{
         .net_bytes = total_alloc_bytes,
@@ -302,13 +294,9 @@ pub fn buildProfilePayload(
     }
     // Note: setop_opt ownership transfers to the returned ProfilePayload
 
-    var hashagg_spills: u64 = 0;
-    var hashagg_reason: []const u8 = "";
-    if (traits.has_group_by and spill_reason != null) {
-        hashagg_spills = 1;
-        hashagg_reason = try allocator.dupe(u8, spill_reason.?);
-    }
-    // Note: hashagg_reason ownership transfers to the returned ProfilePayload
+    // SONNY-6562: no GROUP BY spills either (see `spills`).
+    const hashagg_spills: u64 = 0;
+    const hashagg_reason: []const u8 = "";
 
     var findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;
     errdefer {
@@ -754,27 +742,6 @@ fn buildPeakContributors(
         try list.append(allocator, entry);
     }
     return list;
-}
-
-const SpillCounts = struct {
-    sort: u64,
-    distinct: u64,
-    set_union: u64,
-};
-
-fn firstSpillIndex(ops: []const OpSpec, spills: SpillCounts) ?usize {
-    var distinct_idx: ?usize = null;
-    var sort_idx: ?usize = null;
-    for (ops, 0..) |op, i| {
-        if (std.mem.eql(u8, op.name, "Distinct")) distinct_idx = i;
-        if (std.mem.eql(u8, op.name, "Sort")) sort_idx = i;
-    }
-    if (spills.distinct > 0 and distinct_idx != null) return distinct_idx;
-    if (spills.sort > 0 and sort_idx != null) return sort_idx;
-    if (spills.set_union > 0) {
-        for (ops, 0..) |op, i| if (std.mem.eql(u8, op.name, "SetOpUnion")) return i;
-    }
-    return null;
 }
 
 fn unionModeToString(mode: query_traits.UnionMode) []const u8 {

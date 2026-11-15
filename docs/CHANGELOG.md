@@ -2676,6 +2676,91 @@
   followed by a subcommand no longer takes the subcommand as the event
   source. Regression: `zig build test-sonny6559-cli-exit-paths`.
 
+- **The parser applies ISO/IEC 39075:2024 21.3's identifier rule the right
+  way round, and takes 16.11 edge quantifiers (SONNY-6564, BREAKING: queries
+  using reserved words as names).** 21.3 SR 18: an unquoted identifier whose
+  case-normal form is a reserved word is not one; a non-reserved word is; a
+  delimited identifier may be any word. The parser accepted reserved words
+  as variables (`MATCH (match:X) RETURN match` ran, `RETURN MATCH` parsed)
+  while SET, REMOVE, DELETE, FOR, UNWIND and LET took only plain
+  identifiers, so `MATCH (type:T) SET type.x = 1` (TYPE is non-reserved) was
+  a syntax error. Now one predicate decides every name that binds or is
+  referenced (variables, aliases, YIELD items, parameters and session
+  parameters, VALUES columns, CTE names, comprehension variables): a 21.3
+  non-reserved word or any word 21.3 does not list names it; a reserved word
+  is 42000 naming its delimited form; `` `match` `` (accent-quoted, newly
+  lexed) names anything. The two lists, verified word for word against the
+  standard, are in src/gql/identifier_words.zig. **BREAKING:** an unquoted
+  reserved word as a variable, alias or parameter (`RETURN sum(x) AS sum`,
+  `WITH [1] AS list`, `$limit`, `$from`, `AS year`, `AS data`, ...) is now
+  42000; write it delimited (`` AS `sum` ``, `` $`limit` ``). Decided with
+  evidence (docs/GQL_COMPLIANCE.md "Reserved Words and Identifiers"): of
+  14,410 queries in Geode's tests, docs and examples and the integration
+  specs, strict 21.3 refused 260; five reserved words stay names, a
+  documented non-conformance, because Geode's own procedures yield columns so
+  named (PATH from `algo.*`, VALUE and AVG from `geode.ts.*`, COUNT and
+  TIMESTAMP from RLS and storage procedures) and they are 123 of the 260;
+  labels, relationship types and property names and keys still take any
+  word. 141 queries are refused: 44 of Geode's own (35 test query
+  literals in 20 files, corrected here with delimited names; 8 doc examples
+  whose `$query` became `$query_vector`, with their source in
+  src/gql/language_metadata.zig; the rest expect the refusal or are not
+  queries) and 97 in 39 integration-harness specs. `RETURN no` returns a variable `no` (NO
+  BINDINGS needs both words). 16.11: `-[:R]->{1,2}`, `{2}`, `{1,}`, `{,3}`,
+  `+` and `*` (on full and abbreviated edges) read into the bounds
+  `-[:R*m..n]->` sets and run on the same expansion; SR 3 bounds (`{0}`,
+  `{3,1}`) and a second quantifier are 42000. docs/GQL_COMPLIANCE.md claimed
+  "full quantifier support" with only the Cypher form; it now lists both
+  and that quantified parenthesized paths (G035) are unsupported.
+  Regressions: `zig build test-sonny6564-identifier-words` (every reserved
+  and non-reserved word, every binding position; executed over QUIC and gRPC
+  with the ISO quantifier results compared to `*m..n`),
+  `test-sonny6548-gql-identifier-words` (now in the aggregate),
+  `test-iso-conformance` (120/120, 11 new 21.3 and 16.11 cases).
+- **Wire result metadata describes the result it is sent with (SONNY-6562,
+  BREAKING: declared column types change).** Over QUIC and gRPC:
+  (1) A decimal (`RETURN 1.25`, any fixed-point value) is declared `DECIMAL`,
+  ISO/IEC 39075:2024 21.2's exact numeric type; it was `FLOAT`, the name of
+  an approximate type. `type()` and `valueType()` answer `DECIMAL` for it
+  too. (2) A column's declared type is the combination of the types of all
+  its values (14.2, 22.18 / 22.19): exact numerics combine to the wider one
+  (`DECIMAL` over the integer types), an approximate value makes the column
+  `DOUBLE` (`REAL` only when every value is), character strings `STRING`, a
+  zoned and a local datetime or time the zoned type, and values of different
+  base types `ANY` (18.9's open dynamic union type); NULL adds nothing. It was
+  the type of the first non-null value among the first 10 rows, so
+  `RETURN 2 AS a UNION RETURN 1.25 AS a` declared `INTEGER` for a column
+  holding 1.25, and an ORDER BY, a CASE, an OPTIONAL MATCH or an eleventh row
+  could contradict a declared type. The node-scan stream (`MATCH (n:L)
+  RETURN n.p` served without the executor) sends its schema frame after 10
+  rows: when those are all its rows it declares their combined type, as the
+  executor would; when more rows follow it declares each property column
+  `ANY` (a bare node column stays `NODE`), since it has not read them (it
+  declared the sample's type). Clients that switch on a declared type must
+  accept `DECIMAL` and `ANY`; the value kinds on the wire are unchanged.
+  (3) `ordered` / `order_keys` are set exactly when the statement that
+  returns the rows ends in an ORDER BY (14.10; a UNION's trailing ORDER BY,
+  14.2): `FOR a IN [2, 1, 3] RETURN a ORDER BY a DESC`, a FOR whose body
+  reads, a chain whose last part orders (`MATCH ... WITH n MATCH ... RETURN
+  ... ORDER BY k`) and `CALL p() YIELD x RETURN x ORDER BY x` reported
+  `ordered:false`, and a WITH's ORDER BY ahead of an unordered RETURN (`WITH
+  3 AS x ORDER BY x WITH x RETURN x`) reported `ordered:true`. One function,
+  `query_traits.resultOrderBy`, now decides both the flag and the keys on
+  both transports. (4) PROFILE reports no spill: the executor never spills a
+  sort, DISTINCT, UNION or GROUP BY, but a version-1 PROFILE under
+  `GEODE_SPILL_THRESHOLD_BYTES` (or `GEODE_QUERY_MEM_LIMIT_BYTES`) set
+  `spill_reason:"threshold"` and a spill counter of 1 because its synthetic
+  peak passed the threshold. The variables no longer change any output
+  (docs/kb/PROFILING.md, docs/DOCKER_OVERVIEW.md);
+  tests/e2e_protocol_profile_spill_first_index.zig, which no step ran and
+  which pinned the made-up spill, is removed. docs/BINARY_PROTOCOL.md
+  now describes the SCHEMA types, the ordering flag and the version-1 and
+  version-2 PROFILE payloads geode sends. Regressions: `zig build
+  test-sonny6562-wire-metadata` (5 tests, a real server over both
+  transports, the protobuf value kinds checked against each declared type),
+  `test-sonny6548-wire-result-metadata` (now in the aggregate),
+  `test-sonny1221-fast-path-schema` (a stream longer than its sample declares
+  `ANY`).
 - **An ORDER BY on a column the ordered index cannot serve no longer starts
   its build (SONNY-6555 item 3, SONNY-6518 item 6).** `orderedScanFastPath`
   started the value-ordered index's background build (and its persisting
@@ -2864,6 +2949,48 @@
   test-sonny6567-grpc-stream-ids` (a real server: eight Execute RPCs, a
   4,000-row and a 90,000-row response and one more Execute on one
   connection; a multi-statement `--file` over gRPC).
+- **A cluster node's vote is on disk before its grant can leave the node
+  (SONNY-6563).** The raft library (v0.1.22) hands a RequestVote grant to
+  its transport from inside `step()` and writes the hard state (term,
+  voted_for; fsync) only in `advance()`, which `RaftNode.drainReady` calls
+  after `step()` returns. Geode's bridge queued the grant on the peer's
+  outbox at once and the outbox thread sends without the raft mutex, so a
+  node could tell a candidate "granted", crash before the fsync, restart
+  with no vote for that term and grant it to another candidate: two
+  leaders in one term. The bridge now holds everything the library sends
+  during `step` / `tick` / `propose` until `advance()` has succeeded, then
+  queues it; if `ready()` or `advance()` fails the held messages are
+  dropped (raft resends). Leader AppendEntries now leave after the
+  leader's own append is durable (one fsync later than before). The vote
+  already survived a clean restart (the library stores term and vote
+  together); `test-raft-hardstate-durability` now asserts it and that the
+  restarted node refuses a second candidate in the same term. Regression:
+  `zig build test-sonny6563-vote-persist-before-send` (the grant reached
+  the network while the disk held term 0, voted_for null).
+
+- **CDC_DIAGNOSTICS and CDC_CONTROL answer the same on QUIC and gRPC
+  (SONNY-6561).** The QUIC handler read `ServerState.cdc_engine`, which
+  nothing assigned, so with CDC started by `CALL cdc.enable()` QUIC
+  answered `NO_ENGINE` to every CDC_CONTROL action and reported CDC
+  disabled, while gRPC read the running engine. Both transports now answer
+  through one implementation (`storage_dispatch.cdcDiagnosticsAnswer` /
+  `cdcControlAnswer`) and the field is deleted. **Changed refusals (both
+  frames, both transports):** an unauthenticated caller is refused `28000`
+  and a caller that is not an administrator `42501` (QUIC: an error frame;
+  gRPC: grpc-status 16 / 7 with a grpc-message starting with the SQLSTATE).
+  QUIC refused a non-admin's diagnostics `42000` (the 18 other privilege
+  refusals answer `42501`) and answered its CDC_CONTROL `PERMISSION_DENIED`;
+  gRPC answered a non-admin's or an unauthenticated caller's diagnostics
+  with an empty "CDC disabled" payload and its CDC_CONTROL
+  `AUTH_REQUIRED`. In cluster mode CDC_CONTROL is refused
+  (`CLUSTER_NOT_LEADER` / `CLUSTER_WRITE_NOT_REPLICABLE`) as `CALL
+  cdc.reset_guardrails()` is. `GEODE_CDC_ENABLE=1`, which
+  docs/QUICK_REFERENCE.md documents and nothing read, starts the engine at
+  startup through the path `CALL cdc.enable()` takes; the engine lives in
+  the process allocator and `CALL cdc.disable()` now frees it
+  (`CDCEngine.deinit`). Regression: `zig build
+  test-sonny6561-cdc-transport-parity` (0 of 86 QUIC/gRPC answers differ;
+  40 did) and `test-sonny6548-quic-cdc-control` (now in the aggregate).
 
 - **`test-admin-bootstrap` is green again (SONNY-6551 item 6).** Its 14
   tests passed, but the one that replaces the security graph's engine

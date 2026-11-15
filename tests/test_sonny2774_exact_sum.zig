@@ -43,8 +43,8 @@ const cases = [_]Case{
     .{ .q = "MATCH (b:Big) WHERE b.v > 0 WITH sum(b.v) AS s RETURN s", .err = error.IntegerOverflow },
     .{ .q = "MATCH (b:Big) WHERE b.v > 0 RETURN sum(DISTINCT b.v) AS s", .err = error.IntegerOverflow },
     // avg() is approximate: the exact sum is divided, no overflow.
-    .{ .q = "MATCH (b:Big) WHERE b.g = 1 AND b.v > 0 RETURN avg(b.v) > 4600000000000000000 AS big", .want = &.{"true"} },
-    .{ .q = "MATCH (b:Big) WHERE b.g = 1 RETURN avg(b.v) > 3000000000000000000 AS big", .want = &.{"true"} },
+    .{ .q = "MATCH (b:Big) WHERE b.g = 1 AND b.v > 0 RETURN avg(b.v) > 4600000000000000000 AS `big`", .want = &.{"true"} },
+    .{ .q = "MATCH (b:Big) WHERE b.g = 1 RETURN avg(b.v) > 3000000000000000000 AS `big`", .want = &.{"true"} },
 };
 
 test "SONNY-2774: an exact integer sum is exact, and past i64 it is 22003" {

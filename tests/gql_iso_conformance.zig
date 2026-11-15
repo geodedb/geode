@@ -603,3 +603,73 @@ test "ISO Negative: Gibberish input" {
 test "ISO Negative: Dangling operator" {
     try expectParseErr("RETURN 1 +");
 }
+
+// ============================================================================
+// 21.3 <token>, <separator>, and <identifier> (SONNY-6564)
+// CANARY: REQ=REQ-GQL-ISO-SEC-21-3-001; FEATURE="ISOIdentifierWords"; ASPECT=ReservedWords; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-15
+// SR 18: a <non-delimited identifier> whose case-normal form (SR 17) is a
+// <reserved word> is not an identifier; a <non-reserved word> is one; a
+// <delimited identifier> may be any word. Full lists and every binding
+// position: tests/test_sonny6564_identifier_words.zig. (Geode keeps five
+// reserved words as names, PATH, VALUE, COUNT, AVG and TIMESTAMP, and any
+// word as a label or property name: docs/GQL_COMPLIANCE.md.)
+// ============================================================================
+
+test "ISO 21.3: a non-reserved word is a binding variable (TYPE, PROPERTY, NODE)" {
+    try expectParseOk("MATCH (type:T) SET type.x = 1 RETURN type");
+    try expectParseOk("MATCH (property:T) REMOVE property.x RETURN property");
+    try expectParseOk("MATCH (node)-[edge]->(graph) RETURN node, edge, graph");
+}
+
+test "ISO 21.3: a reserved word is not a binding variable" {
+    try expectParseErr("RETURN MATCH");
+    try expectParseErr("MATCH (match:X) RETURN match");
+    try expectParseErr("MATCH (n) RETURN n AS sum");
+    try expectParseErr("MATCH list = (a)->(b) RETURN 1");
+}
+
+test "ISO 21.3: the case-normal form decides (SR 17)" {
+    try expectParseErr("MATCH (MaTcH:X) RETURN 1");
+}
+
+test "ISO 21.3: a delimited identifier may be a reserved word" {
+    try expectParseOk("MATCH (`match`:X) RETURN `match`");
+    try expectParseOk("MATCH (n) RETURN n AS `sum`");
+}
+
+test "ISO 21.3: a reserved word still begins its own construct" {
+    try expectParseOk("MATCH (n) RETURN count(*), upper(n.s), abs(n.k)");
+}
+
+// ============================================================================
+// 16.11 <graph pattern quantifier> on an edge pattern (Features G036, G060,
+// G061; SONNY-6564)
+// CANARY: REQ=REQ-GQL-ISO-SEC-16-11-001; FEATURE="ISOGraphPatternQuantifier"; ASPECT=QuantifiedEdges; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-15
+// ============================================================================
+
+test "ISO 16.11: general quantifier {m,n}" {
+    try expectParseOk("MATCH (a)-[:R]->{1,2}(b) RETURN b");
+}
+
+test "ISO 16.11: fixed quantifier {n}" {
+    try expectParseOk("MATCH (a)-[:R]->{2}(b) RETURN b");
+}
+
+test "ISO 16.11: unbounded quantifiers {m,}, + and *" {
+    try expectParseOk("MATCH (a)-[:R]->{1,}(b) RETURN b");
+    try expectParseOk("MATCH (a)-[:R]->+(b) RETURN b");
+    try expectParseOk("MATCH (a)-[:R]->*(b) RETURN b");
+}
+
+test "ISO 16.11: general quantifier without a lower bound {,n}" {
+    try expectParseOk("MATCH (a)-[:R]->{,3}(b) RETURN b");
+}
+
+test "ISO 16.11: a quantified abbreviated edge pattern" {
+    try expectParseOk("MATCH (a)->{1,2}(b) RETURN b");
+}
+
+test "ISO 16.11 SR 3: the upper bound is above 0 and not below the lower bound" {
+    try expectParseErr("MATCH (a)-[:R]->{0}(b) RETURN b");
+    try expectParseErr("MATCH (a)-[:R]->{3,1}(b) RETURN b");
+}

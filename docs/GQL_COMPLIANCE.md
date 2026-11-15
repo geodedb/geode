@@ -1,13 +1,13 @@
 # GQL ISO/IEC 39075:2024 Compliance Guide
 
-Geode passes **109/109 cases of its ISO/IEC 39075:2024 GQL conformance suite** (parse-only scope) (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
+Geode passes **120/120 cases of its ISO/IEC 39075:2024 GQL conformance suite** (parse-only scope) (`tests/gql_iso_conformance.zig`), making it one of the most standards-aligned GQL implementations available. "100%" below refers to that named conformance suite — not a blanket claim of full ISO coverage; documented residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`, Cypher-only extensions intentionally excluded) are listed in this guide.
 
 ## 📊 Compliance Overview
 
-- **Conformance suite**: 109/109 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
+- **Conformance suite**: 120/120 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
 - **Scope**: this is the curated conformance suite, not exhaustive ISO coverage; see residual limits in this guide
-- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 109/109 verified 2026-11-14, the NEXT and SONNY-6555 page-clause cases included). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
+- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 120/120 verified 2026-11-15, the NEXT, SONNY-6555 page-clause, and SONNY-6564 21.3 identifier and 16.11 quantifier cases included). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
 - **Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
 
 ## ✅ Fully Supported Features
@@ -84,6 +84,73 @@ SQL, Cypher, and Neo4j.
   ABS/COALESCE/SUBSTRING/TRIM (eval path), `findFunction`/`findProcedure`
   (metadata path), and `extractNormalizedProcName` (dispatch path) with
   uppercase, lowercase, and mixed-case inputs.
+
+### Reserved Words and Identifiers (21.3, SONNY-6564)
+
+ISO/IEC 39075:2024 21.3 splits the keywords into 262 **reserved words**
+(222, plus 40 *pre-reserved* words such as `DATA`, `PRODUCT`, `QUERY`,
+`VALUES`) and 48 **non-reserved words** (`TYPE`, `PROPERTY`, `NODE`, `EDGE`,
+`GRAPH`, `LABEL`, `FIRST`, `TO`, ...). Syntax Rule 18: the case-normal form
+(SR 17, upper case) of an unquoted identifier shall not be a reserved word;
+a *delimited identifier* (`` `match` ``) may be any word. The lists are in
+`src/gql/identifier_words.zig`, with the clause references.
+
+Geode applies the rule to every name that binds or is referenced in a query
+— node, edge and path variables, `SET` / `REMOVE` / `DELETE` targets, `FOR`
+and `WITH ORDINALITY` / `OFFSET` variables, `UNWIND ... AS`, `LET`, `AS`
+aliases (also on `YIELD` items), parameters (`$name`, session parameters),
+`VALUES` column names, CTE names and list-comprehension variables:
+
+```gql
+MATCH (type:T) SET type.x = 1 REMOVE type.y RETURN type   -- TYPE is non-reserved: OK
+MATCH (match:X) RETURN match                               -- 42000: `match` is a reserved word
+MATCH (`match`:X) RETURN `match`                           -- OK: a delimited identifier
+RETURN count(*) AS c, upper('a')                           -- OK: a call is the built-in
+```
+
+A refusal is `42000`, naming the word and its delimited form ("`` `sum` `` is a
+reserved word (ISO/IEC 39075:2024 21.3) and cannot be used as an alias ...;
+write it as a delimited identifier: `` `sum` ``"). A reserved word where an
+expression starts is still the construct it begins: a built-in call
+(`count(...)`, `upper(...)`), `COUNT { }` / `EXISTS { }` / `VALUE { }`, a typed
+literal (`DURATION 'P1D'`), `LIST [...]`, or a niladic function
+(`CURRENT_DATE`, `SESSION_USER`, ...). Until SONNY-6564 the parser had the
+rule backwards: `RETURN MATCH` and `MATCH (match:X) RETURN match` parsed,
+while `SET` / `REMOVE` / `DELETE` / `FOR` / `UNWIND` / `LET` took only plain
+identifiers, so `MATCH (type:T) SET type.x = 1` was a syntax error.
+
+**Documented non-conformances** (Geode extensions to 21.3 SR 18):
+
+1. **Five reserved words stay binding names: `PATH`, `VALUE`, `COUNT`, `AVG`,
+   `TIMESTAMP`.** Geode's own procedures yield columns with these names, so a
+   `YIELD` binds them: `algo.bfs.stream`, `algo.dfs.stream`,
+   `algo.shortestPath.dijkstra` and the recursive path procedures yield
+   `path`; `geode.ts.range` / `last` / `sample_by` yield `value` and
+   `geode.ts.bucket_avg` yields `avg`; RLS and storage procedures yield
+   `count` and `timestamp`. They are also the reserved words most used as
+   names: of 14,410 queries in Geode's tests, docs and examples and the
+   integration-harness specs, a strict rule refused 260, and 123 of those
+   used one of these five (`PATH` 56, `VALUE` 41, `COUNT` 20, `AVG` 4,
+   `TIMESTAMP` 2). Each stays unambiguous (a call needs `(`, `COUNT { }` a
+   brace, a typed literal a string, and a path-search prefix never starts
+   with `PATH`).
+2. **Labels, relationship types, property names and property keys take any
+   word**, a reserved one included (`(o:Order {value: 1, data: 2})`,
+   `n.count`). 21.3 makes `<label name>` and `<property name>` identifiers
+   too, but a name is all these positions can hold, and the corpus above uses
+   reserved words there thousands of times (`{value: ...}` and `{data: ...}`
+   keys alone about 4,250 times in the harness specs, `n.value` 411 times, the
+   labels `Product`, `Project` and `Next` about 120 times).
+3. **A delimited identifier may name a binding variable** (`` (`match`) ``):
+   21.3 makes a `<binding variable>` a `<regular identifier>`.
+4. **A double-quoted sequence is a string literal everywhere**: 21.3 also
+   allows `"name"` as a delimited identifier; Geode accepts only the
+   backquoted (accent-quoted) form.
+
+Every other reserved word (257 of 262) is refused as an unquoted binding
+name. Of the 14,410 queries, 141 are refused: 44 of Geode's own (35 test
+query literals and 8 doc examples, corrected; the rest expect the refusal)
+and 97 in 39 integration-harness specs.
 
 ### Data Types & Literals
 
@@ -443,24 +510,33 @@ test-sonny6460-filter-statement`, `zig build test-sonny6467-query-residuals`.
 
 ### Path Quantifiers
 
-Variable-length path patterns with full quantifier support:
+Variable-length edge patterns, in the ISO/IEC 39075:2024 16.11 form (Feature
+G036, quantified edges; G060 bounded, G061 unbounded) or the Cypher form
+inside the brackets. Both set the same length bounds and run on the same
+variable-length expansion (SONNY-6564):
 
 ```gql
--- Any length
-MATCH (a)-[*]->(b) RETURN a, b
+-- ISO 16.11 <graph pattern quantifier> after the edge pattern
+MATCH (a)-[:R]->{1,2}(b) RETURN b      -- 1 to 2 hops
+MATCH (a)-[:R]->{2}(b) RETURN b        -- exactly 2 (fixed quantifier)
+MATCH (a)-[:R]->{1,}(b) RETURN b       -- at least 1
+MATCH (a)-[:R]->{,3}(b) RETURN b       -- 0 to 3 (16.11 SR 2 d: lower bound 0)
+MATCH (a)-[:R]->+(b) RETURN b          -- {1,}
+MATCH (a)-[:R]->*(b) RETURN b          -- {0,}
+MATCH (a)->{1,2}(b) RETURN b           -- an abbreviated edge, quantified
 
--- Exact length
-MATCH (a)-[*3]->(b) RETURN a, b
-
--- Range with both bounds
-MATCH (a)-[*2..5]->(b) RETURN a, b
-
--- Range with lower bound only
-MATCH (a)-[*3..]->(b) RETURN a, b
-
--- Range with upper bound only  
-MATCH (a)-[*..4]->(b) RETURN a, b
+-- Cypher form, inside the brackets
+MATCH (a)-[*]->(b) RETURN a, b         -- 1 or more (not ISO `*`, which is {0,})
+MATCH (a)-[*3]->(b) RETURN a, b        -- exactly 3
+MATCH (a)-[*2..5]->(b) RETURN a, b     -- 2 to 5
+MATCH (a)-[*3..]->(b) RETURN a, b      -- at least 3
+MATCH (a)-[*..4]->(b) RETURN a, b      -- 1 to 4
 ```
+
+16.11 SR 3 is enforced: an upper bound must be above 0 and not below the
+lower bound (`{0}`, `{3,1}` are 42000), and an edge takes one quantifier
+(`-[:R*1..2]->{1,2}` is 42000). Not supported: a quantified parenthesized
+path pattern, `((a)-[:R]->(b)){1,3}` (Feature G035, quantified paths).
 
 ### Error Handling
 
@@ -470,7 +546,7 @@ Comprehensive syntax validation with clear error messages:
 -- Invalid syntax examples (will fail with clear errors)
 MATCH (n:) RETURN n           -- Missing label name
 RETURN (1 + 2                 -- Unclosed parenthesis
-RETURN MATCH                  -- Reserved keyword as identifier
+RETURN MATCH                  -- Reserved word as an identifier (21.3): 42000
 ```
 
 ## ✅ Complex Path Variable Assignment (Fixed January 2026)

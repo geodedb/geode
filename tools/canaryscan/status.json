@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T14:06:19.365035671Z",
+  "generated_at": "2026-11-15T14:26:33.924317678Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -23429,7 +23429,7 @@
           "tests": [],
           "benches": [],
           "owner": "parser",
-          "updated": "2025-10-09"
+          "updated": "2026-11-15"
         },
         {
           "feature": "GQLCompliance",
@@ -32731,6 +32731,25 @@
       ]
     },
     {
+      "id": "REQ-GQL-ISO-SEC-16-11-001",
+      "features": [
+        {
+          "feature": "ISOGraphPatternQuantifier",
+          "aspect": "QuantifiedEdges",
+          "status": "TESTED",
+          "files": [
+            "tests/gql_iso_conformance.zig"
+          ],
+          "tests": [
+            "test-iso-conformance"
+          ],
+          "benches": [],
+          "owner": "compliance",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-GQL-ISO-SEC-17-001",
       "features": [
         {
@@ -32765,6 +32784,25 @@
           "benches": [],
           "owner": "compliance",
           "updated": "2026-06-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-ISO-SEC-21-3-001",
+      "features": [
+        {
+          "feature": "ISOIdentifierWords",
+          "aspect": "ReservedWords",
+          "status": "TESTED",
+          "files": [
+            "tests/gql_iso_conformance.zig"
+          ],
+          "tests": [
+            "test-iso-conformance"
+          ],
+          "benches": [],
+          "owner": "compliance",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -32923,7 +32961,7 @@
           ],
           "benches": [],
           "owner": "parser",
-          "updated": "2026-11-14"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -78042,6 +78080,91 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6562-DECLARED-TYPE",
+      "features": [
+        {
+          "feature": "ResultMetadata",
+          "aspect": "TypeCombination",
+          "status": "TESTED",
+          "files": [
+            "src/eval/type_helpers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6562_wire_metadata.zig"
+          ],
+          "benches": [],
+          "owner": "types",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "ResultMetadata",
+          "aspect": "StreamSchemaUnread",
+          "status": "TESTED",
+          "files": [
+            "src/server/node_scan_stream.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6562_wire_metadata.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "ResultMetadata",
+          "aspect": "ColumnTypeFromAllRows",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6562_wire_metadata.zig"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6562-PROFILE-SPILLS",
+      "features": [
+        {
+          "feature": "PROFILE",
+          "aspect": "NoFabricatedSpill",
+          "status": "TESTED",
+          "files": [
+            "src/server/profile_payload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6562_wire_metadata.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6562-RESULT-ORDER",
+      "features": [
+        {
+          "feature": "ResultMetadata",
+          "aspect": "OrderedTruthful",
+          "status": "TESTED",
+          "files": [
+            "src/query/query_traits.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6562_wire_metadata.zig"
+          ],
+          "benches": [],
+          "owner": "query",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6563-VOTE-DURABLE",
       "features": [
         {
@@ -78090,6 +78213,63 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6564-BINDING-NAMES",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "ReservedWordRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6564_identifier_words.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6564-IDENTIFIER-WORDS",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "ReservedWords",
+          "status": "TESTED",
+          "files": [
+            "src/gql/identifier_words.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6564_identifier_words.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6564-PATH-QUANTIFIER",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "GraphPatternQuantifier",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6564_identifier_words.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -83589,7 +83769,7 @@
       "COMPLETE": 2,
       "EXEMPT": 209,
       "IMPL": 533,
-      "TESTED": 4151
+      "TESTED": 4161
     },
     "by_aspect": {
       "2PC": 3,
@@ -84086,6 +84266,7 @@
       "ColumnIndexLookup": 1,
       "ColumnOrder": 1,
       "ColumnSchema": 1,
+      "ColumnTypeFromAllRows": 1,
       "CommaSeparatedMergeChains": 1,
       "CommandDispatch": 2,
       "CommandRouting": 1,
@@ -84988,6 +85169,7 @@
       "GraphLockFreeLabelCount": 2,
       "GraphMismatch": 1,
       "GraphNames": 1,
+      "GraphPatternQuantifier": 1,
       "GraphReadGate": 1,
       "GraphSAGE": 1,
       "GraphScope": 1,
@@ -85628,6 +85810,7 @@
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
+      "NoFabricatedSpill": 1,
       "NoFakeOverheadMeasurement": 1,
       "NoFakePerformanceImpact": 1,
       "NoFallbackSnapshot": 1,
@@ -85797,6 +85980,7 @@
       "OrderedEmission": 1,
       "OrderedIndexLabelViaEngine": 1,
       "OrderedTokenize": 1,
+      "OrderedTruthful": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
       "OrderingPerf": 1,
@@ -86202,6 +86386,7 @@
       "QUICWiring": 1,
       "QUIC_HANDLERS": 1,
       "QualityAssurance": 1,
+      "QuantifiedEdges": 1,
       "QuantifierCallHandlers": 1,
       "QuarantinedGraphFailClosed": 1,
       "QuarantinedGraphRefusesWrites": 1,
@@ -86430,6 +86615,8 @@
       "Reseal": 1,
       "ResealRefusesUnsignedLegacy": 1,
       "ReserveBeforeBuild": 1,
+      "ReservedWordRefusal": 1,
+      "ReservedWords": 2,
       "ResetGuardrails": 1,
       "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,
@@ -86899,6 +87086,7 @@
       "StreamIdAllocation": 1,
       "StreamPoolSizing": 1,
       "StreamReadPollCadence": 1,
+      "StreamSchemaUnread": 1,
       "StreamToFile": 1,
       "Streaming": 3,
       "StreamingIntegration": 1,
@@ -87063,6 +87251,7 @@
       "TypeAliases": 1,
       "TypeCastFunctions": 1,
       "TypeCoercion": 1,
+      "TypeCombination": 1,
       "TypeDefinition": 3,
       "TypeHelpers": 1,
       "TypeHelpersImport": 1,

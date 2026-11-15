@@ -310,7 +310,7 @@ test "GAP-0193: SnapshotInstallation - Snapshot cleanup" {
 // CANARY: REQ=REQ-RLS-001; FEATURE="RLSExpressionCompilation"; ASPECT=PolicyParsing; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 test "GAP-0193: RLSExpressionCompilation - Policy parsing" {
     // RLS policy expression parsing
-    var result = try geode.parse(testing.allocator, "MATCH (n) WHERE n.owner = $current_user RETURN n", .{});
+    var result = try geode.parse(testing.allocator, "MATCH (n) WHERE n.owner = $`current_user` RETURN n", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

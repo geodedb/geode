@@ -993,7 +993,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "L2 (Euclidean) distance between vectors",
-        .example = "RETURN vector_l2(n.embedding, $query)",
+        .example = "RETURN vector_l2(n.embedding, $query_vector)",
     },
     .{
         .name = "vector_cosine",
@@ -1005,7 +1005,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Cosine distance between vectors",
-        .example = "RETURN vector_cosine(n.embedding, $query)",
+        .example = "RETURN vector_cosine(n.embedding, $query_vector)",
     },
     .{
         .name = "vector_dot",
@@ -1017,7 +1017,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Dot product of vectors",
-        .example = "RETURN vector_dot(n.embedding, $query)",
+        .example = "RETURN vector_dot(n.embedding, $query_vector)",
     },
     .{
         .name = "distance",
@@ -1030,7 +1030,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Distance between two vectors. metric is one of 'l2'/'euclidean' (default), 'cosine', 'dot'",
-        .example = "RETURN distance(n.embedding, $query, 'euclidean')",
+        .example = "RETURN distance(n.embedding, $query_vector, 'euclidean')",
     },
     .{
         .name = "similarity",
@@ -1043,7 +1043,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Similarity between two vectors. metric is one of 'cosine' (default) or 'dot'; use distance() for 'l2'",
-        .example = "RETURN similarity(n.embedding, $query)",
+        .example = "RETURN similarity(n.embedding, $query_vector)",
     },
     .{
         .name = "cosine",
@@ -1055,7 +1055,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Cosine similarity (alias)",
-        .example = "RETURN cosine(n.embedding, $query)",
+        .example = "RETURN cosine(n.embedding, $query_vector)",
     },
     .{
         .name = "euclidean",
@@ -1067,7 +1067,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Euclidean distance (alias for vector_l2)",
-        .example = "RETURN euclidean(n.embedding, $query)",
+        .example = "RETURN euclidean(n.embedding, $query_vector)",
     },
     .{
         .name = "manhattan",
@@ -1079,7 +1079,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Manhattan (L1) distance between vectors",
-        .example = "RETURN manhattan(n.embedding, $query)",
+        .example = "RETURN manhattan(n.embedding, $query_vector)",
     },
     // docs/@BUGS_731.md bug 8f: `vector_knn` (and its `knn` alias) is a real,
     // dispatched function (src/eval.zig evalVectorKnn) that this catalog did
@@ -1097,7 +1097,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "K nearest node/edge ids by vector property. metric is 'l2'/'euclidean', 'cosine' or 'dot'",
-        .example = "RETURN vector_knn('embedding', $query, 10, 'cosine')",
+        .example = "RETURN vector_knn('embedding', $query_vector, 10, 'cosine')",
     },
     .{
         .name = "knn",
@@ -1111,7 +1111,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Alias of vector_knn",
-        .example = "RETURN knn('embedding', $query, 10, 'l2')",
+        .example = "RETURN knn('embedding', $query_vector, 10, 'l2')",
     },
     // Predicate functions
     .{

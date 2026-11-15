@@ -19,7 +19,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_001_Parser: Full GQL compliance maintained" 
 
         // Aggregation functions
         "MATCH (n) RETURN COUNT(n) AS count",
-        "MATCH (n) RETURN SUM(n.value) AS sum",
+        "MATCH (n) RETURN SUM(n.value) AS `sum`",
         "MATCH (n) RETURN AVG(n.score) AS average",
         "MATCH (n) RETURN MIN(n.age) AS minimum",
         "MATCH (n) RETURN MAX(n.age) AS maximum",
@@ -93,9 +93,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_002_Parser: Error cases still fail correctly
     const error_cases = [_][]const u8{
         "MATCH (n:) RETURN n", // Missing label name
         "RETURN (1 + 2", // Unclosed parenthesis
-        // SONNY-6548: "RETURN MATCH" (a reserved word as an identifier) is
-        // accepted by the parser; reproduced in
-        // tests/test_sonny6548_gql_identifier_words.zig.
+        "RETURN MATCH", // A reserved word as an identifier (ISO/IEC 39075 21.3; SONNY-6564)
         "MATCH (n) SET = value", // Missing property
         "MATCH (n) REMOVE", // Missing property
         "MATCH (n) SET n. = 1", // Missing property name
@@ -126,7 +124,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_003_Parser: Complex integration scenarios" {
         "MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person) RETURN COUNT(path) AS count",
 
         // SET/REMOVE + aggregation + keywords
-        "MATCH (n) SET n.property = 'value' RETURN SUM(n.count) AS sum",
+        "MATCH (n) SET n.property = 'value' RETURN SUM(n.count) AS `sum`",
 
         // Multiple path variables with keywords
         "MATCH path = (a)-[:KNOWS]->(b), route = (b)-[:LIVES_IN]->(c) RETURN length(path) + length(route) AS total",
