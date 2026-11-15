@@ -18621,6 +18621,32 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6602: MFA is not enforced at login (SONNY-6604), and the MFA
+    // procedures and the offline CLI say so; the dead 8-character recovery
+    // code matcher is gone; the MFA rate limiter fails closed. The CLI
+    // regression spawns the built geode binary.
+    const sonny6602_regressions = [_]struct { file: []const u8, step: []const u8, desc: []const u8, spawns: bool }{
+        .{ .file = "tests/test_sonny6602_mfa.zig", .step = "test-sonny6602-mfa", .desc = "Run the SONNY-6602 regression (geode.auth.mfa_setup and mfa_enable answer a warning column saying MFA is not enforced at login, SONNY-6604; mfa.verifyRecoveryCode, which matched 8-character codes only, is gone; an MFA verification whose attempt record cannot be made is refused 53000 without checking the code, and counting a failure in an existing record allocates nothing)", .spawns = false },
+        .{ .file = "tests/test_sonny6602_mfa_cli.zig", .step = "test-sonny6602-mfa-cli", .desc = "Run the SONNY-6602 regression (geode user mfa-setup, geode user mfa enable and their help say MFA is not enforced at login, SONNY-6604, and mfa-setup no longer says its recovery codes can be used; spawns the CLI)", .spawns = true },
+    };
+    for (sonny6602_regressions) |reg| {
+        const mod = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("grpc_impl", sonny1560_shim_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        const reg_tests = b.addTest(.{ .root_module = mod });
+        if (reg.spawns) spawnsBuiltGeode(reg_tests);
+        const run_reg_tests = b.addRunArtifact(reg_tests);
+        shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
+    }
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.
