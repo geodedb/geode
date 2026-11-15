@@ -2542,6 +2542,25 @@
 
 ### Fixed
 
+- **Auth records, cluster apply and index maintenance read node
+  properties with the error-returning getter (SONNY-6612 item 1).** The
+  auth stores read every record field (`hmac`, ids, user / role / grant /
+  policy fields) through helpers over `GraphStore.getNodeProperty`, which
+  returns null for an absent property and for a record that could not be
+  read: `verifyChain` reported `RecordHmacMismatch` (tampering) for a read
+  error, and loaders took field defaults. The helpers and every auth caller
+  now use `getNodePropertyOrError` and fail with the read's error; the
+  role resolver fails closed (no global role). Cluster apply, property
+  mutation, fulltext maintenance and the unbounded MATCH paths read the same
+  way; an index hook that cannot read a value rebuilds the index instead of
+  skipping the node, and CREATE INDEX ... USING fulltext fails its
+  validation with `StorageReadFailed`. Inside `graph_store.zig` the
+  adjacency helpers (`getOutgoingEdges`, `getNeighbors`, `getOutDegree`,
+  `hasEdge`, `getEdgesForNode`, `getEdgesFrom` / `To`) now return the read
+  error, and `getNodePropertyChecked` / `getEdgePropertyChecked` no longer
+  read a failed body as absent. `getOutDegree`, `hasEdge`,
+  `getEdgesForNode`, `getEdgesFrom`, `getEdgesTo` now return error unions.
+  Regression: `zig build test-sonny6612-auth-field-reads`.
 - **Unregistered tenants are refused once tenants are administered; the
   QUIC fast paths check the tenant too (SONNY-6612 item 2).** **BREAKING
   (security / operator):** when the durable tenant registry holds a tenant

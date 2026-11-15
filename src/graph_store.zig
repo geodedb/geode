@@ -8816,8 +8816,10 @@ pub const GraphStore = struct {
     /// decrypt, `FleCatalogUnavailable` while the catalog cannot be loaded.
     /// Never the stored envelope presented as the value. A decrypted or
     /// redacted string is allocated from `allocator`.
-    pub fn getNodePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
-        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+    /// SONNY-6612 (1): a node that cannot be read is the read's error (it
+    /// read as absent).
+    pub fn getNodePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64, key: []const u8) !?PropertyValue {
+        const node = (try self.nodes.getOrHydratePtr(node_id)) orelse return null;
         const value = node.properties.get(key) orelse return null;
         if (value != .String) return value;
         // GAP-0854: the internal security graph is never FLE-encrypted.
@@ -8828,8 +8830,8 @@ pub const GraphStore = struct {
 
     /// SONNY-6327: the edge's property as the requesting principal may see
     /// it, by the same policy as `getNodePropertyChecked`.
-    pub fn getEdgePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, edge_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
-        const edge = self.getEdgeHydrated(edge_id) orelse return null;
+    pub fn getEdgePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, edge_id: u64, key: []const u8) !?PropertyValue {
+        const edge = (try self.getEdgeHydratedChecked(edge_id)) orelse return null;
         const value = edge.properties.get(key) orelse return null;
         if (value != .String) return value;
         if (isSecurityGraphName(edge.graph_name)) return value;
@@ -10143,24 +10145,26 @@ pub const GraphStore = struct {
         return ptr[0..len];
     }
 
-    fn outAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
+    // SONNY-6612 (1): a list that cannot be rebuilt is the hydrate's error,
+    // not "no edges".
+    fn outAdjItems(self: *const GraphStore, node_id: u64) !?[]const u64 {
         const cache: *AdjCache = @constCast(&self.outgoing_edges);
-        const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
         return adjItemsSnapshot(&p.list);
     }
 
-    fn inAdjItems(self: *const GraphStore, node_id: u64) ?[]const u64 {
+    fn inAdjItems(self: *const GraphStore, node_id: u64) !?[]const u64 {
         const cache: *AdjCache = @constCast(&self.incoming_edges);
-        const p = (cache.getOrHydratePtr(node_id) catch return null) orelse return null;
+        const p = (try cache.getOrHydratePtr(node_id)) orelse return null;
         return adjItemsSnapshot(&p.list);
     }
 
     pub fn getOutgoingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return self.outAdjItems(node_id);
+        return self.outAdjItems(node_id) catch null;
     }
 
     pub fn getIncomingEdgeIds(self: *const GraphStore, node_id: u64) ?[]const u64 {
-        return self.inAdjItems(node_id);
+        return self.inAdjItems(node_id) catch null;
     }
 
     // CANARY: REQ=REQ-SONNY-6607-ADJACENCY-PROPERTY-READ-FAILURE; FEATURE="StorageIntegrity"; ASPECT=ErrorReturningGetters; STATUS=TESTED; TEST=tests/test_sonny6607_adjacency_property_read_failure.zig; OWNER=storage; UPDATED=2026-11-15
@@ -10204,7 +10208,7 @@ pub const GraphStore = struct {
 
     pub fn getOutgoingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
         var result: std.ArrayList(Edge) = .empty;
-        if (self.outAdjItems(node_id)) |outgoing| {
+        if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 // PHASE 1: hydrate-on-miss so an evicted edge body still resolves.
                 if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
@@ -10217,7 +10221,7 @@ pub const GraphStore = struct {
 
     pub fn getIncomingEdges(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
         var result: std.ArrayList(Edge) = .empty;
-        if (self.inAdjItems(node_id)) |incoming| {
+        if (try self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
                 if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.*);
@@ -10230,7 +10234,7 @@ pub const GraphStore = struct {
     pub fn getNeighbors(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
         var result: std.ArrayList(u64) = .empty;
         errdefer result.deinit(allocator);
-        if (self.outAdjItems(node_id)) |outgoing| {
+        if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.to_id);
@@ -10242,7 +10246,7 @@ pub const GraphStore = struct {
 
     pub fn getIncomingNodes(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
         var result: std.ArrayList(u64) = .empty;
-        if (self.inAdjItems(node_id)) |incoming| {
+        if (try self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
                 if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.from_id);
@@ -10254,7 +10258,7 @@ pub const GraphStore = struct {
 
     pub fn getOutgoingNodes(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]u64 {
         var result: std.ArrayList(u64) = .empty;
-        if (self.outAdjItems(node_id)) |outgoing| {
+        if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 if ((try self.getEdgePtrHydratedChecked(edge_id))) |edge| {
                     try result.append(allocator, edge.to_id);
@@ -10264,12 +10268,12 @@ pub const GraphStore = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    pub fn getOutDegree(self: *const GraphStore, node_id: u64) usize {
-        return if (self.outAdjItems(node_id)) |outgoing| outgoing.len else 0;
+    pub fn getOutDegree(self: *const GraphStore, node_id: u64) !usize {
+        return if (try self.outAdjItems(node_id)) |outgoing| outgoing.len else 0;
     }
 
-    pub fn hasEdge(self: *const GraphStore, source: u64, target: u64) bool {
-        if (self.outAdjItems(source)) |outgoing| {
+    pub fn hasEdge(self: *const GraphStore, source: u64, target: u64) !bool {
+        if (try self.outAdjItems(source)) |outgoing| {
             for (outgoing) |edge_id| {
                 if (self.getEdgePtrHydrated(edge_id)) |edge| {
                     if (edge.to_id == target) return true;
@@ -10927,13 +10931,13 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; OWNER=perf; UPDATED=2026-02-12
     // Issue #392: Get all edges connected to a node (O(1) lookup instead of O(edges) scan)
     // Issue #450: Use HashSet for O(1) deduplication instead of O(m*n) linear scan
-    pub fn getEdgesForNode(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) std.ArrayList(u64) {
+    pub fn getEdgesForNode(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) !std.ArrayList(u64) {
         var result = std.ArrayList(u64).empty;
         var seen = std.AutoHashMap(u64, void).init(allocator);
         defer seen.deinit();
 
         // Get outgoing edges
-        if (self.outAdjItems(node_id)) |outgoing| {
+        if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 seen.put(edge_id, {}) catch continue;
                 result.append(allocator, edge_id) catch continue;
@@ -10941,7 +10945,7 @@ pub const GraphStore = struct {
         }
 
         // Get incoming edges — deduplicate self-loops via HashSet (#450)
-        if (self.inAdjItems(node_id)) |incoming| {
+        if (try self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
                 if (!seen.contains(edge_id)) {
                     seen.put(edge_id, {}) catch continue;
@@ -11475,9 +11479,9 @@ pub const GraphStore = struct {
     }
 
     /// Deprecated: prefer getOutgoingEdgeIds for zero-copy access.
-    pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
+    pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
         var result: std.ArrayList(Edge) = .empty;
-        if (self.outAdjItems(node_id)) |outgoing| {
+        if (try self.outAdjItems(node_id)) |outgoing| {
             for (outgoing) |edge_id| {
                 if (self.getEdgeHydrated(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
@@ -11488,9 +11492,9 @@ pub const GraphStore = struct {
     }
 
     /// Deprecated: prefer getIncomingEdgeIds for zero-copy access.
-    pub fn getEdgesTo(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
+    pub fn getEdgesTo(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) ![]Edge {
         var result = std.ArrayList(Edge){};
-        if (self.inAdjItems(node_id)) |incoming| {
+        if (try self.inAdjItems(node_id)) |incoming| {
             for (incoming) |edge_id| {
                 if (self.getEdgeHydrated(edge_id)) |edge| {
                     result.append(allocator, edge) catch continue;
@@ -19131,7 +19135,7 @@ test "TestEdgeAdjacencyIndex" {
     try testing.expect(incoming3.?.list.items.len == 2);
 
     // Test getEdgesForNode
-    var edges_for_node1 = store.getEdgesForNode(testing.allocator, node1);
+    var edges_for_node1 = try store.getEdgesForNode(testing.allocator, node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
 }
@@ -19263,8 +19267,8 @@ test "clearNodeProperties removes all node properties" {
 
     const node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
     try testing.expectEqual(@as(usize, 0), node.properties.count());
-    try testing.expect(store.getNodeProperty(node_id, "name") == null);
-    try testing.expect(store.getNodeProperty(node_id, "age") == null);
+    try testing.expect((try store.getNodePropertyOrError(node_id, "name")) == null);
+    try testing.expect((try store.getNodePropertyOrError(node_id, "age")) == null);
 }
 
 test "getGlobalStore initializes adapter from data dir override" {

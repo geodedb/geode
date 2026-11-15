@@ -644,7 +644,8 @@ pub fn removeNodeProperty(
     node: *graph_store.Node,
     key: []const u8,
 ) void {
-    const removed_text = if (store.getNodeProperty(node.id, key)) |pv| pv == .String and pv.String.len > 0 else false;
+    // SONNY-6612 (1): a value that cannot be read may be indexed text.
+    const removed_text = if (store.getNodePropertyOrError(node.id, key)) |maybe| (if (maybe) |pv| pv == .String and pv.String.len > 0 else false) else |_| true;
     store.removeNodeProperty(node.id, key);
     for (node.labels) |label| rebuildAdvancedIndexesForProperty(store, label, key);
     if (removed_text) fts_index_ops.queueRebuildForRemovedText(node.graph_name, node.labels, key);
@@ -699,7 +700,8 @@ fn hasLabel(labels: []const []const u8, label: []const u8) bool {
 /// SONNY-6421: does writing `new` to `key` of `node_id` take indexed-able
 /// text away (the old value a non-empty string the new one does not equal)?
 fn replacesText(store: *graph_store.GraphStore, node_id: u64, key: []const u8, new: ?graph_store.PropertyValue) bool {
-    const old = store.getNodeProperty(node_id, key) orelse return false;
+    // SONNY-6612 (1): an old value that cannot be read may be indexed text.
+    const old = (store.getNodePropertyOrError(node_id, key) catch return true) orelse return false;
     if (old != .String or old.String.len == 0) return false;
     const n = new orelse return true;
     return n != .String or !std.mem.eql(u8, n.String, old.String);
@@ -741,7 +743,9 @@ fn maintainAdvancedIndexesForLabelAdded(store: *graph_store.GraphStore, label: [
     }
     for (properties.items) |property| {
         // Borrowed: the statement's graph lock keeps it alive for the call.
-        const prop = store.getNodeProperty(node_id, property) orelse continue;
+        // SONNY-6612 (1): a value that cannot be read: rebuild the label's
+        // indexes from the store instead of skipping the node.
+        const prop = (store.getNodePropertyOrError(node_id, property) catch return rebuildAdvancedIndexesForLabel(store, label)) orelse continue;
         maintainAdvancedIndexesForNodeWrite(store, label, property, node_id, prop);
     }
 }

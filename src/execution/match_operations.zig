@@ -1878,10 +1878,10 @@ pub fn propertyAggregateFastPath(
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 if (where_pred) |p| {
-                    const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                    const w_val = (try prop_store.getNodePropertyOrError(node_id, p.key)) orelse continue;
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
-                const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+                const t_val = (try prop_store.getNodePropertyOrError(node_id, target_key)) orelse continue;
                 // SONNY-2675: min and max fold the value itself, in the value
                 // order; one they cannot (a string) declines.
                 if (min_or_max) {
@@ -2486,7 +2486,7 @@ pub fn countFilteredFastPath(
                 try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
-                const w_val = prop_store.getNodeProperty(node_id, where_pred.key) orelse continue;
+                const w_val = (try prop_store.getNodePropertyOrError(node_id, where_pred.key)) orelse continue;
                 if (!comparePvLit(w_val, where_pred.op, where_pred.lit)) continue;
                 matched += 1;
             }
@@ -3028,7 +3028,7 @@ pub fn groupByAggregateFastPath(
                 if (!passesTenantFilter(node, filter_tenant)) continue;
 
                 if (where_pred) |p| {
-                    const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                    const w_val = (try prop_store.getNodePropertyOrError(node_id, p.key)) orelse continue;
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
 
@@ -3039,7 +3039,7 @@ pub fn groupByAggregateFastPath(
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
                 const key_w = &key_aw.writer;
                 for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                    const pv: graph_store.PropertyValue = prop_store.getNodeProperty(node_id, kprop) orelse .Null;
+                    const pv: graph_store.PropertyValue = (try prop_store.getNodePropertyOrError(node_id, kprop)) orelse .Null;
                     const key_val = fastPathKeyValue(pv) orelse return null;
                     try distinct_set.writeGroupKeyPart(key_w, ga, key_val);
                     key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
@@ -3065,12 +3065,12 @@ pub fn groupByAggregateFastPath(
                         .group_key => {},
                         .count_star => group.accs[item_acc_idx[i]].count += 1,
                         .count_prop => {
-                            if (prop_store.getNodeProperty(node_id, item_agg_prop[i].?) != null) {
+                            if ((try prop_store.getNodePropertyOrError(node_id, item_agg_prop[i].?)) != null) {
                                 group.accs[item_acc_idx[i]].count += 1;
                             }
                         },
                         .sum, .avg, .min, .max => {
-                            const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
+                            const t_val = (try prop_store.getNodePropertyOrError(node_id, item_agg_prop[i].?)) orelse continue;
                             if (t_val == .Null) continue;
                             // SONNY-2675: min and max fold the value itself, in
                             // the value order. A value this path cannot fold
@@ -3533,7 +3533,7 @@ pub fn topKOrderedFastPath(
                 try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
-                const pv = prop_store.getNodeProperty(node_id, ret_key) orelse {
+                const pv = (try prop_store.getNodePropertyOrError(node_id, ret_key)) orelse {
                     nulls += 1;
                     continue;
                 };

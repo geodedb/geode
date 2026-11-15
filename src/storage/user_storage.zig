@@ -484,31 +484,31 @@ pub const UserStorageBackend = struct {
         const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
-        const id_val = getIntProp(store, node_id, "id", -1);
+        const id_val = (try getIntProp(store, node_id, "id", -1));
         if (id_val < 0) return null;
         const user_id: u64 = @intCast(id_val);
 
         var record = blankUserRecord(user_id);
-        record.username_len = copyIntoField(&record.username, getStringProp(store, node_id, "username", ""));
-        record.email_len = copyIntoField(&record.email, getStringProp(store, node_id, "email", ""));
-        record.password_hash_len = copyIntoField(&record.password_hash, getStringProp(store, node_id, "password_hash", ""));
-        _ = copyIntoField(&record.salt, getStringProp(store, node_id, "salt", ""));
-        record.is_active = getBoolProp(store, node_id, "is_active", true);
-        record.is_superuser = getBoolProp(store, node_id, "is_superuser", false);
-        record.mfa_enabled = getBoolProp(store, node_id, "mfa_enabled", false);
-        record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(store, node_id, "mfa_secret", ""));
+        record.username_len = copyIntoField(&record.username, (try getStringProp(store, node_id, "username", "")));
+        record.email_len = copyIntoField(&record.email, (try getStringProp(store, node_id, "email", "")));
+        record.password_hash_len = copyIntoField(&record.password_hash, (try getStringProp(store, node_id, "password_hash", "")));
+        _ = copyIntoField(&record.salt, (try getStringProp(store, node_id, "salt", "")));
+        record.is_active = (try getBoolProp(store, node_id, "is_active", true));
+        record.is_superuser = (try getBoolProp(store, node_id, "is_superuser", false));
+        record.mfa_enabled = (try getBoolProp(store, node_id, "mfa_enabled", false));
+        record.mfa_secret_len = copyIntoField(&record.mfa_secret, (try getStringProp(store, node_id, "mfa_secret", "")));
         // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-        record.failed_login_attempts = storedInt(u16, getIntProp(store, node_id, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
-        record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
-        record.last_login = getIntProp(store, node_id, "last_login", 0);
-        record.created_at = getIntProp(store, node_id, "created_at", compat_milliTimestamp());
-        record.updated_at = getIntProp(store, node_id, "updated_at", record.created_at);
-        record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(store, node_id, "hash_algorithm", ""));
-        record.is_default_user = getBoolProp(store, node_id, "is_default_user", false);
-        record.password_reset_required = getBoolProp(store, node_id, "password_reset_required", false);
-        record.auth_version = @intCast(@max(1, getIntProp(store, node_id, "auth_version", 1)));
-        record.attributes_json_len = copyIntoField(&record.attributes_json, getStringProp(store, node_id, "attributes_json", ""));
-        record.password_changed_at = getIntProp(store, node_id, "password_changed_at", 0);
+        record.failed_login_attempts = storedInt(u16, (try getIntProp(store, node_id, "failed_login_attempts", 0)), "failed_login_attempts", user_id) orelse return null;
+        record.lockout_until = (try getIntProp(store, node_id, "lockout_until", 0));
+        record.last_login = (try getIntProp(store, node_id, "last_login", 0));
+        record.created_at = try getIntProp(store, node_id, "created_at", compat_milliTimestamp());
+        record.updated_at = (try getIntProp(store, node_id, "updated_at", record.created_at));
+        record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, (try getStringProp(store, node_id, "hash_algorithm", "")));
+        record.is_default_user = (try getBoolProp(store, node_id, "is_default_user", false));
+        record.password_reset_required = (try getBoolProp(store, node_id, "password_reset_required", false));
+        record.auth_version = @intCast(@max(1, (try getIntProp(store, node_id, "auth_version", 1))));
+        record.attributes_json_len = copyIntoField(&record.attributes_json, (try getStringProp(store, node_id, "attributes_json", "")));
+        record.password_changed_at = (try getIntProp(store, node_id, "password_changed_at", 0));
         return record;
     }
 
@@ -766,19 +766,19 @@ pub const UserStorageBackend = struct {
             const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const role_id: u64 = @intCast(id_val);
 
             var record = blankRoleRecord(role_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
-            record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
-            record.parent_role = @intCast(@max(0, getIntProp(self.store, node_id, "parent_role", 0)));
+            record.name_len = copyIntoField(&record.name, (try getStringProp(self.store, node_id, "name", "")));
+            record.description_len = copyIntoField(&record.description, (try getStringProp(self.store, node_id, "description", "")));
+            record.parent_role = @intCast(@max(0, (try getIntProp(self.store, node_id, "parent_role", 0))));
             // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-            record.priority = storedInt(u32, getIntProp(self.store, node_id, "priority", 0), "priority", role_id) orelse continue;
-            record.is_system = getBoolProp(self.store, node_id, "is_system", false);
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
-            record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
+            record.priority = storedInt(u32, (try getIntProp(self.store, node_id, "priority", 0)), "priority", role_id) orelse continue;
+            record.is_system = (try getBoolProp(self.store, node_id, "is_system", false));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.updated_at = (try getIntProp(self.store, node_id, "updated_at", record.created_at));
 
             try self.role_cache.put(role_id, record);
             try self.role_nodes.put(role_id, node_id);
@@ -795,17 +795,17 @@ pub const UserStorageBackend = struct {
             const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const perm_id: u64 = @intCast(id_val);
 
             var record = blankPermissionRecord(perm_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
-            record.resource_len = copyIntoField(&record.resource, getStringProp(self.store, node_id, "resource", ""));
+            record.name_len = copyIntoField(&record.name, (try getStringProp(self.store, node_id, "name", "")));
+            record.resource_len = copyIntoField(&record.resource, (try getStringProp(self.store, node_id, "resource", "")));
             // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", perm_id) orelse continue;
-            record.conditions_len = copyIntoField(&record.conditions, getStringProp(self.store, node_id, "conditions", ""));
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.action = storedInt(u8, (try getIntProp(self.store, node_id, "action", 0)), "action", perm_id) orelse continue;
+            record.conditions_len = copyIntoField(&record.conditions, (try getStringProp(self.store, node_id, "conditions", "")));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
 
             try self.permission_cache.put(perm_id, record);
             try self.permission_nodes.put(perm_id, node_id);
@@ -822,41 +822,41 @@ pub const UserStorageBackend = struct {
             const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const policy_id: u64 = @intCast(id_val);
 
             var record = blankPolicyRecord(policy_id);
-            const stored_name = getStringProp(self.store, node_id, "name", "");
-            const stored_graph = getStringProp(self.store, node_id, "graph", "");
-            const stored_using = getStringProp(self.store, node_id, "using_clause", "");
-            const stored_check = getStringProp(self.store, node_id, "check_clause", "");
+            const stored_name = (try getStringProp(self.store, node_id, "name", ""));
+            const stored_graph = (try getStringProp(self.store, node_id, "graph", ""));
+            const stored_using = (try getStringProp(self.store, node_id, "using_clause", ""));
+            const stored_check = (try getStringProp(self.store, node_id, "check_clause", ""));
             record.name_len = copyIntoField(&record.name, stored_name);
-            record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
+            record.description_len = copyIntoField(&record.description, (try getStringProp(self.store, node_id, "description", "")));
             record.graph_len = copyIntoField(&record.graph, stored_graph);
-            record.table_len = copyIntoField(&record.table, getStringProp(self.store, node_id, "table", ""));
+            record.table_len = copyIntoField(&record.table, (try getStringProp(self.store, node_id, "table", "")));
             // SONNY-2757 (P29): an operation or audit level out of range makes
             // the record malformed (below): it loads nowhere, and its HMAC no
             // longer verifies. It used to abort a safe build here, at
             // startup, before the chain was checked.
-            const stored_operation = storedInt(u8, getIntProp(self.store, node_id, "operation", 0), "operation", policy_id);
+            const stored_operation = storedInt(u8, (try getIntProp(self.store, node_id, "operation", 0)), "operation", policy_id);
             record.operation = stored_operation orelse 0;
-            record.permissive = getBoolProp(self.store, node_id, "permissive", false);
-            record.enabled = getBoolProp(self.store, node_id, "enabled", true);
+            record.permissive = (try getBoolProp(self.store, node_id, "permissive", false));
+            record.enabled = (try getBoolProp(self.store, node_id, "enabled", true));
             // SONNY-2750: the kind, decoded strictly, and whether a property
             // the policy needs is missing: its default must not stand in for
             // it (an absent `enabled` read as true, an absent USING text as
             // "true").
-            record.kind = PolicyKind.fromProperty(self.store.getNodeProperty(node_id, "kind"));
-            if (record.kind == .legacy) record.legacy_shape = legacyPolicyShape(self.store, node_id);
-            record.malformed = !hasProp(self.store, node_id, "name", .String) or
-                !hasProp(self.store, node_id, "graph", .String) or
-                !hasProp(self.store, node_id, "operation", .Int) or
-                !hasProp(self.store, node_id, "permissive", .Bool) or
-                !hasProp(self.store, node_id, "enabled", .Bool) or
+            record.kind = PolicyKind.fromProperty((try self.store.getNodePropertyOrError(node_id, "kind")));
+            if (record.kind == .legacy) record.legacy_shape = (try legacyPolicyShape(self.store, node_id));
+            record.malformed = !(try hasProp(self.store, node_id, "name", .String)) or
+                !(try hasProp(self.store, node_id, "graph", .String)) or
+                !(try hasProp(self.store, node_id, "operation", .Int)) or
+                !(try hasProp(self.store, node_id, "permissive", .Bool)) or
+                !(try hasProp(self.store, node_id, "enabled", .Bool)) or
                 // Since SONNY-2750 a GPS record stores its USING text even
                 // when it is "true"; a legacy one omitted it for "true".
-                (record.kind == .gps and !hasProp(self.store, node_id, "using_clause", .String));
+                (record.kind == .gps and !(try hasProp(self.store, node_id, "using_clause", .String)));
             // CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=OverlongStoredPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2731: a stored name, graph or clause longer than its field
             // (persistPolicy never writes one; an older or foreign writer
@@ -877,12 +877,12 @@ pub const UserStorageBackend = struct {
                 record.using_clause_len = copyIntoField(&record.using_clause, stored_using);
                 record.check_clause_len = copyIntoField(&record.check_clause, stored_check);
             }
-            const stored_audit_level = storedInt(u8, getIntProp(self.store, node_id, "audit_level", 0), "audit_level", policy_id);
+            const stored_audit_level = storedInt(u8, (try getIntProp(self.store, node_id, "audit_level", 0)), "audit_level", policy_id);
             record.audit_level = stored_audit_level orelse 0;
             if (stored_operation == null or stored_audit_level == null) record.malformed = true;
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
-            record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
-            record.created_by = @intCast(@max(0, getIntProp(self.store, node_id, "created_by", 0)));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.updated_at = (try getIntProp(self.store, node_id, "updated_at", record.created_at));
+            record.created_by = @intCast(@max(0, (try getIntProp(self.store, node_id, "created_by", 0))));
 
             try self.policy_cache.put(policy_id, record);
             try self.policy_nodes.put(policy_id, node_id);
@@ -911,12 +911,12 @@ pub const UserStorageBackend = struct {
     /// startup every clamped grant collapsed onto one key, and its HMAC (sealed
     /// under the real id) failed to verify. Deriving the id from the fields the
     /// HMAC already covers gives the real id for new and existing records.
-    fn graphGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) ?u64 {
-        const uid_val = getIntProp(store, node_id, "user_id", -1);
+    fn graphGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) !?u64 {
+        const uid_val = (try getIntProp(store, node_id, "user_id", -1));
         if (uid_val < 0) return null;
-        const action_val = getIntProp(store, node_id, "action", -1);
+        const action_val = (try getIntProp(store, node_id, "action", -1));
         if (action_val < 0 or action_val > std.math.maxInt(u8)) return null;
-        const graph = getStringProp(store, node_id, "graph_name", "");
+        const graph = (try getStringProp(store, node_id, "graph_name", ""));
         return graphGrantId(@intCast(uid_val), graph, @intCast(action_val));
     }
 
@@ -933,8 +933,8 @@ pub const UserStorageBackend = struct {
             // A record whose fields do not give an id (tampered: SONNY-2757) is
             // still mapped, under its stored id, so the chain verification
             // sees it and its HMAC fails rather than the record being skipped.
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse
-                @as(u64, @bitCast(getIntProp(self.store, node_id, "id", -1)));
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse
+                @as(u64, @bitCast((try getIntProp(self.store, node_id, "id", -1))));
 
             try self.graph_grant_nodes.put(grant_id, node_id);
         }
@@ -967,18 +967,18 @@ pub const UserStorageBackend = struct {
             const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse continue;
 
-            const uid_val = getIntProp(self.store, node_id, "user_id", -1);
+            const uid_val = (try getIntProp(self.store, node_id, "user_id", -1));
             if (uid_val < 0) continue;
             const stored_user_id: u64 = @intCast(uid_val);
             if (stored_user_id != user_id) continue;
 
             // SONNY-2757 (P29): an action out of range matches nothing.
-            const stored_action = storedInt(u8, getIntProp(self.store, node_id, "action", -1), "action", grant_id) orelse continue;
+            const stored_action = storedInt(u8, (try getIntProp(self.store, node_id, "action", -1)), "action", grant_id) orelse continue;
             if (stored_action != action) continue;
 
-            const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
+            const stored_graph = (try getStringProp(self.store, node_id, "graph_name", ""));
             if (!std.mem.eql(u8, stored_graph, graph_name)) continue;
 
             // Found the matching grant. SONNY-1333: the node goes first, and
@@ -1052,16 +1052,16 @@ pub const UserStorageBackend = struct {
             const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse continue;
 
             var record = blankGraphGrantRecord(grant_id);
-            const uid_val = getIntProp(self.store, node_id, "user_id", 0);
+            const uid_val = (try getIntProp(self.store, node_id, "user_id", 0));
             record.user_id = if (uid_val >= 0) @intCast(uid_val) else 0;
-            record.graph_name_len = copyIntoField(&record.graph_name, getStringProp(self.store, node_id, "graph_name", ""));
+            record.graph_name_len = copyIntoField(&record.graph_name, (try getStringProp(self.store, node_id, "graph_name", "")));
             // SONNY-2757 (P29): out of range, the record is tampered: not listed.
-            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", grant_id) orelse continue;
-            record.granted_at = getIntProp(self.store, node_id, "granted_at", compat_timestamp());
-            const gb_val = getIntProp(self.store, node_id, "granted_by", 0);
+            record.action = storedInt(u8, (try getIntProp(self.store, node_id, "action", 0)), "action", grant_id) orelse continue;
+            record.granted_at = try getIntProp(self.store, node_id, "granted_at", compat_timestamp());
+            const gb_val = (try getIntProp(self.store, node_id, "granted_by", 0));
             record.granted_by = if (gb_val >= 0) @intCast(gb_val) else 0;
 
             try records.append(allocator, record);
@@ -1088,10 +1088,10 @@ pub const UserStorageBackend = struct {
         return h.final();
     }
 
-    fn fleRoleGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) ?u64 {
-        const uid_val = getIntProp(store, node_id, "user_id", -1);
+    fn fleRoleGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) !?u64 {
+        const uid_val = (try getIntProp(store, node_id, "user_id", -1));
         if (uid_val < 0) return null;
-        const role = getStringProp(store, node_id, "role", "");
+        const role = (try getStringProp(store, node_id, "role", ""));
         if (role.len == 0) return null;
         return fleRoleGrantId(@intCast(uid_val), role);
     }
@@ -1104,8 +1104,8 @@ pub const UserStorageBackend = struct {
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
             // As for GraphGrant: a record whose fields give no id is still
             // mapped (under its stored id) so the chain check sees it.
-            const grant_id = fleRoleGrantIdFromNode(self.store, node_id) orelse
-                @as(u64, @bitCast(getIntProp(self.store, node_id, "id", -1)));
+            const grant_id = (try fleRoleGrantIdFromNode(self.store, node_id)) orelse
+                @as(u64, @bitCast((try getIntProp(self.store, node_id, "id", -1))));
             try self.fle_role_grant_nodes.put(grant_id, node_id);
         }
     }
@@ -1138,7 +1138,7 @@ pub const UserStorageBackend = struct {
         defer doomed.deinit(self.allocator);
         var it = self.fle_role_grant_nodes.iterator();
         while (it.next()) |e| {
-            if (getIntProp(self.store, e.value_ptr.*, "user_id", -1) == safeI64(user_id)) try doomed.append(self.allocator, e.key_ptr.*);
+            if ((try getIntProp(self.store, e.value_ptr.*, "user_id", -1)) == safeI64(user_id)) try doomed.append(self.allocator, e.key_ptr.*);
         }
         for (doomed.items) |id| {
             if (self.fle_role_grant_nodes.fetchRemove(id)) |kv| self.store.deleteNode(kv.value);
@@ -1154,12 +1154,12 @@ pub const UserStorageBackend = struct {
         var it = self.fle_role_grant_nodes.iterator();
         while (it.next()) |e| {
             const node_id = e.value_ptr.*;
-            const id = fleRoleGrantIdFromNode(self.store, node_id) orelse continue;
+            const id = (try fleRoleGrantIdFromNode(self.store, node_id)) orelse continue;
             if (id != e.key_ptr.*) continue;
             try out.append(allocator, .{
                 .id = id,
-                .user_id = @intCast(getIntProp(self.store, node_id, "user_id", 0)),
-                .role = getStringProp(self.store, node_id, "role", ""),
+                .user_id = @intCast((try getIntProp(self.store, node_id, "user_id", 0))),
+                .role = (try getStringProp(self.store, node_id, "role", "")),
             });
         }
         return out.toOwnedSlice(allocator);
@@ -1523,11 +1523,11 @@ pub const UserStorageBackend = struct {
             .node_id = node_id,
         };
 
-        record.chain_hash_len = copyIntoField(&record.chain_hash, getStringProp(self.store, node_id, "chain_hash", ""));
-        const count_val = getIntProp(self.store, node_id, "record_count", 0);
+        record.chain_hash_len = copyIntoField(&record.chain_hash, (try getStringProp(self.store, node_id, "chain_hash", "")));
+        const count_val = (try getIntProp(self.store, node_id, "record_count", 0));
         record.record_count = if (count_val >= 0) @intCast(count_val) else 0;
-        record.last_verified = getIntProp(self.store, node_id, "last_verified", 0);
-        record.hmac_key_id_len = copyIntoField(&record.hmac_key_id, getStringProp(self.store, node_id, "hmac_key_id", ""));
+        record.last_verified = (try getIntProp(self.store, node_id, "last_verified", 0));
+        record.hmac_key_id_len = copyIntoField(&record.hmac_key_id, (try getStringProp(self.store, node_id, "hmac_key_id", "")));
 
         // Only return if we actually have a chain hash stored
         if (record.chain_hash_len == 0) return null;
@@ -1924,8 +1924,8 @@ pub const UserStorageBackend = struct {
         return @intCast(len);
     }
 
-    fn getStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: []const u8) []const u8 {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: []const u8) ![]const u8 {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .String) return val.String;
         }
         return default;
@@ -1948,16 +1948,16 @@ pub const UserStorageBackend = struct {
         };
     }
 
-    fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) i64 {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) !i64 {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .Int) return val.Int;
         }
         return default;
     }
 
     /// SONNY-2750: does node `node_id` have property `key`, of type `tag`?
-    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) bool {
-        const val = store.getNodeProperty(node_id, key) orelse return false;
+    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) !bool {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return false;
         return val == tag;
     }
 
@@ -1970,30 +1970,30 @@ pub const UserStorageBackend = struct {
     /// `geode auth policy create` a table and an empty graph. A record that
     /// lacks a property this reads, or has one of another type, is
     /// `.invalid`: a missing property is never read as the value GPS wrote.
-    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) PolicyKind {
-        const description = exactStringProp(store, node_id, "description") orelse return .invalid;
-        const graph = exactStringProp(store, node_id, "graph") orelse return .invalid;
-        const table = exactStringProp(store, node_id, "table") orelse return .invalid;
-        const audit_level = exactIntProp(store, node_id, "audit_level") orelse return .invalid;
-        const created_by = exactIntProp(store, node_id, "created_by") orelse return .invalid;
-        const has_check = store.getNodeProperty(node_id, "check_clause") != null;
+    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) !PolicyKind {
+        const description = (try exactStringProp(store, node_id, "description")) orelse return .invalid;
+        const graph = (try exactStringProp(store, node_id, "graph")) orelse return .invalid;
+        const table = (try exactStringProp(store, node_id, "table")) orelse return .invalid;
+        const audit_level = (try exactIntProp(store, node_id, "audit_level")) orelse return .invalid;
+        const created_by = (try exactIntProp(store, node_id, "created_by")) orelse return .invalid;
+        const has_check = (try store.getNodePropertyOrError(node_id, "check_clause")) != null;
         const gps_shape = description.len == 0 and table.len == 0 and graph.len != 0 and !has_check and
             audit_level == 0 and created_by == 0;
         return if (gps_shape) .gps else .rls;
     }
 
-    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?[]const u8 {
-        const val = store.getNodeProperty(node_id, key) orelse return null;
+    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) !?[]const u8 {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return null;
         return if (val == .String) val.String else null;
     }
 
-    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?i64 {
-        const val = store.getNodeProperty(node_id, key) orelse return null;
+    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) !?i64 {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return null;
         return if (val == .Int) val.Int else null;
     }
 
-    fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) bool {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) !bool {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .Bool) return val.Bool;
         }
         return default;
@@ -2198,7 +2198,7 @@ test "persistUserWithHmac stores hmac property on graph node" {
     // Verify the hmac property is stored on the graph node (64 hex chars)
     const node_id = backend.user_nodes.get(1);
     try testing.expect(node_id != null);
-    const hmac_prop = store.getNodeProperty(node_id.?, "hmac");
+    const hmac_prop = (try store.getNodePropertyOrError(node_id.?, "hmac"));
     try testing.expect(hmac_prop != null);
     try testing.expect(hmac_prop.? == .String);
     try testing.expectEqual(@as(usize, 64), hmac_prop.?.String.len);
@@ -2332,19 +2332,19 @@ test "new UserRecord fields persist and reload from graph" {
 
     // Verify values in the graph node
     const node_id = backend.user_nodes.get(10).?;
-    const algo = store.getNodeProperty(node_id, "hash_algorithm");
+    const algo = (try store.getNodePropertyOrError(node_id, "hash_algorithm"));
     try testing.expect(algo != null);
     try testing.expect(std.mem.eql(u8, algo.?.String, "argon2id"));
 
-    const default_user = store.getNodeProperty(node_id, "is_default_user");
+    const default_user = (try store.getNodePropertyOrError(node_id, "is_default_user"));
     try testing.expect(default_user != null);
     try testing.expect(default_user.?.Bool == true);
 
-    const reset_req = store.getNodeProperty(node_id, "password_reset_required");
+    const reset_req = (try store.getNodePropertyOrError(node_id, "password_reset_required"));
     try testing.expect(reset_req != null);
     try testing.expect(reset_req.?.Bool == true);
 
-    const pwd_changed = store.getNodeProperty(node_id, "password_changed_at");
+    const pwd_changed = (try store.getNodePropertyOrError(node_id, "password_changed_at"));
     try testing.expect(pwd_changed != null);
     try testing.expectEqual(@as(i64, 1700000000), pwd_changed.?.Int);
 }

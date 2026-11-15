@@ -185,7 +185,7 @@ test "P0-adj: residentCount plateaus at/below cap for a high-degree parent; read
     while (j < got.len) : (j += 1) try testing.expect(got[j] != got[j - 1]);
 
     // CRUX 3 — degree is exact (== K) regardless of residency.
-    try testing.expectEqual(K, h.store.getOutDegree(source));
+    try testing.expectEqual(K, try h.store.getOutDegree(source));
 
     // CRUX 4 — hydrate-on-miss on the MANY-entry (incoming) side: read a sample
     // of targets' incoming adjacency; each must resolve back to `source` even
@@ -343,7 +343,7 @@ test "P0-adj: creating edges on an evicted node, then reading, reflects ALL edge
     var j: usize = 1;
     while (j < got.len) : (j += 1) try testing.expect(got[j] != got[j - 1]);
 
-    try testing.expectEqual(@as(usize, 5), h.store.getOutDegree(subject));
+    try testing.expectEqual(@as(usize, 5), try h.store.getOutDegree(subject));
 
     // Residency still bounded.
     try testing.expect(h.store.outgoing_edges.residentCount() <= CAP);
@@ -431,7 +431,7 @@ test "P0-adj: deep-chain + high-fanout taxonomy graph traverses correctly under 
     try testing.expectEqual(two_hop, try h.runCount(aa, "MATCH (a:Taxon)-[:PARENT_OF]->(b:Taxon)-[:PARENT_OF]->(c:Taxon) RETURN count(c) AS c"));
 
     // --- Degree of the high-fanout root is exact, hydrated from the engine. ---
-    try testing.expectEqual(FANOUT, h.store.getOutDegree(star_root));
+    try testing.expectEqual(FANOUT, try h.store.getOutDegree(star_root));
 
     // --- Variable-length traversal through the executor: the chain head reaches
     // exactly one node at each depth d (1..several). Exercises repeated

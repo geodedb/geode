@@ -127,7 +127,7 @@ test "Random walk generation and transition probabilities" {
     try expectEqual(@as(u64, 1), walk.path.items[0]);
 
     // Test transition probabilities
-    const prob_uniform = walk.transitionProbability(2, &graph);
+    const prob_uniform = try walk.transitionProbability(2, &graph);
     try expectApproxEqRel(@as(f64, 1.0), prob_uniform, 0.001);
 
     // Test biased walk parameters
@@ -137,7 +137,7 @@ test "Random walk generation and transition probabilities" {
     biased_walk.current_node = 1;
 
     // Test return probability (to previous node)
-    const prob_return = biased_walk.transitionProbability(3, &graph);
+    const prob_return = try biased_walk.transitionProbability(3, &graph);
     try expectApproxEqRel(@as(f64, 0.5), prob_return, 0.001); // 1.0 / p = 1.0 / 2.0
 }
 

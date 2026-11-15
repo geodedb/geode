@@ -187,7 +187,7 @@ test "P1-edge: edges.residentCount plateaus at/below cap for a high-edge-count g
 
     // CRUX 4 — getOutDegree (adjacency) == K; the parent's out-edge bodies all
     // resolve (hydrate-on-miss) so getOutgoingEdges returns K complete edges.
-    try testing.expectEqual(K, h.store.getOutDegree(parent));
+    try testing.expectEqual(K, try h.store.getOutDegree(parent));
     {
         const out_edges = try h.store.getOutgoingEdges(testing.allocator, parent);
         defer testing.allocator.free(out_edges);

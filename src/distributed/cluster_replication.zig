@@ -135,7 +135,8 @@ inline fn fireFtsFlush(store: *GraphStore) void {
 /// away from the node? As `property_mutation.replacesText`.
 fn losesText(store: *GraphStore, node_id: u64, key: []const u8, new: ?PropertyValue) bool {
     if (g_fts_apply_text_hooks == null) return false;
-    const old = store.getNodeProperty(node_id, key) orelse return false;
+    // SONNY-6612 (1): an old value that cannot be read may be indexed text.
+    const old = (store.getNodePropertyOrError(node_id, key) catch return true) orelse return false;
     if (old != .String or old.String.len == 0) return false;
     const n = new orelse return true;
     return n != .String or !std.mem.eql(u8, n.String, old.String);
@@ -1729,9 +1730,9 @@ test "node-create payload round-trips through serialize -> apply" {
     try std.testing.expect(store.graphs.contains("g1"));
 
     // The node carries the replicated properties.
-    try std.testing.expectEqual(@as(i64, 42), (store.getNodeProperty(node_id, "v").?).Int);
-    try std.testing.expectEqualStrings("alice", (store.getNodeProperty(node_id, "name").?).String);
-    try std.testing.expectEqual(true, (store.getNodeProperty(node_id, "active").?).Bool);
+    try std.testing.expectEqual(@as(i64, 42), ((try store.getNodePropertyOrError(node_id, "v")).?).Int);
+    try std.testing.expectEqualStrings("alice", ((try store.getNodePropertyOrError(node_id, "name")).?).String);
+    try std.testing.expectEqual(true, ((try store.getNodePropertyOrError(node_id, "active")).?).Bool);
 }
 
 test "two committed entries get deterministic raft-index-derived ids on every node" {
@@ -1811,8 +1812,8 @@ test "GNC2 edge-create round-trips: 2 nodes + 1 positional edge" {
     const n0 = deriveMultiNodeId(10, 0);
     const n1 = deriveMultiNodeId(10, 1);
     const e0 = deriveMultiEdgeId(10, 0);
-    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(n0, "k").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(n1, "k").?.Int);
+    try std.testing.expectEqual(@as(i64, 1), (try store.getNodePropertyOrError(n0, "k")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(n1, "k")).?.Int);
     const edge = store.edges.get(e0).?;
     try std.testing.expectEqual(n0, edge.from_id);
     try std.testing.expectEqual(n1, edge.to_id);
@@ -2071,7 +2072,7 @@ test "GMRG merge round-trips: matched node + ON MATCH SET overwrites by id" {
 
     const node_id = try applyMergePayload(a, &store, payload);
     try std.testing.expectEqual(@as(u64, 77), node_id);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(77, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(77, "v")).?.Int);
 }
 
 test "GMRG apply is idempotent across restart re-apply (set-by-id overwrite)" {
@@ -2087,7 +2088,7 @@ test "GMRG apply is idempotent across restart re-apply (set-by-id overwrite)" {
     _ = try applyMergePayload(a, &store, payload);
     _ = try applyMergePayload(a, &store, payload); // restart replay — clean overwrite
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqualStrings("bob", store.getNodeProperty(5, "name").?.String);
+    try std.testing.expectEqualStrings("bob", (try store.getNodePropertyOrError(5, "name")).?.String);
 }
 
 test "GMRG truncated payload is rejected, not crashed" {
@@ -2121,7 +2122,7 @@ test "GUPD set round-trips: SET n.v = 2 overwrites by stable id" {
 
     const applied = try applyUpdatePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 1), applied);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(33, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(33, "v")).?.Int);
 }
 
 test "GUPD apply is idempotent across restart re-apply (set-by-id overwrite)" {
@@ -2138,7 +2139,7 @@ test "GUPD apply is idempotent across restart re-apply (set-by-id overwrite)" {
     _ = try applyUpdatePayload(a, &store, payload);
     _ = try applyUpdatePayload(a, &store, payload); // restart replay — clean overwrite
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqualStrings("carol", store.getNodeProperty(7, "name").?.String);
+    try std.testing.expectEqualStrings("carol", (try store.getNodePropertyOrError(7, "name")).?.String);
 }
 
 test "GUPD remove of an absent prop is a clean no-op" {
@@ -2157,8 +2158,8 @@ test "GUPD remove of an absent prop is a clean no-op" {
     _ = try applyUpdatePayload(a, &store, payload);
     _ = try applyUpdatePayload(a, &store, payload); // re-apply — still a no-op
     // The untouched property survives; the absent removes did nothing.
-    try std.testing.expectEqual(@as(i64, 5), store.getNodeProperty(9, "keep").?.Int);
-    try std.testing.expect(store.getNodeProperty(9, "ghost") == null);
+    try std.testing.expectEqual(@as(i64, 5), (try store.getNodePropertyOrError(9, "keep")).?.Int);
+    try std.testing.expect((try store.getNodePropertyOrError(9, "ghost")) == null);
 }
 
 test "GUPD remove of a present prop deletes it" {
@@ -2176,8 +2177,8 @@ test "GUPD remove of a present prop deletes it" {
     defer a.free(payload);
 
     _ = try applyUpdatePayload(a, &store, payload);
-    try std.testing.expect(store.getNodeProperty(11, "drop") == null);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(11, "keep").?.Int);
+    try std.testing.expect((try store.getNodePropertyOrError(11, "drop")) == null);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(11, "keep")).?.Int);
 }
 
 test "GUPD label add/remove round-trips by stable id" {
@@ -2227,9 +2228,9 @@ test "GUPD multi-node update payload sets every bound node" {
 
     const applied = try applyUpdatePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 3), applied);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(100, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(101, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(102, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(100, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(101, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(102, "v")).?.Int);
 }
 
 test "GUPD cross-store convergence: two stores apply same payload -> identical state" {
@@ -2249,8 +2250,8 @@ test "GUPD cross-store convergence: two stores apply same payload -> identical s
 
     _ = try applyUpdatePayload(a, &s1, payload);
     _ = try applyUpdatePayload(a, &s2, payload);
-    try std.testing.expectEqual(@as(i64, 9), s1.getNodeProperty(50, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 9), s2.getNodeProperty(50, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 9), (try s1.getNodePropertyOrError(50, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 9), (try s2.getNodePropertyOrError(50, "v")).?.Int);
 }
 
 test "GUPD over-cap update set is rejected at serialize time" {
