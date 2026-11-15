@@ -10768,6 +10768,42 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6567_gs_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6567_gs_step = b.step("test-sonny6567-grpc-stream-ids", "Run SONNY-6567 item 1 regression against a real server with a plaintext gRPC listener: a HELLO, eight Execute RPCs, a response far larger than the connection flow-control window and one more Execute all succeed on ONE connection (each RPC on its own odd, increasing HTTP/2 stream id); a multi-statement --file over gRPC succeeds; the stream-id allocator refuses to wrap");
     sonny6567_gs_step.dependOn(&run_sonny6567_gs_tests.step);
+    // SONNY-6567 (2): a db.* listing whose node or edge body cannot be read
+    // fails; it never answers a short list.
+    const sonny6567_hg_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_hydrated_getter_errors.zig"), .target = target, .optimize = optimize });
+    sonny6567_hg_test_mod.link_libc = true;
+    sonny6567_hg_test_mod.addImport("geode", root_mod);
+    sonny6567_hg_test_mod.addImport("logging", logging_mod);
+    sonny6567_hg_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6567_hg_tests = b.addTest(.{ .root_module = sonny6567_hg_test_mod });
+    const run_sonny6567_hg_tests = b.addRunArtifact(sonny6567_hg_tests);
+    shardDep(test_step, &run_sonny6567_hg_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_hg_step = b.step("test-sonny6567-hydrated-getter-errors", "Run SONNY-6567 item 2 regression (a durable store on an allocator made to fail from each allocation on, every node and edge body evicted: db.propertyKeys() and db.relationshipTypes(), with and without an RLS label deny, either fail or answer exactly the healthy listing; an unreadable body is never taken for an absent one)");
+    sonny6567_hg_step.dependOn(&run_sonny6567_hg_tests.step);
+    // SONNY-6567 (3): a fulltext hit whose node cannot be read fails the
+    // search; a deleted node's hit is skipped; another tenant's is filtered.
+    const sonny6567_fts_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_fts_unreadable_hit.zig"), .target = target, .optimize = optimize });
+    sonny6567_fts_test_mod.link_libc = true;
+    sonny6567_fts_test_mod.addImport("geode", root_mod);
+    const sonny6567_fts_tests = b.addTest(.{ .root_module = sonny6567_fts_test_mod });
+    const run_sonny6567_fts_tests = b.addRunArtifact(sonny6567_fts_tests);
+    shardDep(test_step, &run_sonny6567_fts_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_fts_step = b.step("test-sonny6567-fts-unreadable-hit", "Run SONNY-6567 item 3 regression (CALL geode.fts.search over an evicted node with the store's allocations failing from each one on either fails or returns the hit, never succeeds without it; a hit for a node deleted since indexing is skipped; another tenant's hit is filtered, not an error)");
+    sonny6567_fts_step.dependOn(&run_sonny6567_fts_tests.step);
+    // SONNY-6567 (4): a tenant DROP that fails part-way fails, leaves the
+    // registry consistent in memory and on disk, and can be retried after a
+    // restart.
+    const sonny6567_td_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6567_tenant_drop_failures.zig"), .target = target, .optimize = optimize });
+    sonny6567_td_test_mod.link_libc = true;
+    sonny6567_td_test_mod.addImport("geode", root_mod);
+    sonny6567_td_test_mod.addImport("logging", logging_mod);
+    sonny6567_td_test_mod.addImport("rls", rls_mod);
+    sonny6567_td_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6567_td_tests = b.addTest(.{ .root_module = sonny6567_td_test_mod });
+    const run_sonny6567_td_tests = b.addRunArtifact(sonny6567_td_tests);
+    shardDep(test_step, &run_sonny6567_td_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6567_td_step = b.step("test-sonny6567-tenant-drop-failures", "Run SONNY-6567 item 4 regression (a durable tenant registry: CALL geode.tenant.drop(t, true) with the registry's, then the statement's, allocations failing from each one on either drops the tenant subtree or fails leaving the tenant registered and marked as being dropped; memory and the registry file always agree; after a restart (registry reopened, hierarchy rebuilt) a retry finishes the drop; no child tenant can be created under a tenant being dropped)");
+    sonny6567_td_step.dependOn(&run_sonny6567_td_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

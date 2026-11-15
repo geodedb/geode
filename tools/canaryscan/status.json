@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T12:02:38.045573879Z",
+  "generated_at": "2026-11-15T12:08:53.792812377Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79287,6 +79287,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6567-FTS-UNREADABLE-HIT",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_fts_unreadable_hit.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6567-GRPC-STREAM-IDS",
       "features": [
         {
@@ -79315,6 +79334,44 @@
           ],
           "benches": [],
           "owner": "transport",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-HYDRATED-GETTER-ERRORS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_hydrated_getter_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-14"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6567-TENANT-DROP-FAILURES",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6567_tenant_drop_failures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
           "updated": "2026-11-14"
         }
       ]
@@ -84422,7 +84479,7 @@
       "COMPLETE": 2,
       "EXEMPT": 210,
       "IMPL": 543,
-      "TESTED": 4185
+      "TESTED": 4188
     },
     "by_aspect": {
       "2PC": 3,
@@ -87220,7 +87277,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 361,
+      "Regression": 364,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
