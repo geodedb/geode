@@ -13933,6 +13933,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
     shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6555 item 3: a column the ordered index cannot serve is declined before its build starts. See tests/test_sonny6555_ordered_build_probe.zig.
+    const sonny6555_obp_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_ordered_build_probe.zig"), .target = target, .optimize = optimize });
+    sonny6555_obp_mod.addImport("geode", root_mod);
+    sonny6555_obp_mod.addImport("logging", logging_mod);
+    sonny6555_obp_mod.link_libc = true;
+    const sonny6555_obp_tests = b.addTest(.{ .root_module = sonny6555_obp_mod });
+    const run_sonny6555_obp_tests = b.addRunArtifact(sonny6555_obp_tests);
+    shardDep(test_step, &run_sonny6555_obp_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6555-ordered-build-probe", "Run SONNY-6555 item 3 regression (an ORDER BY ... LIMIT on a mixed-class column, one holding a non-canonical string or a value of no ordered class starts no value-ordered index build; a single-class canonical column still builds; the rows are the full sort's: persisted sessions, bounded and unbounded node cache)").dependOn(&run_sonny6555_obp_tests.step);
     // SONNY-6555 item 7: a WITH stage after a FOR or a CALL subquery reads every row reaching it. See tests/test_sonny6555_for_chain_stage.zig.
     const sonny6555_fcs_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_for_chain_stage.zig"), .target = target, .optimize = optimize });
     sonny6555_fcs_mod.addImport("geode", root_mod);
