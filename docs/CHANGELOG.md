@@ -2616,6 +2616,13 @@
 
 ### Fixed
 
+- **CANARY markers in src/canary.zig no longer claim tests that do not
+  exist (SONNY-6613).** 31 TESTED markers (34 `TestCANARY_*` names, REQ-GQL-
+  001 through REQ-GQL-101) named tests no source defines; they are IMPL until
+  a test that checks the requirement exists. Regression:
+  `zig build test-sonny6587-canary-markers` now checks every TESTED marker
+  in the file.
+
 - **A version-2 PROFILE reports no unmeasured CPU time (SONNY-6613).** Each
   operator's `cpu_time_ns` was a copy of its wall-clock `time_ns`; CPU time
   is not measured per operator, so it is 0. Regression:
