@@ -27,6 +27,7 @@ const GraphStore = geode.graph_store.GraphStore;
 const raft_consensus = geode.distributed.raft_consensus;
 const raft_apply = geode.distributed.raft_apply;
 const snapshot_manager = geode.distributed.raft_snapshot_manager;
+const cr = geode.distributed.cluster_replication;
 const RaftNode = raft_consensus.RaftNode;
 const Transport = raft_consensus.Transport;
 const Peer = raft_consensus.Peer;
@@ -155,14 +156,14 @@ const AppliedAtLeast = struct {
 
 /// Node 3 cut off while the leader commits `writes` entries, then the leader
 /// compacts its log behind a snapshot of `leader_store`; returns its index.
-fn leaveNode3Behind(net: *WireNet, leader_store: *GraphStore, writes: usize) !u64 {
+fn leaveNode3Behind(net: *WireNet, leader_store: *GraphStore, leader_dedup: ?*const cr.IdempotencyDedup, writes: usize) !u64 {
     const leader = net.nodes[0];
     net.cut[3] = true;
     var last: u64 = 0;
     for (0..writes) |_| last = try leader.proposeCommand(.{ .write = "sonny6633" });
     try net.untilTrue(all3, AppliedAtLeast{ .node = leader, .index = last }, AppliedAtLeast.done);
     try net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[1], .index = last }, AppliedAtLeast.done);
-    const payload = try snapshot_manager.encodeRaftSnapshot(net.a, leader_store);
+    const payload = try snapshot_manager.encodeRaftSnapshot(net.a, leader_store, leader_dedup);
     defer net.a.free(payload);
     leader.inner_mutex.lockUncancelable(io);
     defer leader.inner_mutex.unlock(io);
@@ -195,8 +196,17 @@ test "SONNY-6633 (1): a follower behind a compacted log catches up from the snap
     defer raft_apply.resetGlobalStore();
     net.nodes[2].apply_callback = &raft_apply.applyCallbackFn;
     net.nodes[2].snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
+    // SONNY-6633 (6): the leader's idempotency table (a keyed statement it
+    // applied before the snapshot) and node 3's, empty.
+    var leader_dedup = cr.IdempotencyDedup.init(a);
+    defer leader_dedup.deinit();
+    try leader_dedup.record("stmt-6633-before", 2);
+    var follower_dedup = cr.IdempotencyDedup.init(a);
+    defer follower_dedup.deinit();
+    raft_apply.setGlobalIdempotencyDedup(&follower_dedup);
+    defer raft_apply.resetGlobalIdempotencyDedup();
 
-    const snap_index = try leaveNode3Behind(&net, &leader_store, 20);
+    const snap_index = try leaveNode3Behind(&net, &leader_store, &leader_dedup, 20);
     net.cut[3] = false;
     const caught_up = net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[2], .index = snap_index }, AppliedAtLeast.done);
     std.debug.print("SONNY-6633 (1) wire: {d} InstallSnapshot chunk(s), {d} data bytes, {d} voters on the wire; {d} ack(s), {d} refusal(s); node 3 applied {d} (snapshot {d}); restored {d}\n", .{
@@ -214,6 +224,21 @@ test "SONNY-6633 (1): a follower behind a compacted log catches up from the snap
     try testing.expect(hasNode(&follower_store, n2, "Snap6633"));
     try testing.expectEqual(@as(usize, 2), follower_store.nodes.count());
     try testing.expectEqual(@as(usize, 1), follower_store.edges.count());
+
+    // SONNY-6633 (6): the snapshot brought the table. A client retrying the
+    // statement applied before the snapshot (same key, a new entry) creates
+    // nothing on node 3; a new key does.
+    try testing.expectEqual(@as(?u64, 2), follower_dedup.lookup("stmt-6633-before"));
+    const labels = [_][]const u8{"Retry6633"};
+    for ([_][]const u8{ "stmt-6633-before", "stmt-6633-new" }) |key| {
+        const payload = try cr.serializeNodeCreateKeyed(a, "default", &labels, &.{}, key);
+        defer a.free(payload);
+        const idx = try net.nodes[0].proposeCommand(.{ .graph_mutation = .{ .graph = "default", .mutation_type = .create, .data = payload, .txn_id = null } });
+        try net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[2], .index = idx }, AppliedAtLeast.done);
+    }
+    const retried = follower_store.countNodesByLabel("default", "Retry6633", null);
+    std.debug.print("SONNY-6633 (6): after the restore node 3's table has the pre-snapshot key={}; a retry of it and a new key created {d} node(s)\n", .{ follower_dedup.lookup("stmt-6633-before") != null, retried });
+    try testing.expectEqual(@as(usize, 1), retried);
 }
 
 test "SONNY-6633 (1): a snapshot whose digest does not match reaches the leader as a refusal, not as success" {
@@ -226,7 +251,7 @@ test "SONNY-6633 (1): a snapshot whose digest does not match reaches the leader 
     try net.init(&peers);
     defer net.deinit();
 
-    const snap_index = try leaveNode3Behind(&net, &leader_store, 5);
+    const snap_index = try leaveNode3Behind(&net, &leader_store, null, 5);
     net.corrupt_checksum = true;
     net.cut[3] = false;
     for (0..400) |_| try net.round(all3);

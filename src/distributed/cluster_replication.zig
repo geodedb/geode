@@ -1159,6 +1159,37 @@ pub const IdempotencyDedup = struct {
             self.head = 0;
         }
     }
+
+    // CANARY: REQ=REQ-SONNY-6633-DEDUP-IN-SNAPSHOT; FEATURE="DistributedCluster"; ASPECT=DedupSerialized; STATUS=TESTED; TEST=tests/test_sonny6633_snapshot_wire.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6633 (6): append the live keys, oldest first, to `out`:
+    /// u32 count, then per key u16 length, the key, u64 raft index. A Raft
+    /// snapshot carries it: the table is otherwise rebuilt by replaying the
+    /// committed log, and a snapshot replaces the entries it covers.
+    pub fn serialize(self: *const IdempotencyDedup, out: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+        try appendU32(out, allocator, self.map.count());
+        for (self.order.items[self.head..]) |key| {
+            const index = self.map.get(key) orelse continue;
+            try appendStr16(out, allocator, key);
+            try appendU64(out, allocator, index);
+        }
+    }
+
+    /// SONNY-6633 (6): replace the table with one `serialize` wrote, in the
+    /// same order (so later evictions match the replicas'). `data` must be
+    /// exactly that encoding.
+    pub fn replaceFrom(self: *IdempotencyDedup, data: []const u8) !void {
+        var fresh = IdempotencyDedup.init(self.allocator);
+        errdefer fresh.deinit();
+        var r = Reader{ .data = data, .pos = 0 };
+        const count = try r.readU32();
+        for (0..count) |_| {
+            const key = try r.str16();
+            try fresh.record(key, try r.readU64());
+        }
+        if (r.pos != data.len) return CodecError.CorruptPayload;
+        self.deinit();
+        self.* = fresh;
+    }
 };
 
 /// Read the idempotency key from a keyed (GN1K / GN2K) payload, or null for a
