@@ -4,6 +4,36 @@
 
 ### Security
 
+- **Cluster mode: the Raft log and snapshots are encrypted under TDE
+  (SONNY-6571).** With `GEODE_TDE_KEY` set, the storage engine encrypted its
+  pages and WAL, but every cluster node's Raft log
+  (`<data_dir>/raft/entries.wal`, written by the raft library's
+  `FileStorage`) held each replicated write in plaintext: labels, property
+  keys, string and integer values (a doc credited `raft_persistent.zig`,
+  which nothing reached; removed by SONNY-6563). The Raft storage is now
+  `FileStorage` behind a geode `Storage` (`src/distributed/raft_tde_storage.zig`)
+  that seals every entry's and the snapshot's data with AES-256-GCM under a
+  per-open key derived by HKDF-SHA256 from `GEODE_TDE_KEY` and a random salt,
+  with a counter nonce; each entry is authenticated with its index, term and
+  kind. The hard state (term and vote) holds no graph data and is written as
+  before, so the vote is still durable before a reply leaves (SONNY-6563).
+  `<data_dir>/raft/tde.marker` records that the directory is encrypted and
+  under which key (a key check value, not the key). **BREAKING:** a cluster
+  node with `GEODE_TDE_KEY` set refuses to start when its `<data_dir>/raft`
+  holds Raft state written without TDE (`RaftStoragePlaintextUnderTde`; the
+  directory is left as it was): rebuild the node from the cluster with an
+  empty data directory (docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Distributed
+  Consensus (Raft)"). An encrypted Raft directory refuses to start without
+  `GEODE_TDE_KEY` (`RaftStorageNeedsTdeKey`) or under another key
+  (`RaftStorageTdeKeyMismatch`). Single-server data directories are
+  unaffected. Not yet encrypted (found by the same scan, single server and
+  cluster): label and relationship type NAMES in every shard's
+  `labels.dict` and property key names in `props.idx` (graph-storage) and in
+  geode's `prop_exact.idx` / `prop_rev.idx`; property values were found in
+  none of them. Regressions: `zig build test-sonny6571-tde-at-rest` (real
+  single server and 3-node cluster, every file under every data directory),
+  `test-sonny6571-raft-tde-storage`; red until the names are encrypted:
+  `test-sonny6571-schema-names` (docs/KNOWN_TEST_ISSUES.md).
 - **geode-client-zig v0.3.17: one set of DSN rules on every client path
   (SONNY-6550).** The MCP endpoint DSN (`geode mcp --endpoint`) is parsed by
   geode-client-zig, which split the userinfo at the first `@` anywhere in

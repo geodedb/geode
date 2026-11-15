@@ -71,6 +71,9 @@ const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
+// SONNY-6571: the Raft log, hard state and snapshots under GEODE_TDE_KEY.
+pub const raft_tde_storage = @import("raft_tde_storage.zig");
+const tde_file_encryption = @import("../storage/tde_file_encryption.zig");
 
 const cluster_auth = @import("cluster_auth.zig");
 
@@ -2916,10 +2919,13 @@ pub const RaftNode = struct {
     // (production, when a `storage_dir` is supplied) persists currentTerm /
     // votedFor / the raft log via the pinned raft library's crash-safe
     // FileStorage, so a restarted node restores its hard-state (Raft
-    // election-safety) instead of resetting term/vote to zero.
+    // election-safety) instead of resetting term/vote to zero. `.tde_file`
+    // (SONNY-6571, GEODE_TDE_KEY set) is that FileStorage with entry and
+    // snapshot data sealed under keys derived from the TDE key.
     storage_backing: union(enum) {
         in_memory: *raft_lib.InMemoryStorage,
         file: *raft_lib.FileStorage,
+        tde_file: *raft_tde_storage.TdeRaftStorage,
     },
 
     // Configuration
@@ -2977,12 +2983,34 @@ pub const RaftNode = struct {
     ///
     /// The chosen backing pointer is OWNED by the returned RaftNode and freed in
     /// `deinit`; `FileStorage.deinit` releases the flock.
+    ///
+    /// SONNY-6571: with GEODE_TDE_KEY set, the directory's entry and snapshot
+    /// data are encrypted (`raft_tde_storage`); see `initWithStorageDirKey`.
     pub fn initWithStorageDir(
         allocator: Allocator,
         id: u64,
         peers: []Peer,
         election_timeout_ms: u64,
         storage_dir: ?[]const u8,
+    ) !*RaftNode {
+        const tde_key: ?[raft_tde_storage.KEY_BYTES]u8 = if (storage_dir != null) try tde_file_encryption.loadKey(allocator) else null;
+        return initWithStorageDirKey(allocator, id, peers, election_timeout_ms, storage_dir, tde_key);
+    }
+
+    /// `initWithStorageDir` with the TDE key given instead of read from
+    /// GEODE_TDE_KEY. With a key, `storage_dir`'s Raft entry and snapshot data
+    /// are sealed under keys derived from it; a directory holding Raft state
+    /// written without TDE is refused (`error.RaftStoragePlaintextUnderTde`),
+    /// as is one encrypted under another key (`RaftStorageTdeKeyMismatch`).
+    /// Without a key an encrypted directory is refused
+    /// (`RaftStorageNeedsTdeKey`). Ignored when `storage_dir` is null.
+    pub fn initWithStorageDirKey(
+        allocator: Allocator,
+        id: u64,
+        peers: []Peer,
+        election_timeout_ms: u64,
+        storage_dir: ?[]const u8,
+        tde_key: ?[raft_tde_storage.KEY_BYTES]u8,
     ) !*RaftNode {
         const node = try allocator.create(RaftNode);
         // If any subsequent init step fails (most notably raft_lib.RaftNode.init
@@ -3008,7 +3036,7 @@ pub const RaftNode = struct {
         // ClusterCoordinator.start() became reachable (A4b/A4c).
         const StorageBacking = @FieldType(RaftNode, "storage_backing");
         var backing: StorageBacking = undefined;
-        if (storage_dir) |dir| {
+        if (storage_dir) |dir| backing = blk: {
             const file_ptr = try allocator.create(raft_lib.FileStorage);
             errdefer allocator.destroy(file_ptr);
             // The dir's exclusive `.lock` flock is held by whatever process last
@@ -3040,7 +3068,17 @@ pub const RaftNode = struct {
                     else => return err,
                 };
             };
-            backing = .{ .file = file_ptr };
+            // Scoped to this block: once `backing` owns the storage, the
+            // errdefer below releases it.
+            errdefer file_ptr.deinit();
+            if (tde_key) |key| {
+                const tde_ptr = try allocator.create(raft_tde_storage.TdeRaftStorage);
+                errdefer allocator.destroy(tde_ptr);
+                tde_ptr.* = try raft_tde_storage.TdeRaftStorage.adopt(allocator, file_ptr, key);
+                break :blk .{ .tde_file = tde_ptr };
+            }
+            try raft_tde_storage.refuseIfEncrypted(file_ptr);
+            break :blk .{ .file = file_ptr };
         } else {
             const mem_ptr = try allocator.create(raft_lib.InMemoryStorage);
             errdefer allocator.destroy(mem_ptr);
