@@ -92,6 +92,32 @@ pub fn resetApplyHaltForTesting() void {
 /// Must be called before the Raft node begins processing committed entries.
 pub fn setGlobalStore(store: *GraphStore) void {
     g_store = store;
+    loadStoreRaftIndex(store);
+}
+
+// CANARY: REQ=REQ-SONNY-6636-STORE-RAFT-INDEX; FEATURE="Raft Snapshot Persistence"; ASPECT=CoveredEntriesNotReapplied; STATUS=TESTED; TEST=tests/test_sonny6636_durable_snapshot_restore.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6636 (3): the Raft index the registered durable store reflects
+/// (`raft_store.index`, recorded when a snapshot restore finished); 0 when
+/// none. `applyCommand` applies no entry at or below it: the snapshot
+/// covered it, and a node that restarted before the snapshot was persisted
+/// in its Raft log replays its older entries onto the restored store.
+var g_store_raft_index: std.atomic.Value(u64) = .init(0);
+
+pub fn storeRaftIndex() u64 {
+    return g_store_raft_index.load(.acquire);
+}
+
+fn loadStoreRaftIndex(store: *GraphStore) void {
+    g_store_raft_index.store(0, .release);
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return;
+    if (graph_store_mod.getCurrentGlobalStore() != store) return;
+    const point = adapter.storeRaftIndex() catch |err| {
+        // Guessing low would apply entries the store already reflects.
+        log.err("raft apply: the Raft index the store reflects cannot be read; this node applies nothing until it is fixed", &.{Attr.string("error", @errorName(err))});
+        haltApply("raft_store.index unreadable", "");
+        return;
+    };
+    g_store_raft_index.store(point.index, .release);
 }
 
 /// Return the currently registered store (useful in tests / diagnostics).
@@ -102,6 +128,7 @@ pub fn getGlobalStore() ?*GraphStore {
 /// Reset the global store to null (for test isolation).
 pub fn resetGlobalStore() void {
     g_store = null;
+    g_store_raft_index.store(0, .release);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,23 +370,34 @@ fn internNamesOf(entry_graph: []const u8, payload: []const u8) void {
 
 // CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
 /// SONNY-6622: `RaftNode.snapshot_restore_callback`: replace the registered
-/// store's contents with the snapshot `data` (`raft_snapshot_manager.
-/// encodeRaftSnapshot` on the leader), under the Raft node's
-/// `inner_mutex`. The restore takes the store's write lock; a thread
-/// holding the store lock that would wait for Raft gives up meanwhile
-/// (`graph_storage_adapter.beginReplicatedRestore`).
+/// store's contents with the snapshot `data` the leader passed to
+/// `reportSnapshot`. The Raft node runs it on its restore thread, without
+/// `inner_mutex`, while it stays paused (SONNY-6636).
 ///
-/// Refused (`RaftSnapshotRestoreNotDurable`) for the server's durable
-/// store: `installSnapshotData` rebuilds the in-memory graph only and does
-/// not rewrite the storage engine, so the node would serve the snapshot
-/// until a restart and the engine's older contents after it. The Raft node
-/// then stops instead of applying past the snapshot. Nothing in the server
-/// takes Raft snapshots yet (no `reportSnapshot` caller), so a leader never
-/// sends one; a durable restore is future work.
+/// SONNY-6636: the durable store takes a durable snapshot (GRS3,
+/// `raft_snapshot_manager.restoreDurableSnapshot`: the leader's engine
+/// files, swapped in crash-safely; the store then reflects Raft `index`).
+/// It refuses a JSON-lines snapshot (GRS2; `RaftSnapshotRestoreNotDurable`):
+/// that one is lossy and rebuilds memory only. An in-memory store (tests)
+/// takes GRS2 under the store's write lock and refuses GRS3
+/// (`RaftSnapshotNeedsDurableStore`). A refusal stops the node instead of
+/// applying past the snapshot.
 pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: u64, term: u64) anyerror!void {
     const store = g_store orelse return error.StoreNotAvailable;
-    if (graph_store_mod.getGlobalAdapter() != null and graph_store_mod.getCurrentGlobalStore() == store) {
-        log.err("raft apply: a snapshot cannot be restored into the durable store (the storage engine is not rewritten); the node stops", &.{
+    const durable_adapter: ?*graph_storage_adapter.StorageAdapter = if (graph_store_mod.getCurrentGlobalStore() == store) graph_store_mod.getGlobalAdapter() else null;
+    // SONNY-6636: a durable store's snapshot (the engine's files).
+    if (raft_snapshot_manager.isDurableSnapshot(data)) {
+        const adapter = durable_adapter orelse return error.RaftSnapshotNeedsDurableStore;
+        try raft_snapshot_manager.restoreDurableSnapshot(allocator, store, adapter, data, .{ .index = index, .term = term }, g_idempotency_dedup);
+        g_store_raft_index.store(index, .release);
+        log.info("raft apply: durable store restored from the leader's snapshot", &.{
+            Attr.uint("snapshot_index", index),
+            Attr.uint("snapshot_term", term),
+        });
+        return;
+    }
+    if (durable_adapter != null) {
+        log.err("raft apply: a JSON-lines snapshot cannot be restored into the durable store (it is lossy); the node stops", &.{
             Attr.uint("snapshot_index", index),
             Attr.uint("snapshot_term", term),
         });
@@ -392,6 +430,11 @@ pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command,
             Attr.uint("raft_index", raft_index),
         });
         return error.ReplicatedApplyHalted;
+    }
+    // SONNY-6636 (3): an entry a restored snapshot covered is in the store.
+    if (raft_index != 0 and store != null and store == g_store and raft_index <= g_store_raft_index.load(.acquire)) {
+        log.debug("raft apply: entry covered by the restored snapshot; skipped", &.{Attr.uint("raft_index", raft_index)});
+        return allocator.alloc(u8, 0);
     }
     // SONNY-6567 (6c): no hydration this apply triggers persists (waits for
     // a graph lock) under the Raft node's `inner_mutex`.

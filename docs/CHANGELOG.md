@@ -3073,6 +3073,38 @@
 
 ### Fixed
 
+- **A follower restores a Raft snapshot into the durable store, losslessly
+  and off `inner_mutex`; a restored graph shows no trace of the old one
+  (SONNY-6636).** A follower behind the leader's compacted log refused every
+  snapshot into the server's durable store (`RaftSnapshotRestoreNotDurable`)
+  and stayed paused. It now takes a durable snapshot (`GRS3`,
+  `raft_snapshot_manager.encodeDurableSnapshot`): the storage engine's own
+  files of every graph except `__geode_security`, byte for byte, through
+  the GEODBAK1 archive, which moved from `storage/backup.zig` to
+  `storage/graph_archive.zig` so the adapter and the Raft layer can use it.
+  Every `ExtValue` property, empty graph, tenant tag and per-graph index
+  arrives as the leader wrote it. The restore runs on a restore thread
+  while the Raft node stays paused, never under `inner_mutex`. It stages
+  each graph beside the data, then under the store's write lock swaps the
+  graphs in crash-safely, resets each graph's resident state and drops the
+  graphs the leader no longer has.
+  `GraphStore.forgetGraphBeforeRestore` / `resetGraphAfterRestore` exist
+  because hydration re-inserts and removes nothing: the old graph's nodes,
+  edges, label counts and MERGE entries stayed visible, and a MERGE matched
+  a node on a value it no longer had. Once the restore finishes (also after
+  a crash past its commit point), the data directory records the Raft index
+  the store reflects (`raft_store.index`), and no entry at or below it is
+  applied again, including after a restart. The swap now accepts the
+  default graph. **BREAKING (behaviour):** the restore intent is written as
+  `GEODRIN3` (a `GEODRIN2` intent still reads), and a durable store refuses
+  a JSON-lines (`GRS2`) snapshot outright, which never restored correctly
+  anyway. **Still open:** the server takes no Raft snapshots
+  (`reportSnapshot` is never called), so its Raft log still grows without
+  bound, and the restore is not yet tested across `geode serve` processes
+  (`src/distributed/README.md`). Regressions: `zig build
+  test-sonny6636-durable-snapshot-restore`, `zig build
+  test-sonny6636-resident-reset`.
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),

@@ -345,6 +345,8 @@ pub const side_kind_prop_rev = gs.side_file_crypto.Kind.consumer(1);
 pub const side_kind_dropped_graphs = gs.side_file_crypto.Kind.consumer(2);
 /// SONNY-6636 (1): `graph_restore.intent` (`graph_restore_intent.zig`).
 pub const side_kind_graph_restore = gs.side_file_crypto.Kind.consumer(3);
+/// SONNY-6636 (3): a Raft log position (`graph_restore_intent.RaftPoint`).
+pub const RaftPoint = graph_restore_intent.RaftPoint;
 
 fn exactIndexSealKind(name: []const u8) gs.side_file_crypto.Kind {
     return if (std.mem.eql(u8, name, prop_rev_index_file_name)) side_kind_prop_rev else side_kind_prop_exact;
@@ -5105,6 +5107,8 @@ pub const StorageAdapter = struct {
         entries: []graph_restore_intent.Entry,
         staged_dirs: [][]const u8,
         committed: bool = false,
+        /// SONNY-6636 (3): the Raft snapshot this restore installs.
+        raft: graph_restore_intent.RaftPoint = .{},
 
         pub fn deinit(self: *GraphRestore) void {
             self.arena.deinit();
@@ -5121,10 +5125,10 @@ pub const StorageAdapter = struct {
         return dataDirCipher(self.config.encryption_key);
     }
 
-    fn writeGraphRestoreIntent(self: *StorageAdapter, committed: bool, entries: []const graph_restore_intent.Entry) !void {
+    fn writeGraphRestoreIntent(self: *StorageAdapter, committed: bool, entries: []const graph_restore_intent.Entry, raft: graph_restore_intent.RaftPoint) !void {
         var cipher = self.graphRestoreCipher();
         defer if (cipher) |*c| c.deinit();
-        try graph_restore_intent.write(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore, .{ .committed = committed, .entries = entries });
+        try graph_restore_intent.write(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore, .{ .committed = committed, .entries = entries, .raft = raft });
     }
 
     fn stagedDirPath(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, suffix: []const u8) ![]const u8 {
@@ -5133,23 +5137,32 @@ pub const StorageAdapter = struct {
     }
 
     /// SONNY-6636 (1): start restoring `sources` (distinct names and uuids,
-    /// none the default graph or `__geode_security`, which a restore never
-    /// replaces): write the restore intent (fsynced, sealed under at-rest
+    /// never `__geode_security`, whose contents are this node's own): write
+    /// the restore intent (fsynced, sealed under at-rest
     /// encryption) and create each `<data_dir>/<uuid>.restore` directory.
     /// Nothing a reader sees changes until `commitGraphRestore`. Refused when
     /// a source's uuid belongs to another graph here (GraphRestoreUuidInUse).
     /// The caller keeps every writer of these graphs paused until the commit
     /// returns.
     pub fn beginGraphRestore(self: *StorageAdapter, sources: []const RestoreSource) !GraphRestore {
+        return self.beginGraphRestoreAt(sources, .{});
+    }
+
+    /// SONNY-6636 (3): `beginGraphRestore` for a Raft snapshot at `raft`:
+    /// the intent carries it, and finishing the restore records it as the
+    /// Raft index the store reflects (`graph_restore_intent.writeRaftIndex`).
+    /// The default graph is restorable (SONNY-6636: replicated writes land
+    /// in it).
+    pub fn beginGraphRestoreAt(self: *StorageAdapter, sources: []const RestoreSource, raft: graph_restore_intent.RaftPoint) !GraphRestore {
         if (sources.len == 0) return error.NothingToRestore;
         for (sources, 0..) |s, i| {
-            if (s.name.len == 0 or std.mem.eql(u8, s.name, graph_store.DEFAULT_GRAPH_NAME) or std.mem.eql(u8, s.name, "__geode_security")) return error.GraphNotRestorable;
+            if (s.name.len == 0 or std.mem.eql(u8, s.name, "__geode_security")) return error.GraphNotRestorable;
             if (std.mem.allEqual(u8, &s.uuid, 0)) return error.GraphNotRestorable;
             for (sources[0..i]) |t| {
                 if (std.mem.eql(u8, t.name, s.name) or std.mem.eql(u8, &t.uuid, &s.uuid)) return error.GraphNotRestorable;
             }
         }
-        var r: GraphRestore = .{ .arena = .init(self.allocator), .entries = &.{}, .staged_dirs = &.{} };
+        var r: GraphRestore = .{ .arena = .init(self.allocator), .entries = &.{}, .staged_dirs = &.{}, .raft = raft };
         errdefer r.arena.deinit();
         const a = r.arena.allocator();
         r.entries = try a.alloc(graph_restore_intent.Entry, sources.len);
@@ -5165,7 +5178,7 @@ pub const StorageAdapter = struct {
         }
         r.staged_dirs = try a.alloc([]const u8, sources.len);
         for (r.staged_dirs, r.entries) |*d, e| d.* = try stagedDirPath(a, self.data_dir, e.new, graph_restore_intent.staged_suffix);
-        try self.writeGraphRestoreIntent(false, r.entries);
+        try self.writeGraphRestoreIntent(false, r.entries, r.raft);
         errdefer self.abandonGraphRestore(&r);
         if (graphRestoreCrashAt(.intent_written)) return error.InjectedGraphRestoreCrash;
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -5209,7 +5222,7 @@ pub const StorageAdapter = struct {
                     if (threadTxnOn(mg)) return error.ObjectInUse;
                 }
             }
-            try self.writeGraphRestoreIntent(true, r.entries);
+            try self.writeGraphRestoreIntent(true, r.entries, r.raft);
             r.committed = true;
             for (r.entries, detached) |e, *d| {
                 const kv = self.engines.fetchRemove(e.name) orelse continue;
@@ -5230,12 +5243,12 @@ pub const StorageAdapter = struct {
         };
         defer for (detached) |d| if (d) |mg| self.unpinGraph(mg);
         if (graphRestoreCrashAt(.committed)) return error.InjectedGraphRestoreCrash;
-        try self.finishCommittedGraphRestore(r.entries);
+        try self.finishCommittedGraphRestore(r.entries, r.raft);
     }
 
     /// SONNY-6636 (1): the swap after the commit point, idempotent: run by
     /// `commitGraphRestore` and, after a crash, by `init`.
-    fn finishCommittedGraphRestore(self: *StorageAdapter, entries: []const graph_restore_intent.Entry) !void {
+    fn finishCommittedGraphRestore(self: *StorageAdapter, entries: []const graph_restore_intent.Entry, raft: graph_restore_intent.RaftPoint) !void {
         const a = self.allocator;
         const io = std.Io.Threaded.global_single_threaded.io();
         const cwd = std.Io.Dir.cwd();
@@ -5288,6 +5301,9 @@ pub const StorageAdapter = struct {
             cwd.deleteTree(io, aside) catch |err| log.warn("cannot delete {s} left by a graph restore: {}", .{ aside, err });
         }
         if (graphRestoreCrashAt(.old_deleted)) return error.InjectedGraphRestoreCrash;
+        // SONNY-6636 (3): the store now reflects the snapshot's Raft index;
+        // recorded before the intent goes, so a crash in between redoes it.
+        if (raft.index != 0) try graph_restore_intent.writeRaftIndex(a, self.data_dir, raft);
         try graph_restore_intent.remove(a, self.data_dir);
     }
 
@@ -5327,7 +5343,7 @@ pub const StorageAdapter = struct {
         defer owned.deinit();
         const intent = owned.intent;
         if (intent.committed) {
-            try self.finishCommittedGraphRestore(intent.entries);
+            try self.finishCommittedGraphRestore(intent.entries, intent.raft);
         } else {
             const io = std.Io.Threaded.global_single_threaded.io();
             for (intent.entries) |e| {
@@ -5341,6 +5357,46 @@ pub const StorageAdapter = struct {
             SAttr.string("outcome", if (intent.committed) "restored graphs kept" else "old graphs kept"),
             SAttr.uint("graphs", intent.entries.len),
         });
+    }
+
+    /// SONNY-6636 (3): every graph a Raft snapshot carries (all but
+    /// `__geode_security`, whose contents are this node's own), with the
+    /// uuid its files are written under. Free with `freeRestoreSources`.
+    pub fn snapshotGraphs(self: *StorageAdapter, allocator: Allocator) ![]RestoreSource {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var out: std.ArrayList(RestoreSource) = .empty;
+        errdefer freeRestoreSources(allocator, out.items);
+        defer out.deinit(allocator);
+        for (self.registry.entries.items) |e| {
+            if (std.mem.eql(u8, e.name, "__geode_security")) continue;
+            const name = try allocator.dupe(u8, e.name);
+            errdefer allocator.free(name);
+            try out.append(allocator, .{ .name = name, .uuid = e.uuid });
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn freeRestoreSources(allocator: Allocator, sources: []const RestoreSource) void {
+        for (sources) |s| allocator.free(s.name);
+        allocator.free(sources);
+    }
+
+    /// SONNY-6636 (3): `<data_dir>/<uuid hex>`, a graph's directory.
+    pub fn graphDirFor(self: *const StorageAdapter, allocator: Allocator, graph_uuid: [16]u8) ![]const u8 {
+        return graphDirPath(allocator, self.data_dir, graph_uuid);
+    }
+
+    /// SONNY-6636 (3): record that this data directory's store reflects the
+    /// Raft log up to `point` (a restore that swapped no graph).
+    pub fn recordStoreRaftIndex(self: *const StorageAdapter, point: RaftPoint) !void {
+        return graph_restore_intent.writeRaftIndex(self.allocator, self.data_dir, point);
+    }
+
+    /// SONNY-6636 (3): the Raft log position this data directory's store
+    /// reflects (recorded when a Raft snapshot restore finished), or index 0.
+    pub fn storeRaftIndex(self: *const StorageAdapter) !RaftPoint {
+        return graph_restore_intent.readRaftIndex(self.allocator, self.data_dir);
     }
 
     /// Return the names of all known graphs. Caller owns the returned slice and

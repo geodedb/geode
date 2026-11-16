@@ -5688,8 +5688,27 @@ pub const GraphStore = struct {
     /// running build of the graph (its hydration entry) and of any graph
     /// (`hydration_build_mutex`), the order a build takes them.
     pub fn resetGraphAfterRestore(self: *GraphStore, graph_name: []const u8) !void {
+        return self.resetGraphForRestore(graph_name, .after_swap);
+    }
+
+    /// SONNY-6636 (1): the first half of `resetGraphAfterRestore`, run
+    /// BEFORE the swap (same locks): the graph's resident state is dropped
+    /// and it is left unbuilt, so nothing of the old files is resident when
+    /// the new ones arrive. A checkpoint meanwhile writes no IdMap or
+    /// hydration snapshot of it (the savers skip a graph not built), so none
+    /// of the old graph's products can land in the restored graph's directory
+    /// (the same directory when it is restored under its own uuid, or the
+    /// one the registry names once the swap passed its commit point).
+    pub fn forgetGraphBeforeRestore(self: *GraphStore, graph_name: []const u8) !void {
+        return self.resetGraphForRestore(graph_name, .before_swap);
+    }
+
+    fn resetGraphForRestore(self: *GraphStore, graph_name: []const u8, comptime phase: enum { before_swap, after_swap }) !void {
         const adapter = global_adapter orelse return error.NoStorageAdapter;
-        const restored_uuid = adapter.getGraphUuid(graph_name) orelse return error.GraphNotFound;
+        const restored_uuid = adapter.getGraphUuid(graph_name) orelse {
+            if (phase == .before_swap) return; // not here yet: nothing resident
+            return error.GraphNotFound;
+        };
         const io = std.Io.Threaded.global_single_threaded.io();
         try self.markPendingHydration(graph_name);
         const entry: *HydrationEntry = blk: {
@@ -5708,19 +5727,20 @@ pub const GraphStore = struct {
         self.merge_prop_index.removeGraph(graph_name);
         self.forgetLeanBackfilledForGraph(graph_name);
         self.retireIdMap(graph_name);
+        // Built from the (new) files on the next touch.
+        entry.needs_reset = false;
+        entry.failure.store(@intFromEnum(QuarantineCause.unknown), .release);
+        entry.failed.store(false, .release);
+        entry.done.store(false, .release);
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+        if (phase == .before_swap) return;
         {
             self.graphs_mutex.lockUncancelable(io);
             defer self.graphs_mutex.unlock(io);
             try self.setGraphUuidLocked(graph_name, restored_uuid);
         }
-        // Built from the new files on the next touch.
-        entry.needs_reset = false;
-        entry.failure.store(@intFromEnum(QuarantineCause.unknown), .release);
-        entry.failed.store(false, .release);
-        entry.done.store(false, .release);
         try self.loadOneGraphFromAdapter(adapter, graph_name);
-        self.dirty.store(true, .release);
-        incrementMutationEpoch();
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22

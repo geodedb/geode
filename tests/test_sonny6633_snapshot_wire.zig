@@ -64,7 +64,14 @@ const WireNet = struct {
     snapshot_bytes: usize = 0,
     snapshot_voters: usize = 0,
     snapshot_acks: usize = 0,
+    /// Refusals before the first ack: the snapshot was refused.
     snapshot_refusals: usize = 0,
+    /// SONNY-6636: refusals after an ack. The follower restores on its
+    /// restore thread, paused meanwhile, so the leader may send the snapshot
+    /// again before the ack; that copy reaches a node already past it and is
+    /// refused as stale (raft `StaleSnapshot`), which only clears the
+    /// leader's in-flight marker.
+    stale_refusals: usize = 0,
 
     fn send(t: *Transport, peer: Peer, from: u64, term: u64, msg: Message) anyerror!void {
         const self: *WireNet = @ptrCast(@alignCast(t.send_override_ctx orelse return error.MissingCtx));
@@ -89,7 +96,13 @@ const WireNet = struct {
                     if (self.corrupt_checksum and is.done) is.checksum[0] ^= 0xff;
                 },
                 .install_snapshot_response => |isr| {
-                    if (isr.success) self.snapshot_acks += 1 else self.snapshot_refusals += 1;
+                    if (isr.success) {
+                        self.snapshot_acks += 1;
+                    } else if (self.snapshot_acks > 0) {
+                        self.stale_refusals += 1;
+                    } else {
+                        self.snapshot_refusals += 1;
+                    }
                 },
                 else => {},
             }
@@ -209,8 +222,8 @@ test "SONNY-6633 (1): a follower behind a compacted log catches up from the snap
     const snap_index = try leaveNode3Behind(&net, &leader_store, &leader_dedup, 20);
     net.cut[3] = false;
     const caught_up = net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[2], .index = snap_index }, AppliedAtLeast.done);
-    std.debug.print("SONNY-6633 (1) wire: {d} InstallSnapshot chunk(s), {d} data bytes, {d} voters on the wire; {d} ack(s), {d} refusal(s); node 3 applied {d} (snapshot {d}); restored {d}\n", .{
-        net.snapshot_chunks, net.snapshot_bytes, net.snapshot_voters, net.snapshot_acks, net.snapshot_refusals, net.nodes[2].appliedIndex(), snap_index, net.nodes[2].stats.snapshots_received,
+    std.debug.print("SONNY-6633 (1) wire: {d} InstallSnapshot chunk(s), {d} data bytes, {d} voters on the wire; {d} ack(s), {d} refusal(s), {d} stale duplicate(s) refused after the ack; node 3 applied {d} (snapshot {d}); restored {d}\n", .{
+        net.snapshot_chunks, net.snapshot_bytes, net.snapshot_voters, net.snapshot_acks, net.snapshot_refusals, net.stale_refusals, net.nodes[2].appliedIndex(), snap_index, net.nodes[2].stats.snapshots_received,
     });
     try caught_up;
     const after = try net.nodes[0].proposeCommand(.{ .write = "after-snapshot" });
