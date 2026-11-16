@@ -3073,6 +3073,43 @@
 
 ### Fixed
 
+- **The server takes Raft snapshots of its durable store, so the Raft log
+  is bounded (SONNY-6636).** Nothing called `reportSnapshot`: no node ever
+  compacted its Raft log, and a leader had no snapshot to send a follower
+  that fell behind. Every node, leader or follower, now snapshots its store
+  once `GEODE_RAFT_SNAPSHOT_ENTRIES` entries (default 10000) or
+  `GEODE_RAFT_SNAPSHOT_BYTES` bytes of entry data (default 64 MiB) were
+  applied since its last snapshot (0 turns a criterion off), and compacts
+  its log at that index. The node holds its applies (committed entries
+  queue in order) so the store reflects exactly one index, and a snapshot
+  thread checkpoints the store and archives every user graph's files (GRS3)
+  without `inner_mutex`, each graph under its read lock and
+  `replicated_apply_mutex`; heartbeats, votes, persistence and commits go
+  on, and the held entries are applied afterwards, at most 10 ms per tick.
+  A restarted node takes its idempotency table back from its own snapshot.
+  Measured (`test-sonny6636-server-snapshot`, 4.4 MB store, Debug): the
+  copy took 3.7-4.2 s while no tick or message delivery took more than
+  147 ms (a quarter of the 1000 ms election timeout is the bound). **BREAKING
+  (behaviour):** a cluster node now compacts its Raft log; during a
+  snapshot copy its writes are acknowledged on commit but become visible on
+  that node only after the copy. **Still open:** the raft library writes
+  the snapshot (and a leader re-reads it to send it) under `inner_mutex`,
+  141-167 ms for that store and growing with it (`src/distributed/README.md`).
+  Regression: `zig build test-sonny6636-server-snapshot`.
+
+- **A replayed Raft entry skips a node or edge endpoint a later entry
+  deleted, and applies the rest (SONNY-6636).** A restarted node replays
+  the entries after its last snapshot onto a store that already reflects
+  some of them. An update or MERGE ON MATCH SET of a node a later entry
+  deleted failed the whole entry (`NodeNotFound`), and so did an edge to
+  one (`NodeSlotMappingMissing`): a statement batch's later writes to a
+  surviving node never landed again, and the node kept the older value an
+  earlier replayed entry had put back. **BREAKING (behaviour):** such an
+  entry applies its remaining writes; a node on an older build still stops
+  it there. Regression: `zig build test-sonny6636-replay-idempotency`
+  (every suffix of a log covering every apply kind, replayed, leaves the
+  store unchanged).
+
 - **DROP GRAPH leaves none of the graph's MERGE entries or lean backfill
   marks (SONNY-6636).** It removed the MERGE entries of the graph's resident
   nodes only: the entries of nodes evicted from the bounded node cache, and

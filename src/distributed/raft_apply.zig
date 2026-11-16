@@ -410,6 +410,40 @@ pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: 
     try raft_snapshot_manager.installRaftSnapshot(allocator, store, data, g_idempotency_dedup);
 }
 
+// CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotDurableStore; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6636 (b): `RaftNode.snapshot_create_callback`: the durable snapshot
+/// (GRS3, `raft_snapshot_manager.encodeDurableSnapshot`) of the registered
+/// store, which reflects Raft `index` exactly (the node holds its applies).
+/// Runs on the node's snapshot thread, without `inner_mutex`. An in-memory
+/// store cannot be snapshotted (`RaftSnapshotNeedsDurableStore`; the node
+/// then stops trying).
+pub fn createSnapshotCallbackFn(allocator: Allocator, index: u64, term: u64) anyerror![]u8 {
+    const store = g_store orelse return error.StoreNotAvailable;
+    if (graph_store_mod.getCurrentGlobalStore() != store) return error.RaftSnapshotNeedsDurableStore;
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return error.RaftSnapshotNeedsDurableStore;
+    const data = try raft_snapshot_manager.encodeDurableSnapshot(allocator, adapter, g_idempotency_dedup);
+    log.info("raft apply: durable store snapshotted", &.{
+        Attr.uint("snapshot_index", index),
+        Attr.uint("snapshot_term", term),
+        Attr.uint("bytes", data.len),
+    });
+    return data;
+}
+
+/// SONNY-6636 (b): a node restarting with a snapshot of its own in its Raft
+/// storage replays only the entries after it, so the keys the entries before
+/// it recorded come back from the snapshot's idempotency table (else a
+/// client's retry of such a statement would be applied a second time).
+/// `data` is the snapshot (`RaftNode.localSnapshotData`). A snapshot that is
+/// not a durable one carries no table here.
+pub fn seedFromLocalSnapshot(data: []const u8) !void {
+    if (!raft_snapshot_manager.isDurableSnapshot(data)) return;
+    const dedup = g_idempotency_dedup orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    try dedup.replaceFrom(try raft_snapshot_manager.durableSnapshotDedupTable(arena.allocator(), data));
+}
+
 // ---------------------------------------------------------------------------
 // Core routing logic
 // ---------------------------------------------------------------------------

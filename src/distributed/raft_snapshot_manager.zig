@@ -198,8 +198,13 @@ pub fn setGraphRestoredHook(hook: ?GraphRestoredHook) void {
 }
 
 /// The durable snapshot of `adapter`'s store: every graph checkpointed, then
-/// its files archived. The caller keeps the store's writers paused across
-/// the call, so the files reflect one Raft index. The caller frees it.
+/// its files archived. The caller keeps the store's replicated writers
+/// paused across the call (the Raft node holds its applies), so the files
+/// reflect one Raft index. Each graph's files are read under its read lock
+/// and its `replicated_apply_mutex` (`StorageAdapter.holdGraphForSnapshot`),
+/// so no checkpoint, local writer or label interning writes them meanwhile;
+/// with no writer mid-operation the files are a consistent image of the
+/// engine. Never under the Raft node's `inner_mutex`. The caller frees it.
 pub fn encodeDurableSnapshot(allocator: std.mem.Allocator, adapter: *StorageAdapter, dedup: ?*const cluster_replication.IdempotencyDedup) ![]u8 {
     try adapter.checkpointAll();
     const graphs = try adapter.snapshotGraphs(allocator);
@@ -210,6 +215,8 @@ pub fn encodeDurableSnapshot(allocator: std.mem.Allocator, adapter: *StorageAdap
         const dir = try adapter.graphDirFor(allocator, g.uuid);
         defer allocator.free(dir);
         const hex = std.fmt.bytesToHex(g.uuid, .lower);
+        var hold = try adapter.holdGraphForSnapshot(g.name);
+        defer hold.release();
         _ = try archive.appendTree(allocator, dir, &hex);
     }
     const bytes = try archive.finish(allocator);
@@ -246,6 +253,15 @@ pub fn assembleDurableSnapshot(allocator: std.mem.Allocator, graphs: []const Sto
     }
     std.mem.writeInt(u32, out.items[4..8], Crc32.hash(out.items[8..]), .big);
     return out.toOwnedSlice(allocator);
+}
+
+/// SONNY-6636 (b): the idempotency table a durable snapshot carries (a
+/// node restarting on its own snapshot takes it back: the compacted log no
+/// longer holds the entries that recorded its keys). Borrows `payload`.
+pub fn durableSnapshotDedupTable(allocator: std.mem.Allocator, payload: []const u8) ![]const u8 {
+    var snap = try parseDurableSnapshot(allocator, payload);
+    defer snap.deinit(allocator);
+    return snap.dedup;
 }
 
 const DurableSnapshot = struct {

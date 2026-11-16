@@ -2227,6 +2227,11 @@ pub const ManagedGraph = struct {
     /// the apply itself starts (its hydration's persist-on-complete) does
     /// not wait for it.
     replicated_apply_holder: std.atomic.Value(u64) = .init(0),
+    /// SONNY-6636 (b): a Raft snapshot is copying this graph's files
+    /// (`holdGraphForSnapshot`, holding `replicated_apply_mutex`). Label
+    /// interning ahead of an apply, on a Raft receive thread, skips the
+    /// graph rather than wait for the copy (the apply interns them later).
+    snapshot_copying: std.atomic.Value(bool) = .init(false),
     /// SONNY-6541 (1): Raft `drop_graph` applies waiting for this graph's
     /// `rwlock` (`beginReplicatedDrop`). Such an apply waits under the Raft
     /// node's `inner_mutex`, so a thread holding this graph's lock must not
@@ -4737,7 +4742,13 @@ pub const StorageAdapter = struct {
         const mg = self.pinGraph(graph_name) orelse return;
         defer self.unpinGraph(mg);
         const io = std.Io.Threaded.global_single_threaded.io();
-        mg.replicated_apply_mutex.lockUncancelable(io);
+        // SONNY-6636 (b): never wait out a snapshot's copy of the graph on a
+        // Raft receive thread (heartbeats queue behind it); the copy sets
+        // `snapshot_copying` before it takes the mutex.
+        if (!mg.replicated_apply_mutex.tryLock()) {
+            if (mg.snapshot_copying.load(.acquire)) return;
+            mg.replicated_apply_mutex.lockUncancelable(io);
+        }
         mg.replicated_apply_holder.store(currentThreadTag(), .release);
         defer {
             mg.replicated_apply_holder.store(0, .release);
@@ -4752,6 +4763,35 @@ pub const StorageAdapter = struct {
             };
         }
     }
+
+    // CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=GraphFilesHeldForCopy; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6636 (b): hold `graph_name` while a Raft snapshot copies its
+    /// files: its read lock (no local writer, no checkpoint: those take it
+    /// EXCLUSIVE) and its `replicated_apply_mutex` (no replicated write or
+    /// label interning), in that order, as a checkpoint takes them. The
+    /// Raft node holds its applies meanwhile, so no apply waits for it under
+    /// `inner_mutex`. `release` lets go.
+    pub fn holdGraphForSnapshot(self: *StorageAdapter, graph_name: []const u8) !SnapshotHold {
+        const acq = try self.acquireGraphReadLock(graph_name);
+        const mg = acq.mg;
+        mg.snapshot_copying.store(true, .release);
+        mg.replicated_apply_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        return .{ .adapter = self, .mg = mg, .hold_start_ns = acq.hold_start_ns };
+    }
+
+    pub const SnapshotHold = struct {
+        adapter: *StorageAdapter,
+        mg: *ManagedGraph,
+        hold_start_ns: u64,
+
+        pub fn release(self: *SnapshotHold) void {
+            self.mg.replicated_apply_holder.store(0, .release);
+            self.mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mg.snapshot_copying.store(false, .release);
+            self.adapter.releaseGraphReadLock(self.mg, self.hold_start_ns, .snapshot);
+        }
+    };
 
     /// SONNY-6541 (1): a Raft `drop_graph` apply of `graph_name` is about to
     /// wait for the graph's write lock under the Raft node's `inner_mutex`:

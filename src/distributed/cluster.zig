@@ -967,6 +967,11 @@ pub const ClusterCoordinator = struct {
         // this process): the apply under `inner_mutex` then scans nothing.
         raft.prehydrate_callback = &raft_apply.prehydrateForApply;
         raft.prehydrateUnapplied();
+        // SONNY-6636 (b): the node snapshots its store past a threshold
+        // (GEODE_RAFT_SNAPSHOT_ENTRIES / GEODE_RAFT_SNAPSHOT_BYTES) and
+        // compacts its Raft log there.
+        raft.snapshot_create_callback = &raft_apply.createSnapshotCallbackFn;
+        raft.snapshot_policy = raft_consensus.SnapshotPolicy.fromEnv(allocator);
 
         // GAP-0870: register the applied-membership view and the 2PC
         // coordinator so committed config_change / txn_prepare / txn_decide
@@ -995,6 +1000,14 @@ pub const ClusterCoordinator = struct {
         idem_dedup.* = cluster_replication.IdempotencyDedup.init(allocator);
         errdefer idem_dedup.deinit();
         raft_apply.setGlobalIdempotencyDedup(idem_dedup);
+        // SONNY-6636 (b): the keys the compacted entries recorded come back
+        // from this node's own snapshot; the replay rebuilds the rest. A
+        // snapshot that cannot be read refuses the start (a retried
+        // statement would otherwise be applied twice).
+        if (try raft.localSnapshotData(allocator)) |snap_data| {
+            defer allocator.free(snap_data);
+            try raft_apply.seedFromLocalSnapshot(snap_data);
+        }
 
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
