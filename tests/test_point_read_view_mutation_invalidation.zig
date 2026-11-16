@@ -16,7 +16,7 @@ test "PointReadView.isStale flips true after a mutation" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    store.clearNodes();
+    try store.clearNodes();
 
     const labels = [_][]const u8{"Person"};
     const labels_slice: [][]const u8 = @constCast(&labels);

@@ -48,7 +48,7 @@ test "handler dispatch: point-read MATCH takes PointReadView, does NOT clone" {
 
     // Start from a known clean slate — other tests in the same binary
     // may have mutated the process-wide clone counter.
-    store.clearNodes();
+    try store.clearNodes();
 
     const labels = [_][]const u8{"Person"};
     const labels_slice: [][]const u8 = @constCast(&labels);

@@ -2992,7 +2992,7 @@ pub const GraphStore = struct {
         // Clear nodes and edges (which also frees memory). SONNY-6297: without
         // re-registering the default graph, which allocates and panicked on
         // OutOfMemory (a snapshot torn down after a failed clone).
-        self.clearNodesReseeding(false);
+        self.clearNodesReseeding(null);
         // Deinit the hashmaps
         self.nodes.deinit();
         self.edges.deinit();
@@ -3086,13 +3086,49 @@ pub const GraphStore = struct {
         self.pending_hydration.deinit();
     }
 
-    pub fn clearNodes(self: *GraphStore) void {
-        self.clearNodesReseeding(true);
+    /// Reset the store to empty, with the default graph registered again.
+    /// SONNY-6639: fails with OutOfMemory, changing nothing, when the new
+    /// registries cannot be allocated (it panicked, a reload included).
+    pub fn clearNodes(self: *GraphStore) error{OutOfMemory}!void {
+        const reseed = try DefaultGraphReseed.init(self.allocator);
+        self.clearNodesReseeding(reseed);
     }
 
-    /// `clearNodes`; `reseed`: register the default graph again (a reset),
-    /// or leave the registries empty (teardown frees them next).
-    fn clearNodesReseeding(self: *GraphStore, reseed: bool) void {
+    /// SONNY-6639: the graph registry and persistent-UUID map a reset
+    /// installs, each holding the default graph, built before the reset
+    /// frees anything so that the reset itself cannot fail.
+    const DefaultGraphReseed = struct {
+        graphs: std.StringHashMap(void),
+        graph_uuids: std.StringHashMap([16]u8),
+
+        fn init(allocator: std.mem.Allocator) error{OutOfMemory}!DefaultGraphReseed {
+            var graphs = std.StringHashMap(void).init(allocator);
+            errdefer graphs.deinit();
+            const name = try allocator.dupe(u8, "default");
+            errdefer allocator.free(name);
+            try graphs.put(name, {});
+            var graph_uuids = std.StringHashMap([16]u8).init(allocator);
+            errdefer graph_uuids.deinit();
+            const uuid_name = try allocator.dupe(u8, "default");
+            errdefer allocator.free(uuid_name);
+            try graph_uuids.put(uuid_name, generatePersistentUuid());
+            return .{ .graphs = graphs, .graph_uuids = graph_uuids };
+        }
+
+        /// Free a reseed that was not installed.
+        fn deinit(self: *DefaultGraphReseed, allocator: std.mem.Allocator) void {
+            var git = self.graphs.keyIterator();
+            while (git.next()) |k| allocator.free(k.*);
+            self.graphs.deinit();
+            var uit = self.graph_uuids.keyIterator();
+            while (uit.next()) |k| allocator.free(k.*);
+            self.graph_uuids.deinit();
+        }
+    };
+
+    /// `clearNodes`; `reseed`: the registries to install (a reset), or null
+    /// to leave them empty (teardown frees them next). Allocates nothing.
+    fn clearNodesReseeding(self: *GraphStore, reseed: ?DefaultGraphReseed) void {
         // Free and clear all nodes. The BoundedNodeCache frees every resident
         // value via its free_fn (freeNodeValue) AND drains the retire list, so
         // the manual per-node free loop is no longer needed here.
@@ -3122,11 +3158,7 @@ pub const GraphStore = struct {
                 self.allocator.free(entry.key_ptr.*);
             }
             self.graphs.deinit();
-            self.graphs = std.StringHashMap(void).init(self.allocator);
-            if (reseed) {
-                const default_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph name during clearNodes");
-                self.graphs.put(default_name, {}) catch @panic("OOM: failed to register default graph during clearNodes");
-            }
+            self.graphs = if (reseed) |r| r.graphs else std.StringHashMap(void).init(self.allocator);
         }
 
         // GAP-0839: Reset persistent-UUID map alongside the graph registry and
@@ -3137,11 +3169,7 @@ pub const GraphStore = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.graph_uuids.deinit();
-        self.graph_uuids = std.StringHashMap([16]u8).init(self.allocator);
-        if (reseed) {
-            const default_uuid_name = self.allocator.dupe(u8, "default") catch @panic("OOM: failed to allocate default graph uuid key during clearNodes");
-            self.graph_uuids.put(default_uuid_name, generatePersistentUuid()) catch @panic("OOM: failed to register default graph uuid during clearNodes");
-        }
+        self.graph_uuids = if (reseed) |r| r.graph_uuids else std.StringHashMap([16]u8).init(self.allocator);
 
         // Reset label index
         var label_iter = self.label_index.iterator();
@@ -16089,8 +16117,16 @@ pub const GraphStore = struct {
         // Reload semantics replace the in-memory compatibility cache with the
         // latest engine-backed state. This keeps repeated loads idempotent and
         // avoids duplicate indexes / adjacency entries.
-        self.clearNodes();
-        errdefer self.clearNodes();
+        // SONNY-6639: both resets' registries are allocated first; a reload
+        // short of memory fails with OutOfMemory before it changes anything
+        // (the reset panicked), and the reset of a failed load cannot fail.
+        var failure_reseed: ?DefaultGraphReseed = try DefaultGraphReseed.init(self.allocator);
+        defer if (failure_reseed) |*r| r.deinit(self.allocator);
+        try self.clearNodes();
+        errdefer {
+            self.clearNodesReseeding(failure_reseed);
+            failure_reseed = null;
+        }
         // Reload coherence: `clearNodes` wipes every resident product but NOT
         // `pending_hydration`, so a graph hydrated before this reload would
         // stay latched done=true over now-EMPTY products (reads would see an
@@ -16107,6 +16143,9 @@ pub const GraphStore = struct {
             while (pit.next()) |e| {
                 e.value_ptr.*.done.store(false, .release);
                 e.value_ptr.*.failed.store(false, .release);
+                // SONNY-6639: the reset cleared the counters a failed build
+                // left; no build runs (`hydration_build_mutex` is held).
+                e.value_ptr.*.needs_reset = false;
             }
         }
         if (global_adapter) |adapter| {
@@ -18933,7 +18972,6 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // Reinitialize if data dir changed or not initialized yet
     // Clean up previous instance if it exists
     if (initialized.load(.monotonic) and globalStorePtr() != null) {
-        global_store.?.clearNodes();
         global_store.?.deinit();
         global_store = null;
         global_store_allocator = null;
@@ -20600,7 +20638,7 @@ test "PERF-P0-001: edge-type index survives clearNodes" {
     try testing.expect(store.getEdgeIdsByType("default", "LINK") != null);
 
     // Clear the store
-    store.clearNodes();
+    try store.clearNodes();
 
     // Index should be empty after clear
     try testing.expect(store.getEdgeIdsByType("default", "LINK") == null);

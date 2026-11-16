@@ -17,7 +17,7 @@ test "PointReadView does not clone nodes" {
 
     // Start from a known clean slate — other tests in the same test binary
     // may have mutated the process-wide store.
-    store.clearNodes();
+    try store.clearNodes();
 
     const labels = [_][]const u8{"Person"};
     const labels_slice: [][]const u8 = @constCast(&labels);

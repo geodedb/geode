@@ -3073,6 +3073,19 @@
 
 ### Fixed
 
+- **A reload that runs out of memory fails instead of crashing the server;
+  a reload clears every hydration latch (SONNY-6639).**
+  `GraphStore.clearNodes` (the first step of `loadFromFile`, and of a Raft
+  snapshot install) registered the default graph again with allocations
+  that ended in `@panic` on OutOfMemory. The new registries are now built
+  before the reset frees anything: `clearNodes` returns
+  `error{OutOfMemory}!void` and changes nothing when it fails, and
+  `loadFromFile` reserves the registries of its failure-path reset up
+  front, so that reset cannot fail. `loadFromFile` also clears
+  `needs_reset` (SONNY-6605) with `done` and `failed`. **API:**
+  `clearNodes` callers handle the error (`try`). Regression: `zig build
+  test-sonny6639-reload-oom`.
+
 - **A graph whose WAL is damaged mid-log answers 58000 `WalCorrupted` with
   an operator message (SONNY-6642).** graph-storage >= 0.4.20 refuses to
   open a graph whose shard WAL has a damaged record followed by valid ones

@@ -117,7 +117,7 @@ test "SONNY-3253 (F11): clearNodes (reload, Raft snapshot install) keeps an IdMa
     _ = try f.st.createNodeWithGraph(&labels, "g1");
     const refs = try f.st.idMapsSnapshotForTest(testing.allocator);
     try testing.expect(refs.len > 0);
-    f.st.clearNodes();
+    try f.st.clearNodes();
     // Round 14 freed them here: this read was of freed memory.
     for (refs) |r| try testing.expectEqual(@as(u32, 0), r.map.nodeCount());
     try testing.expect(f.st.retired_id_maps.items.len >= refs.len);

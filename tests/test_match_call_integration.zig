@@ -47,7 +47,7 @@ test "MATCH + CALL - Basic node binding" {
     const allocator = testing.allocator;
 
     var store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create test graph
     const labels = [_][]const u8{"TestNode"};
@@ -89,7 +89,7 @@ test "MATCH + CALL - Property-based node filtering" {
     const allocator = testing.allocator;
 
     var store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create test nodes with different properties
     const labels = [_][]const u8{"TestNode"};
@@ -127,7 +127,7 @@ test "MATCH + CALL - Dijkstra with start and end binding" {
     const allocator = testing.allocator;
 
     var store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create test graph for shortest path
     const labels = [_][]const u8{"TestNode"};
@@ -175,7 +175,7 @@ test "MATCH + CALL - Multiple node bindings" {
     const allocator = testing.allocator;
 
     var store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create nodes
     const labels = [_][]const u8{"TestNode"};
@@ -255,7 +255,7 @@ test "MATCH + CALL - Label-based filtering" {
     const allocator = testing.allocator;
 
     var store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create nodes with different labels
     const person_labels = [_][]const u8{"Person"};
