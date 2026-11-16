@@ -12193,6 +12193,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_fle_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_fle_step = b.step("test-sonny6386-fle-rotate-key-unsupported", "Run SONNY-6386 item 2 regression (geode fle rotate-key and fle_commands.rotateKey refuse every scope as unsupported, SONNY-6387, exit non-zero and claim no rotation; fle --help and show-rotation do not advertise or report one)");
     sonny6386_fle_step.dependOn(&run_sonny6386_fle_tests.step);
+    // SONNY-6321: the FLE admin commands and `geode fle` CLI, executed;
+    // migrate-encrypt claims no migration it did not perform.
+    const sonny6321_fle_admin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6321_fle_admin_cli.zig"), .target = target, .optimize = optimize });
+    sonny6321_fle_admin_test_mod.link_libc = true;
+    sonny6321_fle_admin_test_mod.addImport("geode", root_mod);
+    const sonny6321_fle_admin_tests = b.addTest(.{ .root_module = sonny6321_fle_admin_test_mod });
+    const run_sonny6321_fle_admin_tests = b.addRunArtifact(sonny6321_fle_admin_tests);
+    spawnsBuiltGeode(sonny6321_fle_admin_tests);
+    shardDep(test_step, &run_sonny6321_fle_admin_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6321_fle_admin_step = b.step("test-sonny6321-fle-admin-cli", "Run SONNY-6321 FLE admin regression (fle_commands.migrateEncrypt and geode fle migrate-encrypt refuse as unsupported instead of reporting a migration they did not perform; executeCommand grant/revoke/show change and report the persisted catalog and refuse unknown schemas, fields and commands; geode fle grant-plaintext writes GEODE_DATA_DIR's catalog and show-policy reports it)");
+    sonny6321_fle_admin_step.dependOn(&run_sonny6321_fle_admin_tests.step);
     const sonny6386_rb_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_remote_backup_atomic_output.zig"), .target = target, .optimize = optimize });
     sonny6386_rb_test_mod.link_libc = true;
     sonny6386_rb_test_mod.addImport("geode", root_mod);
