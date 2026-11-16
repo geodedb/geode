@@ -4,6 +4,7 @@ const undo_log = logging.scoped("txn_undo_log");
 const graph_store = @import("graph_store.zig");
 const property_codec = @import("property_value_codec.zig");
 const statement_undo = @import("statement_undo.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
 
@@ -379,7 +380,14 @@ pub const UndoLog = struct {
         // rebuilds that session's COMMIT was to run.
     }
 
-    pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) void {
+    /// SONNY-2979: the caller has committed the transaction's engine
+    /// transactions; the durable undo log's COMMITTED record is written
+    /// first, and is the commit point. If it cannot be written the
+    /// transaction is left as it was (open, its entries kept) and
+    /// `error.TxnCommitRecordFailed` returned: the caller rolls it back and
+    /// fails the COMMIT.
+    pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) error{TxnCommitRecordFailed}!void {
+        try markDurableCommit();
         if (store) |s| {
             self.flushPendingRebuilds(s);
         } else {
@@ -399,7 +407,8 @@ pub const UndoLog = struct {
     /// WITHOUT flushing pending index rebuilds. Caller is responsible for calling
     /// flushPendingRebuilds separately -- typically after releasing the write lock
     /// to avoid blocking other connections during the O(N) index population scan.
-    pub fn commitDeferRebuilds(self: *UndoLog) void {
+    pub fn commitDeferRebuilds(self: *UndoLog) error{TxnCommitRecordFailed}!void {
+        try markDurableCommit(); // SONNY-2979: as in `commit`
         self.discardTxn(threadTxn());
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -758,6 +767,9 @@ pub const UndoLog = struct {
 
         // SONNY-3348 (round 19, m3): the transaction is over either way.
         defer t_txn_state = .{};
+        // SONNY-2979: then its undo is committed in the engine and the
+        // durable undo log records the rollback (before the line above).
+        defer txn_durable_undo.markThreadRolledBack();
         try self.undoAndFree(store, owned_entries.items);
     }
 
@@ -795,6 +807,7 @@ pub const UndoLog = struct {
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
+        txn_durable_undo.markThreadRolledBack(); // SONNY-2979: as in `rollback`
         t_txn_state = .{};
     }
 
@@ -836,6 +849,15 @@ pub const UndoLog = struct {
         copies.clearRetainingCapacity();
     }
 };
+
+/// SONNY-2979: write the durable undo log's COMMITTED record of the calling
+/// thread's transaction (none when it logged no entry).
+fn markDurableCommit() error{TxnCommitRecordFailed}!void {
+    txn_durable_undo.markThreadCommitted() catch |err| {
+        undo_log.err("could not write the COMMITTED record of a transaction to the durable undo log; the COMMIT fails and the transaction is rolled back", &.{logging.Attr.string("error", @errorName(err))});
+        return error.TxnCommitRecordFailed;
+    };
+}
 
 /// SONNY-2799: is a transaction open on the calling thread? (SONNY-3348:
 /// a statement's undo record joins it when the statement succeeds.)
@@ -1586,7 +1608,7 @@ test "basic undo log operations" {
     try std.testing.expectEqual(@as(usize, 3), log.entries.items.len);
 
     // Commit clears the log
-    log.commit(null);
+    try log.commit(null);
     try std.testing.expectEqual(@as(usize, 0), log.entries.items.len);
     try std.testing.expect(!log.active);
 }
@@ -1738,7 +1760,7 @@ test "savepoint create and rollback to savepoint" {
     try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].own_count);
 
     // Commit clears savepoints
-    undo.commit(null);
+    try undo.commit(null);
     try std.testing.expectEqual(@as(usize, 0), undo.entries.items.len);
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
     try std.testing.expect(!undo.active);
@@ -1759,7 +1781,7 @@ test "savepoint not found error" {
     // easily construct in a unit test without initializing the full engine.
     // Instead we test that the error is returned for a missing name.
     try std.testing.expectError(error.SavepointNotFound, undo.rollbackToSavepoint("nonexistent", dummy_store_ptr));
-    undo.commit(null);
+    try undo.commit(null);
 }
 
 const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(std.mem.alignForward(usize, 0xdeadbeef, @alignOf(graph_store.GraphStore))));
@@ -1776,7 +1798,7 @@ test "begin clears savepoints from previous transaction" {
     // Begin a new transaction — should clear previous savepoints
     undo.begin();
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
-    undo.commit(null);
+    try undo.commit(null);
 }
 
 test "SerializedProperty round-trips decimal and ext values" {

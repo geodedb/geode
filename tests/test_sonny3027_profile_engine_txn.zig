@@ -66,7 +66,7 @@ test "SONNY-3027: a PROFILE'd MATCH..MERGE in a transaction commits its session 
     // Clean up whatever was left, without tripping the backstop.
     gsa.commitThreadSessionTxn() catch {};
     _ = gsa.leaveSessionEngineTxn(&slot, scope);
-    undo.commit(graph_store.getGlobalStore(testing.allocator));
+    try undo.commit(graph_store.getGlobalStore(testing.allocator));
 
     try testing.expect(!left_open);
     try testing.expect(!on_thread);

@@ -9438,7 +9438,16 @@ fn handleClientMessage(
                         try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.SessionCommitFailed) } });
                         return;
                     };
-                    undo.commitDeferRebuilds();
+                    // SONNY-2979: the durable undo log's COMMITTED record
+                    // is the commit point; without it, as above.
+                    undo.commitDeferRebuilds() catch {
+                        undo.rollback(graph_store.getWritableGlobalStore(gpa)) catch |err| {
+                            log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
+                        };
+                        state.endTransaction();
+                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.SessionCommitFailed) } });
+                        return;
+                    };
                 }
                 // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);

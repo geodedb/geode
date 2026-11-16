@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T07:39:33.986003266Z",
+  "generated_at": "2026-11-16T08:24:26.347472669Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -63214,6 +63214,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2979-DURABLE-UNDO",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "StartupRecovery",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2979_txn_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "DurableUndoLog",
+          "status": "TESTED",
+          "files": [
+            "src/txn_durable_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2979_txn_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3025-WRITE-RETURN-ROWS",
       "features": [
         {
@@ -87908,7 +87941,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4347
+      "TESTED": 4349
     },
     "by_aspect": {
       "2PC": 3,
@@ -88883,6 +88916,7 @@
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
       "DurableRestore": 1,
+      "DurableUndoLog": 1,
       "DurationIsoWriter": 1,
       "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
@@ -91296,6 +91330,7 @@
       "StartupLoadsSecurityManagerMfa": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupRecovery": 1,
       "StartupRefusal": 1,
       "StartupRefusesPartialAuthState": 1,
       "StartupReport": 1,
