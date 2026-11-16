@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T09:56:17.819785199Z",
+  "generated_at": "2026-11-16T10:08:10.730015574Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82930,6 +82930,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6662-CLI-AUTH-LEAK",
+      "features": [
+        {
+          "feature": "QueryCli",
+          "aspect": "ConnectErrorsFreed",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6662_cli_auth_leak.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6662_cli_auth_leak.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6662-CLI-ERROR-MSG-FREED",
+      "features": [
+        {
+          "feature": "QueryCli",
+          "aspect": "ConnectErrorsFreed",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6662_cli_auth_leak.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88021,7 +88059,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4354
+      "TESTED": 4356
     },
     "by_aspect": {
       "2PC": 3,
@@ -88608,6 +88646,7 @@
       "Congestion": 1,
       "ConnectAuthenticates": 1,
       "ConnectCompile": 1,
+      "ConnectErrorsFreed": 2,
       "ConnectHelloRetry": 1,
       "ConnectHelper": 1,
       "ConnectPhaseVsExecPhase": 1,
