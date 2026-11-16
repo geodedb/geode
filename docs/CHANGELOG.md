@@ -4,6 +4,18 @@
 
 ### Security
 
+- **A `DROP POLICY` whose chain-root write keeps failing puts the policy
+  back (SONNY-6273, follow-up).** When the graph store did not take the
+  new chain seal and both reseals failed too, the policy's records stayed
+  removed while the statement failed and the catalog kept the policy: the
+  chain root could be half written (the chain hash stored, the record count
+  not), the chain did not verify, and the next start refused to load the
+  security graph (`AuthChainTampered`). Now the removed records are put
+  back, their HMACs recomputed and the chain sealed over them: the failed
+  statement leaves the policy stored, in force and under a chain that
+  verifies, and the retry drops it. Regression: `zig build
+  test-sonny6273-drop-policy-atomic` (chain-root write failing part way, for
+  an allow and a deny policy).
 - **An MFA reset without proof is audited as `MFA_RESET_BY_ADMIN`
   (SONNY-6624).** `geode.auth.mfa_disable` needs no proof of possession
   (no code, or a code checked for its format only: the Admin recovery
@@ -853,8 +865,8 @@
   fsync per commit, 5 interleaved rounds of 100 operations, medians, load
   average 8-10: CREATE 19.9 -> 20.0 ms, a node SET 21.6 -> 19.8 ms, a
   relationship's first property SET 24.2 -> 24.9 ms, an auto-commit SET
-  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET
-  + ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
+  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET +
+  ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
   the commit path.
 - **The security graph's label-page re-log is gone (SONNY-6529).**
   `relogSecurityLabelPageTxn` re-imaged a node's label page in the
@@ -3371,8 +3383,9 @@
   now reads every Markdown doc under `docs/` (it read one), and the examples
   that did not parse are fixed: one-line statements that ran together end in
   `;`, and syntax templates (`[...]`, `<...>`, signature listings such as
-  docs/TYPE_QUICK_REFERENCE.md's) are ```text blocks. Examples of features
-  Geode does not have are marked so in the prose and kept as ```text, or
+  docs/TYPE_QUICK_REFERENCE.md's) are fenced `text` blocks. Examples of
+  features Geode does not have are marked so in the prose and kept as fenced
+  `text` blocks, or
   rewritten to the supported form: GQL `BACKUP`/`RESTORE`, `ANALYZE INDEX`,
   `REBUILD INDEX`, `SAVEPOINT`/`ROLLBACK TO`, `db.info()`/`db.stats()`,
   `score()`, `point()`/`within()`/`bbox()`/`intersects()` (the spatial
