@@ -174,7 +174,7 @@ test "SONNY-6624 (1): mfa_disable leaves a MFA_RESET_BY_ADMIN audit record with 
     try testing.expect(std.mem.indexOf(u8, detail(resets[1], "details").?, "not verified") != null);
 
     // A refused disable (no such user) is not a reset.
-    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_disable('nobody6624')", "42704");
+    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_disable('nobody6624')", "42002");
     const sink2 = try std.Io.Dir.cwd().readFileAlloc(io(), sink_path, ga, .limited(1 << 22));
     try testing.expectEqual(@as(usize, 2), (try recordsWithAction(ga, sink2, "MFA_RESET_BY_ADMIN")).len);
 }
