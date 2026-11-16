@@ -161,14 +161,18 @@ SONNY-6279.
   hydrated when the entry enters the log or before a restarted node
   replays it, not under `inner_mutex`
   (`test-sonny6631-apply-hydration-off-mutex`). A label or relationship type
-  new to a graph is still written to its label dictionary durably (two
-  fsyncs per shard set) under `inner_mutex` (SONNY-6633 item 4, open).
+  new to a graph an entry writes is given its id (a durable label-dictionary
+  write, two fsyncs per shard set) at the same point, under the graph's
+  `replicated_apply_mutex`, not under `inner_mutex`; only into a graph
+  already open, never creating one (SONNY-6633 item 4, SONNY-6636).
   InstallSnapshot
   carries its chunk data, BLAKE3 digest and configuration on the wire, and a
   refused snapshot reaches the leader as a refusal; a snapshot carries the
-  idempotency-key table (`test-sonny6633-snapshot-wire`).
+  idempotency-key table (`test-sonny6633-snapshot-wire`). raft v0.2.3: the
+  leader re-sends a refused snapshot after 16, 32, 64 ... rounds (at most
+  256), not at the next round; a successful install resets the backoff.
 
-### Raft snapshots into the durable store (SONNY-6633 item 2: blocked)
+### Raft snapshots into the durable store (SONNY-6633 item 2, SONNY-6636 item 1: in progress)
 
 A snapshot cannot be restored into the server's durable store, so the
 follower refuses it (`RaftSnapshotRestoreNotDurable`) and pauses, and the
@@ -179,7 +183,9 @@ block it:
    reopened on other files while the server runs: requests hold pins and
    `rwlock`s on it, and neither graph-storage nor `StorageAdapter` has a
    swap (`storage/backup.zig` `restoreBesideDataDir` restores beside the
-   data directory and asks for a restart for the same reason).
+   data directory and asks for a restart for the same reason). The
+   adapter's crash-safe swap of whole graphs has landed (below); its
+   wiring into the Raft restore has not.
    `installSnapshotData` only rebuilds memory (`clearNodes`, `*NoSave`).
 2. **A lossy snapshot.** The JSON-lines snapshot
    (`GraphStore.serializeSnapshot`) writes every `ExtValue` property
@@ -195,18 +201,35 @@ Design to unblock it:
   table, taken at the leader's applied index: checkpoint every graph, then
   copy (hard-link) its files while the apply path is paused, outside
   `inner_mutex`.
-- **Swap:** `StorageAdapter.swapGraphFiles(name, staged_dir)` (new, and a
-  graph-storage reopen-from-directory if the engine needs one): drain pins,
-  take the graph's `rwlock` EXCLUSIVE and `replicated_apply_mutex`, close
-  the engine, `rename` live -> `<name>.old` and staged -> live on the same
-  file system, fsync the parent, reopen, drop the graph's resident caches
-  and mark it pending hydration, delete `<name>.old`.
-- **Crash safety:** before the first rename write
-  `<data_dir>/raft/restore.intent` (snapshot index and term, staged paths),
-  fsynced; startup finishes or rolls back an intent it finds before the
-  store opens. The Raft snapshot is persisted (`advancePersist`) only after
-  every graph is swapped and the intent removed: a crash before leaves the
-  node behind, and the leader sends the snapshot again.
+- **Swap (landed, SONNY-6636):** a restored graph keeps the uuid its
+  files were written under: graph-storage binds a graph's uuid into its
+  manifest, WAL header (`UuidMismatch`), shard uuids and, under at-rest
+  encryption, its keys, and exposes no re-key, so files cannot move to
+  another uuid. `StorageAdapter.beginGraphRestore(sources)` writes
+  `<data_dir>/graph_restore.intent` (each graph's name, old uuid and
+  restored uuid; fsynced, sealed under at-rest encryption like the
+  registry) and creates `<data_dir>/<uuid>.restore`; the caller fills it;
+  `commitGraphRestore` rewrites the intent as committed (the commit
+  point), detaches the old engines (dropped, drained under their
+  whole-graph lock, freed by the last unpin with no checkpoint), renames
+  each staged directory into place (a graph restored again under its own
+  uuid has its live directory renamed aside to `<uuid>.old` first),
+  points the registry at the restored uuids, deletes the old directories
+  and then the intent. A uuid that belongs to another graph here is
+  refused (`GraphRestoreUuidInUse`). Works under at-rest encryption when
+  the nodes share the key.
+- **Crash safety (landed):** `StorageAdapter.init` reads the intent before
+  any graph opens: not committed, the staged directories are deleted and
+  the old graphs stay; committed, the swap is finished (the same
+  idempotent steps). A damaged intent refuses the open.
+  `test-sonny6636-graph-restore-swap` stops both shapes at every step,
+  with and without at-rest encryption, and reopens. Still open: the
+  snapshot index and term in the intent, and persisting the Raft snapshot
+  (`advancePersist`) only after the intent is removed.
+- **Resident state (open):** after the swap, `GraphStore` must forget the
+  graph's resident state (IdMap, label index, caches) before marking it
+  pending hydration: hydration re-inserts idempotently but removes nothing,
+  so the old graph's nodes would stay visible.
 - **Off `inner_mutex`:** the swap takes graph locks, so `drainReady` must
   hand a Ready with a snapshot to a restore thread and keep the node paused
   (as `stalled_ready` does) until it finishes.

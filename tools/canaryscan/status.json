@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T03:52:31.129546525Z",
+  "generated_at": "2026-11-16T04:29:43.43674881Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81603,6 +81603,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "PrehydrateInternsNames",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InternOffRaftMutex",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6631_apply_hydration_off_mutex.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6633-SNAPSHOT-WIRE",
       "features": [
         {
@@ -81614,6 +81647,77 @@
           ],
           "tests": [
             "tests/test_sonny6633_snapshot_wire.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "RegistrySwap",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_graph_restore_swap.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_graph_restore_swap.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_graph_restore_swap.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-SNAPSHOT-OVER-QUIC",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_snapshot_over_quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_snapshot_over_quic.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-STUB-QUIC-WARNING",
+      "features": [
+        {
+          "feature": "Raft Wrapper Transport Dispatch",
+          "aspect": "StubConnectWarns",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "\"SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing\""
           ],
           "benches": [],
           "owner": "distributed",
@@ -86713,7 +86817,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4279
+      "TESTED": 4285
     },
     "by_aspect": {
       "2PC": 3,
@@ -88397,6 +88501,7 @@
       "InteriorBytesUnconditionalOwnership": 1,
       "InteriorDupeArenaBacked": 1,
       "IntermediateWithAgg": 1,
+      "InternOffRaftMutex": 1,
       "InterruptCheckTTY": 1,
       "InterruptTracking": 1,
       "IntervalAndJsonArgumentBridge": 1,
@@ -89287,6 +89392,7 @@
       "PredictiveVersionCheck": 1,
       "PrefixFilter": 1,
       "PrehydrateBeforePropose": 1,
+      "PrehydrateInternsNames": 1,
       "PrehydrateWhereEntriesEnterTheLog": 1,
       "PreparePhase": 1,
       "PrependUseGraph": 1,
@@ -89577,7 +89683,8 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 405,
+      "RegistrySwap": 1,
+      "Regression": 407,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -90165,6 +90272,7 @@
       "StructuralWriteGuard": 2,
       "StructureTests": 1,
       "StructuredDivergenceDetail": 1,
+      "StubConnectWarns": 1,
       "StubImplAudit": 1,
       "Subnet": 1,
       "SubnetKey": 1,

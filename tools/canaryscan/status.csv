@@ -5168,7 +5168,13 @@ REQ-SONNY-6632-OPEN-FAILED-REBUILT,StorageIntegrity,FailedClearedOnRebuild,TESTE
 REQ-SONNY-6632-RECLAIM-NOT-BUILT,StorageIntegrity,ReclaimGateRunningBuild,TESTED,src/graph_store.zig,tests/test_sonny6632_hydration_followups.zig,,storage,2026-11-15
 REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,DedupSerialized,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
 REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,SnapshotCarriesDedup,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
+REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,PrehydrateInternsNames,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
+REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,InternOffRaftMutex,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6633_snapshot_wire.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
+REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,RegistrySwap,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
+REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_graph_restore_swap.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
+REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_snapshot_over_quic.zig,tests/test_sonny6636_snapshot_over_quic.zig,,distributed,2026-11-15
+REQ-SONNY-6636-STUB-QUIC-WARNING,Raft Wrapper Transport Dispatch,StubConnectWarns,TESTED,src/distributed/raft_consensus.zig,"""SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing""",,distributed,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
