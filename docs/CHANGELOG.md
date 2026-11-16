@@ -3073,6 +3073,35 @@
 
 ### Fixed
 
+- **`shortestPath(a, b)` walks the graph; MATCH ... SET with no RETURN
+  answers no rows; one function arity table; quantified-list and MERGE
+  path leaks; a LET definition sees the ones before it (SONNY-6637).**
+  The two-node forms `shortestPath(a, b)` / `allShortestPaths(a, b)` (and
+  `shortest_path` / `all_shortest_paths`) built a two-node path with no
+  relationships whether or not the nodes were connected, and answered the
+  list [1, 2] for `shortestPath(1, 2)`; the camel-case spelling was a
+  syntax error. They now take the walk `shortestPath((a)-[*0..]-(b))`
+  takes, in the session's scope, any type and direction; no path is NULL
+  (the empty list), a non-node operand 22G03. `allShortestPaths` found one
+  path to an end reached by several parents; it finds every shortest path.
+  A `MATCH ... SET` or `REMOVE` with no RETURN answered the matched rows,
+  at top level and in a FOR body; it answers none (ISO 13.3 GR 10, 13.4
+  GR 5). `src/eval/function_arity.zig` holds every built-in, extension and
+  timeseries function's operand count: the statement check refuses another
+  count with 42000 before anything runs (a call no row reached ran, and an
+  aggregate such as `sum(1, 2)` was never checked), and the evaluator
+  checks it before dispatch. docs/TYPE_QUICK_REFERENCE.md listed fifteen
+  functions no dispatch answered (`now()`, `age()`, `bit_or()`, ...); they
+  are removed. A quantified relationship list on a comma or multi-hop
+  pattern was copied per binding onto the result's allocator and never
+  freed, and a MERGE RETURN's path relationship array likewise; both are
+  lent from the statement's scratch arena. `LET a = 1, b = a + 1` read `a`
+  as NULL (ISO 14.7 runs the definitions in order); it now runs as one
+  chained part per definition when one reads another. test-count-pushdown
+  seeds with deferred WAL sync (51 minutes on a loaded disk). Regressions:
+  `zig build test-sonny6637-query-items`, `zig build
+  test-sonny6637-function-arity`.
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),

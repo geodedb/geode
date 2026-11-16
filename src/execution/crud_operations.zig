@@ -4138,7 +4138,10 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 // scratch arena; on `allocator` nothing freed it.
                 row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
                 // SONNY-3322: the scope's copy of a relationship dies with it.
-                try scope.residentEdges(allocator, store, &row[i]);
+                // SONNY-6637 item 4: a path's replacement relationship array
+                // is lent like the cell (the result borrows it); on
+                // `allocator` nothing freed it.
+                try scope.residentEdges(value_utilities.lentAllocator(allocator), store, &row[i]);
             }
 
             rows[0] = row;

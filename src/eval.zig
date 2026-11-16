@@ -587,6 +587,7 @@ const decimal_text = @import("types/decimal_text.zig");
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
 const call_handlers = @import("eval/call_handlers.zig");
+const function_arity = @import("eval/function_arity.zig");
 // GAP-0537: dedicated handler modules extracted from the fallback .Call branch
 const ts_call_handlers = @import("eval/ts_call_handlers.zig");
 const quantifier_call_handlers = @import("eval/quantifier_call_handlers.zig");
@@ -1623,6 +1624,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 lowercase_name_buf[i] = std.ascii.toLower(c);
             }
             const lowercase_fn = lowercase_name_buf[0..fn_name_len];
+
+            // SONNY-6637 item 3: the operand count, once, from the shared
+            // table, before any handler runs (the statement check refuses it
+            // first, `scope_check.checkCallArity`).
+            try function_arity.check(function_name, call.args.len);
 
             // Try math functions (abs, sqrt, ceil, floor, round, sin, cos, tan, etc.)
             if (try call_handlers.evalMathFunction(allocator, lowercase_fn, call.args, env)) |result| {
@@ -3657,6 +3663,58 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
 // Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
 // Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
 
+// CANARY: REQ=REQ-SONNY-6637-SHORTEST-PATH-NODES; FEATURE="ShortestPath"; ASPECT=TwoArgumentForm; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=eval; UPDATED=2026-11-15
+/// SONNY-6637 item 1: `shortestPath(a, b)` / `allShortestPaths(a, b)`, two
+/// node operands. The forms built a two-node path with no relationships
+/// whether or not `a` and `b` were connected (and `shortestPath(1, 2)` the
+/// list [1, 2]). They now take the walk `shortestPath((a)-[*0..]-(b))` takes
+/// (`graph_algorithms.findShortestPath`, with its session scope: tenant,
+/// graph and RLS): any relationship type, either direction, `a` to itself
+/// the path of `a` alone. No path is NULL (`allShortestPaths`: the empty
+/// list); a NULL operand is NULL, any other non-node operand 22G03.
+fn evalShortestPathBetween(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env, all: bool) EvalError!Value {
+    const start = try evalExpr(allocator, args[0].*, env);
+    const end = try evalExpr(allocator, args[1].*, env);
+    const none: Value = if (all) .{ .List = &.{} } else .{ .Null = {} };
+    if (start == .Null or end == .Null) return none;
+    if (start != .Node or end != .Node) return EvalError.TypeMismatch;
+    // The two operands, bound to names no query can write (a space), as
+    // the pattern's endpoints.
+    const start_name = " shortest path start";
+    const end_name = " shortest path end";
+    const names = [_][]const u8{ start_name, end_name };
+    const values = [_]Value{ start, end };
+    var walk_env = env;
+    walk_env.names = &names;
+    walk_env.values = &values;
+    walk_env.owned = false;
+    var hops = [_]ast.Hop{.{
+        .left = .{ .name = start_name, .labels = &.{}, .props = null },
+        .rel = .{ .name = null, .types = &.{}, .props = null, .dir = .undirected, .min_len = 0, .max_len = null },
+        .right = .{ .name = end_name, .labels = &.{}, .props = null },
+    }};
+    var chains = [_]ast.Chain{.{ .hops = &hops, .is_shortest = true }};
+    const pattern = ast.GraphPattern{ .chains = &chains };
+    // As the `.ShortestPath` expression: a tenancy refusal and a limit are
+    // the query's; any other failure is no path.
+    const found = (try getExecutionCallbacks()).findShortestPath(allocator, pattern, all, walk_env) catch |err| {
+        if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+        if (limitAsEvalError(err)) |limit_err| return limit_err;
+        if (err == error.OutOfMemory) return EvalError.OutOfMemory;
+        return none;
+    };
+    if (!all) return found;
+    return switch (found) {
+        .Null => none,
+        .List => found,
+        else => blk: {
+            const paths = try allocator.alloc(Value, 1);
+            paths[0] = found;
+            break :blk Value{ .List = paths };
+        },
+    };
+}
+
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
@@ -3801,25 +3859,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return Value{ .Null = {} },
             }
         } else if (args.len == 2) {
-            // Two arguments - start and end nodes
-            const start_arg = try evalExpr(allocator, args[0].*, env);
-            const end_arg = try evalExpr(allocator, args[1].*, env);
-
-            // Both must be nodes
-            if (start_arg == .Node and end_arg == .Node) {
-                var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                nodes[0] = start_arg.Node;
-                nodes[1] = end_arg.Node;
-                return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-            }
-            // If node IDs are provided as integers, return them as a list
-            if (start_arg == .Int and end_arg == .Int) {
-                var path_values = try allocator.alloc(Value, 2);
-                path_values[0] = start_arg;
-                path_values[1] = end_arg;
-                return Value{ .List = path_values };
-            }
-            return Value{ .Null = {} };
+            // SONNY-6637 item 1: the walk between the two nodes.
+            return try evalShortestPathBetween(allocator, args, env, false);
         }
         // Invalid arguments
         return Value{ .Null = {} };
@@ -3865,26 +3906,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return Value{ .List = &.{} },
             }
         } else if (args.len == 2) {
-            const start_arg = try evalExpr(allocator, args[0].*, env);
-            const end_arg = try evalExpr(allocator, args[1].*, env);
-
-            if (start_arg == .Node and end_arg == .Node) {
-                var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                nodes[0] = start_arg.Node;
-                nodes[1] = end_arg.Node;
-                var paths = try allocator.alloc(Value, 1);
-                paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                return Value{ .List = paths };
-            }
-            if (start_arg == .Int and end_arg == .Int) {
-                var path_values = try allocator.alloc(Value, 2);
-                path_values[0] = start_arg;
-                path_values[1] = end_arg;
-                var paths = try allocator.alloc(Value, 1);
-                paths[0] = Value{ .List = path_values };
-                return Value{ .List = paths };
-            }
-            return Value{ .List = &.{} };
+            // SONNY-6637 item 1: every shortest walk between the two nodes.
+            return try evalShortestPathBetween(allocator, args, env, true);
         }
         return Value{ .List = &.{} };
     }
