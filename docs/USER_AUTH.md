@@ -1039,7 +1039,11 @@ What exists:
   22023, a missing code is an argument error and does not) and turns the
   user's stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
   `warning` column; `mfa_disable(user)` turns it off. No login reads the
-  flag yet.
+  flag yet. `mfa_disable` needs no proof of possession (no code, or a code
+  checked for its format only: the Admin recovery route), so every disable
+  that takes effect is audited as `MFA_RESET_BY_ADMIN` with the actor
+  (`details.username`) and the target (`details.target_user`) (SONNY-6624),
+  beside the security graph's `MFA_DISABLE` record.
 - The offline `geode user mfa-setup` and `geode user mfa enable` print the
   same warning. `geode user mfa enable` needs `--code` with a code that
   verifies (SONNY-6608: without it, it turned MFA on).
