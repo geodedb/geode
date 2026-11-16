@@ -3073,6 +3073,15 @@
 
 ### Fixed
 
+- **A replicated write whose payload names no graph writes to the default
+  graph (SONNY-6651).** The Raft apply path maps an entry's empty graph to
+  `default`, but the payload decoders in `cluster_replication.zig` took the
+  payload's own empty graph name as it was: a GNC1/GNC2/GN1K/GN2K create, a
+  GMRG merge, a GUPD update, a GDEL delete or a GBAT batch entry created and
+  wrote a graph named `""`, and `effectOf` / `forEachBatchGraph` reported
+  `""`. Every graph-name decode now reads an empty name as `default`.
+  Regression: `zig build test-sonny6651-empty-graph-payload`.
+
 - **The server takes Raft snapshots of its durable store, so the Raft log
   is bounded (SONNY-6636).** Nothing called `reportSnapshot`: no node ever
   compacted its Raft log, and a leader had no snapshot to send a follower

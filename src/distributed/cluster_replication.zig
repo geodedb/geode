@@ -265,6 +265,13 @@ const Reader = struct {
         self.pos += n;
         return s;
     }
+    // CANARY: REQ=REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD; FEATURE="DistributedCluster"; ASPECT=DecodeEmptyGraphAsDefault; STATUS=TESTED; TEST=tests/test_sonny6651_empty_graph_payload.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6651: a payload's graph name; an empty one is the default
+    /// graph, as raft_apply maps an entry's empty graph.
+    fn graphName(self: *Reader) ![]const u8 {
+        const g = try self.str16();
+        return if (g.len > 0) g else graph_store.DEFAULT_GRAPH_NAME;
+    }
 };
 
 /// Deterministically apply a node-create payload to `store`, using `node_id`
@@ -281,7 +288,7 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     if (!isNodeCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -560,7 +567,7 @@ fn applyMultiCreatePayloadAt(
     if (!isMultiCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC2.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -728,7 +735,7 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     if (!isDeletePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -851,7 +858,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     if (!isMergePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -977,7 +984,7 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     if (!isUpdatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -1526,7 +1533,7 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
         const tag = try r.byte();
         if (tag > @intFromEnum(BatchMutation.merge)) return CodecError.CorruptPayload;
         const mutation: BatchMutation = @enumFromInt(tag);
-        const graph = try r.str16();
+        const graph = try r.graphName();
         const body = try r.str32();
         const ok = switch (mutation) {
             .create => isKeyedPayload(body) or isNodeCreatePayload(body) or isMultiCreatePayload(body),
@@ -1556,7 +1563,7 @@ pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf
     if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
     for (0..count) |_| {
         _ = try r.byte();
-        const graph = try r.str16();
+        const graph = try r.graphName();
         f(ctx, graph, try r.str32());
     }
 }
@@ -1661,13 +1668,13 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     var edge_types = std.ArrayList([]const u8).empty;
     if (isNodeCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const created = try allocator.alloc(CreatedNode, 1);
         created[0] = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
         out.created = created;
     } else if (isMultiCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC2.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const node_count = try r.readU16();
         const created = try allocator.alloc(CreatedNode, node_count);
         for (created) |*c| c.* = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
@@ -1684,7 +1691,7 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
         }
     } else if (isDeletePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const edge_count = try r.readU16();
         out.deletes_edges = edge_count > 0;
         var i: usize = 0;
@@ -1694,12 +1701,12 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
         while (i < node_count) : (i += 1) try ids.append(allocator, try r.readU64());
     } else if (isMergePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         try ids.append(allocator, try r.readU64());
         for (try readProps(allocator, &r)) |p| try keys.append(allocator, p.key);
     } else if (isUpdatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const count = try r.readU16();
         var i: usize = 0;
         while (i < count) : (i += 1) {
