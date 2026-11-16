@@ -197,6 +197,15 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         // SONNY-6334: a configureField / grant / revoke is an audit event,
         // whether it succeeds or fails.
         const audited = storage_dispatch.isAuditedFleChange(proc_name);
+        // SONNY-6688: the migration needs the session (tenant, graph gate).
+        if (std.mem.eql(u8, proc_name, "geode.fle.migrateencrypt")) {
+            const migrated = storage_dispatch.executeFleMigrate(allocator, call_stmt, context) catch |err| {
+                fle_admin.auditChange(allocator, proc_name, call_stmt, context, err);
+                return err;
+            };
+            fle_admin.auditChange(allocator, proc_name, call_stmt, context, null);
+            return migrated;
+        }
         const fle_result = storage_dispatch.executeFle(allocator, proc_name, call_stmt) catch |err| {
             if (audited) fle_admin.auditChange(allocator, proc_name, call_stmt, context, err);
             return err;

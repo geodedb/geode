@@ -991,6 +991,21 @@ pub fn sealStoredString(
     return encryptStoredString(allocator, kind, type_name, field_name, value, id, record_tenant);
 }
 
+/// SONNY-6688: is `value` already this record's sealed `field_name` value
+/// (`isStoredEnvelopeOf`: authenticated, not judged by shape)? For the
+/// migration of a field's existing plaintext.
+pub fn storedStringIsEnvelope(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    value: []const u8,
+    id: u64,
+    record_tenant: []const u8,
+) error{OutOfMemory}!bool {
+    return isStoredEnvelopeOf(allocator, kind, type_name, field_name, value, id, record_tenant);
+}
+
 /// SONNY-6347: does `data` decrypt as this record's `field_name` envelope
 /// under an identity a reader tries (`recordIdentity`, the request tenant's,
 /// `legacyStoreIdentity`)? No role check: this is the writer's question, and

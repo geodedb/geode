@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T17:51:03.9675731Z",
+  "generated_at": "2026-11-16T18:32:09.724374956Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -14474,23 +14474,6 @@
       ]
     },
     {
-      "id": "REQ-FIPS-CHACHA-FAILCLOSE-004",
-      "features": [
-        {
-          "feature": "FIPSFailClose",
-          "aspect": "FLEMigrate",
-          "status": "IMPL",
-          "files": [
-            "src/admin/fle_commands.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-06-24"
-        }
-      ]
-    },
-    {
       "id": "REQ-FIPS-PWHASH-001",
       "features": [
         {
@@ -14619,11 +14602,13 @@
         {
           "feature": "FLE Batch Re-encryption",
           "aspect": "ProgressTracking",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/admin/fle_commands.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-16"
@@ -15511,11 +15496,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "Migration",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/admin/fle_commands.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-16"
@@ -15528,11 +15515,13 @@
         {
           "feature": "FLEMigrateCLI",
           "aspect": "CLI",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/cli/fle_cli.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-16"
@@ -15802,11 +15791,13 @@
         {
           "feature": "FLE Storage Callback",
           "aspect": "StorageIntegration",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/admin/fle_commands.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-16"
@@ -69601,25 +69592,6 @@
       ]
     },
     {
-      "id": "REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED",
-      "features": [
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "MigrateRefusedWithoutStorage",
-          "status": "TESTED",
-          "files": [
-            "src/admin/fle_commands.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6321_fle_admin_cli.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-16"
-        }
-      ]
-    },
-    {
       "id": "REQ-SONNY-6321-FLE-SCHEMA-BI",
       "features": [
         {
@@ -83478,6 +83450,58 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6688-FLE-MIGRATE-ENCRYPT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "MigrateExistingPlaintext",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fle_migration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6688-FLE-MIGRATE-PROCEDURE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "MigrateEncryptProcedure",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6688_fle_migrate_encrypt.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6689-DATA-DIR-SEAL-MARKER",
       "features": [
         {
@@ -88624,9 +88648,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 568,
+      "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4386
+      "TESTED": 4392
     },
     "by_aspect": {
       "2PC": 3,
@@ -89859,7 +89883,6 @@
       "FLEEncryptAesGcmAllowed": 1,
       "FLEEncryptChaChaAllowedNonFips": 1,
       "FLEEncryptRejectChaCha": 1,
-      "FLEMigrate": 1,
       "FLETests": 1,
       "FLEVisibility": 1,
       "FORMATTER": 2,
@@ -90659,7 +90682,8 @@
       "MfaVerifyErrors": 1,
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
-      "MigrateRefusedWithoutStorage": 1,
+      "MigrateEncryptProcedure": 1,
+      "MigrateExistingPlaintext": 1,
       "Migration": 4,
       "MigrationHmacKey": 1,
       "MigrationModule": 2,
@@ -91543,7 +91567,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 431,
+      "Regression": 432,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

@@ -644,6 +644,11 @@ pub fn initialize(
     // cannot be opened or read refuses startup: the store may hold changes
     // of a transaction that never committed.
     try openTxnUndoLog(allocator, store);
+    // SONNY-6688: an FLE migration batch a crash cut short is finished.
+    geode.fle_migration.recoverAtStartup(allocator, store) catch |err| {
+        std.debug.print("[startup] finishing the FLE migration batch in fle_migration.journal failed ({s}); refusing to start: a migrated value may be missing until it is finished\n", .{@errorName(err)});
+        return err;
+    };
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain

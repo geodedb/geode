@@ -60,6 +60,7 @@ const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 const fle_integration = @import("../fle_integration.zig");
 const cluster_mod = @import("../distributed/cluster.zig");
+const fle_migration = @import("fle_migration.zig");
 const schema = @import("schema");
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,8 @@ const fle_mutating_set = std.StaticStringMap(void).initComptime(.{
     // SONNY-6341: who may act under which FLE role.
     .{ "geode.fle.grantrole", {} },
     .{ "geode.fle.revokerole", {} },
+    // SONNY-6688: encrypts a field's stored values (Admin only, audited).
+    .{ "geode.fle.migrateencrypt", {} },
 });
 
 /// SONNY-6334: FLE and TDE key administration, Admin only
@@ -1202,6 +1205,71 @@ pub fn executeFle(
         return try handler(allocator, call_stmt);
     }
     return null;
+}
+
+// CANARY: REQ=REQ-SONNY-6688-FLE-MIGRATE-PROCEDURE; FEATURE="FieldLevelEncryption"; ASPECT=MigrateEncryptProcedure; STATUS=TESTED; TEST=tests/test_sonny6688_fle_migrate_encrypt.zig; OWNER=security; UPDATED=2026-11-16
+/// SONNY-6688: `CALL geode.fle.migrateEncrypt(type, field [, batch_size
+/// [, tenant [, graph]]])`: encrypt the field's values stored before it was
+/// configured as encrypted (`fle_migration.migrateField`). Admin only and
+/// audited (`fle_mutating_set`), refused in cluster mode (no replicated
+/// slice). The tenant is the session's: one naming another is refused
+/// (`Unauthorized`, 42501); an unscoped session may name one (null: every
+/// tenant). The graph passes the gate every graph-naming procedure takes
+/// (`storageGraph`). YIELDs graph, scanned, encrypted, already_encrypted,
+/// non_string, skipped_tenant, skipped_rls, batches, complete.
+pub fn executeFleMigrate(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext) !ExecutionResult {
+    try cluster_mod.gateUnreplicatedWrite();
+    const args: []const *ast.Expr = if (call_stmt.procedure == .Call) call_stmt.procedure.Call.args else &.{};
+    if (args.len < 2 or args.len > 5) return error.InvalidArgs;
+    if (args[0].* != .String or args[1].* != .String) return error.InvalidArgs;
+    var opts = fle_migration.Options{ .type_name = args[0].String, .field_name = args[1].String };
+    if (opts.type_name.len == 0 or opts.field_name.len == 0) return error.InvalidArgs;
+    if (args.len >= 3) switch (args[2].*) {
+        .Int => |n| opts.batch_size = std.math.cast(usize, n) orelse return error.InvalidArgs,
+        .Null => {},
+        else => return error.InvalidArgs,
+    };
+    opts.tenant = context.tenant_id;
+    if (args.len >= 4) switch (args[3].*) {
+        .String => |t| {
+            if (context.tenant_id) |own| {
+                if (!std.mem.eql(u8, own, t)) return error.Unauthorized;
+            }
+            opts.tenant = t;
+        },
+        .Null => {},
+        else => return error.InvalidArgs,
+    };
+    if (args.len >= 5) {
+        if (args[4].* != .String) return error.InvalidArgs;
+        opts.graph = args[4].String;
+    }
+    try execution.session_graph.refuseInternal(opts.graph);
+    if (!execution.session_graph.mayBind(context.principal, opts.graph)) return error.Unauthorized;
+    if (!execution.session_graph.exists(context.catalog, opts.graph)) return error.GraphNotFound;
+
+    const store = graph_store.getGlobalStore(allocator);
+    const report = fle_migration.migrateField(allocator, store, opts) catch |err| switch (err) {
+        error.InvalidBatchSize => return error.InvalidArgs,
+        else => return err,
+    };
+
+    const names = [_][]const u8{ "graph", "scanned", "encrypted", "already_encrypted", "non_string", "skipped_tenant", "skipped_rls", "batches", "complete" };
+    const columns = try allocator.alloc([]const u8, names.len);
+    for (names, columns) |n, *c| c.* = try allocator.dupe(u8, n);
+    const row = try allocator.alloc(Value, names.len);
+    row[0] = .{ .Str = try allocator.dupe(u8, opts.graph) };
+    row[1] = .{ .Int = @intCast(report.scanned) };
+    row[2] = .{ .Int = @intCast(report.encrypted) };
+    row[3] = .{ .Int = @intCast(report.already_encrypted) };
+    row[4] = .{ .Int = @intCast(report.non_string) };
+    row[5] = .{ .Int = @intCast(report.skipped_tenant) };
+    row[6] = .{ .Int = @intCast(report.skipped_rls) };
+    row[7] = .{ .Int = @intCast(report.batches) };
+    row[8] = .{ .Bool = report.complete() };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
 fn handleGeodeFleConfigurefield(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {

@@ -67,7 +67,10 @@ fn dirContains(allocator: std.mem.Allocator, dir_path: []const u8, needle: []con
         if (entry.kind != .file) continue;
         const data = dir.readFileAlloc(io(), entry.path, allocator, .limited(1 << 30)) catch continue;
         defer allocator.free(data);
-        if (std.mem.indexOf(u8, data, needle) != null) return true;
+        if (std.mem.indexOf(u8, data, needle) != null) {
+            std.debug.print("'{s}' is in {s}\n", .{ needle, entry.path });
+            return true;
+        }
     }
     return false;
 }
@@ -270,6 +273,36 @@ test "SONNY-6688 (1): a migration stopped after a batch, as a crash would stop i
     try testing.expectEqual(@as(usize, 3), (try e.strs("pii", "MATCH (n:P6688) RETURN n.ssn")).len);
 }
 
+test "SONNY-6688 (1): a crash between a value's removal and its encrypted write is repaired from the journal at the next start" {
+    var e: Env = undefined;
+    try e.init();
+    defer e.deinit();
+    try seedPlaintext(&e);
+    try e.encrypt("P6688", "ssn");
+    if (!has_migration) return error.FleMigrationMissing;
+    if (comptime has_migration) {
+        geode.fle_migration.crash_between_remove_and_write_for_testing.store(true, .release);
+        defer geode.fle_migration.crash_between_remove_and_write_for_testing.store(false, .release);
+        const stopped = e.refused(null, "CALL geode.fle.migrateEncrypt('P6688', 'ssn', 10)");
+        try testing.expectEqualStrings("MigrationInterrupted", @errorName(stopped));
+        // One value is gone from the store; its envelope is in the journal.
+        const journal = try std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ e.f.h.data_dir, geode.fle_migration.journal_file_name });
+        defer testing.allocator.free(journal);
+        std.Io.Dir.cwd().access(io(), journal, .{}) catch return error.NoJournal;
+        try testing.expectEqual(@as(usize, 2), (try e.strs("pii", "MATCH (n:P6688) WHERE n.ssn IS NOT NULL RETURN n.ssn")).len);
+        // What the server does at start.
+        try testing.expectEqual(@as(usize, 3), try geode.fle_migration.recoverJournal(testing.allocator, e.f.st));
+        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io(), journal, .{}));
+        const plain = try e.strs("pii", "MATCH (n:P6688) RETURN n.ssn");
+        try testing.expectEqual(@as(usize, 3), plain.len);
+        for (plain, [_][]const u8{ secrets[0], secrets[2], secrets[1] }) |got, want| try testing.expectEqualStrings(want, got);
+        try testing.expect(!try e.anyOnDisk(&secrets));
+        const again = try e.migrate(null, "CALL geode.fle.migrateEncrypt('P6688', 'ssn')");
+        try testing.expectEqual(@as(i64, 0), again.encrypted);
+        try testing.expectEqual(@as(i64, 3), again.already);
+    }
+}
+
 test "SONNY-6688 (1): only the tenant's own records are migrated, and the arguments are checked" {
     var e: Env = undefined;
     try e.init();
@@ -293,6 +326,7 @@ test "SONNY-6688 (1): only the tenant's own records are migrated, and the argume
     _ = try e.exec("pii", null, "START TRANSACTION");
     try expectSqlstate(e.refused(null, "CALL geode.fle.migrateEncrypt('P6688', 'ssn')"), "25000");
     _ = try e.exec("pii", null, "ROLLBACK");
+    geode.txn_undo_log.setThreadTxnId(0); // as the transport does after a request
 
     // The default tenant's own run.
     const own = try e.migrate(null, "CALL geode.fle.migrateEncrypt('P6688', 'ssn', 10, 'default')");
@@ -355,6 +389,14 @@ const Server = struct {
         testing.allocator.free(self.addr);
     }
 
+    /// SIGTERM: the server's own shutdown, whose checkpoint writes the
+    /// pages and truncates the WAL.
+    fn stopClean(self: *Server) !void {
+        const outcome = self.handle.stopGracefully(60_000);
+        testing.allocator.free(self.addr);
+        if (outcome != .exited) return error.ServerDidNotStopCleanly;
+    }
+
     fn admin(self: *Server, fle_role: []const u8) !util.QuicProtoClient {
         var c = try util.QuicProtoClient.connect(testing.allocator, self.addr);
         errdefer c.deinit();
@@ -378,9 +420,11 @@ test "SONNY-6688 (2): geode fle migrate-encrypt against a real server encrypts t
 
     {
         var server = try Server.start(data_dir);
-        defer server.stop();
+        var stopped = false;
+        defer if (!stopped) server.stop();
         var a = try server.admin("admin");
-        defer a.deinit();
+        var a_open = true;
+        defer if (a_open) a.deinit();
         try quicOk(&a, "CREATE (:Person6688 {k: 1, ssn: '" ++ secrets[0] ++ "'}), (:Person6688 {k: 2, ssn: '" ++ secrets[1] ++ "'})");
         try quicOk(&a, "CALL geode.fle.configureField('Person6688', 'ssn', { algorithm: 'AES-256-GCM', visibility: ['admin'] })");
         try quicOk(&a, "CALL geode.fle.grantRole('geode', 'admin')");
@@ -408,9 +452,15 @@ test "SONNY-6688 (2): geode fle migrate-encrypt against a real server encrypts t
         try testing.expectEqual(@as(usize, 2), plain.len);
         try testing.expectEqualStrings(secrets[0], plain[0]);
         try testing.expectEqualStrings(secrets[1], plain[1]);
-        var o = try server.admin("other6688");
-        defer o.deinit();
-        for (try quicStrs(aa, &o, "MATCH (n:Person6688) RETURN n.ssn")) |got| try testing.expectEqualStrings("[REDACTED]", got);
+        {
+            var o = try server.admin("other6688");
+            defer o.deinit();
+            for (try quicStrs(aa, &o, "MATCH (n:Person6688) RETURN n.ssn")) |got| try testing.expectEqualStrings("[REDACTED]", got);
+        }
+        a_open = false;
+        a.deinit();
+        stopped = true;
+        try server.stopClean();
     }
     // The server stopped (and checkpointed): no file holds a migrated value.
     for (secrets[0..2]) |s| {

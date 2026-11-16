@@ -132,7 +132,19 @@ pub const commands = [_]Command{
     .{ .names = &.{"logout"}, .options = &.{v("--token")} },
     .{
         .names = &.{"fle"},
-        .subs = &.{.{ .names = &.{ "rotate-key", "show-rotation", "show-policy", "grant-plaintext", "migrate-encrypt" } }},
+        .subs = &.{
+            .{ .names = &.{ "rotate-key", "show-rotation", "show-policy", "grant-plaintext" } },
+            // SONNY-6688: sent through `geode query`; its connection,
+            // credential and output options.
+            .{ .names = &.{"migrate-encrypt"}, .options = &.{
+                v("--server"),           f("--insecure"),    f("--insecure-tls-skip-verify"), v("--user"),
+                v("-U"),                 v("--username"),    v("--password"),                 v("-P"),
+                v("--pass"),             v("--token"),       v("--timeout"),                  v("--retry"),
+                v("--ca-cert"),          v("--client-cert"), v("--client-key"),               v("--dsn"),
+                v("--graph"),            v("-g"),            v("--role"),                     v("--format"),
+                f("--no-saved-session"), f("--grpc"),        v("--log-level"),
+            } },
+        },
     },
     .{
         .names = &.{"apikey"},

@@ -2,6 +2,12 @@ const std = @import("std");
 const geode = @import("geode");
 const fle_commands = geode.fle_commands;
 
+/// SONNY-6688: `geode query`'s handler (set by main), through which
+/// migrate-encrypt sends `CALL geode.fle.migrateEncrypt` to the server with
+/// the same connection, TLS and credential options.
+pub const QueryCommand = *const @import("cli_dispatcher.zig").CommandHandler;
+pub var query_command: ?QueryCommand = null;
+
 /// FLE command handler
 pub fn cmdFLE(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Ensure global catalog is cleaned up when command exits
@@ -51,8 +57,10 @@ fn printFLEUsage() void {
         "  show-rotation <tenant>                        Show key rotation status\n" ++
         "  show-policy <schema>                          Show encryption policy for schema\n" ++
         "  grant-plaintext <schema> <field> <role>       Grant READ_PLAINTEXT privilege\n" ++
-        "  migrate-encrypt <tenant> <schema> <field> [batch_size]  not supported in this release (SONNY-6321):\n" ++
-        "                                                refused with an error; no value is encrypted\n" ++
+        "  migrate-encrypt <tenant> <schema> <field> [batch_size] [query options]\n" ++
+        "                                                Encrypt the field's values stored before it was\n" ++
+        "                                                configured as encrypted, in the server (--server,\n" ++
+        "                                                --user/--password, TLS options as for geode query)\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode fle show-rotation default\n" ++
@@ -126,57 +134,55 @@ fn handleGrantPlaintext(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
     std.debug.print("\n✓ Privilege granted successfully\n", .{});
 }
 
-// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=IMPL; OWNER=security; UPDATED=2026-11-16
-// SONNY-6321: stays IMPL: the command parses and validates its arguments
-// and delegates, and the migration it names is refused as unsupported
-// (REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED, tests/test_sonny6321_fle_admin_cli.zig).
-// GAP-0147 FIX: Properly delegate to fle_commands.migrateEncrypt with full validation
+// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=TESTED; TEST=tests/test_sonny6688_fle_migrate_encrypt.zig; OWNER=security; UPDATED=2026-11-16
+/// SONNY-6688: `geode fle migrate-encrypt <tenant> <schema> <field>
+/// [batch_size] [geode query options]` sends `CALL
+/// geode.fle.migrateEncrypt('<schema>', '<field>', <batch_size>, '<tenant>')`
+/// to the server (`geode query`, so the connection, TLS and credential
+/// options and the exit status are the query command's). The server
+/// migrates (Admin only, audited, the session's tenant) and answers the
+/// counts.
 fn handleMigrateEncrypt(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (start_idx + 2 >= argv.len) {
-        std.debug.print("Error: migrate-encrypt requires: <tenant> <schema> <field> [batch_size]\n", .{});
+        std.debug.print("Error: migrate-encrypt requires: <tenant> <schema> <field> [batch_size] [query options]\n", .{});
         return error.InvalidArguments;
     }
-
     const tenant = argv[start_idx];
     const schema = argv[start_idx + 1];
     const field = argv[start_idx + 2];
-
-    // Parse optional batch_size parameter (default: 1000)
+    for ([_][]const u8{ tenant, schema, field }) |name| {
+        if (!isPlainName(name)) {
+            std.debug.print("Error: '{s}' is not a name (letters, digits, '_' and '-' only)\n", .{name});
+            return error.InvalidArguments;
+        }
+    }
     var batch_size: usize = 1000;
-    if (start_idx + 3 < argv.len) {
-        batch_size = std.fmt.parseInt(usize, argv[start_idx + 3], 10) catch {
-            std.debug.print("Error: Invalid batch_size '{s}' - must be a positive integer\n", .{argv[start_idx + 3]});
+    var rest = start_idx + 3;
+    if (rest < argv.len and argv[rest].len > 0 and argv[rest][0] != '-') {
+        batch_size = std.fmt.parseInt(usize, argv[rest], 10) catch {
+            std.debug.print("Error: Invalid batch_size '{s}' - must be a positive integer\n", .{argv[rest]});
             return error.InvalidArguments;
         };
         if (batch_size == 0) {
             std.debug.print("Error: batch_size must be greater than 0\n", .{});
             return error.InvalidArguments;
         }
+        rest += 1;
     }
+    const run_query = query_command orelse return error.Unsupported;
+    const call = try std.fmt.allocPrintSentinel(allocator, "CALL geode.fle.migrateEncrypt('{s}', '{s}', {d}, '{s}')", .{ schema, field, batch_size, tenant }, 0);
+    defer allocator.free(call);
+    const query_argv = try allocator.alloc([:0]u8, 3 + (argv.len - rest));
+    defer allocator.free(query_argv);
+    query_argv[0] = argv[0];
+    query_argv[1] = @constCast("query");
+    query_argv[2] = call;
+    for (argv[rest..], query_argv[3..]) |a, *d| d.* = a;
+    try run_query(allocator, query_argv, 1);
+}
 
-    // Build migration arguments
-    const args = fle_commands.MigrationArgs{
-        .tenant_id = tenant,
-        .schema_name = schema,
-        .field_name = field,
-        .batch_size = batch_size,
-    };
-
-    // GAP-0147: Call the actual fle_commands implementation
-    fle_commands.migrateEncrypt(allocator, args) catch |err| {
-        switch (err) {
-            error.SchemaNotFound => {
-                std.debug.print("\n❌ Migration failed: Schema '{s}' not found in FLE catalog\n", .{schema});
-                std.debug.print("Hint: Ensure the schema has FLE annotations defined.\n", .{});
-            },
-            error.FieldNotFound => {
-                std.debug.print("\n❌ Migration failed: Field '{s}' not found in schema '{s}'\n", .{ field, schema });
-                std.debug.print("Hint: Check field name and ensure encryption is configured.\n", .{});
-            },
-            else => {
-                std.debug.print("\n❌ Migration failed: {any}\n", .{err});
-            },
-        }
-        return err;
-    };
+fn isPlainName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 128) return false;
+    for (name) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) return false;
+    return true;
 }

@@ -3542,6 +3542,8 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
         argv[i] = @constCast(std.mem.span(arg));
     }
 
+    // SONNY-6688: `geode fle migrate-encrypt` runs through `geode query`.
+    fle_cli.query_command = cmdQuery;
     // Delegate all command routing and dispatch to cli_dispatcher
     try cli_dispatcher.dispatch(
         allocator,

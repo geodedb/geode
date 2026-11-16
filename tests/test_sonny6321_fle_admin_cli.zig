@@ -8,9 +8,11 @@
 //       migrated: 0", exit 0) without reading or encrypting a value: no
 //       build sets the storage it migrates through (`setStorageCallback`),
 //       so an operator was told the field's existing plaintext was
-//       encrypted while it stayed plaintext on disk. They now refuse as
-//       unsupported (error.Unsupported, a non-zero exit) once the schema
-//       and field are validated, and claim nothing.
+//       encrypted while it stayed plaintext on disk. In process
+//       `migrateEncrypt` now refuses (error.Unsupported) once the schema and
+//       field are validated; the CLI sends the migration to the server
+//       (SONNY-6688, tests/test_sonny6688_fle_migrate_encrypt.zig) and,
+//       with no server to reach, fails without claiming a migration.
 //   (2) The admin command dispatcher (`fle_commands.executeCommand`):
 //       grant-plaintext and revoke-plaintext change the persisted FLE
 //       catalog (seen by a catalog loaded from disk, as a restarted server
@@ -195,17 +197,17 @@ test "SONNY-6321 (1): fle_commands.migrateEncrypt refuses as unsupported instead
     try testing.expectError(error.FieldNotFound, fle_commands.migrateEncrypt(testing.allocator, .{ .tenant_id = "default", .schema_name = "Sonny6321M", .field_name = "missing" }));
 }
 
-test "SONNY-6321 (1): geode fle migrate-encrypt exits non-zero, says it is not supported and claims no completed migration" {
+test "SONNY-6321 (1): geode fle migrate-encrypt with no server to reach exits non-zero and claims no completed migration" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f = try Fixture.init("sonny6321-migrate-cli", "Sonny6321MC");
     defer f.deinit();
     resetGlobal();
-    const r = try runGeode(&.{ geode_binary, "fle", "migrate-encrypt", "default", "Sonny6321MC", "ssn", "10" }, f.path(), f.path());
+    // SONNY-6688: it runs in the server; none listens on this port.
+    const r = try runGeode(&.{ geode_binary, "fle", "migrate-encrypt", "default", "Sonny6321MC", "ssn", "10", "--server", "127.0.0.1:9", "--insecure", "--timeout", "2" }, f.path(), f.path());
     defer r.deinit();
-    const ok = r.exitedNonZero() and r.output("not supported") and !r.output("Migration Complete") and !r.output("Records migrated");
+    const ok = r.exitedNonZero() and !r.output("Migration Complete") and !r.output("Records migrated");
     if (!ok) r.dump("fle migrate-encrypt");
     try testing.expect(r.exitedNonZero());
-    try testing.expect(r.output("not supported"));
     try testing.expect(!r.output("Migration Complete"));
     try testing.expect(!r.output("Records migrated"));
     // Its argument checks still run before anything else.

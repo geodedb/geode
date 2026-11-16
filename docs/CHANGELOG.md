@@ -4,6 +4,30 @@
 
 ### Security
 
+- **Existing plaintext of a newly encrypted field can be migrated:
+  `CALL geode.fle.migrateEncrypt` and `geode fle migrate-encrypt`
+  (SONNY-6688).** `geode.fle.configureField` encrypted values written
+  after it; values already stored stayed plaintext on disk, and
+  `migrate-encrypt` refused as unsupported (SONNY-6321). The new procedure
+  (Admin only, audited, refused in cluster mode and in an explicit
+  transaction) rewrites every plaintext value of the field in one graph,
+  nodes whose first label is the type and relationships of the type,
+  sealed under the FLE record identity: the permitted role reads it as
+  before, others read `"[REDACTED]"`. Only the session's tenant's records;
+  nodes hidden by row policies are skipped and counted. Each value is
+  removed before its envelope is written, so graph-storage's dead slot does
+  not keep the plaintext (the store files drop it at the next checkpoint).
+  Batches are journaled ahead (`fle_migration.journal`, envelopes only) and
+  a crash between a removal and its rewrite is finished at the next server
+  start; values already sealed are skipped, so a rerun resumes. `geode fle
+  migrate-encrypt <tenant> <schema> <field> [batch_size]` sends the CALL
+  with `geode query`'s connection options. **BREAKING (operator):** it now
+  needs a server (`--server`); the in-process `fle_commands.migrateEncrypt`
+  refuses and points there. The never-set storage-callback migration in
+  `fle_commands` (`setStorageCallback`, `executeMigrationWithStorage`) is
+  removed. REQ-FLE-MIGRATE-001, REQ-FLE-BATCH-001, REQ-FLE-STORAGE-001
+  (fle_commands) and REQ-FLE-MIGRATE-CLI-001 are TESTED. Regression: `zig
+  build test-sonny6688-fle-migrate-encrypt`.
 - **A TDE data directory refuses a deleted or donor identity after the
   upgrade, and a restore intent or undo log moved from another directory
   (SONNY-6689).** With `data_dir.identity` deleted, a registry sealed under

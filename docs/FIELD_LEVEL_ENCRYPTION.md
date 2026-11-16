@@ -258,9 +258,10 @@ geode show rotation-status --tenant T
 geode policy grant plaintext S.F --role R
 geode policy revoke plaintext S.F --role R
 
-# Migration: not supported in this release (SONNY-6321). `geode fle
-# migrate-encrypt <tenant> <schema> <field>` validates its arguments and is
-# refused with an error; no value is read or encrypted.
+# Migration of values stored before the field was encrypted (SONNY-6688):
+# runs in the server (Admin only, audited)
+geode fle migrate-encrypt <tenant> <schema> <field> [batch_size] --server host:port [query options]
+# or, in a session:  CALL geode.fle.migrateEncrypt('<schema>', '<field>' [, batch_size [, tenant [, graph]]])
 ```
 
 ---
@@ -895,11 +896,38 @@ Run: `python3 extended_test_runner.py`
 
 2. **New writes:** Immediately encrypted
 
-3. **Backfill existing data:** not supported in this release (SONNY-6321).
-   `geode fle migrate-encrypt` reported a finished migration ("Migration
-   Complete", exit 0) without reading or encrypting a value; it is now
-   refused with an error. Values stored before the field was configured as
-   encrypted stay as they were stored until they are written again.
+3. **Backfill existing data (SONNY-6688):**
+
+   ```bash
+   geode fle migrate-encrypt default Person ssn 1000 --server host:3141 --user admin --password ...
+   ```
+
+   It sends `CALL geode.fle.migrateEncrypt('Person', 'ssn', 1000,
+   'default')` (Admin only, audited; refused in cluster mode and inside an
+   explicit transaction). In one graph (`default` unless the fifth argument
+   names one), every node whose first label is the type and every
+   relationship of the type that holds a plaintext string in the field is
+   rewritten sealed under the FLE record identity, so a permitted role
+   reads it as before and any other role reads `"[REDACTED]"`.
+   - Tenancy: only the session's tenant's records (a tenant argument must
+     be the session's own; an unscoped session may name one). Row policies:
+     a node the session may not see is skipped and counted
+     (`skipped_rls`, `complete = false`).
+   - Batched and crash-safe: each batch's envelopes are written ahead to
+     `fle_migration.journal` (record ids and envelopes, no plaintext); a
+     crash between a value's removal and its rewrite is finished from it at
+     the next server start. Every write is a durable commit; the opt-in
+     deferred WAL mode is refused.
+   - Resumable: values already sealed are recognized and skipped
+     (`already_encrypted`); run it again after an interruption.
+   - At rest: each value is removed (its record's property blob rewritten
+     in place, the freed bytes zeroed) before its envelope is written, so
+     the old plaintext does not stay in a dead slot. The store files and
+     the WAL drop the old bytes at the next checkpoint (periodic, or at
+     shutdown). A value larger than a property page (spilled to the var
+     store) keeps its freed pages' bytes until they are reused.
+   - YIELDs `graph, scanned, encrypted, already_encrypted, non_string,
+     skipped_tenant, skipped_rls, batches, complete`.
 
 4. **Access during migration:**
    - Authorized users: still see values (plaintext or decrypted)
