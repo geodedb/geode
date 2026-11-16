@@ -5500,6 +5500,7 @@ REQ-SONNY-6636-REPLAY-IDEMPOTENT,Raft Snapshot Persistence,Regression,TESTED,,,d
 REQ-SONNY-6636-RESIDENT-RESET,Raft Snapshot Persistence,ForgetResidentStateAfterSwap,TESTED,,,storage,2026-11-16,src/graph_store.zig,5675
 REQ-SONNY-6636-RESIDENT-RESET,Raft Snapshot Persistence,Regression,TESTED,,,storage,2026-11-16,tests/test_sonny6636_resident_reset.zig,19
 REQ-SONNY-6636-RESTORE-OFF-INNER-MUTEX,Raft Snapshot Persistence,RestoreThreadWhilePaused,TESTED,,,distributed,2026-11-16,src/distributed/raft_consensus.zig,3092
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,Regression,TESTED,,,distributed,2026-11-16,tests/test_sonny6636_server_snapshot.zig,22
 REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,,,distributed,2026-11-15,tests/test_sonny6636_snapshot_over_quic.zig,22
 REQ-SONNY-6636-STORE-RAFT-INDEX,Raft Snapshot Persistence,CoveredEntriesNotReapplied,TESTED,,,distributed,2026-11-16,src/distributed/raft_apply.zig,98
 REQ-SONNY-6636-STORE-RAFT-INDEX,Raft Snapshot Persistence,StoreRecordsRaftIndex,TESTED,,,storage,2026-11-16,src/storage/graph_restore_intent.zig,225
