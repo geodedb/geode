@@ -26,7 +26,7 @@
 //! src/proto/geode.proto (the published gRPC contract, shipped by the
 //! clients) declares GetCdcDiagnostics and ControlCdc; the server served
 //! only /CdcDiag and /CdcCtrl, so a client generated from the .proto got
-//! UNIMPLEMENTED.
+//! UNIMPLEMENTED. (SONNY-6593: the undeclared aliases are no longer served.)
 //!
 //! `cdc_enhanced.startCDC` leaked the engine when `start()` failed.
 const std = @import("std");
@@ -867,7 +867,9 @@ test "SONNY-6570: CDC changes and refusals write audit records, on both transpor
 // The .proto's method names.
 // ---------------------------------------------------------------------------
 
-test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares (GetCdcDiagnostics, ControlCdc), as it serves /CdcDiag and /CdcCtrl" {
+test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares (GetCdcDiagnostics, ControlCdc)" {
+    // SONNY-6593: the undeclared /CdcDiag and /CdcCtrl aliases are no longer
+    // served (tests/test_sonny6593_grpc_service_contract.zig).
     const a = testing.allocator;
     var srv = try Server.start(a, &.{}, &.{});
     defer srv.deinit();
@@ -881,25 +883,17 @@ test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares 
 
     var proto_diag = try s.diag(a, "/geode.GeodeService/GetCdcDiagnostics");
     defer proto_diag.deinit(a);
-    var short_diag = try s.diag(a, "/geode.GeodeService/CdcDiag");
-    defer short_diag.deinit(a);
     if (proto_diag != .answer) std.debug.print("GetCdcDiagnostics answered {s}\n", .{&proto_diag.refused});
     try testing.expect(proto_diag == .answer);
-    try testing.expect(short_diag == .answer);
-    try testing.expectEqual(short_diag.answer.guardrail_epoch, proto_diag.answer.guardrail_epoch);
     try testing.expect((proto_diag.answer.engine orelse return error.NoEngine).is_running);
 
-    const epoch = short_diag.answer.guardrail_epoch;
+    const epoch = proto_diag.answer.guardrail_epoch;
     var proto_ctrl = try s.ctrl(a, "/geode.GeodeService/ControlCdc", "RESET_GUARDRAILS");
     defer proto_ctrl.deinit(a);
     if (proto_ctrl != .answer) std.debug.print("ControlCdc answered {s}\n", .{&proto_ctrl.refused});
     try testing.expect(proto_ctrl == .answer);
     try testing.expect(proto_ctrl.answer.success);
     try testing.expectEqual(epoch + 1, proto_ctrl.answer.guardrail_epoch);
-    var short_ctrl = try s.ctrl(a, "/geode.GeodeService/CdcCtrl", "RESET_GUARDRAILS");
-    defer short_ctrl.deinit(a);
-    try testing.expect(short_ctrl == .answer);
-    try testing.expectEqual(epoch + 2, short_ctrl.answer.guardrail_epoch);
 }
 
 // ---------------------------------------------------------------------------

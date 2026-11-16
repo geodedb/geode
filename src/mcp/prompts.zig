@@ -133,17 +133,60 @@ fn find(name: []const u8) ?*const Def {
 const TextContent = struct { type: []const u8 = "text", text: []const u8 };
 const PromptMessage = struct { role: []const u8 = "user", content: TextContent };
 
+/// Whether geode has a prompt named `name`.
+pub fn exists(name: []const u8) bool {
+    return find(name) != null;
+}
+
+/// SONNY-6585: why `getPromptExplained` refused a request, for the JSON-RPC
+/// error message (server.zig gives it with `mcp.setErrorDetail`).
+pub const Why = struct {
+    buf: [256]u8 = undefined,
+    len: usize = 0,
+
+    fn set(self: *Why, comptime fmt: []const u8, args: anytype) void {
+        const out = std.fmt.bufPrint(&self.buf, fmt, args) catch {
+            // A name too long to quote: say what, not which.
+            const short = "Invalid prompt request (a name is too long to quote)";
+            @memcpy(self.buf[0..short.len], short);
+            self.len = short.len;
+            return;
+        };
+        self.len = out.len;
+    }
+
+    pub fn slice(self: *const Why) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
 /// `prompts/get`: a GetPromptResult, allocated with `allocator` (the caller
 /// owns it). `args_json` is the request's `arguments` object, or null.
 pub fn getPrompt(allocator: std.mem.Allocator, name: []const u8, args_json: ?[]const u8) ![]const u8 {
-    const def = find(name) orelse return error.InvalidParams;
+    var why: Why = .{};
+    return getPromptExplained(allocator, name, args_json, &why);
+}
+
+/// `getPrompt`, saying in `why` what was wrong when it returns
+/// `error.InvalidParams`.
+pub fn getPromptExplained(allocator: std.mem.Allocator, name: []const u8, args_json: ?[]const u8, why: *Why) ![]const u8 {
+    const def = find(name) orelse {
+        why.set("Unknown prompt: {s}", .{name});
+        return error.InvalidParams;
+    };
 
     var parsed: ?std.json.Parsed(std.json.Value) = null;
     defer if (parsed) |*p| p.deinit();
     var args: ?std.json.ObjectMap = null;
     if (args_json) |a| {
-        parsed = std.json.parseFromSlice(std.json.Value, allocator, a, .{}) catch return error.InvalidParams;
-        if (parsed.?.value != .object) return error.InvalidParams;
+        parsed = std.json.parseFromSlice(std.json.Value, allocator, a, .{}) catch {
+            why.set("Prompt {s}: arguments is not JSON", .{name});
+            return error.InvalidParams;
+        };
+        if (parsed.?.value != .object) {
+            why.set("Prompt {s}: arguments is not an object", .{name});
+            return error.InvalidParams;
+        }
         args = parsed.?.value.object;
     }
 
@@ -152,14 +195,23 @@ pub fn getPrompt(allocator: std.mem.Allocator, name: []const u8, args_json: ?[]c
     if (args) |obj| {
         var it = obj.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.* != .string) return error.InvalidParams;
             for (def.arguments) |arg| {
                 if (std.mem.eql(u8, arg.name, entry.key_ptr.*)) break;
-            } else return error.InvalidParams;
+            } else {
+                why.set("Prompt {s}: takes no argument '{s}'", .{ name, entry.key_ptr.* });
+                return error.InvalidParams;
+            }
+            if (entry.value_ptr.* != .string) {
+                why.set("Prompt {s}: argument '{s}' is not a string", .{ name, entry.key_ptr.* });
+                return error.InvalidParams;
+            }
         }
     }
     for (def.arguments) |arg| {
-        if (arg.required and (args == null or args.?.get(arg.name) == null)) return error.InvalidParams;
+        if (arg.required and (args == null or args.?.get(arg.name) == null)) {
+            why.set("Prompt {s}: missing required argument '{s}'", .{ name, arg.name });
+            return error.InvalidParams;
+        }
     }
 
     var text: std.ArrayList(u8) = .empty;

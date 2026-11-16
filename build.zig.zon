@@ -337,9 +337,16 @@
         // handler (src/mcp/server.zig) therefore returns allocator-owned bytes,
         // never a literal. Same json/thread_pool/otel pins as v0.1.21. See
         // docs/MCP_SERVER.md.
+        // 2026-11-15: v0.1.23 (472a64bb, SONNY-6585): ToolNotFound and
+        // PromptNotFound answer -32602 (were -32002, the resource code);
+        // a notification or a peer-cancelled request gets no reply; error
+        // messages and string ids are JSON-escaped; mcp.setErrorDetail lets
+        // a handler give the error message and data; a handler result that
+        // is not exactly one JSON value is answered -32603; the built-in
+        // "barrier" tool is gone. Same json/thread_pool/otel/fips pins.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.22#eb9da27bc4b278eb73cefa4120a53eb92e419c0c",
-            .hash = "mcp-0.1.22-exAeBLBXCAC7RucZzI7lrQOB9D6KbKrHbv6-p4qmTpvJ",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.23#472a64bb3e4e183c8a9d11b31f784a5a847e5a3f",
+            .hash = "mcp-0.1.23-exAeBGh0CQBwMMuSNqSVDSGJXYXi8PmyaeZ_jqQJj8d2",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible

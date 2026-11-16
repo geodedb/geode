@@ -149,13 +149,14 @@ fn readGraphResource(allocator: std.mem.Allocator, endpoint: []const u8, uri: []
             // SONNY-6617 (3): an endpoint that cannot work as configured
             // (a gRPC endpoint with TLS on) says why, whatever the resource.
             if (mcp_client.endpointErrorMessage(err)) |why| return try formatResourceError(allocator, uri, why);
-            // The server could not be reached: schema and stats answer
-            // their offline documents (as before); the others say why.
-            return switch (target) {
-                .schema => try formatContents(allocator, uri, "application/json", default_schema_text),
-                .stats => try formatContents(allocator, uri, "application/json", default_stats_text),
-                else => try formatResourceError(allocator, uri, @errorName(err)),
-            };
+            // CANARY: REQ=REQ-SONNY-6586-MCP-OFFLINE-RESOURCES; FEATURE="MCPBackendTools"; ASPECT=NoOfflineData; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=mcp; UPDATED=2026-11-15
+            // SONNY-6586: the server could not be reached, so nothing was
+            // read. schema and stats answered `"node_labels": []` /
+            // `"node_count": 0` (with a "Server unavailable" note), which
+            // reads as an empty graph; every resource now says why.
+            const why = try std.fmt.allocPrint(allocator, "Server unavailable ({s}): nothing was read", .{@errorName(err)});
+            defer allocator.free(why);
+            return try formatResourceError(allocator, uri, why);
         },
     };
     const text = try std.json.Stringify.valueAlloc(allocator, doc, .{});
@@ -293,7 +294,7 @@ fn formatResourceResponse(allocator: std.mem.Allocator, uri: []const u8, mime_ty
 /// The resource as a document naming why it could not be read (the
 /// endpoint DSN is unusable, SONNY-6494). The MCP library can only answer
 /// an error with the Zig error's name, which would lose the reason, so the
-/// reason is the resource's text, like the offline fallback documents.
+/// reason is the resource's text.
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-044; FEATURE="JSON Library Migration"; ASPECT=ResourceError; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatResourceError(allocator: std.mem.Allocator, uri: []const u8, error_msg: []const u8) ![]const u8 {
     const text = try json_lib.encode(allocator, struct { @"error": []const u8 }{ .@"error" = error_msg }, .{});
@@ -306,11 +307,6 @@ fn formatResourceError(allocator: std.mem.Allocator, uri: []const u8, error_msg:
 pub fn listResourceTemplates(allocator: std.mem.Allocator) ![]const u8 {
     return try json_lib.encode(allocator, struct { resourceTemplates: []const ResourceTemplate }{ .resourceTemplates = &resource_template_list }, .{});
 }
-
-// Fallback resource text when the server is unavailable
-const default_schema_text = "{\"node_labels\": [], \"relationship_types\": [], \"note\": \"Server unavailable\"}";
-
-const default_stats_text = "{\"node_count\": 0, \"relationship_count\": 0, \"index_count\": 0, \"note\": \"Server unavailable\"}";
 
 const default_config_text = "{\"version\": \"" ++ build_options.version ++ "\", \"gql_compliance\": \"ISO/IEC 39075:2024\", \"status\": \"disconnected\"}";
 

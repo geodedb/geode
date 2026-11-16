@@ -3073,6 +3073,68 @@
 
 ### Fixed
 
+- **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
+  JSON-RPC error from `geode mcp` carried the Zig error's name as its
+  message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp
+  v0.1.23's `setErrorDetail` (`src/mcp/error_detail.zig`, data serialized
+  with escaping): an unknown tool is `Unknown tool: <name>` and an unknown
+  prompt `Unknown prompt: <name>` (both -32602, with `data.name`; geode
+  now returns `ToolNotFound` / `PromptNotFound`, which v0.1.23 maps to
+  -32602 instead of -32002), a refused prompt argument names it, an
+  unknown resource is `Resource not found: <uri>` (-32002, `data.uri`),
+  and a cursor on `tools/list`, `resources/list` or `prompts/list` says
+  geode issues none (-32602, `data.cursor`). From the library: a failing
+  notification and a peer-cancelled `tools/call` get no reply, error
+  messages and string ids are JSON-escaped, a handler result that is not
+  one JSON value is answered -32603, and the built-in `barrier` tool is
+  gone (it was an unknown tool to geode's handler anyway). Regression:
+  `zig build test-sonny6585-mcp-error-detail`.
+
+- **Offline auth commands name a missing data directory; `grant` /
+  `revoke` answer `--help` without the auth store; `query` / `shell`
+  refuse `--log-level`; the MCP server reports no data from an unreachable
+  server and passes list and map parameters (SONNY-6586).** `geode user`,
+  `role`, `policy`, `grant`, `revoke` and `auth reseal` given a data
+  directory that does not exist failed with `DataDirLockUnavailable` (the
+  lock file cannot be created in it); they now say the directory does not
+  exist, change nothing and create nothing (`geode auth init` still
+  creates it). `geode grant` and `geode revoke` opened the auth store, and
+  took the data directory's lock, before looking at `--help` or their
+  arguments, so `--help` and a usage error failed while a server held the
+  directory or when it did not exist; they also took the value of
+  `--data-dir` as the grantee when no `--to` / `--from` was given, and
+  took whatever followed the command (`--data-dir` included) as the
+  permission. The permission is now the first positional argument.
+  `geode query --log-level` and `geode shell --log-level` were accepted and
+  ignored (neither writes a log; `geode tenant` forwards it to query).
+  **User-visible:** they now exit 2; `--log-level` is a `geode serve`
+  option. With the server unreachable, the MCP `schema` and `stats`
+  resources answered `"node_labels": []` / `"node_count": 0`, which read
+  as an empty graph; every resource now answers
+  `{"error": "Server unavailable (<error>): nothing was read"}`. The MCP
+  `query` tool refused a list or map parameter (`UnsupportedParamType`);
+  a JSON array is now a LIST and an object a MAP (nested up to 64 deep,
+  freed on a part-way failure). `docs/NIX_DEPLOYMENT.md` told operators
+  to run `geode --config=... --validate-config`, an option that does not
+  exist; it now says `geode serve` refuses to start on a config it cannot
+  load. `geode authn stepup-check` / `stepup-mark` were already refused
+  (SONNY-6554). Regression: `zig build test-sonny6586-cli-truth`.
+
+- **The gRPC listener serves exactly the RPCs `geode.proto` declares
+  (SONNY-6593).** It served `Savepoint`, `RollbackTo`, `Backup`, `Restore`
+  and `UploadBackup`, which `src/proto/geode.proto` (the contract the
+  clients ship and generate from) did not declare, so no generated client
+  could call them; they are now declared with the request and response
+  messages the QUIC transport already uses (additive: the wire format and
+  existing RPCs are unchanged). It also served `CdcDiag` / `CdcCtrl`,
+  undeclared aliases of `GetCdcDiagnostics` / `ControlCdc` that no client
+  calls. **User-visible:** they now answer grpc-status 12
+  (UNIMPLEMENTED). The served list is
+  `src/transport/grpc_service_methods.zig`. Regression: `zig build
+  test-sonny6593-grpc-service-contract` (the list against the .proto, and
+  every declared and undeclared name probed on a real `geode serve
+  --listen-grpc`).
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),

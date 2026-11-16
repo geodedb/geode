@@ -8228,6 +8228,42 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step(spec[1], spec[2]).dependOn(&run_tests.step);
     }
+    // SONNY-6586: no CLI or MCP answer claims what did not happen (real
+    // binaries, a real server for the MCP query tool).
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6586_cli_truth.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6586_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6586-cli-truth", "Run SONNY-6586 regression (geode authn stepup-check/stepup-mark are refused; user, role, policy, grant, revoke and auth reseal name a data directory that does not exist instead of DataDirLockUnavailable and create nothing; grant and revoke answer --help and usage errors without opening the auth store, so a held or missing data directory does not matter; query, shell and tenant refuse --log-level with exit 2; with the server unreachable the MCP schema and stats resources are an error document with no counts or labels; the MCP query tool passes list and map parameters to a real server; no doc names --validate-config and geode serve refuses it)").dependOn(&run_tests.step);
+    }
+    // SONNY-6593 (2): the gRPC RPCs geode serves are exactly the RPCs
+    // src/proto/geode.proto declares (a real server).
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6593_grpc_service_contract.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6593_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6593-grpc-service-contract", "Run SONNY-6593 item 2 regression (against a real geode serve --listen-grpc: every RPC src/proto/geode.proto's service GeodeService declares is served, including Savepoint, RollbackTo, Backup, Restore and UploadBackup, and every other /geode.GeodeService/ name, including the undeclared CdcDiag and CdcCtrl aliases, answers grpc-status 12 UNIMPLEMENTED)").dependOn(&run_tests.step);
+    }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig.
     // SONNY-6550: the file re-exports geode-client-zig's config.redact, so
     // the table runs against the library's implementation.
@@ -8267,7 +8303,18 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and the offline fallbacks, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
+        b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and an unreachable server, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
+    }
+    // SONNY-6585: a JSON-RPC error from geode's MCP server carries a message
+    // and data naming what was wrong (mcp v0.1.23 setErrorDetail).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6585_mcp_error_detail.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6585-mcp-error-detail", "Run SONNY-6585 regression (through the real mcp v0.1.23 processMessage dispatch: an unknown tool is -32602 'Unknown tool: <name>' with data.name, an unknown prompt -32602 'Unknown prompt: <name>', a missing, unexpected or non-string prompt argument -32602 naming it, an unknown resource -32002 'Resource not found: <uri>' with an escaped data.uri, a cursor on tools/list, resources/list or prompts/list -32602 with data.cursor; a failing notification gets no reply; every response is one line of JSON)").dependOn(&run_tests.step);
     }
     // SONNY-6552: every MCP response has its MCP 2025-11-25 result shape
     // or JSON-RPC error code, through the real processMessage dispatch and

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T02:05:43.188737315Z",
+  "generated_at": "2026-11-16T03:52:31.129546525Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78706,6 +78706,121 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6585-MCP-ERROR-DETAIL",
+      "features": [
+        {
+          "feature": "MCPResultShapes",
+          "aspect": "ErrorMessageAndData",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/error_detail.zig",
+            "tests/test_sonny6585_mcp_error_detail.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6585_mcp_error_detail.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-CLI-MISSING-DATA-DIR",
+      "features": [
+        {
+          "feature": "OfflineAuthStoreSafety",
+          "aspect": "MissingDataDirNamed",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_auth_helpers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-CLI-TRUTH",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "NoFalseClaims",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-MCP-LIST-MAP-PARAMS",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "ListAndMapParameters",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-MCP-OFFLINE-RESOURCES",
+      "features": [
+        {
+          "feature": "MCPBackendTools",
+          "aspect": "NoOfflineData",
+          "status": "TESTED",
+          "files": [
+            "src/mcp/resources.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-QUERY-LOG-LEVEL",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "LogLevelRefused",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_cli_truth.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6587-CANARY-TRUTH",
       "features": [
         {
@@ -79053,6 +79168,26 @@
           ],
           "benches": [],
           "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6593-GRPC-SERVICE-CONTRACT",
+      "features": [
+        {
+          "feature": "GrpcTransport",
+          "aspect": "ServedEqualsDeclared",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_service_methods.zig",
+            "tests/test_sonny6593_grpc_service_contract.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6593_grpc_service_contract.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
           "updated": "2026-11-15"
         }
       ]
@@ -86578,7 +86713,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4272
+      "TESTED": 4279
     },
     "by_aspect": {
       "2PC": 3,
@@ -87653,6 +87788,7 @@
       "ErrorFreesRows": 1,
       "ErrorHandling": 12,
       "ErrorLogging": 1,
+      "ErrorMessageAndData": 1,
       "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
       "ErrorReporting": 1,
@@ -88397,6 +88533,7 @@
       "LintCompliance": 1,
       "List": 1,
       "ListAccess": 1,
+      "ListAndMapParameters": 1,
       "ListComprehension": 1,
       "ListConcat": 1,
       "ListCreation": 1,
@@ -88441,6 +88578,7 @@
       "LogCleanup": 1,
       "LogCreateNode": 1,
       "LogDeleteNode": 1,
+      "LogLevelRefused": 1,
       "LogRemoveProperty": 1,
       "LogSetProperty": 1,
       "LoggedUndo": 1,
@@ -88585,6 +88723,7 @@
       "MiscBatch2": 1,
       "MismatchedTrackerLinked": 1,
       "MissCounter": 1,
+      "MissingDataDirNamed": 1,
       "MixedVersionFailLoud": 1,
       "MixedWorkload": 1,
       "Module": 4,
@@ -88674,6 +88813,7 @@
       "NoFakeOverheadMeasurement": 1,
       "NoFakePerformanceImpact": 1,
       "NoFallbackSnapshot": 1,
+      "NoFalseClaims": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,
       "NoFixedSharedPaths": 1,
@@ -88693,6 +88833,7 @@
       "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
       "NoObjectStorageOrRemovedTestClaims": 1,
+      "NoOfflineData": 1,
       "NoPerEdgePropsPage": 1,
       "NoPerTableCacheOfRowVerdict": 1,
       "NoPlaintextFallback": 1,
@@ -89699,6 +89840,7 @@
       "SentSignal": 1,
       "Serialization": 1,
       "ServeHelpSingleSource": 1,
+      "ServedEqualsDeclared": 1,
       "ServerAllocator": 1,
       "ServerBackupDir": 1,
       "ServerCallbackWiring": 1,

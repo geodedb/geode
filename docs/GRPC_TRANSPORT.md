@@ -31,6 +31,26 @@ stderr with the address and port bound, for example
 `{"component":"transport","transport":"grpc","address":"0.0.0.0","port":50051,"status":"listening"}`.
 The listener is TLS-only outside Debug builds (see Fail-closed behaviour below).
 
+## RPCs
+
+The listener serves exactly the RPCs `service GeodeService` in
+`src/proto/geode.proto` declares (the clients ship that file and generate
+their stubs from it): `Handshake`, `Execute`, `Ping`, `Begin`, `Commit`,
+`Rollback`, `GetCdcDiagnostics`, `ControlCdc`, `Savepoint`, `RollbackTo`,
+`Backup`, `Restore` and `UploadBackup`, each at
+`/geode.GeodeService/<name>`. Any other path answers grpc-status 12
+(UNIMPLEMENTED). The list the server registers is
+`src/transport/grpc_service_methods.zig`;
+`zig build test-sonny6593-grpc-service-contract` checks it against the
+.proto and probes a running server.
+
+Before SONNY-6593 the server also served `Savepoint`, `RollbackTo`,
+`Backup`, `Restore` and `UploadBackup`, which the .proto did not declare
+(they are declared now, with the request and response messages the QUIC
+transport already used, so existing clients are unaffected), and
+`CdcDiag` / `CdcCtrl`, undeclared aliases of `GetCdcDiagnostics` /
+`ControlCdc` that no client used (no longer served).
+
 ## Runtime requirement (new)
 
 Prior to this change every cross-compiled release binary shipped **without**

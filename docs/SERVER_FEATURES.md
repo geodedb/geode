@@ -583,7 +583,8 @@ result success or failure); a CDC_CONTROL frame writes one with action
 
 The gRPC service serves the CDC frames under the names `src/proto/geode.proto`
 declares, `/geode.GeodeService/GetCdcDiagnostics` and
-`/geode.GeodeService/ControlCdc`, and under the older `/CdcDiag` / `/CdcCtrl`.
+`/geode.GeodeService/ControlCdc`. The undeclared `/CdcDiag` / `/CdcCtrl`
+aliases are no longer served (SONNY-6593; they answer UNIMPLEMENTED).
 
 **Core Features** (engine library; see the status note above):
 

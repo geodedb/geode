@@ -1409,8 +1409,10 @@ nix flake check
 systemctl status geode
 journalctl -u geode -f
 
-# Check configuration
-geode --config=/etc/geode/geode.conf --validate-config
+# Check configuration: geode has no check-only mode. `geode serve --config`
+# loads the file at startup and refuses to start on one it cannot load,
+# printing "[startup] config load failed; refusing to start: <error>".
+journalctl -u geode | grep 'refusing to start'
 
 # Check permissions
 ls -la /var/lib/geode /var/log/geode /etc/geode

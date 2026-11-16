@@ -1054,13 +1054,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             };
             i += 1;
         } else if (std.mem.eql(u8, arg, "--log-level")) {
-            // Handle --log-level flag (ignored for query command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - query command doesn't use it but we need to consume it
-            i += 1;
+            // CANARY: REQ=REQ-SONNY-6586-QUERY-LOG-LEVEL; FEATURE="CliOptions"; ASPECT=LogLevelRefused; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6586: accepted and ignored (geode query writes no log;
+            // `geode tenant` forwards it here). It is a geode serve option.
+            std.debug.print("Error: geode query: option '--log-level' is not supported: geode query writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--role")) {
             // GAP-0271: FLE role for field-level access control
             if (i + 1 >= argv.len) {
@@ -3372,13 +3370,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, argv[i], "--plain")) {
             plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--log-level")) {
-            // Handle --log-level flag (ignored for shell command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - shell command doesn't use it but we need to consume it
-            i += 1;
+            // SONNY-6586: accepted and ignored, as in geode query.
+            std.debug.print("Error: geode shell: option '--log-level' is not supported: geode shell writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
             // Issue #387: Username for authentication
             if (i + 1 >= argv.len) {

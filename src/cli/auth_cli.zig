@@ -176,36 +176,17 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 /// Grant permission command handler
 /// Handles: grant <permission> [target] [resource] / --to / --resource
 pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for offline auth operations
-    const data_dir = extractDataDir(argv);
-    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
-        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
-    const perm_idx = start_idx + 1;
-    if (perm_idx >= argv.len) {
-        std.debug.print("Error: missing permission to grant\n", .{});
-        printGrantUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const permission = argv[perm_idx];
-    if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
+    if (hasHelpFlag(argv, start_idx + 1)) {
         printGrantUsage();
         return;
     }
 
-    // Check for trailing help flag
-    if (hasHelpFlag(argv, perm_idx + 1)) {
-        printGrantUsage();
-        return;
-    }
-
+    // SONNY-6586: the permission is the first positional argument (it was
+    // argv[start_idx + 1] whatever it was, so `grant --data-dir <dir> ...`
+    // took "--data-dir" as the permission).
     var target: ?[]const u8 = null;
     var resource: []const u8 = "";
-    var i = perm_idx + 1;
+    var i = start_idx + 1;
     var positional = std.ArrayList([]const u8).empty;
     defer positional.deinit(allocator);
     while (i < argv.len) : (i += 1) {
@@ -218,16 +199,28 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
             // Skip global server flag and its value
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+            // SONNY-6586: the directory is not a positional (it was taken
+            // as the grantee when no --to was given).
+            i += 1;
         } else if (!std.mem.startsWith(u8, argv[i], "--")) {
-            if (isLikelyServerAddress(argv[i])) continue;
+            // The first is the permission, whatever it looks like.
+            if (positional.items.len > 0 and isLikelyServerAddress(argv[i])) continue;
             positional.append(allocator, argv[i]) catch {};
         }
     }
-    if (target == null and positional.items.len > 0) {
-        target = positional.items[positional.items.len - 1];
+    if (positional.items.len == 0) {
+        std.debug.print("Error: missing permission to grant\n", .{});
+        printGrantUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    if (resource.len == 0 and positional.items.len > 1) {
-        resource = positional.items[0];
+    const permission = positional.items[0];
+    const rest = positional.items[1..];
+    if (target == null and rest.len > 0) {
+        target = rest[rest.len - 1];
+    }
+    if (resource.len == 0 and rest.len > 1) {
+        resource = rest[0];
     }
 
     if (target == null) {
@@ -241,6 +234,16 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.debug.print("Permission denied: insufficient privileges to grant '{s}' to '{s}'\n", .{ permission, target.? });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
+
+    // SONNY-6586: the auth store (and the data directory's lock) is opened
+    // only now, once help and the arguments are handled; --help failed while
+    // a server held the directory, or when it did not exist.
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // SONNY-2798: verify the chain before the change.
     cli_auth.requireIntactChain(allocator, &mgr, "grant", permission);
@@ -259,35 +262,15 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
 /// Revoke permission command handler
 /// Handles: revoke <permission> [target] / --from
 pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for offline auth operations
-    const data_dir = extractDataDir(argv);
-    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
-        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
-    const perm_idx = start_idx + 1;
-    if (perm_idx >= argv.len) {
-        std.debug.print("Error: missing permission to revoke\n", .{});
-        printRevokeUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const permission = argv[perm_idx];
-    if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
+    if (hasHelpFlag(argv, start_idx + 1)) {
         printRevokeUsage();
         return;
     }
 
-    if (hasHelpFlag(argv, perm_idx + 1)) {
-        printRevokeUsage();
-        return;
-    }
-
+    // SONNY-6586: the permission is the first positional argument.
     var target: ?[]const u8 = null;
     var resource: []const u8 = "";
-    var i = perm_idx + 1;
+    var i = start_idx + 1;
     var positional = std.ArrayList([]const u8).empty;
     defer positional.deinit(allocator);
     while (i < argv.len) : (i += 1) {
@@ -299,16 +282,27 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             i += 1;
         } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
             i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+            // SONNY-6586: not a positional (it was taken as the principal).
+            i += 1;
         } else if (!std.mem.startsWith(u8, argv[i], "--")) {
-            if (isLikelyServerAddress(argv[i])) continue;
+            // The first is the permission, whatever it looks like.
+            if (positional.items.len > 0 and isLikelyServerAddress(argv[i])) continue;
             positional.append(allocator, argv[i]) catch {};
         }
     }
-    if (target == null and positional.items.len > 0) {
-        target = positional.items[positional.items.len - 1];
+    if (positional.items.len == 0) {
+        std.debug.print("Error: missing permission to revoke\n", .{});
+        printRevokeUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    if (resource.len == 0 and positional.items.len > 1) {
-        resource = positional.items[0];
+    const permission = positional.items[0];
+    const rest = positional.items[1..];
+    if (target == null and rest.len > 0) {
+        target = rest[rest.len - 1];
+    }
+    if (resource.len == 0 and rest.len > 1) {
+        resource = rest[0];
     }
 
     if (target == null) {
@@ -316,6 +310,14 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         printRevokeUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
+
+    // SONNY-6586: opened once help and the arguments are handled.
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // SONNY-2798: verify the chain before the change.
     cli_auth.requireIntactChain(allocator, &mgr, "revoke", permission);

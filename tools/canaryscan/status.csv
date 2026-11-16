@@ -4985,6 +4985,13 @@ REQ-SONNY-6570-CDC-WORKER-SLEEPS,CDC Engine,IdleWorkerSleeps,TESTED,src/streamin
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorage,TESTED,src/distributed/raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,RaftStorageSealOpenRefuse,TESTED,tests/test_sonny6571_raft_tde_storage.zig,tests/test_sonny6571_raft_tde_storage.zig,,distributed,2026-11-15
 REQ-SONNY-6571-TDE-RAFT-AT-REST,TDEFileLevelEncryption,NoPlaintextUnderDataDir,TESTED,tests/test_sonny6571_tde_at_rest.zig,tests/test_sonny6571_tde_at_rest.zig,,security,2026-11-15
+REQ-SONNY-6585-MCP-ERROR-DETAIL,MCPResultShapes,ErrorMessageAndData,TESTED,src/mcp/error_detail.zig,tests/test_sonny6585_mcp_error_detail.zig,,mcp,2026-11-15
+REQ-SONNY-6585-MCP-ERROR-DETAIL,MCPResultShapes,ErrorMessageAndData,TESTED,tests/test_sonny6585_mcp_error_detail.zig,,,mcp,2026-11-15
+REQ-SONNY-6586-CLI-MISSING-DATA-DIR,OfflineAuthStoreSafety,MissingDataDirNamed,TESTED,src/cli/cli_auth_helpers.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
+REQ-SONNY-6586-CLI-TRUTH,CliOptions,NoFalseClaims,TESTED,tests/test_sonny6586_cli_truth.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
+REQ-SONNY-6586-MCP-LIST-MAP-PARAMS,MCPBackendTools,ListAndMapParameters,TESTED,src/mcp/client.zig,tests/test_sonny6586_cli_truth.zig,,mcp,2026-11-15
+REQ-SONNY-6586-MCP-OFFLINE-RESOURCES,MCPBackendTools,NoOfflineData,TESTED,src/mcp/resources.zig,tests/test_sonny6586_cli_truth.zig,,mcp,2026-11-15
+REQ-SONNY-6586-QUERY-LOG-LEVEL,CliOptions,LogLevelRefused,TESTED,src/cli/main.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
 REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,tests/test_sonny6587_canary_markers.zig,tests/test_sonny6587_canary_markers.zig,,governance,2026-11-15
 REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,src/execution/statement_handlers.zig,tests/test_sonny6587_for_write_after_with.zig,,engine,2026-11-15
 REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,tests/test_sonny6587_for_write_after_with.zig,,,engine,2026-11-15
@@ -5007,6 +5014,8 @@ REQ-SONNY-6590-TS-TDE-DEFAULT,TimeSeriesTDE,OnWithTdeKey,TESTED,src/timeseries/t
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,tests/test_sonny6591_fts_write_paths.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
+REQ-SONNY-6593-GRPC-SERVICE-CONTRACT,GrpcTransport,ServedEqualsDeclared,TESTED,src/transport/grpc_service_methods.zig,tests/test_sonny6593_grpc_service_contract.zig,,transport,2026-11-15
+REQ-SONNY-6593-GRPC-SERVICE-CONTRACT,GrpcTransport,ServedEqualsDeclared,TESTED,tests/test_sonny6593_grpc_service_contract.zig,,,transport,2026-11-15
 REQ-SONNY-6594-AUTH-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_auth_read_failure.zig,tests/test_sonny6594_auth_read_failure.zig,,security,2026-11-15
 REQ-SONNY-6594-INDEX-BUILD-READ-FAILURE,VectorIndex,Regression,TESTED,tests/test_sonny6594_index_build_read_failure.zig,tests/test_sonny6594_index_build_read_failure.zig,,index,2026-11-15
 REQ-SONNY-6594-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_read_failure.zig,tests/test_sonny6594_read_failure.zig,,execution,2026-11-15

@@ -6,8 +6,8 @@
 //! again by `CALL cdc.disable()`), each CDC operation is sent over QUIC and
 //! over gRPC and the two answers are compared:
 //!
-//!   * the CDC_DIAGNOSTICS frame (`.cdc_diag`, gRPC `/CdcDiag`);
-//!   * the CDC_CONTROL frame (`.cdc_ctrl`, gRPC `/CdcCtrl`) with the one
+//!   * the CDC_DIAGNOSTICS frame (`.cdc_diag`, gRPC `/GetCdcDiagnostics`);
+//!   * the CDC_CONTROL frame (`.cdc_ctrl`, gRPC `/ControlCdc`) with the one
 //!     documented action (RESET_GUARDRAILS), an unknown action and an empty
 //!     one;
 //!   * `CALL cdc.*` procedures (src/execution/storage_dispatch.zig
@@ -305,7 +305,7 @@ const GrpcSession = struct {
     fn diag(self: *GrpcSession, a: std.mem.Allocator) ![]u8 {
         const req = try gq.encodeMessage(a, schema.CdcDiagnosticsRequest{ .session_id = self.client.session_id });
         defer a.free(req);
-        var u = try self.call(a, "/geode.GeodeService/CdcDiag", req);
+        var u = try self.call(a, "/geode.GeodeService/GetCdcDiagnostics", req);
         defer u.deinit(a);
         if (u.grpc_status != 0) return refusal(a, &u);
         const bytes = u.message orelse return error.EmptyReply;
@@ -318,7 +318,7 @@ const GrpcSession = struct {
     fn ctrl(self: *GrpcSession, a: std.mem.Allocator, action: []const u8, epoch_before: u64) ![]u8 {
         const req = try gq.encodeMessage(a, schema.CdcControlRequest{ .action = action, .session_id = self.client.session_id });
         defer a.free(req);
-        var u = try self.call(a, "/geode.GeodeService/CdcCtrl", req);
+        var u = try self.call(a, "/geode.GeodeService/ControlCdc", req);
         defer u.deinit(a);
         if (u.grpc_status != 0) return refusal(a, &u);
         const bytes = u.message orelse return error.EmptyReply;
