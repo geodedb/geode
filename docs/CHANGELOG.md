@@ -3102,6 +3102,17 @@
   Zig 0.16 does not have (it did not compile when called). Regression:
   `zig build test-sonny6593-cdc-start-lifecycle`.
 
+- **`docs/USAGE.md` and `docs/REAL_TIME_ANALYTICS.md` describe what geode
+  does (SONNY-6593).** USAGE.md documented `system.federation.status()`
+  and `system.resources()` (no such procedures), "always on" shard
+  federation and a nested config file (`server:`, `tls:`, `storage:`,
+  `federation:`, `optimizer:`) that `geode serve` never reads,
+  `EXPLAIN (VERBOSE)` / `EXPLAIN (ANALYZE)` (EXPLAIN takes no options),
+  metrics on fixed ports with a `/ready` path and metric names that do not
+  exist, and log files geode does not write. REAL_TIME_ANALYTICS.md
+  presented CDC as an input to an engine `geode serve` does not start, and
+  a CDC conversion that ignores the event it is given.
+
 - **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
   JSON-RPC error from `geode mcp` carried the Zig error's name as its
   message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp
