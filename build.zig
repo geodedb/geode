@@ -18081,6 +18081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6302_step = b.step("test-sonny6302-edge-write-and-delete-errors", "Run SONNY-6302 regression (a failed engine write in setEdgeProperty / removeEdgeProperty is reported and memory stays equal to the engine; a tenant drop whose delete fails is refused before the tenant is removed and a retry completes it; a replicated delete reports a failed delete; deleting nodes and edges with names past 512 bytes cannot fail after the engine delete)");
     sonny6302_step.dependOn(&run_sonny6302_tests.step);
 
+    // SONNY-6302 (4)/(5): label counters stay exact for names past 512 bytes
+    // whichever allocation fails; setEdgeProperty of a missing edge fails.
+    const sonny6302_lc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6302_label_count_and_missing_edge.zig"), .target = target, .optimize = optimize });
+    sonny6302_lc_test_mod.addImport("geode", root_mod);
+    sonny6302_lc_test_mod.link_libc = true;
+    const sonny6302_lc_tests = b.addTest(.{ .root_module = sonny6302_lc_test_mod });
+    const run_sonny6302_lc_tests = b.addRunArtifact(sonny6302_lc_tests);
+    shardDep(test_step, &run_sonny6302_lc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6302_lc_step = b.step("test-sonny6302-label-count-and-missing-edge", "Run SONNY-6302 items 4 and 5 regression (addNodeLabel / removeNodeLabel of a 600-byte label on a node of a 600-byte tenant, each allocation failed once in turn: the label posting, its count and the tenant's label listing agree with the node; setEdgeProperty of a missing edge is EdgeNotFound)");
+    sonny6302_lc_step.dependOn(&run_sonny6302_lc_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
