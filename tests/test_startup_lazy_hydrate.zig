@@ -376,7 +376,7 @@ test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-
                         const r = s.getNodesByLabel(GB, LABEL) orelse continue;
                         var it = s.iterateNodesInGraph(GB);
                         var cnt: usize = 0;
-                        while (it.next()) |_| cnt += 1;
+                        while (it.next() catch @panic("SONNY-6621: unexpected read failure")) |_| cnt += 1;
                         if (r.len == NB and cnt == NB and s.nodesInGraphCount(GB) == NB) good += 1;
                     }
                     if (good == 64) _ = ok.fetchAdd(1, .monotonic);
@@ -796,7 +796,7 @@ test "H3 no-snapshot: by-id setEdgeProperty as FIRST access hydrates + edge upda
     try testing.expect(graph_store.loop2ScanNodeCount() >= N);
 
     // The edge property update actually took effect and is readable (not dropped).
-    const edge = store.getEdgeHydrated(edge_ids[3]) orelse return error.EdgeMissing;
+    const edge = (try store.getEdgeHydratedChecked(edge_ids[3])) orelse return error.EdgeMissing;
     const w = edge.properties.get("weight") orelse return error.WeightMissing;
     try testing.expect(w == .Int and w.Int == 42);
 
@@ -849,7 +849,7 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     var node_gate_old = false;
     if (store.getNodePtr(node_id) != null) node_gate_old = true;
     var edge_gate_old = false;
-    if (store.getEdgePtr(edge_id) != null) edge_gate_old = true;
+    if ((try store.getEdgePtrHydratedChecked(edge_id)) != null) edge_gate_old = true;
     try testing.expect(!node_gate_old); // replicated node UPDATE would be dropped
     try testing.expect(!edge_gate_old); // replicated edge UPDATE would be dropped
     // The raw-accessor probes did NOT build the graph (still fully deferred).
@@ -862,15 +862,15 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     // --- GREEN: the same by-id gates now resolve the real node/edge, so the
     // `.update` block runs and the property write applies. ---
     try testing.expect(store.getNodePtr(node_id) != null);
-    try testing.expect(store.getEdgePtr(edge_id) != null);
+    try testing.expect((try store.getEdgePtrHydratedChecked(edge_id)) != null);
     try testing.expect(graph_store.loop2ScanNodeCount() >= N); // build happened once
 
     try store.setNodeProperty(node_id, "role", .{ .String = "admin" });
     try store.setEdgeProperty(edge_id, "w", .{ .Int = 7 });
 
-    const role = store.getNodeProperty(node_id, "role") orelse return error.RoleMissing;
+    const role = (try store.getNodePropertyOrError(node_id, "role")) orelse return error.RoleMissing;
     try testing.expect(role == .String and std.mem.eql(u8, role.String, "admin"));
-    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeMissing;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeMissing;
     const w = edge.properties.get("w") orelse return error.WeightMissing;
     try testing.expect(w == .Int and w.Int == 7);
 
@@ -915,14 +915,14 @@ test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrat
     try testing.expect(graph_store.loop2ScanNodeCount() >= N);
 
     // The by-id write landed on the correct, real node.
-    const flag = store.getNodeProperty(seed_ids[7], "flag") orelse return error.FlagMissing;
+    const flag = (try store.getNodePropertyOrError(seed_ids[7], "flag")) orelse return error.FlagMissing;
     try testing.expect(flag == .Bool and flag.Bool == true);
 
     // (c) Node/edge counts and the pre-existing property read are correct.
     try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
     try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
     var nb: [32]u8 = undefined;
-    const name7 = store.getNodeProperty(seed_ids[7], "name") orelse return error.NameMissing;
+    const name7 = (try store.getNodePropertyOrError(seed_ids[7], "name")) orelse return error.NameMissing;
     try testing.expect(name7 == .String and std.mem.eql(u8, name7.String, nameFor(&nb, 7)));
 
     graph_store.deinitGlobalStore();
@@ -963,7 +963,7 @@ test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
 
     // The seeded data was not corrupted by hydrating concurrently with the write.
     var nb: [32]u8 = undefined;
-    const name0 = store.getNodeProperty(seed_ids[0], "name") orelse return error.NameMissing;
+    const name0 = (try store.getNodePropertyOrError(seed_ids[0], "name")) orelse return error.NameMissing;
     try testing.expect(name0 == .String and std.mem.eql(u8, name0.String, nameFor(&nb, 0)));
 
     graph_store.deinitGlobalStore();
@@ -1573,7 +1573,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         try testing.expectEqual(GraphStore.MergeLookupResult.not_found, miss);
 
         // Point read through the hydrate-on-miss node cache (no warm-up ran).
-        try testing.expect(store.getNodeProperty(seed_ids[3], "name") != null);
+        try testing.expect((try store.getNodePropertyOrError(seed_ids[3], "name")) != null);
 
         // Resident-set iteration (the MATCH fallback scan) must see EVERY
         // node even though the cache started COLD after the snapshot-served
@@ -1581,7 +1581,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         // silently dropping non-resident rows.
         var res_iter = store.iterateNodesInGraph(GRAPH);
         var n_seen: usize = 0;
-        while (res_iter.next()) |_| n_seen += 1;
+        while (try res_iter.next()) |_| n_seen += 1;
         try testing.expectEqual(N, n_seen);
 
         // Tenant-filtered label count walks the posting and hydrates each
@@ -2515,7 +2515,7 @@ test "P3 C2: graph-scoped scan never mutates the node cache; retained node point
         defer ids.deinit(allocator);
 
         var n_seen: usize = 0;
-        while (it.next()) |node_ptr| {
+        while (try it.next()) |node_ptr| {
             ptrs.appendAssumeCapacity(node_ptr);
             ids.appendAssumeCapacity(node_ptr.id);
             n_seen += 1;
@@ -2621,7 +2621,7 @@ fn c3WarmReopenExecCheckpoint(allocator: std.mem.Allocator, data_dir: []const u8
 // Session 3 helper: expect a String property with the given value (hydrating
 // point read), or null when `expected` is null (property must be gone).
 fn c3ExpectProp(store: *GraphStore, node_id: u64, key: []const u8, expected: ?[]const u8) !void {
-    const got = store.getNodeProperty(node_id, key);
+    const got = (try store.getNodePropertyOrError(node_id, key));
     if (expected) |want| {
         const val = got orelse return error.DurableWriteDropped;
         try testing.expect(val == .String);
@@ -4037,7 +4037,7 @@ test "SONNY-1979: getNodePtrForScan return survives a resident-cache shard grow 
     const before_addr = @intFromPtr(store.nodes.getPtr(x).?);
 
     // Scan-source X: resident HIT. Pre-fix this returns the volatile in-map slot.
-    const p = store.getNodePtrForScan(x).?;
+    const p = (try store.getNodePtrForScan(x)).?;
 
     // Force the resident cache to GROW → rehash → MOVE every value slot. Inserting
     // many new nodes outgrows every shard's initial AutoHashMap capacity, X's

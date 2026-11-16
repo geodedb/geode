@@ -145,8 +145,8 @@ fn writeNode(out: *std.ArrayList(u8), store: *GraphStore, graph: []const u8, nam
         try writeValue(out, p.value_ptr.*);
         try out.appendSlice(testing.allocator, ",");
     }
-    const out_n = if (store.getOutgoingEdgeIds(id)) |s| s.len else 0;
-    const in_n = if (store.getIncomingEdgeIds(id)) |s| s.len else 0;
+    const out_n = if ((try store.getOutgoingEdgeIdsOrError(id))) |s| s.len else 0;
+    const in_n = if ((try store.getIncomingEdgeIdsOrError(id))) |s| s.len else 0;
     try out.print(testing.allocator, " out={d} in={d}\n", .{ out_n, in_n });
 }
 

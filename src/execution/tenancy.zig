@@ -172,15 +172,26 @@ pub fn isConcreteScope(tid: []const u8) bool {
 /// marked as being dropped (a DROP that failed part-way leaves it so until
 /// it is retried). Its sessions went on reading and writing it. Checked at
 /// every statement's entry (`executeStatementWithContext`,
-/// `executeProgramWithContext`); an unregistered tenant, or no registry, is
-/// not refused here.
-pub fn refuseDroppingTenant(maybe_tid: ?[]const u8) error{TenantDropping}!void {
+/// `executeProgramWithContext`) and by the QUIC handler before its fast
+/// paths (SONNY-6612 (2)).
+///
+/// SONNY-6612 (2): once tenants are administered (the registry holds a
+/// tenant other than the default), a session scoped to a tenant the registry
+/// does not know is refused too (`TenantNotRegistered`, fail closed): it read
+/// and wrote under any tenant id a client asserted. With no registry, or an
+/// empty one (single tenant, or client-asserted tenancy not administered
+/// through the registry), nothing is refused.
+pub fn refuseDroppingTenant(maybe_tid: ?[]const u8) error{ TenantDropping, TenantNotRegistered }!void {
     const tid = maybe_tid orelse return;
     if (!isConcreteScope(tid)) return;
     const reg = tenant_registry.getGlobalRegistry() orelse return;
     if (reg.isDropping(tid)) {
         log.warn("tenant is being dropped; its statement is refused", &.{logging.Attr.string("tenant", tid)});
         return error.TenantDropping;
+    }
+    if (!reg.contains(tid) and reg.hasNonDefaultTenant()) {
+        log.warn("tenant is not registered; its statement is refused", &.{logging.Attr.string("tenant", tid)});
+        return error.TenantNotRegistered;
     }
 }
 

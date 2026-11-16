@@ -40,9 +40,9 @@ fn idList(aa: std.mem.Allocator, ids: []const u64) ![]const u8 {
 /// The id of the `label` edge from `from` to `to` (read straight from the store).
 fn edgeId(from: u64, to: u64, label: []const u8) !u64 {
     const store = geode.graph_store.getGlobalStore(testing.allocator);
-    const ids = store.getOutgoingEdgeIds(from) orelse return error.EdgeNotFound;
+    const ids = (try store.getOutgoingEdgeIdsOrError(from)) orelse return error.EdgeNotFound;
     for (ids) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (e.to_id == to and std.mem.eql(u8, e.label, label)) return eid;
     }
     return error.EdgeNotFound;

@@ -632,7 +632,7 @@ pub const AuthGraphManager = struct {
 
             // Get stored HMAC from graph node
             const node_id = self.storage.user_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -652,7 +652,7 @@ pub const AuthGraphManager = struct {
             const computed = computeRoleHmac(hmac_key, record);
 
             const node_id = self.storage.role_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -672,7 +672,7 @@ pub const AuthGraphManager = struct {
             const computed = computePermissionHmac(hmac_key, record);
 
             const node_id = self.storage.permission_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -692,7 +692,7 @@ pub const AuthGraphManager = struct {
             const computed = computePolicyHmac(hmac_key, record);
 
             const node_id = self.storage.policy_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -710,9 +710,9 @@ pub const AuthGraphManager = struct {
 
     /// SONNY-2791: does the HMAC stored on `record`'s node match the one
     /// `hmac_key` gives it?
-    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) bool {
+    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) !bool {
         const node_id = self.storage.policy_nodes.get(record.id) orelse return false;
-        const stored = self.storage.store.getNodeProperty(node_id, "hmac") orelse return false;
+        const stored = (try self.storage.store.getNodePropertyOrError(node_id, "hmac")) orelse return false;
         if (stored != .String) return false;
         const computed = computePolicyHmac(hmac_key, record);
         const computed_hex = auth_hmac.hmacToHex(&computed);
@@ -745,12 +745,12 @@ pub const AuthGraphManager = struct {
     /// An offline CLI command loads the security graph as it is and seals
     /// after its change, so it used to sign such a record. A record without a
     /// kind whose HMAC verifies was signed by this key before the upgrade.
-    fn refuseUnsignedLegacy(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) error{UnsignedLegacyPolicyRecord}!void {
+    fn refuseUnsignedLegacy(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) !void {
         var refused: usize = 0;
         var it = self.storage.policyIterator();
         while (it.next()) |record| {
             if (record.kind != .legacy or decisions.decided(record.id)) continue;
-            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            if (try self.policyHmacVerifies(hmac_key, record)) continue;
             log.err("refusing to sign a policy record without a kind whose HMAC does not verify (it may have been planted); decide it with geode auth reseal --accept-legacy-policy <id> or --drop-legacy-policy <id>", &.{
                 Attr.uint("policy_id", record.id),
                 Attr.string("name", record.getName()),
@@ -790,7 +790,7 @@ pub const AuthGraphManager = struct {
         var it = self.storage.policyIterator();
         while (it.next()) |record| {
             if (record.kind != .legacy) continue;
-            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            if (try self.policyHmacVerifies(hmac_key, record)) continue;
             try unverified.append(self.allocator, record.id);
         }
         for (unverified.items) |id| {
@@ -2492,7 +2492,7 @@ pub const AuthGraphManager = struct {
         for (ids.items) |grant_id| {
             const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
             // Read properties from graph to build a stable HMAC input.
-            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed = try computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
             try hmac_list.append(self.allocator, computed);
@@ -2510,7 +2510,7 @@ pub const AuthGraphManager = struct {
         }
         for (ids.items) |uid| {
             const node_id = self.storage.mfa_recovery_nodes.get(uid) orelse continue;
-            const computed = computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed = try computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, node_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
             try hmac_list.append(self.allocator, computed);
@@ -2520,8 +2520,8 @@ pub const AuthGraphManager = struct {
     fn verifyMfaRecoveryRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
         var it = self.storage.mfa_recovery_nodes.iterator();
         while (it.next()) |e| {
-            const computed = computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
-            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            const computed = try computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
             if (stored != .String) return error.RecordHmacMismatch;
             const computed_hex = auth_hmac.hmacToHex(&computed);
             if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
@@ -2540,7 +2540,7 @@ pub const AuthGraphManager = struct {
         }
         for (ids.items) |uid| {
             const node_id = self.storage.mfa_attempt_nodes.get(uid) orelse continue;
-            const computed = computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed = try computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, node_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
             try hmac_list.append(self.allocator, computed);
@@ -2550,8 +2550,8 @@ pub const AuthGraphManager = struct {
     fn verifyMfaAttemptRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
         var it = self.storage.mfa_attempt_nodes.iterator();
         while (it.next()) |e| {
-            const computed = computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
-            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            const computed = try computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
             if (stored != .String) return error.RecordHmacMismatch;
             const computed_hex = auth_hmac.hmacToHex(&computed);
             if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
@@ -2566,7 +2566,7 @@ pub const AuthGraphManager = struct {
         suspendStatementUndo();
         defer geode.statement_undo.resumeCapture();
         const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
-        const old = self.storage.getMfaAttempts(uid);
+        const old = try self.storage.getMfaAttempts(uid);
         errdefer {
             if (old) |o| {
                 self.storage.setMfaAttempts(uid, o) catch |err| logRestoreFailure("MFA attempts", err);
@@ -2579,7 +2579,7 @@ pub const AuthGraphManager = struct {
     }
 
     /// SONNY-6614: `user_id`'s stored offline MFA attempts, or null.
-    pub fn mfaAttempts(self: *Self, user_id: u64) ?UserStorageBackend.MfaAttemptState {
+    pub fn mfaAttempts(self: *Self, user_id: u64) !?UserStorageBackend.MfaAttemptState {
         return self.storage.getMfaAttempts(user_id);
     }
 
@@ -2594,7 +2594,7 @@ pub const AuthGraphManager = struct {
         }
         for (ids.items) |grant_id| {
             const node_id = self.storage.fle_role_grant_nodes.get(grant_id) orelse continue;
-            const computed = computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed = try computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
             try hmac_list.append(self.allocator, computed);
@@ -2604,8 +2604,8 @@ pub const AuthGraphManager = struct {
     fn verifyFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
         var it = self.storage.fle_role_grant_nodes.iterator();
         while (it.next()) |e| {
-            const computed = computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*, e.key_ptr.*);
-            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            const computed = try computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*, e.key_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
             if (stored != .String) return error.RecordHmacMismatch;
             const computed_hex = auth_hmac.hmacToHex(&computed);
             if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
@@ -2618,8 +2618,8 @@ pub const AuthGraphManager = struct {
         while (it.next()) |key| {
             const grant_id = key.*;
             const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
-            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const computed = try computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -2805,26 +2805,26 @@ fn graphGrantId(user_id: u64, graph_name: []const u8, action: u8) u64 {
 }
 
 /// Compute the HMAC for a GraphGrant node by reading its properties from the store.
-fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) [32]u8 {
+fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) ![32]u8 {
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
 
     // Read properties directly from the graph node (grants have no in-memory cache).
-    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else 0 else 0;
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else 0 else 0;
     var uid_buf: [20]u8 = undefined;
     const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
 
-    const graph_name = if (store.getNodeProperty(node_id, "graph_name")) |v| if (v == .String) v.String else "" else "";
+    const graph_name = if ((try store.getNodePropertyOrError(node_id, "graph_name"))) |v| if (v == .String) v.String else "" else "";
 
-    const action_val = if (store.getNodeProperty(node_id, "action")) |v| if (v == .Int) v.Int else 0 else 0;
+    const action_val = if ((try store.getNodePropertyOrError(node_id, "action"))) |v| if (v == .Int) v.Int else 0 else 0;
     var action_buf: [10]u8 = undefined;
     const action_str = std.fmt.bufPrint(&action_buf, "{d}", .{action_val}) catch "0";
 
-    const granted_at_val = if (store.getNodeProperty(node_id, "granted_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    const granted_at_val = if ((try store.getNodePropertyOrError(node_id, "granted_at"))) |v| if (v == .Int) v.Int else 0 else 0;
     var granted_at_buf: [20]u8 = undefined;
     const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
 
-    const granted_by_val = if (store.getNodeProperty(node_id, "granted_by")) |v| if (v == .Int) v.Int else 0 else 0;
+    const granted_by_val = if ((try store.getNodePropertyOrError(node_id, "granted_by"))) |v| if (v == .Int) v.Int else 0 else 0;
     var granted_by_buf: [20]u8 = undefined;
     const granted_by_str = std.fmt.bufPrint(&granted_by_buf, "{d}", .{granted_by_val}) catch "0";
 
@@ -2841,18 +2841,18 @@ fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.Gr
 }
 
 /// SONNY-6614: the HMAC of a MfaAttempts node, from its stored fields.
-fn computeMfaAttemptsHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) [32]u8 {
+fn computeMfaAttemptsHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) ![32]u8 {
     const int = struct {
-        fn get(st: *graph_store.GraphStore, nid: u64, key: []const u8, default: i64) i64 {
-            return if (st.getNodeProperty(nid, key)) |v| if (v == .Int) v.Int else default else default;
+        fn get(st: *graph_store.GraphStore, nid: u64, key: []const u8, default: i64) !i64 {
+            return if ((try st.getNodePropertyOrError(nid, key))) |v| if (v == .Int) v.Int else default else default;
         }
     }.get;
     var uid_buf: [20]u8 = undefined;
-    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{int(store, node_id, "user_id", -1)}) catch "-1";
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{try int(store, node_id, "user_id", -1)}) catch "-1";
     var count_buf: [20]u8 = undefined;
-    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{int(store, node_id, "fail_count", -1)}) catch "-1";
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{try int(store, node_id, "fail_count", -1)}) catch "-1";
     var lock_buf: [20]u8 = undefined;
-    const lock_str = std.fmt.bufPrint(&lock_buf, "{d}", .{int(store, node_id, "lockout_until_ms", -1)}) catch "-1";
+    const lock_str = std.fmt.bufPrint(&lock_buf, "{d}", .{try int(store, node_id, "lockout_until_ms", -1)}) catch "-1";
     const props = [_]auth_hmac.KeyValue{
         .{ .key = "fail_count", .value = count_str },
         .{ .key = "kind", .value = "MfaAttempts" },
@@ -2863,12 +2863,12 @@ fn computeMfaAttemptsHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.G
 }
 
 /// SONNY-6608: the HMAC of a MfaRecoveryCodes node, from its stored fields.
-fn computeMfaRecoveryHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) [32]u8 {
-    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else -1 else -1;
+fn computeMfaRecoveryHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) ![32]u8 {
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else -1 else -1;
     var uid_buf: [20]u8 = undefined;
     const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "-1";
-    const digests = if (store.getNodeProperty(node_id, "digests")) |v| if (v == .String) v.String else "" else "";
-    const created_val = if (store.getNodeProperty(node_id, "created_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    const digests = if ((try store.getNodePropertyOrError(node_id, "digests"))) |v| if (v == .String) v.String else "" else "";
+    const created_val = if ((try store.getNodePropertyOrError(node_id, "created_at"))) |v| if (v == .Int) v.Int else 0 else 0;
     var created_buf: [20]u8 = undefined;
     const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{created_val}) catch "0";
     const props = [_]auth_hmac.KeyValue{
@@ -2881,14 +2881,14 @@ fn computeMfaRecoveryHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.G
 }
 
 /// SONNY-6341: the HMAC of a FleRoleGrant node, from its stored fields.
-fn computeFleRoleGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) [32]u8 {
+fn computeFleRoleGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) ![32]u8 {
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
-    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else 0 else 0;
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else 0 else 0;
     var uid_buf: [20]u8 = undefined;
     const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
-    const role = if (store.getNodeProperty(node_id, "role")) |v| if (v == .String) v.String else "" else "";
-    const granted_at_val = if (store.getNodeProperty(node_id, "granted_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    const role = if ((try store.getNodePropertyOrError(node_id, "role"))) |v| if (v == .String) v.String else "" else "";
+    const granted_at_val = if ((try store.getNodePropertyOrError(node_id, "granted_at"))) |v| if (v == .Int) v.Int else 0 else 0;
     var granted_at_buf: [20]u8 = undefined;
     const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
     const props = [_]auth_hmac.KeyValue{

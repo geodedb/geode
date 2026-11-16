@@ -86,7 +86,7 @@ const Race = struct {
                 self.noteErr("single g2", e);
                 continue;
             };
-            _ = self.st.getNodeProperty(id, "v");
+            _ = (self.st.getNodePropertyOrError(id, "v") catch @panic("SONNY-6621: unexpected read failure"));
             _ = self.singles.fetchAdd(1, .monotonic);
         }
     }

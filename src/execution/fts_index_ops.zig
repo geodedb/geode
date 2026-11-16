@@ -30,6 +30,9 @@ const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig"
 const log = std.log.scoped(.fts_index_ops);
 
 pub const Error = error{
+    /// SONNY-6612 (1): an existing value the validation must check could not
+    /// be read (the cause is logged).
+    StorageReadFailed,
     /// The fulltext index name already exists (and IF NOT EXISTS was absent).
     FulltextIndexExists,
     /// FTS is unavailable on the resolved graph (adapter not initialised).
@@ -428,7 +431,9 @@ pub fn queueRebuildForRemovedLabel(store: *graph_store.GraphStore, graph_name: [
     const specs = mg.coveringFtsIndexes(label) orelse return;
     for (specs) |spec| {
         for (spec.properties) |p| {
-            const pv = store.getNodeProperty(node_id, p) orelse continue;
+            // SONNY-6612 (1): a value that cannot be read may be text the
+            // index holds: rebuild (it read as absent and the index kept it).
+            const pv = (store.getNodePropertyOrError(node_id, p) catch graph_store.PropertyValue{ .String = "unreadable" }) orelse continue;
             if (pv != .String or pv.String.len == 0) continue;
             queueRebuild(graph_name, spec.name) catch |err| {
                 log.err("fulltext index '{s}' could not be queued for a rebuild after a REMOVE of its label: {}; it holds the node's text until rebuilt (searches skip the node)", .{ spec.name, err });
@@ -502,7 +507,10 @@ pub fn validateTextProperty(
     var saw_any_value = false;
     for (node_ids) |node_id| {
         for (properties) |prop| {
-            const pv = store.getNodeProperty(node_id, prop) orelse continue;
+            const pv = (store.getNodePropertyOrError(node_id, prop) catch |err| {
+                log.err("fulltext index validation could not read a node's value: {}", .{err});
+                return error.StorageReadFailed;
+            }) orelse continue;
             switch (pv) {
                 .String => return, // at least one string value → text index is meaningful
                 .Null => {},
@@ -582,7 +590,7 @@ fn backfillExistingNodes(
         }
 
         for (properties) |prop| {
-            const pv = store.getNodeProperty(node_id, prop) orelse continue;
+            const pv = (try store.getNodePropertyOrError(node_id, prop)) orelse continue;
             const text = switch (pv) {
                 .String => |s| s,
                 else => continue, // only string is indexable for FTS (skip Int/Float/Bool/Null/...)

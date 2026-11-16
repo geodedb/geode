@@ -123,7 +123,7 @@ test "massive graph store stress test" {
         if (item.deleted) continue;
         const node = reloaded.getNodePtr(item.node_id) orelse return error.MissingNode;
         _ = node;
-        const prop = reloaded.getNodeProperty(item.node_id, "hash") orelse return error.MissingProperty;
+        const prop = (try reloaded.getNodePropertyOrError(item.node_id, "hash")) orelse return error.MissingProperty;
         const stored_hash = switch (prop) {
             .Int => |v| @as(u64, @bitCast(v)),
             else => return error.InvalidPropertyType,

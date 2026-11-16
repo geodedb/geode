@@ -123,7 +123,11 @@ const mfa_not_enforced_note =
 fn beginOfflineMfaAttempt(allocator: std.mem.Allocator, mgr: anytype, user_id: u64, username: []const u8) void {
     const geode_auth_dispatch = geode.auth_dispatch;
     const now_ms = compat_milliTimestamp();
-    const prev = mgr.mfaAttempts(user_id) orelse @TypeOf(mgr.storage).MfaAttemptState{};
+    const stored_prev = mgr.mfaAttempts(user_id) catch |err| {
+        std.debug.print("Error: the stored MFA attempt record could not be read ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    const prev = stored_prev orelse @TypeOf(mgr.storage).MfaAttemptState{};
     if (now_ms < prev.lockout_until_ms) {
         std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
         std.process.exit(@intFromEnum(ExitCode.general_error));

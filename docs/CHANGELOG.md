@@ -3663,6 +3663,62 @@
   ran. Behaviour is unchanged. Regression:
   `zig build test-sonny6595-standalone-delete`.
 
+- **The null-on-error node and edge getters are gone (SONNY-6621).**
+  **BREAKING (behaviour / API):** `GraphStore.getNodeProperty`,
+  `getNodePtrHydrated`, `getEdgePtrHydrated`, `getEdgeHydrated`,
+  `getEdgePtr`, `getOutgoingEdgeIds` and `getIncomingEdgeIds` returned null
+  both for an absent entity and for one that could not be read; they are
+  removed, and every caller (the executor, MERGE, cluster apply, the 2PC
+  coordinator, the storage adapter's getter call sites, the index manager,
+  the tests) uses `getNodePropertyOrError`, the `*Checked` body getters and
+  `get*EdgeIdsOrError`. `getNodePtrForScan` and `NodesByGraphIterator.next`
+  now return error unions, and the ~25 `getOrHydratePtr(..) catch null`
+  reads in the executor, eval, the index manager and the adapter propagate
+  the error. MERGE of an existing node whose body could not be read created
+  a second node beside it; it now fails with the read's error. Regression:
+  `zig build test-sonny6621-hydrate-catch-null`.
+- **Auth records, cluster apply and index maintenance read node
+  properties with the error-returning getter (SONNY-6612 item 1).** The
+  auth stores read every record field (`hmac`, ids, user / role / grant /
+  policy fields) through helpers over `GraphStore.getNodeProperty`, which
+  returns null for an absent property and for a record that could not be
+  read: `verifyChain` reported `RecordHmacMismatch` (tampering) for a read
+  error, and loaders took field defaults. The helpers and every auth caller
+  now use `getNodePropertyOrError` and fail with the read's error; the
+  role resolver fails closed (no global role). Cluster apply, property
+  mutation, fulltext maintenance and the unbounded MATCH paths read the same
+  way; an index hook that cannot read a value rebuilds the index instead of
+  skipping the node, and CREATE INDEX ... USING fulltext fails its
+  validation with `StorageReadFailed`. Inside `graph_store.zig` the
+  adjacency helpers (`getOutgoingEdges`, `getNeighbors`, `getOutDegree`,
+  `hasEdge`, `getEdgesForNode`, `getEdgesFrom` / `To`) now return the read
+  error, and `getNodePropertyChecked` / `getEdgePropertyChecked` no longer
+  read a failed body as absent. `getOutDegree`, `hasEdge`,
+  `getEdgesForNode`, `getEdgesFrom`, `getEdgesTo` now return error unions.
+  Regression: `zig build test-sonny6612-auth-field-reads`.
+- **Unregistered tenants are refused once tenants are administered; the
+  QUIC fast paths check the tenant too (SONNY-6612 item 2).** **BREAKING
+  (security / operator):** when the durable tenant registry holds a tenant
+  other than the default, a session scoped to a tenant it does not know is
+  refused with `TenantNotRegistered` (42501); it read and wrote under any
+  tenant id a client asserted. With no registry or an empty one nothing
+  changes. The QUIC handler now checks a dropping or unregistered tenant
+  before its fast paths (bulk MERGE, the count fast paths), which bypass
+  the executor's statement-entry check. Regression: `zig build
+  test-sonny6612-tenant-refusal`.
+- **Storage and tenant errors carry a SQLSTATE and an operator message
+  (SONNY-6612 item 3).** `StorageReadFailed` and `StorageWriteFailed` map to
+  58000, `TenantDropping` to 42501 (access rule violation, as
+  `TenantScopeRequired`) and `TenantRegistryOrphanParent` to 58000, each
+  with a message that names the error, says what happened and what to do,
+  and names no file path; they reached the client as the bare error name.
+  Regression: `zig build test-sonny6612-error-messages`.
+- **A write to a node whose body cannot be read reports the read error,
+  not NodeNotFound (SONNY-6612 item 4).** SET, REMOVE and the label writes
+  resolved their target with a hydrate whose error read as "absent" and
+  answered `NodeNotFound` (58000), sending an operator looking for a deleted
+  node; they now fail with the read's own error. Regression: `zig build
+  test-sonny6612-unreadable-node-write`.
 - **A traversal whose adjacency list cannot be read, and a MATCH fast path
   whose property read fails, fail instead of answering short (SONNY-6607
   item 1).** **BREAKING (behaviour):** `getOutgoingEdgeIds` /

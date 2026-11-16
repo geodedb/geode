@@ -190,7 +190,7 @@ test "SONNY-6468 (2): a batch node property write seals an FLE value once (the s
     };
     try e.f.st.setNodePropertiesBatch(id, &props);
 
-    const in_memory = e.f.st.getNodeProperty(id, "ssn").?.String;
+    const in_memory = (try e.f.st.getNodePropertyOrError(id, "ssn")).?.String;
     const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
     const pv = (try adapter.getNodeProperty(graph_store.DEFAULT_GRAPH_NAME, try e.slotOf(id, .node), "ssn", testing.allocator)) orelse return error.NotPersisted;
     const persisted = switch (pv) {
@@ -201,7 +201,7 @@ test "SONNY-6468 (2): a batch node property write seals an FLE value once (the s
     try expectOneEnvelope(in_memory, persisted, "setNodePropertiesBatch");
 
     // An unencrypted field is untouched, and the encrypted one reads back.
-    try testing.expectEqualStrings("visible", e.f.st.getNodeProperty(id, "plain").?.String);
+    try testing.expectEqualStrings("visible", (try e.f.st.getNodePropertyOrError(id, "plain")).?.String);
     try testing.expectEqualStrings(secret, try e.str("MATCH (n:T6468) RETURN n.ssn"));
 }
 
@@ -218,7 +218,7 @@ test "SONNY-6468 (2): a batch edge property write seals an FLE value once (the s
     const props = [_]graph_store.GraphStore.BatchPropertyEntry{.{ .key = "p", .value = .{ .String = secret } }};
     try e.f.st.setEdgePropertiesBatch(edges[0], &props);
 
-    const edge = e.f.st.getEdgeHydrated(edges[0]).?;
+    const edge = (try e.f.st.getEdgeHydratedChecked(edges[0])).?;
     const in_memory = edge.properties.get("p").?.String;
     const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
     const pv = (try adapter.getEdgeProperty(

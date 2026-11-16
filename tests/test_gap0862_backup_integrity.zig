@@ -142,22 +142,22 @@ fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph)
     try testing.expectEqual(@as(usize, 3), restored.getEdgeCount());
 
     // Sampled node property round-trip (String + Int).
-    const alice_name = restored.getNodeProperty(seed.user_alice, "name") orelse return error.NodePropertyMissing;
+    const alice_name = (try restored.getNodePropertyOrError(seed.user_alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", alice_name.String);
-    const alice_age = restored.getNodeProperty(seed.user_alice, "age") orelse return error.NodePropertyMissing;
+    const alice_age = (try restored.getNodePropertyOrError(seed.user_alice, "age")) orelse return error.NodePropertyMissing;
     try testing.expectEqual(@as(i64, 30), alice_age.Int);
 
-    const carol_name = restored.getNodeProperty(seed.user_carol, "name") orelse return error.NodePropertyMissing;
+    const carol_name = (try restored.getNodePropertyOrError(seed.user_carol, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Carol", carol_name.String);
-    const carol_age = restored.getNodeProperty(seed.user_carol, "age") orelse return error.NodePropertyMissing;
+    const carol_age = (try restored.getNodePropertyOrError(seed.user_carol, "age")) orelse return error.NodePropertyMissing;
     try testing.expectEqual(@as(i64, 41), carol_age.Int);
 
-    const hello_title = restored.getNodeProperty(seed.post_hello, "title") orelse return error.NodePropertyMissing;
+    const hello_title = (try restored.getNodePropertyOrError(seed.post_hello, "title")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Hello World", hello_title.String);
 
     // Sampled edge round-trip: topology (from/to/label) + property.
     for (seed.edges) |ef| {
-        const edge_ptr = restored.getEdgePtr(ef.id) orelse return error.EdgeMissing;
+        const edge_ptr = (try restored.getEdgePtrHydratedChecked(ef.id)) orelse return error.EdgeMissing;
         try testing.expectEqual(ef.from, edge_ptr.from_id);
         try testing.expectEqual(ef.to, edge_ptr.to_id);
         try testing.expectEqualStrings(ef.label, edge_ptr.label);

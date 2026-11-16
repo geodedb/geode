@@ -183,7 +183,7 @@ pub fn main() !void {
 
     // --- Assertion 3: hydrate-on-miss returns correct data for an evicted id. ---
     if (probe_id != 0) {
-        const got = store.getNodeProperty(probe_id, "scientific_name");
+        const got = (try store.getNodePropertyOrError(probe_id, "scientific_name"));
         var expbuf: [96]u8 = undefined;
         // scientific_name is taxon_keys[0], so its value suffix is "-0".
         const expected = std.fmt.bufPrint(&expbuf, "scientific_name-{d}-0", .{probe_id}) catch unreachable;

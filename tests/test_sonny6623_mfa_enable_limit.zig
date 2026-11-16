@@ -216,7 +216,7 @@ test "SONNY-6623 (1): mfa_enable shares mfa_verify's attempt count, lockout and 
         },
     }
     // The lockout is stored and survives a restart, for mfa_enable too.
-    const st = w.agm.mfaAttempts(uid) orelse return error.LockoutNotStored;
+    const st = (try w.agm.mfaAttempts(uid)) orelse return error.LockoutNotStored;
     try testing.expectEqual(@as(u32, 5), st.fail_count);
     try restart(&w.agm);
     _ = try fx.expectRefused(ga, w.admin, right, "53400");

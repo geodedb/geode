@@ -201,7 +201,7 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
         try testing.expect(nodes.len >= 1);
         for (nodes) |node_id| {
             // Read the current (plaintext) email and write it straight back.
-            const email_val = store.getNodeProperty(node_id, "email") orelse continue;
+            const email_val = (try store.getNodePropertyOrError(node_id, "email")) orelse continue;
             if (email_val == .String) {
                 try store.setNodeProperty(node_id, "email", .{ .String = email_val.String });
             }
@@ -226,7 +226,7 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
     {
         const nodes = store.getNodesByLabel(SECURITY_GRAPH_NAME, "User") orelse &[_]u64{};
         for (nodes) |node_id| {
-            const email_val = store.getNodeProperty(node_id, "email") orelse continue;
+            const email_val = (try store.getNodePropertyOrError(node_id, "email")) orelse continue;
             if (email_val == .String) {
                 try testing.expectEqualStrings("admin@localhost", email_val.String);
             }

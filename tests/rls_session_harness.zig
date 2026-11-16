@@ -239,7 +239,7 @@ pub const Session = struct {
 /// A property of an edge, read unscoped straight from the store.
 pub fn storedEdgeString(edge_id: u64, key: []const u8) ?[]const u8 {
     const store = graph_store.getGlobalStore(testing.allocator);
-    const edge = store.getEdgeHydrated(edge_id) orelse return null;
+    const edge = (store.getEdgeHydratedChecked(edge_id) catch @panic("SONNY-6621: unexpected read failure")) orelse return null;
     const pv = edge.properties.get(key) orelse return null;
     return if (pv == .String) pv.String else null;
 }
@@ -249,9 +249,9 @@ pub fn storedEdgeString(edge_id: u64, key: []const u8) ?[]const u8 {
 pub fn edgeIds(aa: std.mem.Allocator, from: u64, to: u64, label: []const u8) ![]u64 {
     const store = graph_store.getGlobalStore(testing.allocator);
     var out: std.ArrayList(u64) = .empty;
-    const ids = store.getOutgoingEdgeIds(from) orelse return out.toOwnedSlice(aa);
+    const ids = (try store.getOutgoingEdgeIdsOrError(from)) orelse return out.toOwnedSlice(aa);
     for (ids) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (e.to_id == to and std.mem.eql(u8, e.label, label)) try out.append(aa, eid);
     }
     return out.toOwnedSlice(aa);
@@ -260,10 +260,10 @@ pub fn edgeIds(aa: std.mem.Allocator, from: u64, to: u64, label: []const u8) ![]
 /// Does any edge incident to `id` carry the property `key`?
 pub fn anyIncidentEdgeHas(id: u64, key: []const u8) bool {
     const store = graph_store.getGlobalStore(testing.allocator);
-    for ([_]?[]const u64{ store.getOutgoingEdgeIds(id), store.getIncomingEdgeIds(id) }) |maybe_ids| {
+    for ([_]?[]const u64{ (store.getOutgoingEdgeIdsOrError(id) catch @panic("SONNY-6621: unexpected read failure")), (store.getIncomingEdgeIdsOrError(id) catch @panic("SONNY-6621: unexpected read failure")) }) |maybe_ids| {
         const ids = maybe_ids orelse continue;
         for (ids) |eid| {
-            const e = store.getEdgeHydrated(eid) orelse continue;
+            const e = (store.getEdgeHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
             if (e.properties.get(key) != null) return true;
         }
     }
@@ -303,8 +303,8 @@ pub fn countWithS(s: []const u8) usize {
 /// How many edges start or end at `id` (every graph and tenant).
 pub fn incidentEdges(id: u64) usize {
     const store = graph_store.getGlobalStore(testing.allocator);
-    const out = if (store.getOutgoingEdgeIds(id)) |ids| ids.len else 0;
-    const in = if (store.getIncomingEdgeIds(id)) |ids| ids.len else 0;
+    const out = if ((store.getOutgoingEdgeIdsOrError(id) catch @panic("SONNY-6621: unexpected read failure"))) |ids| ids.len else 0;
+    const in = if ((store.getIncomingEdgeIdsOrError(id) catch @panic("SONNY-6621: unexpected read failure"))) |ids| ids.len else 0;
     return out + in;
 }
 

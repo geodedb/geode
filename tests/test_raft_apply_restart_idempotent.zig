@@ -62,7 +62,7 @@ test "REGRESSION #6: re-applying a committed replicated create does not duplicat
     var ids = try store.getNodesByLabels(a, "default", &labels, null);
     defer ids.deinit(a);
     try std.testing.expectEqual(@as(usize, 1), ids.items.len);
-    const v = store.getNodeProperty(ids.items[0], "v") orelse return error.MissingProperty;
+    const v = (try store.getNodePropertyOrError(ids.items[0], "v")) orelse return error.MissingProperty;
     try std.testing.expectEqual(@as(i64, 1), v.Int);
 }
 
@@ -138,6 +138,6 @@ test "PROPERTY IDEMPOTENCY: re-applying a create with {v:1} at the same raft ind
     var ids = try store.getNodesByLabels(a, "default", &labels, null);
     defer ids.deinit(a);
     try std.testing.expectEqual(@as(usize, 1), ids.items.len);
-    const v = store.getNodeProperty(ids.items[0], "v") orelse return error.MissingProperty;
+    const v = (try store.getNodePropertyOrError(ids.items[0], "v")) orelse return error.MissingProperty;
     try std.testing.expectEqual(@as(i64, 1), v.Int);
 }

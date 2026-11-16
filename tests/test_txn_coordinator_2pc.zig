@@ -56,7 +56,7 @@ test "TestCANARY_2PC_Coordinator basic prepare and commit" {
     try coordinator.handleDecide(.{ .xid = 1, .commit = true });
 
     try std.testing.expect(store.getNodePtr(1) != null);
-    const name_prop = store.getNodeProperty(1, "name") orelse return error.TestUnexpectedResult;
+    const name_prop = (try store.getNodePropertyOrError(1, "name")) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Alice", name_prop.String);
     try std.testing.expect(!coordinator.prepared_txns.contains(1));
 }
@@ -103,9 +103,9 @@ test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
     try std.testing.expect(try coordinator.handlePrepare(.{ .xid = 100, .shard_id = 0, .write_set = write_set, .metadata = "test_persistence" }));
     try coordinator.handleDecide(.{ .xid = 100, .commit = true });
 
-    const a = store.getNodeProperty(10, "name") orelse return error.TestUnexpectedResult;
+    const a = (try store.getNodePropertyOrError(10, "name")) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Alice Smith", a.String);
-    const b = store.getNodeProperty(11, "name") orelse return error.TestUnexpectedResult;
+    const b = (try store.getNodePropertyOrError(11, "name")) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Bob Jones", b.String);
 }
 

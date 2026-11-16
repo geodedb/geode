@@ -182,7 +182,7 @@ test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating
 
     // The second MERGE's bare-SET (apply_on_match) must have overwritten the
     // first: confirm the upsert effect, not just the no-duplicate identity.
-    const rank = store.getNodeProperty(id2, "rank") orelse return error.RankPropertyMissing;
+    const rank = (try store.getNodePropertyOrError(id2, "rank")) orelse return error.RankPropertyMissing;
     try std.testing.expect(rank == .String);
     try std.testing.expectEqualStrings("genus", rank.String);
 }

@@ -169,11 +169,11 @@ test "SONNY-6335 (1): a node value encrypted by the graph-store primitive (raft 
     const ids = e.f.st.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "T6335") orelse return error.NoNodes;
     var store_written: ?u64 = null;
     for (ids) |id| {
-        if (e.f.st.getNodeProperty(id, "ssn") == null) store_written = id;
+        if ((try e.f.st.getNodePropertyOrError(id, "ssn")) == null) store_written = id;
     }
     try e.f.st.setNodeProperty(store_written.?, "ssn", .{ .String = secret });
     // Stored encrypted, not in plaintext.
-    const stored = e.f.st.getNodeProperty(store_written.?, "ssn").?.String;
+    const stored = (try e.f.st.getNodePropertyOrError(store_written.?, "ssn")).?.String;
     try testing.expect(std.mem.indexOf(u8, stored, secret) == null);
 
     try expectStr(secret, try e.str("pii", "MATCH (n:T6335 {k: 1}) RETURN n.ssn"), "executor-written");
@@ -192,7 +192,7 @@ test "SONNY-6335 (1): an edge value encrypted by the graph-store primitive decry
     defer testing.allocator.free(edges);
     var store_written: ?u64 = null;
     for (edges) |id| {
-        const edge = e.f.st.getEdgeHydrated(id) orelse continue;
+        const edge = (try e.f.st.getEdgeHydratedChecked(id)) orelse continue;
         if (edge.properties.get("p") == null) store_written = id;
     }
     try e.f.st.setEdgeProperty(store_written.?, "p", .{ .String = secret });
@@ -216,7 +216,7 @@ test "SONNY-6335 (1): a value already on disk under the old graph-store identity
     defer testing.allocator.free(envelope);
     // An envelope reaching the store is kept as it is (never re-encrypted).
     try e.f.st.setNodeProperty(id, "ssn", .{ .String = envelope });
-    try testing.expectEqualSlices(u8, envelope, e.f.st.getNodeProperty(id, "ssn").?.String);
+    try testing.expectEqualSlices(u8, envelope, (try e.f.st.getNodePropertyOrError(id, "ssn")).?.String);
     try expectStr(secret, try e.str("pii", "MATCH (n:T6335 {k: 3}) RETURN n.ssn"), "legacy store identity");
 
     // Under another record's identity: no identity a reader tries.
@@ -229,7 +229,7 @@ test "SONNY-6335 (1): a value already on disk under the old graph-store identity
     // encrypted. (Stored bytes that do not decrypt are refused, 58030:
     // test-sonny6327-fle-read-gaps.)
     try e.f.st.setNodeProperty(id, "ssn", .{ .String = foreign });
-    try testing.expect(!std.mem.eql(u8, foreign, e.f.st.getNodeProperty(id, "ssn").?.String));
+    try testing.expect(!std.mem.eql(u8, foreign, (try e.f.st.getNodePropertyOrError(id, "ssn")).?.String));
     try expectStr(foreign, try e.str("pii", "MATCH (n:T6335 {k: 3}) RETURN n.ssn"), "a foreign envelope is a value");
 }
 

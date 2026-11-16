@@ -428,7 +428,7 @@ fn committedW(st: *graph_store.GraphStore, graph: []const u8, index: usize, roun
     const ids = st.getNodesByLabel(graph, "W") orelse return 0;
     var n: usize = 0;
     for (ids) |id| {
-        const node = st.getNodePtrHydrated(id) orelse continue;
+        const node = (try st.getNodePtrHydratedChecked(id)) orelse continue;
         const s = node.properties.get("s") orelse continue;
         const r = node.properties.get("r") orelse continue;
         if (s == .Int and r == .Int and s.Int == @as(i64, @intCast(index)) and r.Int == @as(i64, @intCast(round))) n += 1;

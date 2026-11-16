@@ -296,7 +296,7 @@ test "GDEL delete payload round-trips: create-then-delete converges to empty" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 
     // Edge 200 and node 100 are gone; node 101 (not targeted) remains.
-    try std.testing.expect(store.getEdgePtr(200) == null);
+    try std.testing.expect((try store.getEdgePtrHydratedChecked(200)) == null);
     try std.testing.expect(store.getNodePtr(100) == null);
     try std.testing.expect(store.getNodePtr(101) != null);
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
@@ -464,7 +464,7 @@ test "MERGE create outcome (GNC1) applies idempotently: apply twice -> 1 node" {
 
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
     try std.testing.expectEqual(@as(usize, 1), store.countNodesByLabel("default", "MergeRepl", null));
-    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(12, "k").?.Int);
+    try std.testing.expectEqual(@as(i64, 1), (try store.getNodePropertyOrError(12, "k")).?.Int);
 }
 
 test "MERGE create outcome: two stores apply same payload -> identical single node" {
@@ -523,7 +523,7 @@ test "GMRG merge command applies ON MATCH SET by stable id and is idempotent" {
     defer allocator.free(r2);
 
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(50, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(50, "v")).?.Int);
 }
 
 test "merge command with unknown payload magic is skipped (no error, no mutation)" {
@@ -580,7 +580,7 @@ test "GUPD update command applies SET by stable id and is idempotent (apply twic
     defer allocator.free(r2);
 
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(60, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(60, "v")).?.Int);
 }
 
 test "GUPD update command: remove of an absent prop is a clean no-op" {
@@ -606,8 +606,8 @@ test "GUPD update command: remove of an absent prop is a clean no-op" {
     const result = try raft_apply.applyCommand(allocator, &store, cmd, 8);
     defer allocator.free(result);
 
-    try std.testing.expectEqual(@as(i64, 7), store.getNodeProperty(61, "keep").?.Int);
-    try std.testing.expect(store.getNodeProperty(61, "ghost") == null);
+    try std.testing.expectEqual(@as(i64, 7), (try store.getNodePropertyOrError(61, "keep")).?.Int);
+    try std.testing.expect((try store.getNodePropertyOrError(61, "ghost")) == null);
 }
 
 test "GUPD update command: unknown payload magic is skipped (no error, no mutation)" {
@@ -630,7 +630,7 @@ test "GUPD update command: unknown payload magic is skipped (no error, no mutati
 
     try std.testing.expectEqual(@as(usize, 0), result.len);
     // The unknown payload mutated nothing — the seed value is untouched.
-    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(62, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 1), (try store.getNodePropertyOrError(62, "v")).?.Int);
     try std.testing.expect(store.graphs.contains("default"));
 }
 
@@ -666,10 +666,10 @@ test "GUPD update command: two stores apply same multi-node payload -> identical
     const r2 = try raft_apply.applyCommand(allocator, &s2, cmd, 11);
     defer allocator.free(r2);
 
-    try std.testing.expectEqual(@as(i64, 3), s1.getNodeProperty(70, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 3), s1.getNodeProperty(71, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(70, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 3), s2.getNodeProperty(71, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 3), (try s1.getNodePropertyOrError(70, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 3), (try s1.getNodePropertyOrError(71, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 3), (try s2.getNodePropertyOrError(70, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 3), (try s2.getNodePropertyOrError(71, "v")).?.Int);
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +706,7 @@ test "GNC2: zero-node payload with absolute_id endpoints creates edge between pr
     // Exactly one MCL edge exists, from src_id to dst_id, at the derived id.
     const edge_id = cr.deriveMultiEdgeId(4242, 0);
     try std.testing.expectEqual(@as(usize, 1), store.edges.count());
-    const edge = store.getEdgePtr(edge_id) orelse return error.EdgeNotFound;
+    const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
     try std.testing.expectEqual(src_id, edge.from_id);
     try std.testing.expectEqual(dst_id, edge.to_id);
     try std.testing.expectEqualStrings("MCL", edge.label);
