@@ -3073,6 +3073,23 @@
 
 ### Fixed
 
+- **Raft snapshots under `GEODE_TDE_KEY` are sealed and written off the
+  Raft node lock (SONNY-6670).** The TDE-wrapped Raft storage had no staged
+  snapshot API, so raft kept a snapshot in memory and sealed, wrote and
+  fsynced it whole at commit, under `inner_mutex`, for a node's own
+  snapshots and for ones received from the leader (the SONNY-6665
+  residual). `TdeRaftStorage` now implements it: the data is sealed in 64
+  KiB segments (AES-256-GCM, each authenticated with its position and
+  whether it is the last) as it is staged in FileStorage's staged file,
+  synced there off the lock, and committed by FileStorage's renames under
+  it. A received snapshot is no longer held in memory (no size cap). The
+  older one-record format still reads. Measured
+  (`test-sonny6670-tde-staged-snapshot`, 64 MiB, Debug): the longest wait
+  for `inner_mutex` fell from 2683 ms to 17 ms for a follower's install
+  and from 2656 ms to 40 ms for a leader's own snapshot; the staged file
+  holds no plaintext, and a crash between stage and commit leaves the
+  previous snapshot whole.
+
 - **A snapshot restore no longer uses a freed idempotency table
   (SONNY-6667).** Under load `test-sonny6633-snapshot-wire` panicked
   "incorrect alignment" in `IdempotencyDedup.deinit` from `replaceFrom` on
@@ -3120,8 +3137,8 @@
   the Raft snapshot). Measured (`test-sonny6665-install-lock-hold`, 64
   MiB snapshot, Debug): the longest wait for a follower's `inner_mutex`
   during the install fell from 2269 ms to 44 ms. Under GEODE_TDE_KEY the
-  sealed snapshot is still written under the lock (the TDE storage has no
-  staging; it stages in memory). Tests: `test-sonny6665-wire-fields`,
+  sealed snapshot was still written under the lock (fixed by SONNY-6670).
+  Tests: `test-sonny6665-wire-fields`,
   `test-sonny6665-snapshot-resume`, `test-sonny6665-install-lock-hold`,
   `test-sonny6665-cluster-snapshot-resume` (three `geode serve`
   processes; the Debug-only `GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS` hook

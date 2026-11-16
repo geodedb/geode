@@ -3462,9 +3462,9 @@ pub const RaftNode = struct {
             .stage_received_snapshots = true,
         };
         // Staged on disk, a received snapshot is never held in memory whole,
-        // so FileStorage takes any size; the in-memory and TDE storages
-        // stage in memory and keep the library's bound.
-        if (backing == .file) raft_config.max_snapshot_size = 0;
+        // so FileStorage takes any size, sealed (SONNY-6670) or not; the
+        // in-memory storage stages in memory and keeps the library's bound.
+        if (backing != .in_memory) raft_config.max_snapshot_size = 0;
 
         const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage_iface);
 
@@ -4050,16 +4050,24 @@ pub const RaftNode = struct {
 
     /// SONNY-6665: the data of `snap`, a snapshot `advancePersist()`
     /// committed, when the Ready does not carry it (raft v0.2.6 staged it in
-    /// FileStorage): read from the committed snapshot file and checked
-    /// against the digest committed with it. Null when the Ready carries
-    /// it. Safe without `inner_mutex` (`FileStorage.openSnapshotReader`).
-    /// The caller frees it.
+    /// FileStorage; SONNY-6670: sealed, under TDE): read from the committed
+    /// snapshot file and checked against the digest committed with it (and
+    /// under TDE opened). Null when the Ready carries it. Safe without
+    /// `inner_mutex` (`FileStorage.openSnapshotReader`). The caller frees it.
     fn committedSnapshotData(self: *RaftNode, snap: raft_lib.Snapshot) !?[]u8 {
         if (snap.data.len > 0) return null;
         const fs = switch (self.storage_backing) {
             .file => |fs| fs,
-            // These stage in memory: the Ready carries the data.
-            .in_memory, .tde_file => return null,
+            .tde_file => |tde| {
+                const got = (try tde.loadSnapshotUnlocked()) orelse return error.RaftSnapshotMissing;
+                defer raft_lib.storage.freeSnapshotMetadata(self.allocator, got.metadata);
+                errdefer if (got.data.len > 0) self.allocator.free(got.data);
+                // A newer snapshot committed since (this node's own) supersedes it.
+                if (got.metadata.index != snap.metadata.index or got.metadata.term != snap.metadata.term) return error.RaftSnapshotChanged;
+                return @constCast(got.data);
+            },
+            // It stages in memory: the Ready carries the data.
+            .in_memory => return null,
         };
         var reader = (try fs.openSnapshotReader()) orelse return error.RaftSnapshotMissing;
         defer reader.close();

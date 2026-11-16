@@ -34,6 +34,15 @@
 //! the snapshot with a fixed context string, so a record copied to another
 //! index, or a log entry presented as a snapshot, fails to open.
 //!
+//! Snapshots (SONNY-6670) are staged off the Raft node lock like plaintext
+//! ones: the data is sealed as it is staged, in segments of at most
+//! `SEGMENT_BYTES`, each a record as above authenticated with its position
+//! and whether it is the last (so segments cannot be reordered, dropped or
+//! cut off), written to FileStorage's staged file, synced there, and
+//! committed by FileStorage's renames under the lock. The file starts with
+//! `STREAM_MAGIC`; a snapshot saved whole (`saveSnapshot`) is one record,
+//! as before, and both read back.
+//!
 //! The directory records that it is encrypted in `tde.marker` (written before
 //! any Raft state, by temp file, fsync, rename and directory fsync), with a
 //! key check value derived from GEODE_TDE_KEY. On open:
@@ -79,6 +88,12 @@ const SESSION_KEY_INFO = "geode/raft-storage/v1/aes-256-gcm";
 const KEY_CHECK_INFO = "geode/raft-storage/v1/key-check";
 const ENTRY_AAD_CONTEXT = "geode-raft-entry-v1";
 const SNAPSHOT_AAD_CONTEXT = "geode-raft-snapshot-v1";
+const SEGMENT_AAD_CONTEXT = "geode-raft-snapshot-segment-v1";
+/// "Geode Raft TDE Stream": a snapshot sealed in segments (SONNY-6670).
+const STREAM_MAGIC = [4]u8{ 'G', 'R', 'T', 'S' };
+const STREAM_VERSION: u8 = 1;
+/// The plaintext bytes in each sealed segment but the last.
+pub const SEGMENT_BYTES: usize = 64 * 1024;
 
 /// The files `FileStorage` keeps Raft state in.
 const RAFT_STATE_FILES = [_][]const u8{ "hard_state", "entries.wal", "snapshot.meta", "snapshot.data" };
@@ -220,6 +235,13 @@ pub const TdeRaftStorage = struct {
         .saveSnapshot = saveSnapshot,
         .loadSnapshot = loadSnapshot,
         .compact = compact,
+        .stageSnapshot = stageSnapshot,
+        .commitStagedSnapshot = commitStagedSnapshot,
+        .discardStagedSnapshot = discardStagedSnapshot,
+        .beginStagedSnapshot = beginStagedSnapshot,
+        .appendStagedSnapshot = appendStagedSnapshot,
+        .syncStagedSnapshot = syncStagedSnapshot,
+        .loadSnapshotMetadata = loadSnapshotMetadata,
     };
 
     fn cast(ptr: *anyopaque) *TdeRaftStorage {
@@ -359,7 +381,7 @@ pub const TdeRaftStorage = struct {
         const self = cast(ptr);
         var snap = (try self.innerStorage().loadSnapshot()) orelse return null;
         errdefer raft_lib.freeSnapshot(self.allocator, snap);
-        const plaintext = try self.open(snap.data, SNAPSHOT_AAD_CONTEXT);
+        const plaintext = try self.openSnapshotData(snap.data);
         if (snap.data.len > 0) self.allocator.free(snap.data);
         snap.data = plaintext;
         return snap;
@@ -383,7 +405,7 @@ pub const TdeRaftStorage = struct {
             std.crypto.hash.Blake3.hash(sealed, &got, .{});
             if (!std.mem.eql(u8, &got, &want)) return error.SnapshotChanged;
         }
-        const plaintext = try self.open(sealed, SNAPSHOT_AAD_CONTEXT);
+        const plaintext = try self.openSnapshotData(sealed);
         errdefer if (plaintext.len > 0) self.allocator.free(plaintext);
         const cfg = reader.metadata.config;
         const voters = try self.allocator.dupe(u64, cfg.voters);
@@ -397,6 +419,178 @@ pub const TdeRaftStorage = struct {
             } },
             .data = plaintext,
         };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6670-TDE-STAGED-SNAPSHOT; FEATURE="TDEFileLevelEncryption"; ASPECT=StagedSealedSegments; STATUS=TESTED; TEST=tests/test_sonny6670_tde_staged_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6670: a snapshot's data, sealed in one record (`saveSnapshot`)
+    /// or in segments (staged), opened. The caller frees it.
+    fn openSnapshotData(self: *TdeRaftStorage, sealed: []const u8) ![]const u8 {
+        if (sealed.len < STREAM_MAGIC.len or !std.mem.eql(u8, sealed[0..STREAM_MAGIC.len], &STREAM_MAGIC)) {
+            return self.open(sealed, SNAPSHOT_AAD_CONTEXT);
+        }
+        if (sealed.len < STREAM_MAGIC.len + 1 or sealed[STREAM_MAGIC.len] != STREAM_VERSION) return error.RaftStorageCorrupt;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+        var pos: usize = STREAM_MAGIC.len + 1;
+        var index: u64 = 0;
+        while (true) : (index += 1) {
+            if (sealed.len - pos < 4) return error.RaftStorageCorrupt;
+            const len = std.mem.readInt(u32, sealed[pos..][0..4], .little);
+            pos += 4;
+            if (sealed.len - pos < len) return error.RaftStorageCorrupt;
+            const record = sealed[pos..][0..len];
+            pos += len;
+            const last = pos == sealed.len;
+            var aad_buf: [SEGMENT_AAD_CONTEXT.len + 9]u8 = undefined;
+            const plain = try self.open(record, segmentAad(&aad_buf, index, last));
+            defer if (plain.len > 0) self.allocator.free(plain);
+            try out.appendSlice(self.allocator, plain);
+            if (last) break;
+        }
+        // An empty snapshot is the static empty slice, as FileStorage returns.
+        if (out.items.len == 0) {
+            out.deinit(self.allocator);
+            return &.{};
+        }
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    fn segmentAad(buf: *[SEGMENT_AAD_CONTEXT.len + 9]u8, index: u64, last: bool) []const u8 {
+        @memcpy(buf[0..SEGMENT_AAD_CONTEXT.len], SEGMENT_AAD_CONTEXT);
+        std.mem.writeInt(u64, buf[SEGMENT_AAD_CONTEXT.len..][0..8], index, .little);
+        buf[SEGMENT_AAD_CONTEXT.len + 8] = @intFromBool(last);
+        return buf;
+    }
+
+    /// SONNY-6670: the TDE side of a staged snapshot: FileStorage's staged
+    /// snapshot of the sealed segments (its digest and size are the sealed
+    /// bytes', which FileStorage records and checks), and the plaintext not
+    /// sealed yet. The outer `StagedSnapshot` (whose digest is the
+    /// plaintext's, which raft compares with the leader's) holds its
+    /// address in `payload`.
+    const Stage = struct {
+        inner: raft_lib.StagedSnapshot,
+        pending: std.ArrayList(u8) = .empty,
+        segments: u64 = 0,
+    };
+
+    fn stageOf(staged: *raft_lib.StagedSnapshot) !*Stage {
+        if (staged.payload.len != @sizeOf(usize)) return error.StagedSnapshotForeign;
+        return @ptrFromInt(std.mem.readInt(usize, staged.payload[0..@sizeOf(usize)], .little));
+    }
+
+    fn freeStage(self: *TdeRaftStorage, st: *Stage) void {
+        st.inner.deinit();
+        st.pending.deinit(self.allocator);
+        self.allocator.destroy(st);
+    }
+
+    /// Write `bytes` at the end of the inner staged file.
+    fn appendSealed(self: *TdeRaftStorage, st: *Stage, bytes: []const u8) !void {
+        try self.inner.appendStagedSnapshot(&st.inner, bytes);
+        st.inner.noteAppended(bytes);
+    }
+
+    /// Seal `plain` as the next segment (`last`: the final one) and append it.
+    fn sealSegment(self: *TdeRaftStorage, st: *Stage, plain: []const u8, last: bool) !void {
+        var aad_buf: [SEGMENT_AAD_CONTEXT.len + 9]u8 = undefined;
+        const record = try self.seal(plain, segmentAad(&aad_buf, st.segments, last));
+        defer self.allocator.free(record);
+        var len: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len, @intCast(record.len), .little);
+        try self.appendSealed(st, &len);
+        try self.appendSealed(st, record);
+        st.segments += 1;
+    }
+
+    fn beginStagedSnapshot(ptr: *anyopaque, meta: raft_lib.SnapshotMetadata) anyerror!raft_lib.StagedSnapshot {
+        const self = cast(ptr);
+        const st = try self.allocator.create(Stage);
+        errdefer self.allocator.destroy(st);
+        st.* = .{ .inner = try self.inner.beginStagedSnapshot(meta) };
+        errdefer {
+            self.inner.storage().vtable.discardStagedSnapshot.?(@ptrCast(self.inner), &st.inner);
+            st.inner.deinit();
+        }
+        try self.appendSealed(st, &(STREAM_MAGIC ++ [_]u8{STREAM_VERSION}));
+        var outer = try raft_lib.StagedSnapshot.initMetadata(self.allocator, @ptrCast(self), meta);
+        errdefer outer.deinit();
+        var addr: [@sizeOf(usize)]u8 = undefined;
+        std.mem.writeInt(usize, &addr, @intFromPtr(st), .little);
+        outer.payload = try self.allocator.dupe(u8, &addr);
+        return outer;
+    }
+
+    /// Seals every full segment that more data follows; the rest waits.
+    /// No lock needed (FileStorage writes only the staged file).
+    fn appendStagedSnapshot(ptr: *anyopaque, staged: *raft_lib.StagedSnapshot, bytes: []const u8) anyerror!void {
+        const self = cast(ptr);
+        const st = try stageOf(staged);
+        try st.pending.appendSlice(self.allocator, bytes);
+        var done: usize = 0;
+        while (st.pending.items.len - done > SEGMENT_BYTES) : (done += SEGMENT_BYTES) {
+            try self.sealSegment(st, st.pending.items[done..][0..SEGMENT_BYTES], false);
+        }
+        if (done > 0) {
+            const rest = st.pending.items.len - done;
+            std.mem.copyForwards(u8, st.pending.items[0..rest], st.pending.items[done..]);
+            st.pending.shrinkRetainingCapacity(rest);
+        }
+    }
+
+    /// Seals the last segment, then syncs the staged file and writes its
+    /// metadata (FileStorage). No lock needed.
+    fn syncStagedSnapshot(ptr: *anyopaque, staged: *raft_lib.StagedSnapshot) anyerror!void {
+        const self = cast(ptr);
+        const st = try stageOf(staged);
+        if (!st.inner.finished) {
+            try self.sealSegment(st, st.pending.items, true);
+            st.pending.clearAndFree(self.allocator);
+            _ = st.inner.finish();
+        }
+        try self.inner.syncStagedSnapshot(&st.inner);
+        staged.synced = true;
+    }
+
+    /// Seal and stage a whole snapshot (a node's own), off the lock.
+    fn stageSnapshot(ptr: *anyopaque, snap: raft_lib.Snapshot) anyerror!raft_lib.StagedSnapshot {
+        const self = cast(ptr);
+        var staged = try beginStagedSnapshot(ptr, snap.metadata);
+        errdefer self.storage().releaseStagedSnapshot(&staged);
+        try appendStagedSnapshot(ptr, &staged, snap.data);
+        staged.noteAppended(snap.data);
+        _ = staged.finish();
+        try syncStagedSnapshot(ptr, &staged);
+        return staged;
+    }
+
+    /// FileStorage's commit (renames, directory syncs, log compaction),
+    /// under the lock.
+    fn commitStagedSnapshot(ptr: *anyopaque, staged: *raft_lib.StagedSnapshot) anyerror!void {
+        const self = cast(ptr);
+        const st = try stageOf(staged);
+        if (!staged.synced) try syncStagedSnapshot(ptr, staged);
+        const committed = self.inner.commitStagedSnapshot(&st.inner);
+        // Past FileStorage's commit point the snapshot stands, error or not.
+        if (st.inner.committed) {
+            staged.committed = true;
+            self.freeStage(st);
+        }
+        return committed;
+    }
+
+    /// Removes an uncommitted staged snapshot's files (FileStorage).
+    fn discardStagedSnapshot(ptr: *anyopaque, staged: *raft_lib.StagedSnapshot) void {
+        const self = cast(ptr);
+        const st = stageOf(staged) catch return;
+        if (!st.inner.committed) self.inner.storage().vtable.discardStagedSnapshot.?(@ptrCast(self.inner), &st.inner);
+        self.freeStage(st);
+    }
+
+    /// The metadata is not sealed: FileStorage reads it alone.
+    fn loadSnapshotMetadata(ptr: *anyopaque) anyerror!?raft_lib.SnapshotMetadata {
+        const self = cast(ptr);
+        return self.innerStorage().loadSnapshotMetadata(self.allocator);
     }
 
     fn compact(ptr: *anyopaque, index: u64) anyerror!void {
