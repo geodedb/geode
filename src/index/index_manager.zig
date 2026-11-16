@@ -2867,6 +2867,42 @@ pub fn getGlobalIndexManager() ?*IndexManager {
     return global_index_manager;
 }
 
+// CANARY: REQ=REQ-SONNY-6636-VECTOR-REARM; FEATURE="Raft Snapshot Persistence"; ASPECT=VectorIndexesRebuiltAfterRestore; STATUS=IMPL; OWNER=index; UPDATED=2026-11-16
+/// SONNY-6636 (1): a Raft snapshot restore replaced `graph_name`'s files.
+/// The vector indexes are not per graph and held the old graph's vectors:
+/// rebuild every one from the store (`rebuildAdvancedVectorIndexNonBlocking`,
+/// which takes the graph's shared lock itself). Runs with no graph lock and
+/// not under `rebuild_mutex` (`raft_snapshot_manager.setGraphRestoredHook`).
+/// A failure is logged; the index is rebuilt by its next use.
+pub fn rebuildVectorIndexesForRestoredGraph(graph_name: []const u8) void {
+    const self = global_index_manager orelse return;
+    const allocator = self.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| allocator.free(n);
+        names.deinit(allocator);
+    }
+    {
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        var it = self.advanced_property_indexes.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.index_type != .vector_f32) continue;
+            const copy = allocator.dupe(u8, e.key_ptr.*) catch return;
+            names.append(allocator, copy) catch {
+                allocator.free(copy);
+                return;
+            };
+        }
+    }
+    for (names.items) |name| {
+        _ = self.rebuildAdvancedVectorIndexNonBlocking(allocator, graph_name, name) catch |err| {
+            std.log.warn("vector index {s} could not be rebuilt after the restore of graph {s}: {s}", .{ name, graph_name, @errorName(err) });
+        };
+    }
+}
+
 // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimRegistry; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
 /// The index manager for the vector dimension guard, created on demand.
 ///

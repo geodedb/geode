@@ -2197,6 +2197,36 @@ pub const MergePropertyIndex = struct {
         for (&self.shards, generations) |*shard, g| shard.generation = g;
     }
 
+    /// SONNY-6636 (1): drop every entry of `graph_name` (keys start with the
+    /// graph's name and a NUL: `buildMergeIndexKey`,
+    /// `buildCompositeMergeIndexKey`), resident holders or not. Each shard's
+    /// generation moves, so no lookup settles an entry it read before.
+    fn removeGraph(self: *MergePropertyIndex, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (&self.shards) |*shard| {
+            shard.mutex.lockUncancelable(io);
+            defer shard.mutex.unlock(io);
+            shard.generation +%= 1;
+            // Allocation-free, `drop_purge_batch` keys per scan, as
+            // `GraphStore.removeGraphKeyed`.
+            var batch: [drop_purge_batch][]const u8 = undefined;
+            while (true) {
+                var n: usize = 0;
+                var it = shard.map.keyIterator();
+                while (it.next()) |k| {
+                    if (!GraphStore.graphLabelKeyMatchesGraph(k.*, graph_name)) continue;
+                    batch[n] = k.*;
+                    n += 1;
+                    if (n == batch.len) break;
+                }
+                for (batch[0..n]) |key| {
+                    if (shard.map.fetchRemove(key)) |kv| self.allocator.free(kv.key);
+                }
+                if (n < batch.len) break;
+            }
+        }
+    }
+
     /// An entry as a lookup read it, with its shard's generation then.
     const Seen = struct {
         entry: u64,
@@ -5649,6 +5679,11 @@ pub const GraphStore = struct {
         }
 
         self.clearNodesForGraph(graph_name);
+        // CANARY: REQ=REQ-SONNY-6636-DROP-GRAPH-MERGE-PURGE; FEATURE="MergeIdempotency"; ASPECT=DropPurgesMergeEntries; STATUS=TESTED; TEST=tests/test_sonny6636_drop_graph_merge_purge.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6636: the MERGE entries of the graph's evicted nodes (the
+        // resident ones went with their nodes) and its lean backfill marks.
+        self.merge_prop_index.removeGraph(graph_name);
+        self.forgetLeanBackfilledForGraph(graph_name);
         {
             // SONNY-3233 (round 15, F12): under `graphs_lock`.
             const gio = std.Io.Threaded.global_single_threaded.io();
@@ -5669,6 +5704,82 @@ pub const GraphStore = struct {
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         dropped = true;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6636-RESIDENT-RESET; FEATURE="Raft Snapshot Persistence"; ASPECT=ForgetResidentStateAfterSwap; STATUS=TESTED; TEST=tests/test_sonny6636_resident_reset.zig; OWNER=storage; UPDATED=2026-11-16
+    /// SONNY-6636 (1): `graph_name`'s files were just replaced
+    /// (`StorageAdapter.commitGraphRestore`): forget everything resident of
+    /// the graph that came from the old files, then register it for a
+    /// first-touch build from the new ones, as an open does. Hydration
+    /// re-inserts idempotently but removes nothing, so without this the old
+    /// graph's nodes, edges, label postings and counts, merge entries and
+    /// IdMap stayed visible beside the restored ones.
+    ///
+    /// Gone: the resident nodes and edges and every graph-keyed index and
+    /// counter (`clearNodesForGraph`), the graph's MERGE entries and lean
+    /// backfill marks (also for nodes not resident), and its IdMap. The
+    /// graph's uuid is the restored one. Its fulltext indexes and exact
+    /// property index belong to its engine, which the swap replaced; the
+    /// vector indexes are the caller's (they are not per graph).
+    ///
+    /// The caller holds the store's write lock (`acquireStoreWriteLock`),
+    /// so no request reads the graph between the swap and this. Waits for a
+    /// running build of the graph (its hydration entry) and of any graph
+    /// (`hydration_build_mutex`), the order a build takes them.
+    pub fn resetGraphAfterRestore(self: *GraphStore, graph_name: []const u8) !void {
+        return self.resetGraphForRestore(graph_name, .after_swap);
+    }
+
+    /// SONNY-6636 (1): the first half of `resetGraphAfterRestore`, run
+    /// BEFORE the swap (same locks): the graph's resident state is dropped
+    /// and it is left unbuilt, so nothing of the old files is resident when
+    /// the new ones arrive. A checkpoint meanwhile writes no IdMap or
+    /// hydration snapshot of it (the savers skip a graph not built), so none
+    /// of the old graph's products can land in the restored graph's directory
+    /// (the same directory when it is restored under its own uuid, or the
+    /// one the registry names once the swap passed its commit point).
+    pub fn forgetGraphBeforeRestore(self: *GraphStore, graph_name: []const u8) !void {
+        return self.resetGraphForRestore(graph_name, .before_swap);
+    }
+
+    fn resetGraphForRestore(self: *GraphStore, graph_name: []const u8, comptime phase: enum { before_swap, after_swap }) !void {
+        const adapter = global_adapter orelse return error.NoStorageAdapter;
+        const restored_uuid = adapter.getGraphUuid(graph_name) orelse {
+            if (phase == .before_swap) return; // not here yet: nothing resident
+            return error.GraphNotFound;
+        };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        try self.markPendingHydration(graph_name);
+        const entry: *HydrationEntry = blk: {
+            self.hydration_mutex.lockUncancelable(io);
+            defer self.hydration_mutex.unlock(io);
+            break :blk self.pending_hydration.get(graph_name).?;
+        };
+        entry.mutex.lockUncancelable(io);
+        defer entry.mutex.unlock(io);
+        self.hydration_build_mutex.lockUncancelable(io);
+        defer self.hydration_build_mutex.unlock(io);
+        t_dropping_graph = true;
+        defer t_dropping_graph = false;
+
+        self.clearNodesForGraph(graph_name);
+        self.merge_prop_index.removeGraph(graph_name);
+        self.forgetLeanBackfilledForGraph(graph_name);
+        self.retireIdMap(graph_name);
+        // Built from the (new) files on the next touch.
+        entry.needs_reset = false;
+        entry.failure.store(@intFromEnum(QuarantineCause.unknown), .release);
+        entry.failed.store(false, .release);
+        entry.done.store(false, .release);
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+        if (phase == .before_swap) return;
+        {
+            self.graphs_mutex.lockUncancelable(io);
+            defer self.graphs_mutex.unlock(io);
+            try self.setGraphUuidLocked(graph_name, restored_uuid);
+        }
+        try self.loadOneGraphFromAdapter(adapter, graph_name);
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -7423,6 +7534,29 @@ pub const GraphStore = struct {
         var it = self.lean_backfilled.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
         self.lean_backfilled.clearRetainingCapacity();
+    }
+
+    /// SONNY-6636 (1): `clearLeanBackfilled` for one graph's triples (its
+    /// merge entries were removed: `resetGraphAfterRestore`).
+    fn forgetLeanBackfilledForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lean_backfill_mutex.lockUncancelable(io);
+        defer self.lean_backfill_mutex.unlock(io);
+        var batch: [drop_purge_batch][]const u8 = undefined;
+        while (true) {
+            var n: usize = 0;
+            var it = self.lean_backfilled.keyIterator();
+            while (it.next()) |k| {
+                if (!graphLabelKeyMatchesGraph(k.*, graph_name)) continue;
+                batch[n] = k.*;
+                n += 1;
+                if (n == batch.len) break;
+            }
+            for (batch[0..n]) |key| {
+                if (self.lean_backfilled.fetchRemove(key)) |kv| self.allocator.free(kv.key);
+            }
+            if (n < batch.len) return;
+        }
     }
 
     // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=PerLabelBackfillFromPostings; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12

@@ -17,9 +17,16 @@
 //! hex directory name, and a name is only a registry key: nothing read from
 //! the file reaches a path unescaped.
 //!
-//! Layout (before sealing): magic "GEODRIN2" | committed u8 | count u32 |
-//! per graph: name_len u16 | name | has_old u8 | old [16]u8 | new [16]u8 |
-//! then crc32 u32 over everything before it (little-endian).
+//! Layout (before sealing): magic "GEODRIN3" | committed u8 | raft index u64 |
+//! raft term u64 | count u32 | per graph: name_len u16 | name | has_old u8 |
+//! old [16]u8 | new [16]u8 | then crc32 u32 over everything before it
+//! (little-endian). A "GEODRIN2" intent (no Raft point) still reads.
+//!
+//! SONNY-6636 (3): a restore of a Raft snapshot carries the snapshot's Raft
+//! index and term. Finishing it (also at the next open, after a crash past
+//! the commit point) records them in `raft_store.index` before the intent is
+//! removed: the Raft index the store reflects, so a restarted node never
+//! applies again an entry the snapshot covered.
 
 const std = @import("std");
 const gs = @import("graph_storage");
@@ -29,7 +36,12 @@ pub const file_name = "graph_restore.intent";
 pub const staged_suffix = ".restore";
 /// A live directory renamed aside for a graph restored under its own uuid.
 pub const aside_suffix = ".old";
-const magic = "GEODRIN2";
+const magic = "GEODRIN3";
+const magic_v2 = "GEODRIN2";
+/// SONNY-6636 (3): the Raft index (and term) the store reflects, written when
+/// a Raft snapshot restore finishes.
+pub const raft_index_file_name = "raft_store.index";
+const raft_index_magic = "GEODRIX1";
 /// More graphs than any data directory holds; bounds a damaged count.
 pub const max_graphs: u32 = 1 << 16;
 const max_file_bytes: usize = 64 << 20;
@@ -42,9 +54,18 @@ pub const Entry = struct {
     new: [16]u8,
 };
 
+/// SONNY-6636 (3): a Raft log position (index 0: none).
+pub const RaftPoint = struct {
+    index: u64 = 0,
+    term: u64 = 0,
+};
+
 pub const Intent = struct {
     committed: bool,
     entries: []const Entry,
+    /// The Raft snapshot this restore installs (index 0 for a restore that
+    /// is not a Raft snapshot's).
+    raft: RaftPoint = .{},
 };
 
 /// An intent read from disk; `deinit` frees it.
@@ -65,6 +86,11 @@ pub fn encode(allocator: std.mem.Allocator, intent: Intent) ![]u8 {
     errdefer buf.deinit(allocator);
     try buf.appendSlice(allocator, magic);
     try buf.append(allocator, @intFromBool(intent.committed));
+    var n8: [8]u8 = undefined;
+    std.mem.writeInt(u64, &n8, intent.raft.index, .little);
+    try buf.appendSlice(allocator, &n8);
+    std.mem.writeInt(u64, &n8, intent.raft.term, .little);
+    try buf.appendSlice(allocator, &n8);
     var n4: [4]u8 = undefined;
     std.mem.writeInt(u32, &n4, @intCast(intent.entries.len), .little);
     try buf.appendSlice(allocator, &n4);
@@ -85,17 +111,25 @@ pub fn encode(allocator: std.mem.Allocator, intent: Intent) ![]u8 {
 
 pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !Owned {
     const bad = Error.CorruptGraphRestoreIntent;
-    if (bytes.len < magic.len + 5 + 4 or !std.mem.eql(u8, bytes[0..magic.len], magic)) return bad;
+    if (bytes.len < magic.len + 5 + 4) return bad;
+    const v2 = std.mem.eql(u8, bytes[0..magic.len], magic_v2);
+    if (!v2 and !std.mem.eql(u8, bytes[0..magic.len], magic)) return bad;
+    const head: usize = magic.len + 1 + (if (v2) @as(usize, 0) else 16);
+    if (bytes.len < head + 4 + 4) return bad;
     const body = bytes[0 .. bytes.len - 4];
     if (std.hash.Crc32.hash(body) != std.mem.readInt(u32, bytes[bytes.len - 4 ..][0..4], .little)) return bad;
     if (body[magic.len] > 1) return bad;
-    const count = std.mem.readInt(u32, body[magic.len + 1 ..][0..4], .little);
+    const raft: RaftPoint = if (v2) .{} else .{
+        .index = std.mem.readInt(u64, body[magic.len + 1 ..][0..8], .little),
+        .term = std.mem.readInt(u64, body[magic.len + 9 ..][0..8], .little),
+    };
+    const count = std.mem.readInt(u32, body[head..][0..4], .little);
     if (count > max_graphs) return bad;
     var owned: Owned = .{ .arena = .init(allocator), .intent = undefined };
     errdefer owned.arena.deinit();
     const a = owned.arena.allocator();
     const entries = try a.alloc(Entry, count);
-    var pos: usize = magic.len + 5;
+    var pos: usize = head + 4;
     for (entries) |*e| {
         if (body.len - pos < 2) return bad;
         const len = std.mem.readInt(u16, body[pos..][0..2], .little);
@@ -110,7 +144,7 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !Owned {
         pos += 33;
     }
     if (pos != body.len) return bad;
-    owned.intent = .{ .committed = body[magic.len] == 1, .entries = entries };
+    owned.intent = .{ .committed = body[magic.len] == 1, .entries = entries, .raft = raft };
     return owned;
 }
 
@@ -186,4 +220,47 @@ pub fn remove(allocator: std.mem.Allocator, data_dir: []const u8) !void {
         else => return err,
     };
     try syncDir(data_dir);
+}
+
+// CANARY: REQ=REQ-SONNY-6636-STORE-RAFT-INDEX; FEATURE="Raft Snapshot Persistence"; ASPECT=StoreRecordsRaftIndex; STATUS=TESTED; TEST=tests/test_sonny6636_durable_snapshot_restore.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6636 (3): record that the store in `data_dir` reflects the Raft log
+/// up to `point` (a temporary file, fsynced, renamed, the directory fsynced).
+/// Layout: "GEODRIX1" | index u64 | term u64 | crc32 u32 (little-endian).
+/// Not secret (two numbers), so never sealed.
+pub fn writeRaftIndex(allocator: std.mem.Allocator, data_dir: []const u8, point: RaftPoint) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var buf: [raft_index_magic.len + 20]u8 = undefined;
+    @memcpy(buf[0..raft_index_magic.len], raft_index_magic);
+    std.mem.writeInt(u64, buf[8..16], point.index, .little);
+    std.mem.writeInt(u64, buf[16..24], point.term, .little);
+    std.mem.writeInt(u32, buf[24..28], std.hash.Crc32.hash(buf[0..24]), .little);
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, raft_index_file_name });
+    defer allocator.free(path);
+    const tmp = try std.fmt.allocPrint(allocator, "{s}.tmp", .{path});
+    defer allocator.free(tmp);
+    {
+        const f = try std.Io.Dir.cwd().createFile(io, tmp, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
+        defer f.close(io);
+        try f.writeStreamingAll(io, &buf);
+        try f.sync(io);
+    }
+    try std.Io.Dir.cwd().rename(tmp, std.Io.Dir.cwd(), path, io);
+    try syncDir(data_dir);
+}
+
+/// SONNY-6636 (3): the Raft log position the store in `data_dir` reflects
+/// (`writeRaftIndex`), or none (index 0) when nothing recorded one. A
+/// damaged file is an error: guessing low would apply covered entries again.
+pub fn readRaftIndex(allocator: std.mem.Allocator, data_dir: []const u8) !RaftPoint {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, raft_index_file_name });
+    defer allocator.free(path);
+    var buf: [64]u8 = undefined;
+    const bytes = std.Io.Dir.cwd().readFile(io, path, &buf) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    if (bytes.len != 28 or !std.mem.eql(u8, bytes[0..8], raft_index_magic)) return error.CorruptRaftStoreIndex;
+    if (std.hash.Crc32.hash(bytes[0..24]) != std.mem.readInt(u32, bytes[24..28], .little)) return error.CorruptRaftStoreIndex;
+    return .{ .index = std.mem.readInt(u64, bytes[8..16], .little), .term = std.mem.readInt(u64, bytes[16..24], .little) };
 }

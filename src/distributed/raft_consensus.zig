@@ -3089,6 +3089,22 @@ pub const RaftNode = struct {
     /// `stalled_ready != null`, readable without `inner_mutex`.
     persist_stalled: bool = false,
 
+    // CANARY: REQ=REQ-SONNY-6636-RESTORE-OFF-INNER-MUTEX; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreThreadWhilePaused; STATUS=TESTED; TEST=tests/test_sonny6636_durable_snapshot_restore.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6636 (3): the restore of the stalled Ready's snapshot
+    /// (`snapshot_restore_callback`) runs on this thread, never under
+    /// `inner_mutex`: a durable restore writes files and takes graph locks
+    /// and the store's write lock. The node stays paused (`stalled_ready`)
+    /// until it succeeds; `tick` collects it (`retryStalledPersist`), then
+    /// persists the snapshot and applies what follows it.
+    restore_thread: ?std.Thread = null,
+    /// A `RestoreState`: written by the restore thread (release), read under
+    /// `inner_mutex` (acquire).
+    restore_state: std.atomic.Value(u8) = .init(@intFromEnum(RestoreState.idle)),
+    /// The restore thread's error, set before `restore_state` turns `failed`.
+    restore_error: anyerror = error.Unexpected,
+    /// The stalled Ready's snapshot is restored; only its persist remains.
+    stalled_restored: bool = false,
+
     pub fn init(
         allocator: Allocator,
         id: u64,
@@ -3284,6 +3300,9 @@ pub const RaftNode = struct {
 
     pub fn deinit(self: *RaftNode) void {
         self.state = .shutdown;
+        // SONNY-6636 (3): the restore thread reads the stalled Ready's data.
+        if (self.restore_thread) |t| t.join();
+        self.restore_thread = null;
         self.inner.deinit();
         // Deinit + destroy the OWNED storage backing variant. FileStorage.deinit
         // releases the exclusive `.lock` flock so the dir can be re-opened by a
@@ -3692,6 +3711,12 @@ pub const RaftNode = struct {
         // SONNY-6622: a snapshot this node installed is restored into the
         // state machine first, so a refused snapshot is never persisted
         // (a restart would skip it) and no entry applies past it.
+        // SONNY-6636 (3): on the restore thread, the node paused meanwhile.
+        if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null) {
+            self.stall(rd);
+            self.startRestore(snap);
+            return;
+        };
         if (rd.snapshot) |snap| self.restoreSnapshot(snap) catch |err| {
             self.stall(rd);
             log.err("raft snapshot restore failed: this node sends no vote or reply, applies nothing and takes no Raft input until the restore succeeds (retried every few ticks); applying later entries without the snapshot's contents would diverge from the cluster", &.{
@@ -3718,6 +3743,7 @@ pub const RaftNode = struct {
     /// gets it through.
     fn stall(self: *RaftNode, rd: raft_lib.Ready) void {
         self.stalled_ready = rd;
+        self.stalled_restored = false;
         @atomicStore(bool, &self.persist_stalled, true, .release);
         self.persist_failures = 1;
         self.persist_backoff = 1;
@@ -3745,6 +3771,51 @@ pub const RaftNode = struct {
     /// SONNY-6617: the most ticks between two persist retries.
     const persist_backoff_max_ticks: u32 = 64;
 
+    const RestoreState = enum(u8) { idle, running, succeeded, failed };
+
+    /// SONNY-6636 (3): start restoring `snap` (the stalled Ready's) on the
+    /// restore thread. Under `inner_mutex`.
+    fn startRestore(self: *RaftNode, snap: raft_lib.Snapshot) void {
+        self.restore_state.store(@intFromEnum(RestoreState.running), .release);
+        self.restore_thread = std.Thread.spawn(.{}, restoreWorker, .{ self, snap }) catch |err| {
+            self.restore_error = err;
+            self.restore_state.store(@intFromEnum(RestoreState.failed), .release);
+            return;
+        };
+        log.info("raft: restoring the leader's snapshot on the restore thread; the node is paused until it ends", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("snapshot_index", snap.metadata.index),
+            Attr.uint("snapshot_term", snap.metadata.term),
+            Attr.uint("bytes", snap.data.len),
+        });
+    }
+
+    fn restoreWorker(self: *RaftNode, snap: raft_lib.Snapshot) void {
+        const restore = self.snapshot_restore_callback.?;
+        if (restore(self.allocator, snap.data, snap.metadata.index, snap.metadata.term)) |_| {
+            self.restore_state.store(@intFromEnum(RestoreState.succeeded), .release);
+        } else |err| {
+            self.restore_error = err;
+            self.restore_state.store(@intFromEnum(RestoreState.failed), .release);
+        }
+    }
+
+    /// SONNY-6636 (3): the restore thread's outcome, once it has ended (the
+    /// thread joined); null while it runs. Under `inner_mutex`.
+    fn collectRestore(self: *RaftNode) ?anyerror!void {
+        const state: RestoreState = @enumFromInt(self.restore_state.load(.acquire));
+        switch (state) {
+            .running => return null,
+            .idle => return error.RaftSnapshotRestoreNotStarted,
+            .succeeded, .failed => {},
+        }
+        if (self.restore_thread) |t| t.join();
+        self.restore_thread = null;
+        self.restore_state.store(@intFromEnum(RestoreState.idle), .release);
+        if (state == .failed) return self.restore_error;
+        return {};
+    }
+
     /// SONNY-6617: retry the stalled Ready's `advancePersist()`. It is
     /// idempotent: it re-writes the hard state (still unacknowledged by
     /// `advanceApply`) and re-appends the unstable entries, truncating the
@@ -3752,15 +3823,51 @@ pub const RaftNode = struct {
     /// applied as `drainReady` would have; on failure the wait doubles, up
     /// to `persist_backoff_max_ticks`. Under `inner_mutex`.
     fn retryStalledPersist(self: *RaftNode) void {
+        const rd = self.stalled_ready orelse return;
+        // SONNY-6636 (3): a snapshot restoring on the restore thread: wait
+        // for it; a failed one is started again after the backoff.
+        if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null and !self.stalled_restored) {
+            const state: RestoreState = @enumFromInt(self.restore_state.load(.acquire));
+            if (state == .idle) {
+                if (self.persist_retry_wait > 0) {
+                    self.persist_retry_wait -= 1;
+                    return;
+                }
+                self.startRestore(snap);
+                return;
+            }
+            const outcome = self.collectRestore() orelse return;
+            outcome catch |err| {
+                self.persist_failures += 1;
+                self.persist_retry_wait = self.persist_backoff;
+                self.persist_backoff = @min(self.persist_backoff * 2, persist_backoff_max_ticks);
+                log.err("raft snapshot restore failed: this node sends no vote or reply, applies nothing and takes no Raft input until a restore succeeds (retried with backoff); applying later entries without the snapshot's contents would diverge from the cluster", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("node_id", self.id),
+                    Attr.uint("snapshot_index", snap.metadata.index),
+                    Attr.uint("attempts", self.persist_failures),
+                    Attr.uint("next_retry_ticks", self.persist_retry_wait),
+                });
+                return;
+            };
+            self.stalled_restored = true;
+            self.persist_retry_wait = 0;
+            self.stats.snapshots_received += 1;
+            log.info("raft: state machine restored from the leader's snapshot", &.{
+                Attr.uint("node_id", self.id),
+                Attr.uint("snapshot_index", snap.metadata.index),
+                Attr.uint("snapshot_term", snap.metadata.term),
+                Attr.uint("bytes", snap.data.len),
+            });
+        };
         if (self.persist_retry_wait > 0) {
             self.persist_retry_wait -= 1;
             return;
         }
-        const rd = self.stalled_ready orelse return;
         // SONNY-6622: the snapshot restore first, as in `drainReady`; both
         // steps are idempotent.
         const retried: anyerror!void = blk: {
-            if (rd.snapshot) |snap| self.restoreSnapshot(snap) catch |err| break :blk err;
+            if (rd.snapshot) |snap| if (self.snapshot_restore_callback == null) self.restoreSnapshot(snap) catch |err| break :blk err;
             break :blk self.inner.advancePersist();
         };
         retried catch |err| {
@@ -3780,6 +3887,7 @@ pub const RaftNode = struct {
             Attr.uint("attempts", self.persist_failures + 1),
         });
         self.stalled_ready = null;
+        self.stalled_restored = false;
         @atomicStore(bool, &self.persist_stalled, false, .release);
         self.persist_failures = 0;
         self.persist_backoff = 1;

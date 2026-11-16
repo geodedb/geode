@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T05:20:53.271242325Z",
+  "generated_at": "2026-11-16T05:50:35.714964645Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81942,6 +81942,143 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6636-DROP-GRAPH-MERGE-PURGE",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "DropPurgesMergeEntries",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_drop_graph_merge_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_drop_graph_merge_purge.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_drop_graph_merge_purge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-DURABLE-SNAPSHOT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "LosslessEngineFileSnapshot",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_snapshot_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "DurableRestore",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_snapshot_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-DURABLE-SNAPSHOT-RESTORE",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-RESIDENT-RESET",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "ForgetResidentStateAfterSwap",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_resident_reset.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_resident_reset.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_resident_reset.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-RESTORE-OFF-INNER-MUTEX",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "RestoreThreadWhilePaused",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6636-SNAPSHOT-OVER-QUIC",
       "features": [
         {
@@ -81961,6 +82098,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6636-STORE-RAFT-INDEX",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "CoveredEntriesNotReapplied",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "StoreRecordsRaftIndex",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_restore_intent.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6636-STUB-QUIC-WARNING",
       "features": [
         {
@@ -81976,6 +82146,23 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-VECTOR-REARM",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "VectorIndexesRebuiltAfterRestore",
+          "status": "IMPL",
+          "files": [
+            "src/index/index_manager.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -87412,9 +87599,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 564,
+      "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4319
+      "TESTED": 4329
     },
     "by_aspect": {
       "2PC": 3,
@@ -88077,6 +88264,7 @@
       "CountReadSnapshotBypass": 1,
       "CounterRegistry": 1,
       "Coverage": 1,
+      "CoveredEntriesNotReapplied": 1,
       "Create": 1,
       "CreateClassifiedAsCreate": 1,
       "CreateConstraintValidates": 2,
@@ -88349,6 +88537,7 @@
       "DropPolicyParse": 1,
       "DropPolicySealBeforeRemove": 1,
       "DropPolicyWriteThrough": 1,
+      "DropPurgesMergeEntries": 1,
       "DropQuiescence": 1,
       "DropRefusedWhileTxnHolds": 1,
       "DropRoleFailClosed": 1,
@@ -88383,6 +88572,7 @@
       "DurableRecoveryDigests": 1,
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
+      "DurableRestore": 1,
       "DurationIsoWriter": 1,
       "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
@@ -88716,6 +88906,7 @@
       "FlowControl": 1,
       "FollowerRemovedTextRebuild": 1,
       "ForAndSubqueryStages": 1,
+      "ForgetResidentStateAfterSwap": 1,
       "ForkJoin": 1,
       "FormatString": 1,
       "ForwardToShard": 1,
@@ -89302,6 +89493,7 @@
       "LongNameLabelCounter": 1,
       "LongNameRemoverKeys": 1,
       "Lookup": 1,
+      "LosslessEngineFileSnapshot": 1,
       "LostAcknowledgement": 1,
       "LowestHolderEntry": 1,
       "MAGIC_NUMBERS": 2,
@@ -90298,7 +90490,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 412,
+      "Regression": 415,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -90390,6 +90582,7 @@
       "RestoreDataIntegrity": 1,
       "RestoreFromReadySnapshot": 1,
       "RestoreIntoStore": 1,
+      "RestoreThreadWhilePaused": 1,
       "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultBuilder": 1,
       "ResultGuard": 1,
@@ -90852,6 +91045,7 @@
       "StoreHolderYieldsToRestore": 1,
       "StoreLockReentrancy": 1,
       "StoreOwnsItsMemory": 1,
+      "StoreRecordsRaftIndex": 1,
       "StoreStats": 1,
       "StoreUndoCapture": 1,
       "StoreUpgradedHash": 1,
@@ -91193,6 +91387,7 @@
       "VarianceEnvelopeGuard": 1,
       "Vector": 1,
       "VectorDimension": 1,
+      "VectorIndexesRebuiltAfterRestore": 1,
       "VectorMetricPersistence": 1,
       "VectorReadersLocked": 1,
       "VendorParallelPoolGating": 1,

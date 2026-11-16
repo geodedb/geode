@@ -2239,6 +2239,9 @@ pub fn main() !void {
     // here would silently skip FTS maintenance for the replayed entries.
     // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=ServerInitFtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
     geode.execution.fts_index_ops.registerFtsApplyHook();
+    // SONNY-6636: after a Raft snapshot restore replaced a graph's files,
+    // the vector indexes (not per graph) are rebuilt from it.
+    geode.distributed.raft_snapshot_manager.setGraphRestoredHook(&geode.index_manager.rebuildVectorIndexesForRestoredGraph);
 
     if (cluster_token != null) {
         // Build a small EnvMap with just the keys cluster_bootstrap needs.

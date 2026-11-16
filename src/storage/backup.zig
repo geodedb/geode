@@ -55,6 +55,9 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 }
 
 const geode = @import("geode");
+// SONNY-6636: the archive code lives in the geode module (the storage
+// adapter and the Raft layer use it; this file is its own module).
+const graph_archive = geode.graph_archive;
 const graph_store = geode.graph_store;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
@@ -178,7 +181,7 @@ const backup_file_perms: std.Io.File.Permissions = if (builtin.os.tag == .window
 /// when the certificate is missing). A restore of auth state takes the HMAC
 /// key from the operator instead.
 pub const excluded_data_dir_files = [_][]const u8{ lock_file_name, hmac_key_file_name, ".geode_admin_password", "server.key", "server.crt" };
-pub const lock_file_name = ".geode.lock";
+pub const lock_file_name = graph_archive.lock_file_name;
 pub const hmac_key_file_name = ".geode_hmac_key";
 
 // CANARY: REQ=REQ-SONNY-6322-AUDIT-KEY-EPOCH; FEATURE="Backup Restore"; ASPECT=ExcludeAuditSeed; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
@@ -188,13 +191,11 @@ pub const hmac_key_file_name = ".geode_hmac_key";
 /// forged audit entries with it. The log and its public keys (`.pub`,
 /// `.pub.<n>`) stay in the backup; a restored store starts a new audit key
 /// epoch (security/audit.zig `key_epoch_resource_type`).
-pub const audit_seed_file_name = "audit.jsonl.key";
+pub const audit_seed_file_name = graph_archive.audit_seed_file_name;
 
 /// Whether a file at any depth of the data directory stays out of a backup
 /// by its name (the audit signing seed).
-pub fn isExcludedNestedFile(name: []const u8) bool {
-    return std.mem.eql(u8, name, audit_seed_file_name);
-}
+pub const isExcludedNestedFile = graph_archive.isExcludedNestedFile;
 
 /// The server's backup directory inside its data directory (SONNY-6299).
 /// Never archived, so a backup does not hold the previous backups.
@@ -615,86 +616,14 @@ fn generateBackupId() u64 {
     return rng.random().int(u64);
 }
 
-/// Append a single file entry (name + data) into the archive buffer.
-fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
-    const io_ae = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.cwd().openFile(io_ae, file_path, .{ .mode = .read_only });
-    defer file.close(io_ae);
-    const stat = try file.stat(io_ae);
-    const sz_ae: usize = @intCast(stat.size);
-    const data = try allocator.alloc(u8, sz_ae);
-    defer allocator.free(data);
-    _ = try file.readPositionalAll(io_ae, data, 0);
-
-    // name_len (u32) + name + data_len (u64) + data
-    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, @intCast(archive_name.len))));
-    try buffer.appendSlice(allocator, archive_name);
-    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u64, @intCast(data.len))));
-    try buffer.appendSlice(allocator, data);
-}
-
-fn appendDirectoryTree(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    root_path: []const u8,
-    archive_prefix: []const u8,
-) !u32 {
-    var file_count: u32 = 0;
-
-    const io_dt = std.Io.Threaded.global_single_threaded.io();
-    var dir = std.Io.Dir.cwd().openDir(io_dt, root_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return 0;
-        return err;
-    };
-    defer dir.close(io_dt);
-
-    var iter = dir.iterate();
-    while (try iter.next(io_dt)) |entry| {
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root_path, entry.name });
-        defer allocator.free(full_path);
-
-        const archive_name = if (archive_prefix.len == 0)
-            try allocator.dupe(u8, entry.name)
-        else
-            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ archive_prefix, entry.name });
-        defer allocator.free(archive_name);
-
-        switch (entry.kind) {
-            .file => {
-                // SONNY-6322: never the audit signing seed.
-                if (isExcludedNestedFile(entry.name)) continue;
-                try appendFileEntry(buffer, allocator, full_path, archive_name);
-                file_count += 1;
-            },
-            .directory => {
-                file_count += try appendDirectoryTree(buffer, allocator, full_path, archive_name);
-            },
-            else => {},
-        }
-    }
-
-    return file_count;
-}
-
 /// Read all per-graph storage files (`graph_registry.dat` plus the full
 /// recursive `graphs/<uuid>/...` tree) into a simple archive payload:
 ///   magic "GEODBAK1" (8 bytes) | version u32 | file_count u32 |
 ///   (name_len u32 | name [name_len]u8 | data_len u64 | data [data_len]u8)*
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-001; FEATURE="PerGraphBackup"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
 fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
-    var buffer: std.ArrayList(u8) = .empty;
-    errdefer buffer.deinit(allocator);
-
-    // Archive header: magic + version placeholder + file_count placeholder.
-    // We will overwrite file_count once we know it.
-    try buffer.appendSlice(allocator, "GEODBAK1");
-    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, 1))); // version = 1
-
-    // Reserve space for file_count; we'll patch it after collecting files.
-    const file_count_offset = buffer.items.len;
-    try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, 0)));
-
-    var file_count: u32 = 0;
+    var archive = try graph_archive.Builder.init(allocator);
+    errdefer archive.deinit(allocator);
 
     // Archive every top-level entry under data_dir: `graph_registry.dat` plus
     // each per-graph storage directory (`{data_dir}/<graph_uuid>/...`, the
@@ -705,7 +634,7 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
     // data — making every restore produce an empty store (GAP-0862).
     const io_rp = std.Io.Threaded.global_single_threaded.io();
     var root = std.Io.Dir.cwd().openDir(io_rp, data_dir, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return buffer.toOwnedSlice(allocator);
+        if (err == error.FileNotFound) return archive.finish(allocator);
         return err;
     };
     defer root.close(io_rp);
@@ -720,22 +649,12 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
         defer allocator.free(full_path);
 
         switch (entry.kind) {
-            .file => {
-                try appendFileEntry(&buffer, allocator, full_path, entry.name);
-                file_count += 1;
-            },
-            .directory => {
-                file_count += try appendDirectoryTree(&buffer, allocator, full_path, entry.name);
-            },
+            .file => try archive.appendFile(allocator, full_path, entry.name),
+            .directory => _ = try archive.appendTree(allocator, full_path, entry.name),
             else => {},
         }
     }
-
-    // Patch file_count into the header.
-    const count_bytes = std.mem.toBytes(file_count);
-    @memcpy(buffer.items[file_count_offset .. file_count_offset + 4], &count_bytes);
-
-    return buffer.toOwnedSlice(allocator);
+    return archive.finish(allocator);
 }
 
 /// A backup file read from disk and verified: its header, and the GEODBAK1
@@ -753,10 +672,7 @@ pub const DecodedBackup = struct {
 };
 
 /// Number of files and data bytes in a GEODBAK1 archive.
-pub const ArchiveStats = struct {
-    files: u32 = 0,
-    bytes: u64 = 0,
-};
+pub const ArchiveStats = graph_archive.ArchiveStats;
 
 // CANARY: REQ=REQ-BACKUP-HEADER-001; FEATURE="Backup Restore"; ASPECT=RangeCheckedHeaderDecode; STATUS=TESTED; TEST=tests/test_sonny6289_backup_cleanup_info.zig; OWNER=storage; UPDATED=2026-11-11
 /// Decode a backup header from its raw bytes, checking every field before
@@ -860,90 +776,25 @@ pub fn readBackupFile(allocator: std.mem.Allocator, path: []const u8, enc_key: ?
     return .{ .header = header, .archive = archive, .stats = stats };
 }
 
-/// An archive entry name is a relative path under the restore directory:
-/// not empty, not absolute, no `.`/`..`/empty components, no backslash or
-/// NUL. Anything else could write outside the target (SONNY-6280).
-fn isSafeArchiveEntryName(name: []const u8) bool {
-    if (name.len == 0 or name[0] == '/') return false;
-    if (std.mem.indexOfAny(u8, name, "\\\x00") != null) return false;
-    var it = std.mem.splitScalar(u8, name, '/');
-    while (it.next()) |component| {
-        if (component.len == 0) return false;
-        if (std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return false;
-    }
-    return true;
-}
-
-const ArchiveEntry = struct {
-    name: []const u8,
-    data: []const u8,
-};
-
-const ArchiveIterator = struct {
-    payload: []const u8,
-    offset: usize = 16,
-    remaining: u32,
-
-    fn init(payload: []const u8) !ArchiveIterator {
-        if (payload.len < 16) return error.InvalidBackupFile;
-        if (!std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
-        // version (u32) at offset 8 — currently ignored.
-        return .{ .payload = payload, .remaining = std.mem.readInt(u32, payload[12..16], .little) };
-    }
-
-    fn next(self: *ArchiveIterator) !?ArchiveEntry {
-        if (self.remaining == 0) {
-            if (self.offset != self.payload.len) return error.InvalidBackupFile;
-            return null;
-        }
-        self.remaining -= 1;
-        const p = self.payload;
-        if (p.len - self.offset < 4) return error.InvalidBackupFile;
-        const name_len = std.mem.readInt(u32, p[self.offset..][0..4], .little);
-        self.offset += 4;
-        if (p.len - self.offset < name_len) return error.InvalidBackupFile;
-        const name = p[self.offset .. self.offset + name_len];
-        self.offset += name_len;
-        if (p.len - self.offset < 8) return error.InvalidBackupFile;
-        const data_len = std.mem.readInt(u64, p[self.offset..][0..8], .little);
-        self.offset += 8;
-        if (data_len > p.len - self.offset) return error.InvalidBackupFile;
-        const data_size: usize = @intCast(data_len);
-        const data = p[self.offset .. self.offset + data_size];
-        self.offset += data_size;
-        return .{ .name = name, .data = data };
-    }
-};
+const ArchiveIterator = graph_archive.ArchiveIterator;
 
 /// Check a whole archive before anything is written: well-formed, no
-/// trailing bytes, every entry name safe and unique.
+/// trailing bytes, every entry name safe and unique
+/// (`graph_archive.validateArchive`).
 fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveStats {
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-    var stats: ArchiveStats = .{};
-    var it = try ArchiveIterator.init(payload);
-    while (try it.next()) |entry| {
-        if (!isSafeArchiveEntryName(entry.name)) {
-            log.err("backup archive entry name is not a safe relative path; restore refused", &.{
-                Attr.uint("name_len", @intCast(entry.name.len)),
-            });
-            return error.UnsafeArchiveEntryName;
-        }
-        const gop = try seen.getOrPut(entry.name);
-        if (gop.found_existing) return error.InvalidBackupFile;
-        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
-        stats.files += 1;
-        stats.bytes += entry.data.len;
-    }
-    return stats;
+    return graph_archive.validateArchive(allocator, payload) catch |err| {
+        if (err == error.UnsafeArchiveEntryName) log.err("backup archive entry name is not a safe relative path; restore refused", &.{});
+        return err;
+    };
 }
 
 /// Write a per-graph archive payload into `dir`, recreating
-/// `graph_registry.dat` and every per-graph directory. The whole archive is
-/// validated first (names cannot escape `dir`). Files are created 0600 — the
-/// archive keeps no modes, and one written before SONNY-6299 holds key
-/// material (server.key, .geode_hmac_key). A `.geode.lock` entry (such an
-/// archive's) is never written: it is the source process's lock, not data.
+/// `graph_registry.dat` and every per-graph directory
+/// (`graph_archive.writeTree`). The whole archive is validated first (names
+/// cannot escape `dir`). Files are created 0600 — the archive keeps no
+/// modes, and one written before SONNY-6299 holds key material (server.key,
+/// .geode_hmac_key). A `.geode.lock` entry (such an archive's) is never
+/// written: it is the source process's lock, not data.
 ///
 /// With `durable`, everything written is on disk before this returns.
 /// SONNY-6300: each file used to be fsynced as it was written (about 700
@@ -954,68 +805,13 @@ fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveSt
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-12
 fn writeArchiveTree(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8, durable: bool) !u32 {
     _ = try validateArchive(allocator, payload);
-
-    const io_ef = std.Io.Threaded.global_single_threaded.io();
-    const file_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
-    const sync_once = comptime builtin.os.tag == .linux;
-    var syncs: u32 = 0;
-    var it = try ArchiveIterator.init(payload);
-    while (try it.next()) |entry| {
-        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
-        // Build the destination path and ensure parent directories exist.
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
-        defer allocator.free(full_path);
-
-        if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
-            // error-policy: A — ensure-parent-dirs is best-effort (the dir may
-            // already exist); a real failure surfaces as a proper error on the
-            // createFile immediately below.
-            std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
-        }
-
-        const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{ .permissions = file_perms });
-        defer out.close(io_ef);
-        try out.writeStreamingAll(io_ef, entry.data);
-        if (durable and !sync_once) {
-            try out.sync(io_ef);
-            syncs += 1;
-        }
-    }
-    if (durable and sync_once) {
-        // A real descriptor (iterate), not O_PATH: syncfs and fsync refuse O_PATH.
-        var d = try std.Io.Dir.cwd().openDir(io_ef, dir, .{ .iterate = true });
-        defer d.close(io_ef);
-        if (std.os.linux.errno(std.os.linux.syncfs(d.handle)) != .SUCCESS) return error.RestoreSyncFailed;
-        syncs += 1;
-    }
-    return syncs;
+    return graph_archive.writeTree(allocator, dir, payload, "", durable);
 }
 
 /// Re-read every file the archive names under `dir` and compare it byte for
 /// byte with the archive.
 fn verifyRestoredArchive(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8) !ArchiveStats {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var stats: ArchiveStats = .{};
-    var it = try ArchiveIterator.init(payload);
-    var buf: [64 * 1024]u8 = undefined;
-    while (try it.next()) |entry| {
-        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
-        defer allocator.free(full_path);
-        const f = try std.Io.Dir.cwd().openFile(io, full_path, .{ .mode = .read_only });
-        defer f.close(io);
-        if ((try f.stat(io)).size != entry.data.len) return error.RestoreVerificationFailed;
-        var off: usize = 0;
-        while (off < entry.data.len) {
-            const want = @min(buf.len, entry.data.len - off);
-            const n = try f.readPositionalAll(io, buf[0..want], off);
-            if (n != want or !std.mem.eql(u8, buf[0..want], entry.data[off .. off + want])) return error.RestoreVerificationFailed;
-            off += want;
-        }
-        stats.files += 1;
-        stats.bytes += entry.data.len;
-    }
-    return stats;
+    return graph_archive.verifyTree(allocator, dir, payload, "");
 }
 
 /// A restore written into a private staging directory next to the target,
