@@ -3133,6 +3133,25 @@ fn encodeShardedTxn(shard_idx: usize, local: gs.TxnId) gs.TxnId {
 /// return the decoded local txn (batching all ops in the same fsync).
 /// Otherwise return null — the caller should open a fresh local txn on the
 /// node's shard.
+// CANARY: REQ=REQ-SONNY-6671-WORKER-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=ForeignShardWriteCounter; STATUS=TESTED; TEST=tests/test_sonny6671_group_commit_routing.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6671: the engine shard whose group-commit worker runs on this
+/// thread (`group_commit.ShardedCoordinator.shardLoop`), null elsewhere. A
+/// worker holds a batch transaction open on its own shard, and its ops take
+/// that shard's lock; a write to another shard's engine runs beside that
+/// shard's own worker.
+pub threadlocal var t_group_commit_shard: ?usize = null;
+
+/// SONNY-6671: engine writes a group-commit worker made on a shard other
+/// than its own (`noteEngineShardWrite`). Zero in a correct server.
+pub var group_commit_foreign_shard_writes_total: std.atomic.Value(u64) = .init(0);
+
+/// SONNY-6671: a write to engine shard `shard` is about to run.
+fn noteEngineShardWrite(shard: usize) void {
+    const own = t_group_commit_shard orelse return;
+    if (own == shard) return;
+    _ = group_commit_foreign_shard_writes_total.fetchAdd(1, .monotonic);
+}
+
 fn shardLocalTxnForNode(stmt_txn_id: gs.TxnId, node_id: u64) ?gs.TxnId {
     const txn_shard = shardedTxnShard(stmt_txn_id);
     const node_shard = gs.shard_count.shardOfNode(node_id);
@@ -5763,6 +5782,7 @@ pub const StorageAdapter = struct {
         else
             @intCast(mg.engine.coordinator_txn_counter.fetchAdd(1, .monotonic) % gs.sharded_engine.SHARD_COUNT);
         const node_shard = mg.engine.shards[shard_idx];
+        noteEngineShardWrite(shard_idx); // SONNY-6671
         // SONNY-6658: an auto-commit statement's first write opens its
         // transaction on the node's shard; a create that commits its own
         // has the statement's undo on disk first.
@@ -6098,6 +6118,7 @@ pub const StorageAdapter = struct {
         defer mg.shard_locks[idx].unlock(io);
 
         const node_shard = mg.engine.shards[idx];
+        noteEngineShardWrite(idx); // SONNY-6671
 
         // REQ-QUIC-HC-016: allocate the dense engine slot from the same
         // shard the coordinator selected for the public id. The previous path
@@ -8040,6 +8061,7 @@ pub const StorageAdapter = struct {
         // transaction of its own there (`ShardedGraphEngine.addEdge`) while
         // that one was open: two open writers of the shard's pages, which
         // graph-storage 0.4.25 refuses (`WriteConflict`).
+        noteEngineShardWrite(gs.shard_count.shardOfNode(from_id)); // SONNY-6671
         if (try self.statementLocalTxn(graph_name, from_id)) |local| {
             // GAP-ENT-0024: the public-id-carrying path uses the
             // CO-LOCATED txn add (the id rides both durable adjacency
@@ -8244,6 +8266,7 @@ pub const StorageAdapter = struct {
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
+        noteEngineShardWrite(gs.shard_count.shardOfNode(node_id)); // SONNY-6671
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
@@ -8325,6 +8348,7 @@ pub const StorageAdapter = struct {
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
+        noteEngineShardWrite(gs.shard_count.shardOfNode(node_id)); // SONNY-6671
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 

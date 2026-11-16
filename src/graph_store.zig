@@ -4114,6 +4114,13 @@ pub const GraphStore = struct {
         return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
     }
 
+    /// SONNY-6671: the engine slot of public node id `node_id` in
+    /// `graph_name` (its engine shard is the slot's), or null when the graph
+    /// maps no such node.
+    pub fn nodeSlotOf(self: *GraphStore, graph_name: []const u8, node_id: u64) ?u64 {
+        return self.requireNodeSlot(graph_name, node_id) catch null;
+    }
+
     /// Resolve which graph + engine slot a public node id belongs to, by
     /// scanning the per-graph IdMaps. Public ids are globally unique, so the
     /// first IdMap that maps the id wins. O(graphs); for the common single-graph

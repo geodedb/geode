@@ -11512,6 +11512,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6659ow_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6659-open-writers", "Run SONNY-6659 regression (graph-storage v0.4.25: four statement transactions open on one shard creating nodes there through createNode, createNodesBatch and the bulk insert are never refused with WriteConflict; over a real server, explicit transactions of several sessions at once and two sessions incrementing one node answer no 40001 and lose no update, a ROLLBACK with the session's engine transaction open undoes every kind of change, and a SIGKILL keeps only what committed)").dependOn(&run_sonny6659ow_tests.step);
 
+    // SONNY-6671: a group-commit worker writes only its own engine shard:
+    // relationship ops from executor-created nodes (slot placed round-robin,
+    // public id hashed elsewhere) go to the worker of the source's engine
+    // shard and take that shard's lock.
+    const sonny6671_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6671_group_commit_routing.zig"), .target = target, .optimize = optimize });
+    sonny6671_test_mod.link_libc = true;
+    sonny6671_test_mod.addImport("geode", root_mod);
+    sonny6671_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6671_tests = b.addTest(.{ .root_module = sonny6671_test_mod });
+    const run_sonny6671_tests = b.addRunArtifact(sonny6671_tests);
+    shardDep(test_step, &run_sonny6671_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6671-group-commit-routing", "Run SONNY-6671 regression (relationships from executor-created nodes, whose public id hashes to another shard than their engine slot's, submitted through group commit as bulk insert, bulk MERGE and MATCH ... CREATE: no worker writes another worker's engine shard, and every relationship is created)").dependOn(&run_sonny6671_tests.step);
+
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.
     const sonny2979w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_undo_wal_format.zig"), .target = target, .optimize = optimize });

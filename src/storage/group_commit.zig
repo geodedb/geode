@@ -703,6 +703,8 @@ pub const ShardedCoordinator = struct {
     fn shardLoop(self: *ShardedCoordinator, shard_idx: usize) void {
         shard_worker_tls.t_is_shard_worker = true;
         defer shard_worker_tls.t_is_shard_worker = false;
+        graph_storage_adapter.t_group_commit_shard = shard_idx; // SONNY-6671
+        defer graph_storage_adapter.t_group_commit_shard = null;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const s = &self.shards[shard_idx];
