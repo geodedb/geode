@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T14:50:07.410548637Z",
+  "generated_at": "2026-11-16T15:06:37.807969995Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83254,6 +83254,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6670-TDE-STAGED-SNAPSHOT",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "StagedSealedSegments",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_tde_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6670_tde_staged_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6670_tde_staged_snapshot.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6670_tde_staged_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88345,7 +88378,7 @@
       "EXEMPT": 209,
       "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4372
+      "TESTED": 4374
     },
     "by_aspect": {
       "2PC": 3,
@@ -91255,7 +91288,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 426,
+      "Regression": 427,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91725,6 +91758,7 @@
       "StackGuard": 2,
       "StagePartReadsEveryRow": 1,
       "StagedRestoreIntoEmptyTarget": 1,
+      "StagedSealedSegments": 1,
       "StagedVerifiedRestore": 1,
       "StaleDetection": 1,
       "StallEvictDecision": 1,
