@@ -14567,6 +14567,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6613_gko_tests = b.addRunArtifact(sonny6613_gko_tests);
     shardDep(test_step, &run_sonny6613_gko_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6613-group-key-oom", "Run SONNY-6613 item 5a regression (an allocation failure while a DISTINCT or grouping key is built - RETURN DISTINCT, WITH DISTINCT, a WITH's implicit grouping and its GROUP BY - answers OutOfMemory (53200), not WriteFailed, and leaks nothing: every allocation failed in turn, every session kind)").dependOn(&run_sonny6613_gko_tests.step);
+    // SONNY-6637 items 1, 2, 4 and 5. See tests/test_sonny6637_query_items.zig.
+    const sonny6637_qi_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6637_query_items.zig"), .target = target, .optimize = optimize });
+    sonny6637_qi_mod.addImport("geode", root_mod);
+    sonny6637_qi_mod.addImport("logging", logging_mod);
+    sonny6637_qi_mod.addImport("rls_types", rls_types_mod);
+    const sonny6637_qi_tests = b.addTest(.{ .root_module = sonny6637_qi_mod });
+    const run_sonny6637_qi_tests = b.addRunArtifact(sonny6637_qi_tests);
+    shardDep(test_step, &run_sonny6637_qi_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6637-query-items", "Run SONNY-6637 items 1, 2, 4 and 5 regression (shortestPath(a, b) / allShortestPaths(a, b) walk the graph between the two nodes and refuse a non-node with 22G03; MATCH ... SET or REMOVE with no RETURN answers no rows, also in a FOR body; a quantified relationship list on a comma or multi-hop pattern leaks nothing; a LET definition sees the definitions before it in the same LET; in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6637_qi_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
