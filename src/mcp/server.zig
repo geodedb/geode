@@ -5,6 +5,7 @@ const build_options = @import("build_options");
 // Model Context Protocol (MCP) server for Geode - enables AI/LLM integration
 // The MCP server connects to the Geode database via QUIC transport for real query execution
 const mcp = @import("mcp");
+const error_detail = @import("error_detail.zig");
 
 const tools = @import("tools.zig");
 const resources = @import("resources.zig");
@@ -229,7 +230,7 @@ pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 // MCP Handler Implementations
 // =============================================================================
 //
-// SONNY-6531 result ownership (mcp v0.1.22, Handler "Result Ownership"):
+// SONNY-6531 result ownership (mcp v0.1.22+, Handler "Result Ownership"):
 // every callback that returns `[]const u8` hands the slice to the server,
 // which frees it with the allocator passed to `mcp.Server.init`, after the
 // response is built, for a notification, and when building the response
@@ -243,9 +244,12 @@ pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 // answer is a JSON-RPC error, signalled by the Zig error the library maps
 // (mcp.zig processJsonValue): `error.InvalidParams` -> -32602 (an unknown
 // tool or prompt, a bad prompt argument, a cursor geode never issued),
-// `error.ResourceNotFound` -> -32002 (an unknown resource URI). The
-// library's `ToolNotFound` / `PromptNotFound` map to -32002, which the
-// spec gives to resources only, so geode does not use them.
+// `error.ResourceNotFound` -> -32002 (an unknown resource URI). Since
+// mcp v0.1.23 (SONNY-6585) `ToolNotFound` / `PromptNotFound` map to
+// -32602 too (they were -32002), and geode uses them; each error's message
+// and data come from `error_detail` (mcp.setErrorDetail), not the Zig
+// error's name. Every result is one JSON value (the library answers any
+// other with -32603).
 // CANARY: REQ=REQ-SONNY-6531-MCP-OWNERSHIP; FEATURE="MCPResultOwnership"; ASPECT=AllocatorOwnedHandlerResults; STATUS=TESTED; TEST=tests/test_sonny6531_mcp_ownership.zig; OWNER=mcp; UPDATED=2026-11-14
 
 /// A copy of `text` from the allocator the mcp server frees results with.
@@ -254,7 +258,17 @@ fn ownedCopy(ctx: ?*anyopaque, text: []const u8) ![]const u8 {
     return self.allocator.dupe(u8, text);
 }
 
+/// SONNY-6585: geode's lists are one page and it never issues a cursor, so
+/// any cursor is invalid params (-32602); the message says so.
+fn refuseCursor(ctx: ?*anyopaque, comptime method: []const u8, cursor: ?[]const u8) !void {
+    const c = cursor orelse return;
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try error_detail.set(self.allocator, "Invalid cursor: geode answers " ++ method ++ " in one page and issues no cursor", .{ .cursor = c });
+    return error.InvalidParams;
+}
+
 fn listToolsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
+    try refuseCursor(ctx, "tools/list", cursor);
     return ownedCopy(ctx, try tools.listTools(cursor));
 }
 
@@ -269,12 +283,19 @@ fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, ca
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try refuseCursor(ctx, "resources/list", cursor);
     return resources.listResources(self.allocator, cursor);
 }
 
 fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
-    return resources.readResource(self.allocator, self.geode_endpoint, uri);
+    return resources.readResource(self.allocator, self.geode_endpoint, uri) catch |err| {
+        // SONNY-6585: -32002 with the URI as data (escaped by std.json).
+        if (err == error.ResourceNotFound) {
+            try error_detail.setFmt(self.allocator, "Resource not found: {s}", .{uri}, .{ .uri = uri });
+        }
+        return err;
+    };
 }
 
 fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
@@ -331,12 +352,23 @@ fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
 
 fn listPromptsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try refuseCursor(ctx, "prompts/list", cursor);
     return prompts.listPrompts(self.allocator, cursor);
 }
 
 fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
-    return prompts.getPrompt(self.allocator, name, args_json);
+    // SONNY-6585: mcp v0.1.23 answers PromptNotFound with -32602 (it was
+    // -32002); every refusal says what was wrong, with the prompt's name.
+    if (!prompts.exists(name)) {
+        try error_detail.setFmt(self.allocator, "Unknown prompt: {s}", .{name}, .{ .name = name });
+        return error.PromptNotFound;
+    }
+    var why: prompts.Why = .{};
+    return prompts.getPromptExplained(self.allocator, name, args_json, &why) catch |err| {
+        if (err == error.InvalidParams and why.len > 0) try error_detail.set(self.allocator, why.slice(), .{ .name = name });
+        return err;
+    };
 }
 
 // GAP-0516: completion/complete is optional per MCP spec §4.4.
@@ -507,10 +539,15 @@ test "SONNY-6531: every handler returns a result from the server's allocator" {
     }
     // SONNY-6552: an unknown prompt, a missing required argument, an
     // unknown URI and a cursor are errors (nothing is handed over).
-    try std.testing.expectError(error.InvalidParams, getPromptHandler(server, "no_such_prompt", "{}"));
+    // SONNY-6585: an unknown prompt is PromptNotFound (-32602 in mcp
+    // v0.1.23). Each leaves an error detail for the dispatch to send; a
+    // dispatch frees the one left here (the mcp server clears a stale
+    // detail before it handles a request).
+    try std.testing.expectError(error.PromptNotFound, getPromptHandler(server, "no_such_prompt", "{}"));
     try std.testing.expectError(error.InvalidParams, getPromptHandler(server, "find_nodes", null));
     try std.testing.expectError(error.ResourceNotFound, readResourceHandler(server, "unknown://resource"));
     try std.testing.expectError(error.InvalidParams, listResourcesHandler(server, "next"));
+    if (try server.server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}")) |r| allocator.free(r);
 }
 
 test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {

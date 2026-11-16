@@ -3,6 +3,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-LIB-MIGRATION-MCP-002; FEATURE="External Library Migration"; ASPECT=MCPTools; STATUS=TESTED; OWNER=core; UPDATED=2026-01-24
 // MCP Tools for Geode - GQL query execution, schema introspection, graph operations, and LSP features
 const mcp = @import("mcp");
+const error_detail = @import("error_detail.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-038; FEATURE="JSON Library Migration"; ASPECT=MCPTools; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -130,11 +131,11 @@ pub fn callTool(
         return getDiagnostics(allocator, args_json);
     } else {
         // SONNY-6552: an unknown tool is a protocol error, -32602 in MCP
-        // 2025-11-25 (tools "Error Handling"). The library answers
-        // `error.InvalidParams` with -32602; `error.ToolNotFound` it maps to
-        // -32002, and an error it does not know (the old `UnknownTool`) to
-        // -32603 InternalError.
-        return error.InvalidParams;
+        // 2025-11-25 (tools "Error Handling"). SONNY-6585: mcp v0.1.23 maps
+        // `error.ToolNotFound` to -32602 (it was -32002), and the message
+        // names the tool (it was the error's name).
+        try error_detail.setFmt(allocator, "Unknown tool: {s}", .{name}, .{ .name = name });
+        return error.ToolNotFound;
     }
 }
 
@@ -547,14 +548,15 @@ test "listTools contains valid JSON structure" {
     };
     defer parsed.deinit();
 
-    // Verify it's an object with `tools` array of length 9 (5 database + 4 LSP).
+    // Verify it's an object with `tools` array of length 8 (4 database +
+    // 4 LSP; SONNY-6559 removed `catalogs`, and this count was not updated).
     try std.testing.expect(parsed.value == .object);
     const tools_field = parsed.value.object.get("tools") orelse {
         try std.testing.expect(false);
         return;
     };
     try std.testing.expect(tools_field == .array);
-    try std.testing.expectEqual(@as(usize, 9), tools_field.array.items.len);
+    try std.testing.expectEqual(@as(usize, 8), tools_field.array.items.len);
 }
 
 test "listTools refuses a cursor it never issued (SONNY-6552)" {

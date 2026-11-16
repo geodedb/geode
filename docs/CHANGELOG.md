@@ -3073,6 +3073,23 @@
 
 ### Fixed
 
+- **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
+  JSON-RPC error from `geode mcp` carried the Zig error's name as its
+  message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp
+  v0.1.23's `setErrorDetail` (`src/mcp/error_detail.zig`, data serialized
+  with escaping): an unknown tool is `Unknown tool: <name>` and an unknown
+  prompt `Unknown prompt: <name>` (both -32602, with `data.name`; geode
+  now returns `ToolNotFound` / `PromptNotFound`, which v0.1.23 maps to
+  -32602 instead of -32002), a refused prompt argument names it, an
+  unknown resource is `Resource not found: <uri>` (-32002, `data.uri`),
+  and a cursor on `tools/list`, `resources/list` or `prompts/list` says
+  geode issues none (-32602, `data.cursor`). From the library: a failing
+  notification and a peer-cancelled `tools/call` get no reply, error
+  messages and string ids are JSON-escaped, a handler result that is not
+  one JSON value is answered -32603, and the built-in `barrier` tool is
+  gone (it was an unknown tool to geode's handler anyway). Regression:
+  `zig build test-sonny6585-mcp-error-detail`.
+
 - **Offline auth commands name a missing data directory; `grant` /
   `revoke` answer `--help` without the auth store; `query` / `shell`
   refuse `--log-level`; the MCP server reports no data from an unreachable

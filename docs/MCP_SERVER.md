@@ -9,7 +9,7 @@ The Geode MCP (Model Context Protocol) server (`src/mcp/server.zig`)
 exposes graph-database operations and the GQL language bridge to
 AI/LLM clients over the MCP JSON-RPC protocol (stdio and HTTP
 transports). It is built on the pinned `mcp` library (`build.zig.zon`
-`.mcp` = v0.1.22).
+`.mcp` = v0.1.23).
 
 This document records exactly which MCP methods Geode implements,
 which it intentionally does not, and the one upstream-library caveat
@@ -50,16 +50,24 @@ by newlines and a message "MUST NOT contain embedded newlines".
 
 Every list is a single page: no `nextCursor` is returned.
 
-Errors are JSON-RPC errors (the `message` is the Zig error name the
-library reports, e.g. `InvalidParams`):
+Errors are JSON-RPC errors whose `message` says what was wrong and
+whose `data` carries it (SONNY-6585, `mcp.setErrorDetail` in mcp v0.1.23,
+`src/mcp/error_detail.zig`; the data is serialized with escaping). Before,
+the message was the Zig error name (`InvalidParams`) and there was no data.
 
-| Request | Error code |
-|---|---|
-| `tools/call` with an unknown tool name | `-32602` (the spec's protocol error for an unknown tool) |
-| `prompts/get` with an unknown prompt name | `-32602` |
-| `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` |
-| `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) |
-| `resources/read` of a URI geode does not serve | `-32002` (resource not found) |
+| Request | Error code | `message` / `data` |
+|---|---|---|
+| `tools/call` with an unknown tool name | `-32602` (the spec's protocol error for an unknown tool) | `Unknown tool: <name>` / `{"name"}` |
+| `prompts/get` with an unknown prompt name | `-32602` | `Unknown prompt: <name>` / `{"name"}` |
+| `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` | `Prompt <name>: missing required argument '<arg>'` (or `takes no argument`, `is not a string`) / `{"name"}` |
+| `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) | `Invalid cursor: ...` / `{"cursor"}` |
+| `resources/read` of a URI geode does not serve | `-32002` (resource not found) | `Resource not found: <uri>` / `{"uri"}` |
+
+A notification (no `id`) is never answered, even when it fails, and a
+`tools/call` the client cancels with `notifications/cancelled` gets no
+reply (mcp v0.1.23). The library's built-in `barrier` tool is gone, so
+`tools/call` of `barrier` is an unknown tool. Every handler result is one
+JSON value; the library answers any other with `-32603`.
 | `resources/subscribe` / `resources/unsubscribe` | `-32601` (see below) |
 
 Tool **execution** failures are not protocol errors: they are a
@@ -207,7 +215,7 @@ fails on a leak and panics on an invalid free):
 
 ### Known upstream advertisement caveat
 
-The pinned `mcp` library (v0.1.22) **hardcodes**
+The pinned `mcp` library (v0.1.23, as v0.1.22) **hardcodes**
 `"resources":{"subscribe":true,"listChanged":true}` in the
 `initialize` response (`mcp.zig` `handleInitialize`, ~line 3193) and
 exposes **no `ServerOptions` field to override it**. Geode therefore
