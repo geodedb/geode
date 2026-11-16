@@ -611,6 +611,121 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **Storage re-pin: graph-storage v0.4.21, timeseries-storage v0.2.22,
+  wal v0.1.25 (SONNY-738, SONNY-6615, SONNY-6616, SONNY-6622,
+  SONNY-6632).** graph-storage v0.4.21 lands a frame's flushes in copy
+  order and makes `flushAll` / `flushDirty` wait for writes in flight, so
+  a checkpoint can no longer truncate the WAL before a page's new image is
+  on disk (no API change). One wal is
+  compiled into geode, v0.1.25 (`truncateAfter` fails closed as well as
+  recovery and compaction): graph-storage v0.4.20 pins it, and build.zig
+  points raft v0.2.2's and timeseries-storage v0.2.22's `wal` import (both
+  still pin v0.1.24) at geode's module. graph-storage v0.4.18-v0.4.20: a
+  wrong key is `EncryptionKeyMismatch` (see the next entry), the graph
+  registry and the topology snapshots (`edges.idx`, `edges_exist.idx`) are
+  sealed under the key, side-file kinds 128..255 belong to the consumer, an
+  unreadable graph WAL is refused instead of truncated (`WalCorrupted` for
+  mid-log damage), a checkpoint whose WAL compaction is refused completes,
+  and `VerifyTool` no longer wipes an encrypted WAL. timeseries-storage
+  v0.2.22 closes the WAL directory its engine opened, so geode's
+  `Store.deinit` no longer closes it: the second close ran on a freed
+  descriptor number, which could already belong to another thread's handle
+  on the same directory (a watcher thread lost one after 109 store
+  open/close cycles against v0.2.22). Regression: `zig build
+  test-sonny6615-ts-wal-dir-close`.
+- **Graph names sealed under TDE; a wrong key is reported as such
+  (SONNY-6616). Requires graph-storage 0.4.20.** `graph_registry.dat` and
+  `dropped_graphs.dat` held every graph's name in plaintext beside the
+  encrypted stores. They are sealed under `GEODE_TDE_KEY`
+  (`GraphRegistry.saveToFileWith`; the dropped list with geode's own
+  consumer kind); a plaintext pair from an earlier build is rewritten sealed
+  when the data directory opens. **BREAKING:** without the key (or under
+  another one) the whole data directory is refused (`SideFileEncrypted` /
+  `SideFileAuthFailed`); it used to open and refuse graph by graph, and an
+  older geode cannot read a sealed registry (no downgrade). geode's
+  `prop_exact.idx` / `prop_rev.idx` are sealed with consumer kinds (they
+  borrowed graph-storage's `prop_chain_index`; files sealed that way are
+  rebuilt). A graph whose manifests or WAL do not authenticate under the key
+  answers 58000 `EncryptionKeyMismatch` with an operator message (it was
+  `NoManifest`). The offline auth CLI's registry probe
+  (`graphRegisteredOnDisk`) and `geode storage verify --check
+  tde-page-tail` read the sealed registry with the key; the page-tail scan
+  without the key reports that it needs it. Regression:
+  `test-sonny6616-tde-residuals` (5 tests) and the 6571 scans, which now
+  look for a graph's name and a dropped graph's name.
+- **timeseries-storage v0.2.21 (SONNY-6615): a time-series WAL that cannot
+  be decoded is refused, not truncated.** 0.2.20 read the frames of a
+  `ts.wal` it could not decode (another key mode, another key, mid-log
+  damage) as a torn tail and truncated the file, losing every point not yet
+  flushed. 0.2.21 refuses with `WalEncryptionMismatch`, `WalAuthFailed` or
+  `WalCorrupted` and leaves the file; only a torn tail is truncated, from
+  its first bad record. geode drops its own `ts.wal` layout precheck
+  (SONNY-6590) and maps the errors: without the key `WalEncryptionMismatch`
+  is `TimeseriesNeedsTdeKey`; under the key it is a plaintext store and goes
+  to the empty-store replacement (refused with `TimeseriesNotEncrypted`
+  when it holds points); `WalAuthFailed` and `WalCorrupted` pass through
+  and never reach the replacement.
+- **Invalidating a graph's exact property index removes `prop_rev.idx`
+  too (SONNY-6616).** A full checkpoint of a graph whose exact index was
+  never built and that has no nodes left deleted `prop_exact.idx` and left
+  `prop_rev.idx`: a node -> (label, property key, value hash) map of data
+  the graph no longer holds, with the property-key names in it (in
+  plaintext without a key). Both files go now. Regression:
+  `zig build test-sonny6616-tde-residuals`.
+- **graph-storage v0.4.17 (SONNY-6590): schema names and indexed values are
+  sealed at rest. BREAKING: on-disk format change under TDE, no
+  downgrade.** With an at-rest key (`GEODE_TDE_KEY`) graph-storage wrote
+  `labels.dict` (label and relationship-type names, every shard),
+  `props.idx` (property-key names, value hashes), `ordered_propidx.snap`
+  (key names and indexed values), `props.catalog` and `propidx_*.btree` in
+  plaintext beside the encrypted pages and WAL. 0.4.17 seals them
+  (AES-256-GCM under an HKDF side-file key, random nonce, associated data =
+  header + the shard's uuid + the file name); manifest format_version 5
+  marks a sealed store. A store written by <= 0.4.16 under a key is upgraded
+  in place when it is opened (crash-safe at every step). New open errors:
+  `SideFileEncrypted` (sealed, no key), `SideFileAuthFailed` (another key, a
+  modified file or one copied from another graph), `SideFileNotSealed`
+  (plaintext in a sealed store); `LabelDictionary.loadFromFile` refuses a
+  sealed file. Once a graph has been checkpointed by this build,
+  graph-storage <= 0.4.16 (any earlier geode) refuses it. Same transitive
+  dependencies as 0.4.16. The geode-side changes follow in the next entry.
+- **TDE covers geode's exact property index and time-series data, and a
+  graph whose sealed files cannot be read is refused alone (SONNY-6590).**
+  With `GEODE_TDE_KEY` set, geode wrote its exact property index
+  (`<graph dir>/prop_exact.idx`, `prop_rev.idx`: property-key names and an
+  unkeyed 64-bit hash of every indexed value, from which a guessable value
+  is recoverable) in plaintext, and time-series values in plaintext to
+  `<data_dir>/timeseries/ts.wal` unless `GEODE_TS_TDE=1` was set as well.
+  The exact-index files are now sealed with graph-storage's side-file
+  envelope, bound to the graph's uuid and the file name; one that is
+  plaintext, fails authentication or is stale is rebuilt from the pages,
+  never served, and a plaintext pair left by an earlier build is deleted
+  when the graph opens. **BREAKING:** time-series encryption follows
+  `GEODE_TDE_KEY` (`GEODE_TS_TDE=0` opts out, logged at ERROR on every
+  start; any `GEODE_TS_TDE` value other than `1`/`true`/`0`/`false` is
+  refused). An empty plaintext time-series store is replaced by an
+  encrypted one at open; one holding data is refused
+  (`TimeseriesNotEncrypted`, also under `GEODE_TS_DURABILITY=best_effort`)
+  and kept: the server-wide store stops startup, a graph's store refuses the
+  graph (docs/TDE_FILE_LEVEL_ENCRYPTION.md gives the export steps). geode
+  reads the layout of a time-series `ts.wal` before opening the store and
+  never opens a WAL of the other layout: timeseries-storage 0.2.20 treats
+  frames it cannot decode as a torn tail and truncated the file, losing
+  every point not yet flushed (a plaintext WAL under the key, or an
+  encrypted one without it); an encrypted store opened without the key is
+  refused (`TimeseriesNeedsTdeKey`). A graph
+  graph-storage refuses at open with `SideFileEncrypted`,
+  `SideFileAuthFailed` or `SideFileNotSealed`, or whose time-series store is
+  refused (`TimeseriesNotEncrypted`, `TimeseriesNeedsTdeKey`), answers every read and write with 58000 and a message saying
+  what happened and what to do (supply the key, restore the file); the
+  server and its other graphs keep running, and no key material is echoed.
+  `label_dict_divergence` reads the shard dictionaries through the cipher.
+  Cost under a key: each exact-index save builds the file in memory and
+  seals it (about twice the file size transiently). Regression:
+  `zig build test-sonny6590-tde-side-files`; `test-sonny6571-schema-names`
+  (now in the aggregate) and `test-sonny6571-tde-at-rest` also write a
+  property index and a time-series point and scan every file after a SIGKILL
+  and a restart, on a single server and a 3-node cluster.
 - **graph-storage v0.4.16 (SONNY-6529, SONNY-6527): an aborted transaction
   is undone.** `abortTxn` used to drop only the transaction's WAL records:
   the pages it had written stayed modified, its slots and counts stayed

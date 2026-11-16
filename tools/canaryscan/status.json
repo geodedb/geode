@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T01:26:07.119385255Z",
+  "generated_at": "2026-11-16T02:05:43.188737315Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78930,6 +78930,77 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6590-EXACT-INDEX-SEALED",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "SealedExactIndexFiles",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6590_tde_side_files.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6590_tde_side_files.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6590_tde_side_files.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6590-SIDE-FILE-REFUSAL",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "OperatorMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6590_tde_side_files.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6590-TS-TDE-DEFAULT",
+      "features": [
+        {
+          "feature": "TimeSeriesTDE",
+          "aspect": "OnWithTdeKey",
+          "status": "TESTED",
+          "files": [
+            "src/timeseries/timeseries.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6590_tde_side_files.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6591-FTS-FAST-CREATE",
       "features": [
         {
@@ -80865,6 +80936,64 @@
           ],
           "tests": [
             "tests/test_sonny6614_auth_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6615-TS-WAL-DIR-OWNER",
+      "features": [
+        {
+          "feature": "Timeseries",
+          "aspect": "WalDirClosedOnce",
+          "status": "TESTED",
+          "files": [
+            "src/timeseries/timeseries.zig",
+            "tests/test_sonny6615_ts_wal_dir_close.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6615_ts_wal_dir_close.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6616-DATA-DIR-NAMES-SEALED",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "SealedGraphNames",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6616_tde_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6616-EXACT-INDEX-INVALIDATE-PAIR",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6616_tde_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6616_tde_residuals.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -86449,7 +86578,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4265
+      "TESTED": 4272
     },
     "by_aspect": {
       "2PC": 3,
@@ -88673,6 +88802,7 @@
       "OltpAuthClusterFleEvidence": 1,
       "OnCreateSetRelationship": 1,
       "OnMessage": 1,
+      "OnWithTdeKey": 1,
       "OneActionDerivation": 1,
       "OneCheckpointPerTickAndShutdown": 1,
       "OneEncryptionIdentity": 1,
@@ -88694,7 +88824,7 @@
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
-      "OperatorMessage": 3,
+      "OperatorMessage": 4,
       "Operators": 1,
       "Optimization": 2,
       "Optimizer": 1,
@@ -89306,7 +89436,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 403,
+      "Regression": 405,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -89521,7 +89651,9 @@
       "ScopedLockedClone": 1,
       "ScratchAllocator": 1,
       "SealRefusesUnsignedLegacy": 1,
+      "SealedExactIndexFiles": 1,
       "SealedFleRoleGrants": 1,
+      "SealedGraphNames": 1,
       "SearchHitHydrate": 1,
       "SearchHitHydrateNegativeControl": 1,
       "SearchHitHydrateTenantScoped": 1,
@@ -90210,6 +90342,7 @@
       "VoteSurvivesRestart": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
+      "WalDirClosedOnce": 1,
       "WalDirHandleClosed": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,

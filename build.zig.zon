@@ -497,12 +497,13 @@
         // 2026-11-15: v0.1.24 (acd8f68, SONNY-6622) — recovery and compaction
         // fail closed (WalEncryptionMismatch / WalAuthFailed / WalCorrupted)
         // on data they cannot read; only a genuine torn tail is truncated on
-        // open. 2026-11-15: v0.1.25 (eca478c, SONNY-6628) — truncateAfter
-        // fails closed too instead of cutting kept records after a damaged
-        // one. Known diamond: raft v0.2.2 pins wal v0.1.24, graph-storage
-        // v0.4.16 and timeseries-storage v0.2.20 pin v0.1.23; build.zig
-        // points all three libraries' "wal" import at this module (two wal
-        // packages cannot share one compilation) until they re-pin.
+        // open.
+        // 2026-11-15: v0.1.25 (eca478c, SONNY-6628, SONNY-738) — truncateAfter fails
+        // closed too. graph-storage v0.4.20 pins it; raft v0.2.2 and
+        // timeseries-storage v0.2.22 still pin v0.1.24. build.zig points
+        // all three libraries' "wal" import at this module, so exactly one
+        // wal (v0.1.25) is compiled; the v0.1.24 entries in their manifests
+        // are a known diamond (detect-diamond-deps) until they re-pin.
         .wal = .{
             .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.25#eca478cae4784f4dc311acab31659beaea065508",
             .hash = "wal-0.1.25-EqPqpqU_CACws_QxxCu906MZjIvJFGLkRmXHvLAY_i4U",
@@ -669,8 +670,47 @@
             // `error.LabelIdSpaceExhausted`; `GraphConfig.label_dict_report`;
             // `Metrics.txn_aborts_undone`/`txn_aborts_not_undone`. No store
             // format change. Same transitive deps as v0.4.15 (no diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.16#327893d8d0067e29e0703b70ac68451d7b2ea17a",
-            .hash = "graph_storage-0.4.16-9UyJS0AjMgDpk3ZrUPWwKfIlEkblrzsvT1bmdBTVShqs",
+            // v0.4.17 (2026-11-15, SONNY-6590): ON-DISK FORMAT CHANGE under
+            // `GraphConfig.encryption_key`. `labels.dict`, `props.idx`,
+            // `ordered_propidx.snap`, `props.catalog` and `propidx_*.btree`
+            // are sealed (AES-256-GCM, HKDF-SHA256 side-file key, random
+            // 96-bit nonce, AD = header + graph uuid + file name; envelope
+            // in `side_file_crypto`). Manifest format_version 5 marks a
+            // sealed store; a <= 0.4.16 store under a key is upgraded in
+            // place at open (crash-safe; 5 written by the next checkpoint or
+            // close). New open errors: `error.SideFileEncrypted` (sealed, no
+            // key), `error.SideFileAuthFailed` (wrong key, modified or foreign
+            // file), `error.SideFileNotSealed` (plaintext in a sealed store).
+            // `LabelDictionary.loadFromFile` refuses a sealed file (use
+            // `loadFromFileWith`). graph_storage <= 0.4.16 cannot open a
+            // store once it is sealed (no downgrade). Same transitive deps as
+            // v0.4.16 (no diamond).
+            // v0.4.18 (SONNY-6605): `BufferPool.pageNewerThanDisk` /
+            // `PageFrame.newerThanDisk` (dirty, or a flush's write of the
+            // page still in flight). geode's hydration scan reads every
+            // resident frame through the pool (SONNY-6597), a superset.
+            // v0.4.20 (2026-11-15, SONNY-6616, SONNY-6622): a wrong key is
+            // `error.EncryptionKeyMismatch` (was `NoManifest`); the graph
+            // registry (`GraphRegistry.saveToFileWith` / `loadFromFileWith`)
+            // and the topology snapshots `edges.idx` / `edges_exist.idx` are
+            // sealed under the key; `side_file_crypto.Kind` 128..255 are the
+            // consumer's (`Kind.consumer(n)`); `WalManager.init` maps wal's
+            // WalAuthFailed / WalEncryptionMismatch to EncryptionKeyMismatch
+            // and keeps WalCorrupted; a refused WAL compaction no longer
+            // fails the checkpoint; `VerifyTool` reads the WAL from a copy
+            // under the key. Pins wal v0.1.25 and thread_pool v0.2.11
+            // (geode's); its otel chain's thread_pool v0.2.9 is the
+            // pre-existing diamond (SONNY-6630). The tag is on the MR merge
+            // commit cacb325, whose tree is the release commit 845b454's.
+            // v0.4.21 (2026-11-15, SONNY-6632): writes of one frame land in
+            // copy order (a flush waits for the frame's write in flight
+            // before copying it), and flushAll / flushDirty wait for every
+            // write in flight, so a checkpoint no longer truncates the WAL
+            // before a page's new image is on disk. No API change; same
+            // dependencies as v0.4.20. Tagged on the MR merge 160046c, same
+            // tree as the release commit 3ffeba7.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.21#160046ced08ff09c0da6c4a32949d6c2a49d6763",
+            .hash = "graph_storage-0.4.21-9UyJS1xFNABIc04s56XcQVFmjRKQ1LooloHJbu2v36F7",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -761,8 +801,19 @@
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.20#9b52189748a43f48df458bc3126cff2d151a7e0a",
-            .hash = "timeseries_storage-0.2.20-5wzBJNRSFAAC5RKVAhQm22TKlUa8qRACnjDboRbEdJnM",
+            // v0.2.21 (SONNY-6615): Engine.init refuses, and leaves
+            // untouched, a ts.wal it cannot decode instead of truncating it
+            // (WalEncryptionMismatch for a key-mode mismatch, WalAuthFailed
+            // for a wrong key, WalCorrupted for mid-log damage; salvage is
+            // opt-in). A torn tail is still truncated, from the first bad
+            // record only. geode's thread_pool override in build.zig wins.
+            // 2026-11-15: v0.2.22 (e44380b, SONNY-6623) — Engine.deinit
+            // closes the WAL directory Engine.init opened (and init's
+            // errdefer does); the WAL refusals are returned as
+            // WalEncryptionMismatch / WalAuthFailed / WalCorrupted with no
+            // separate precheck. geode no longer closes it (SONNY-6615).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.22#e44380b7ab543905ae071e0f0556b5a1082200bf",
+            .hash = "timeseries_storage-0.2.22-5wzBJHPkFAD07UGtI2cLgnhoxtKIMXRWc81bXLX0pRGf",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{

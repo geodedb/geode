@@ -304,7 +304,7 @@ fn adoptableShape(shape: Shape) !void {
     const after_refusal = try dictBytes(allocator, path, uuid);
     defer allocator.free(after_refusal);
     try testing.expectEqualSlices(u8, before, after_refusal);
-    try testing.expectEqual(divergence.Shape.shift, try divergence.classify(allocator, path, uuid));
+    try testing.expectEqual(divergence.Shape.shift, try divergence.classify(allocator, path, uuid, null));
 
     // The operator names the graph: geode opens it, adopting shard 0's names.
     setAdopt(graph ++ ",other");
@@ -384,7 +384,7 @@ fn lostShape(shape: Shape, want: std.meta.Tag(divergence.Shape)) !void {
     const uuid = try buildStore(allocator, path, shape, &m);
     const before = try dictBytes(allocator, path, uuid);
     defer allocator.free(before);
-    try testing.expectEqual(want, std.meta.activeTag(try divergence.classify(allocator, path, uuid)));
+    try testing.expectEqual(want, std.meta.activeTag(try divergence.classify(allocator, path, uuid, null)));
 
     try expectRefused(allocator, path);
     setAdopt(graph);
@@ -423,7 +423,7 @@ test "SONNY-6524: shard 0 lost a name, the ORDER BY path reused its id: indistin
     var m: Made = .{};
     const uuid = try buildStore(allocator, path, .lost_then_reused, &m);
     // The dictionaries look like an ORDER BY split...
-    try testing.expectEqual(divergence.Shape.shift, try divergence.classify(allocator, path, uuid));
+    try testing.expectEqual(divergence.Shape.shift, try divergence.classify(allocator, path, uuid, null));
     // ...so without the operator's say-so it stays closed...
     try expectRefused(allocator, path);
     // ...because adopting shard 0 reads the old Y nodes as X.

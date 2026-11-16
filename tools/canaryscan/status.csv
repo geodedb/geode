@@ -5000,6 +5000,10 @@ REQ-SONNY-6589-LSP-PASSWORD-AUTH,Embedded LSP,PasswordAuthAndPerUserSchema,TESTE
 REQ-SONNY-6589-MCP-TIMEOUT-APPLIED,MCPBackendTools,EndpointTimeoutApplied,TESTED,tests/test_sonny6589_mcp_timeout.zig,tests/test_sonny6589_mcp_timeout.zig,,mcp,2026-11-15
 REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6589_broken_graph_open.zig,,storage,2026-11-15
 REQ-SONNY-6589-OPEN-FAILURE-CACHED,StorageIntegrity,GraphOpenFailureRemembered,TESTED,tests/test_sonny6589_broken_graph_open.zig,,,storage,2026-11-15
+REQ-SONNY-6590-EXACT-INDEX-SEALED,TDEFileLevelEncryption,SealedExactIndexFiles,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6590_tde_side_files.zig,,security,2026-11-15
+REQ-SONNY-6590-EXACT-INDEX-SEALED,TDEFileLevelEncryption,Regression,TESTED,tests/test_sonny6590_tde_side_files.zig,tests/test_sonny6590_tde_side_files.zig,,security,2026-11-15
+REQ-SONNY-6590-SIDE-FILE-REFUSAL,TDEFileLevelEncryption,OperatorMessage,TESTED,src/server/proto_util.zig,tests/test_sonny6590_tde_side_files.zig,,security,2026-11-15
+REQ-SONNY-6590-TS-TDE-DEFAULT,TimeSeriesTDE,OnWithTdeKey,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6590_tde_side_files.zig,,security,2026-11-15
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,tests/test_sonny6591_fts_write_paths.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
@@ -5123,6 +5127,10 @@ REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,OfflineAttemptLimit,TESTED,s
 REQ-SONNY-6614-OFFLINE-MFA-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6614_offline_verify.zig,tests/test_sonny6614_offline_verify.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-LOAD-ERRDEFER,AuthGraphManager Integration,LoadFreesOnFailure,TESTED,src/security/auth_startup_hydration.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6614-SM-RESIDUALS,MFA authentication,Regression,TESTED,tests/test_sonny6614_auth_residuals.zig,tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
+REQ-SONNY-6615-TS-WAL-DIR-OWNER,Timeseries,WalDirClosedOnce,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6615_ts_wal_dir_close.zig,,storage,2026-11-15
+REQ-SONNY-6615-TS-WAL-DIR-OWNER,Timeseries,WalDirClosedOnce,TESTED,tests/test_sonny6615_ts_wal_dir_close.zig,,,storage,2026-11-15
+REQ-SONNY-6616-DATA-DIR-NAMES-SEALED,TDEFileLevelEncryption,SealedGraphNames,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6616_tde_residuals.zig,,security,2026-11-15
+REQ-SONNY-6616-EXACT-INDEX-INVALIDATE-PAIR,TDEFileLevelEncryption,Regression,TESTED,tests/test_sonny6616_tde_residuals.zig,tests/test_sonny6616_tde_residuals.zig,,security,2026-11-15
 REQ-SONNY-6617-CLI-DSN-TIMEOUT,DSN parameters,CliAppliesDsnTimeout,TESTED,src/cli/main.zig,tests/test_sonny6617_cli_dsn_timeout.zig,,cli,2026-11-15
 REQ-SONNY-6617-CLI-DSN-TIMEOUT,DSN parameters,CliAppliesDsnTimeout,TESTED,tests/test_sonny6617_cli_dsn_timeout.zig,,,cli,2026-11-15
 REQ-SONNY-6617-RAFT-PERSIST-RETRY,Raft Consensus Persistence,PersistFailureRetried,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6617_raft_persist_failure.zig,,distributed,2026-11-15

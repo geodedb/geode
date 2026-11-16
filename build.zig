@@ -751,7 +751,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6571-schema-names", .reason = "intentionally red TDD reproduction (SONNY-6571, KNOWN_TEST_ISSUES): with TDE on, label, relationship type and property key names are written in plaintext to graph-storage's labels.dict and props.idx and geode's prop_exact.idx / prop_rev.idx; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -1275,12 +1274,16 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622, SONNY-6628: geode pins wal v0.1.25 (fail-closed recovery,
-    // compaction and truncateAfter); raft v0.2.2 pins v0.1.24,
-    // graph-storage v0.4.16 and timeseries-storage v0.2.20 v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
-    // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
-    // both libraries compile against geode's wal module, as timeseries-storage
-    // does for thread_pool below. Remove once both pin geode's wal version.
+    // SONNY-6622, SONNY-6628, SONNY-738: exactly one wal is compiled,
+    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.2 and
+    // timeseries-storage v0.2.22 still pin v0.1.24. Two wal packages cannot share one
+    // compilation (Zig 0.16: "file exists in modules 'build_optionsN' and
+    // 'build_optionsM'"), so every library that imports "wal" (graph-storage
+    // here, raft below, timeseries-storage further down) has that import
+    // pointed at geode's module, as timeseries-storage does for thread_pool.
+    // Their own wal pins are then fetched but never compiled. v0.1.25 only
+    // adds a fail-closed truncateAfter to v0.1.24's API. Remove each line
+    // once that library pins geode's wal version.
     graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -1291,6 +1294,7 @@ pub fn build(b: *std.Build) void {
     const raft_ext_mod = raft_dep.module("raft");
     // SONNY-6628: raft v0.2.2 pins wal v0.1.24, geode v0.1.25 (truncateAfter
     // fails closed); one wal per compilation (see graph_storage_mod above).
+    // raft's root module is the only one of its modules that imports "wal".
     raft_ext_mod.addImport("wal", wal_ext_mod);
 
     // ==========================================================================
@@ -10585,6 +10589,45 @@ pub fn build(b: *std.Build) void {
     const sonny6524_step = b.step("test-sonny6524-label-dict-split", "Run SONNY-6524 regression (graphs whose shard label dictionaries disagree, in every shape older geode and graph-storage left: refused at open by default with nothing written; a shift adopted from shard 0 when GEODE_LABEL_DICT_ADOPT_SHARD0 names the graph, every node and edge on every shard keeping the label it was created with; shapes in which shard 0 lost a name refused even then; a real server keeps serving its other graphs)");
     sonny6524_step.dependOn(&run_sonny6524_tests.step);
 
+    // SONNY-6590: under TDE the files holding schema names and indexed values
+    // are sealed (graph-storage 0.4.17's side files, geode's prop_exact.idx /
+    // prop_rev.idx), a store written before is upgraded at open, a graph whose
+    // sealed files cannot be read is refused alone (58000), and time-series
+    // encryption follows GEODE_TDE_KEY (real adapter, timeseries Store and
+    // `geode serve` processes).
+    const sonny6590_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6590_tde_side_files.zig"), .target = target, .optimize = optimize });
+    sonny6590_test_mod.link_libc = true;
+    sonny6590_test_mod.addImport("geode", root_mod);
+    sonny6590_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6590_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6590_test_mod.addImport("schema", schema_mod);
+    sonny6590_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6590_tests = b.addTest(.{ .root_module = sonny6590_test_mod });
+    const run_sonny6590_tests = b.addRunArtifact(sonny6590_tests);
+    spawnsBuiltGeode(sonny6590_tests);
+    shardDep(test_step, &run_sonny6590_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6590-tde-side-files", "Run SONNY-6590 regression (with an at-rest key: geode's prop_exact.idx / prop_rev.idx are sealed, hold no name or value, reload after a clean reopen and reconcile a crash tail exactly as a rebuild; plaintext ones from before are deleted at open and rebuilt sealed; one copied from another graph or modified is rebuilt, not served; a graph whose sealed labels.dict fails authentication, is plaintext or has no key is refused alone with 58000 SideFileAuthFailed / SideFileNotSealed / SideFileEncrypted; GEODE_TDE_KEY alone encrypts time-series; an empty plaintext time-series store is replaced, one with data refused (TimeseriesNotEncrypted) and kept; a real server upgrades a pre-0.4.17 TDE data directory and keeps nothing in plaintext, refuses a damaged graph while serving the other, and stops on plaintext time-series data unless GEODE_TS_TDE=0)").dependOn(&run_sonny6590_tests.step);
+
+    // SONNY-6616: TDE residuals - invalidating a graph's exact property index
+    // removes prop_rev.idx together with prop_exact.idx.
+    const sonny6616_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6616_tde_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6616_test_mod.link_libc = true;
+    sonny6616_test_mod.addImport("geode", root_mod);
+    sonny6616_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6616_tests = b.addTest(.{ .root_module = sonny6616_test_mod });
+    const run_sonny6616_tests = b.addRunArtifact(sonny6616_tests);
+    shardDep(test_step, &run_sonny6616_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6616-tde-residuals", "Run SONNY-6616 regression (invalidating a graph's exact property index removes prop_rev.idx with prop_exact.idx, with and without an at-rest key)").dependOn(&run_sonny6616_tests.step);
+
+    // SONNY-6615: exactly one owner closes the time-series WAL directory.
+    const sonny6615_wal_dir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6615_ts_wal_dir_close.zig"), .target = target, .optimize = optimize });
+    sonny6615_wal_dir_mod.link_libc = true;
+    sonny6615_wal_dir_mod.addImport("geode", root_mod);
+    const sonny6615_wal_dir_tests = b.addTest(.{ .root_module = sonny6615_wal_dir_mod });
+    const run_sonny6615_wal_dir_tests = b.addRunArtifact(sonny6615_wal_dir_tests);
+    shardDep(test_step, &run_sonny6615_wal_dir_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6615-ts-wal-dir-close", "Run SONNY-6615 regression (closing a time-series store closes only its own WAL directory descriptor, never one another thread has just opened on the same directory)").dependOn(&run_sonny6615_wal_dir_tests.step);
+
     // SONNY-6547 (1): a quarantined graph and a graph whose label
     // dictionaries diverged answer every read and write shape with the same
     // GQLSTATUS and message class over QUIC and gRPC (a real server).
@@ -19832,14 +19875,14 @@ pub fn build(b: *std.Build) void {
     // cluster (real `geode serve` processes; the cluster on 127.0.0.171-173).
     // test-sonny6571-tde-at-rest runs in the aggregate (the Raft storage is
     // encrypted under TDE, src/distributed/raft_tde_storage.zig).
-    // test-sonny6571-schema-names is intentionally red until the storage
-    // engine's schema-name files are encrypted: compiled by test-compile,
-    // registered through shardDep by the commit that fixes it
-    // (KNOWN_TEST_ISSUES).
+    // test-sonny6571-schema-names too since SONNY-6590 (graph-storage 0.4.17
+    // seals its schema-name files, geode its exact-index files). SONNY-6590:
+    // both also scan after a SIGKILL and a restart, with a property index and
+    // a time-series point on the single server.
     {
         const steps = [_]struct { name: []const u8, filters: []const []const u8, aggregate: bool, desc: []const u8 }{
-            .{ .name = "test-sonny6571-tde-at-rest", .filters = &.{ "single node: with TDE on", "cluster: with TDE on" }, .aggregate = true, .desc = "Run SONNY-6571 regression (with GEODE_TDE_KEY set, a written label, relationship type, property key, string value and integer value appear in no file under a single server's data directory nor under any node's of a 3-node cluster - Raft log, hard state and snapshots included - with the servers running and after a clean stop; names in the storage engine's schema-name files are test-sonny6571-schema-names)" },
-            .{ .name = "test-sonny6571-schema-names", .filters = &.{"single node schema names"}, .aggregate = false, .desc = "Run SONNY-6571 reproduction (intentionally red: with GEODE_TDE_KEY set, label and relationship type names are written in plaintext to every shard's labels.dict and property key names to props.idx (graph-storage) and prop_exact.idx / prop_rev.idx (geode's exact property index))" },
+            .{ .name = "test-sonny6571-tde-at-rest", .filters = &.{ "single node: with TDE on", "cluster: with TDE on" }, .aggregate = true, .desc = "Run SONNY-6571 / SONNY-6590 regression (with GEODE_TDE_KEY set, a written label, relationship type, property key, index name, string value, integer value and time-series value appear in no file under a single server's data directory nor under any node's of a 3-node cluster - Raft log, hard state and snapshots included - with the servers running, after a SIGKILL, after a restart on the crashed directory and after a clean stop; on the single server names in the storage engine's schema-name files are test-sonny6571-schema-names)" },
+            .{ .name = "test-sonny6571-schema-names", .filters = &.{"single node schema names"}, .aggregate = true, .desc = "Run SONNY-6571 / SONNY-6590 regression (with GEODE_TDE_KEY set, no label, relationship type, property key or index name is in plaintext in any file of a single server - graph-storage's labels.dict, props.idx, ordered_propidx.snap, props.catalog and propidx_*.btree and geode's prop_exact.idx / prop_rev.idx included - running, after a SIGKILL, after a restart and after a clean stop)" },
         };
         for (steps) |st| {
             const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6571_tde_at_rest.zig"), .target = target, .optimize = optimize });

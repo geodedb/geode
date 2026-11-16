@@ -274,7 +274,17 @@ pub fn scan(allocator: Allocator, data_dir: []const u8, key: ?[32]u8) !Report {
     {
         const reg_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
         defer allocator.free(reg_path);
-        if (pathExists(reg_path)) try registry.loadFromFile(reg_path);
+        // SONNY-6616: the registry is sealed under the at-rest key. It only
+        // names the graphs in the report; without the key the scan goes on
+        // with uuids and reports that it needs the key.
+        var cipher = gs.side_file_crypto.Cipher.forKey(key, gs.registry.SEAL_UUID);
+        defer if (cipher) |*c| c.deinit();
+        if (pathExists(reg_path)) {
+            _ = registry.loadFromFileWith(reg_path, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false }) catch |err| switch (err) {
+                error.SideFileEncrypted => report.needs_key = true,
+                else => return err,
+            };
+        }
     }
 
     const graph_uuids = try uuidDirs(allocator, data_dir);

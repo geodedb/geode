@@ -94,34 +94,45 @@ fn byShardId(_: void, a: Pair, b: Pair) bool {
     return a.id_k < b.id_k;
 }
 
-fn loadShardDict(allocator: std.mem.Allocator, graph_root: []const u8, shard_uuid: [16]u8) !gs.label_dict.LabelDictionary {
+/// SONNY-6590: graph-storage 0.4.17 seals `labels.dict` under at-rest
+/// encryption (`encryption_key`), bound to the shard's uuid; the plain
+/// `loadFromFile` refuses a sealed file. A plaintext file is accepted here
+/// only to classify a store the engine itself already opened that far (a
+/// store written by <= 0.4.16, upgraded at open): the engine's own read
+/// policy refused a plaintext dictionary in a sealed store
+/// (`SideFileNotSealed`) before it could report `LabelDictionaryDiverged`,
+/// and a repair goes through the engine again.
+fn loadShardDict(allocator: std.mem.Allocator, graph_root: []const u8, shard_uuid: [16]u8, encryption_key: ?[32]u8) !gs.label_dict.LabelDictionary {
     const hex = std.fmt.bytesToHex(shard_uuid, .lower);
     const path = try std.fmt.allocPrint(allocator, "{s}/graphs/{s}/labels.dict", .{ graph_root, &hex });
     defer allocator.free(path);
+    var cipher = gs.side_file_crypto.Cipher.forKey(encryption_key, shard_uuid);
+    defer if (cipher) |*c| c.deinit();
     var dict = gs.label_dict.LabelDictionary.init(allocator);
     errdefer dict.deinit();
-    dict.loadFromFile(path) catch |err| switch (err) {
-        error.FileNotFound => {},
+    _ = dict.loadFromFileWith(path, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false }) catch |err| switch (err) {
+        error.FileNotFound => false,
         else => return err,
     };
     return dict;
 }
 
 /// Read the graph's 16 `labels.dict` files from disk and say which shape
-/// their disagreement has. Reads only.
-pub fn classify(allocator: std.mem.Allocator, data_dir: []const u8, graph_uuid: [16]u8) !Shape {
+/// their disagreement has. Reads only. `encryption_key` is the store's
+/// at-rest key (`GraphConfig.encryption_key`), null when it has none.
+pub fn classify(allocator: std.mem.Allocator, data_dir: []const u8, graph_uuid: [16]u8, encryption_key: ?[32]u8) !Shape {
     const root_hex = std.fmt.bytesToHex(graph_uuid, .lower);
     const graph_root = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, &root_hex });
     defer allocator.free(graph_root);
     const manifest = try gs.shard_manifest.readFromDir(allocator, graph_root);
 
-    var d0 = try loadShardDict(allocator, graph_root, manifest.per_shard_uuids[0]);
+    var d0 = try loadShardDict(allocator, graph_root, manifest.per_shard_uuids[0], encryption_key);
     defer d0.deinit();
     var pairs: std.ArrayList(Pair) = .empty;
     defer pairs.deinit(allocator);
 
     for (1..SHARD_COUNT) |k| {
-        var dk = try loadShardDict(allocator, graph_root, manifest.per_shard_uuids[k]);
+        var dk = try loadShardDict(allocator, graph_root, manifest.per_shard_uuids[k], encryption_key);
         defer dk.deinit();
         pairs.clearRetainingCapacity();
         var it = dk.name_to_id.iterator();
@@ -220,7 +231,7 @@ pub fn openShardedEngine(
 ) !*gs.ShardedGraphEngine {
     return gs.ShardedGraphEngine.open(allocator, data_dir, graph_uuid, cfg) catch |err| {
         if (err != error.LabelDictionaryDiverged) return err;
-        const shape = classify(allocator, data_dir, graph_uuid) catch |cerr| {
+        const shape = classify(allocator, data_dir, graph_uuid, cfg.encryption_key) catch |cerr| {
             slog.err("graph not opened: its shard label dictionaries disagree (LabelDictionaryDiverged) and reading them failed; its reads and writes fail, other graphs are unaffected (SONNY-6524)", &.{
                 SAttr.string("graph", graph_name),
                 SAttr.err("read_error", cerr),
