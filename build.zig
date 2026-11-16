@@ -11201,6 +11201,62 @@ pub fn build(b: *std.Build) void {
     const sonny6601_bi_step = b.step("test-sonny6601-bulk-insert-index-abort", "Run SONNY-6601 item 2 regression (a durable store, one store allocation failed in turn during a bulk reserved-id node insert: every property's exact-index posting holds exactly the nodes that exist; an insert that fails before its commit leaves none)");
     sonny6601_bi_step.dependOn(&run_sonny6601_bi_tests.step);
 
+    // SONNY-6646 (5): a bulk reserved-id insert whose in-memory property copy
+    // fails leaves no node; it failed after the commit and left one.
+    const sonny6646_pc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6646_bulk_insert_post_commit.zig"), .target = target, .optimize = optimize });
+    sonny6646_pc_test_mod.link_libc = true;
+    sonny6646_pc_test_mod.addImport("geode", root_mod);
+    const sonny6646_pc_tests = b.addTest(.{ .root_module = sonny6646_pc_test_mod });
+    const run_sonny6646_pc_tests = b.addRunArtifact(sonny6646_pc_tests);
+    shardDep(test_step, &run_sonny6646_pc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6646_pc_step = b.step("test-sonny6646-bulk-insert-post-commit", "Run SONNY-6646 item 5 regression (a durable store, one store allocation failed in turn during a bulk reserved-id node insert: a failed insert leaves no node in memory or in the engine; the one that succeeds leaves one node holding every property)");
+    sonny6646_pc_step.dependOn(&run_sonny6646_pc_tests.step);
+
+    // SONNY-6646 (6): a property write moves the node's exact-index entry to the
+    // value it holds whichever allocation fails.
+    const sonny6646_ex_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6646_exact_index_property_write.zig"), .target = target, .optimize = optimize });
+    sonny6646_ex_test_mod.link_libc = true;
+    sonny6646_ex_test_mod.addImport("geode", root_mod);
+    const sonny6646_ex_tests = b.addTest(.{ .root_module = sonny6646_ex_test_mod });
+    const run_sonny6646_ex_tests = b.addRunArtifact(sonny6646_ex_tests);
+    shardDep(test_step, &run_sonny6646_ex_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6646_ex_step = b.step("test-sonny6646-exact-index-property-write", "Run SONNY-6646 item 6 regression (a durable store, one store allocation failed in turn during a set, batch set and batch remove of a property with a 1,100-byte key and a 200-byte value: the exact index finds the node by the value it holds and by no other)");
+    sonny6646_ex_step.dependOn(&run_sonny6646_ex_tests.step);
+
+    // SONNY-6646 (7): a failing full checkpoint is counted and logged once per
+    // cause (it logged a WARN on every call and counted nothing).
+    const sonny6646_cl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6646_full_checkpoint_failure_log.zig"), .target = target, .optimize = optimize });
+    sonny6646_cl_test_mod.link_libc = true;
+    sonny6646_cl_test_mod.addImport("geode", root_mod);
+    const sonny6646_cl_tests = b.addTest(.{ .root_module = sonny6646_cl_test_mod });
+    const run_sonny6646_cl_tests = b.addRunArtifact(sonny6646_cl_tests);
+    shardDep(test_step, &run_sonny6646_cl_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6646_cl_step = b.step("test-sonny6646-full-checkpoint-failure-log", "Run SONNY-6646 item 7 regression (a full checkpoint failing on a real EISDIR is counted every time and logged at ERROR once per cause, as the light checkpoint is)");
+    sonny6646_cl_step.dependOn(&run_sonny6646_cl_tests.step);
+
+    // SONNY-6601 (3): an auto-commit engine write whose abort graph-storage
+    // cannot undo quarantines its graph.
+    const sonny6601_aq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_autocommit_abort_quarantine.zig"), .target = target, .optimize = optimize });
+    sonny6601_aq_test_mod.link_libc = true;
+    sonny6601_aq_test_mod.addImport("geode", root_mod);
+    const sonny6601_aq_tests = b.addTest(.{ .root_module = sonny6601_aq_test_mod });
+    const run_sonny6601_aq_tests = b.addRunArtifact(sonny6601_aq_tests);
+    shardDep(test_step, &run_sonny6601_aq_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_aq_step = b.step("test-sonny6601-autocommit-abort-quarantine", "Run SONNY-6601 item 3 regression (a durable store whose graph engine fails every allocation from the k-th on during an auto-commit addNodeLabel, removeNodeLabel or relationship create: whenever a shard is left refusing writes (abort not undone) the graph is quarantined)");
+    sonny6601_aq_step.dependOn(&run_sonny6601_aq_tests.step);
+
+    // SONNY-6601 (1): a property write failing half done (test-only seam
+    // between putPropertyTxn and putNodeTxn) inside a statement transaction
+    // does not commit, in memory or on disk.
+    const sonny6601_hw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_half_write_rollback.zig"), .target = target, .optimize = optimize });
+    sonny6601_hw_test_mod.link_libc = true;
+    sonny6601_hw_test_mod.addImport("geode", root_mod);
+    const sonny6601_hw_tests = b.addTest(.{ .root_module = sonny6601_hw_test_mod });
+    const run_sonny6601_hw_tests = b.addRunArtifact(sonny6601_hw_tests);
+    shardDep(test_step, &run_sonny6601_hw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_hw_step = b.step("test-sonny6601-half-write-rollback", "Run SONNY-6601 item 1 regression (the 16th of 32 property writes of one SET fails between putPropertyTxn and putNodeTxn, as an auto-commit statement and inside an explicit transaction that then commits: no node holds the failed value, in memory or after a reopen)");
+    sonny6601_hw_step.dependOn(&run_sonny6601_hw_tests.step);
+
     // SONNY-6601 (6): QUIC runs START TRANSACTION ... ROLLBACK with
     // mutations in one message (it refused it with 25001; gRPC ran it).
     const sonny6601_qr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_quic_inline_rollback.zig"), .target = target, .optimize = optimize });
@@ -18117,6 +18173,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6302_lc_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6302_lc_step = b.step("test-sonny6302-label-count-and-missing-edge", "Run SONNY-6302 items 4 and 5 regression (addNodeLabel / removeNodeLabel of a 600-byte label on a node of a 600-byte tenant, each allocation failed once in turn: the label posting, its count and the tenant's label listing agree with the node; setEdgeProperty of a missing edge is EdgeNotFound)");
     sonny6302_lc_step.dependOn(&run_sonny6302_lc_tests.step);
+
+    // SONNY-6646 (3)/(4): GraphStore count readers and getEdgesByType answer
+    // a failed allocation with the right answer or an error, never 0 / empty.
+    const sonny6646_ssf_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6646_store_silent_failures.zig"), .target = target, .optimize = optimize });
+    sonny6646_ssf_test_mod.addImport("geode", root_mod);
+    sonny6646_ssf_test_mod.link_libc = true;
+    const sonny6646_ssf_tests = b.addTest(.{ .root_module = sonny6646_ssf_test_mod });
+    const run_sonny6646_ssf_tests = b.addRunArtifact(sonny6646_ssf_tests);
+    shardDep(test_step, &run_sonny6646_ssf_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6646_ssf_step = b.step("test-sonny6646-store-silent-failures", "Run SONNY-6646 items 3 and 4 regression (an in-memory store, one allocation failed in turn: countNodesByLabel with and without a tenant and countEdgesByTypeForGraph of a 600-byte name stay exact; getEdgesByType answers every edge or OutOfMemory, never an empty or partial list)");
+    sonny6646_ssf_step.dependOn(&run_sonny6646_ssf_tests.step);
 
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once

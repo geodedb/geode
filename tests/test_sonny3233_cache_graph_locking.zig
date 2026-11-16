@@ -126,7 +126,10 @@ const Race = struct {
             const lock = graph_store.acquireGraphReadLock("default");
             defer graph_store.releaseGraphLock(lock);
             _ = self.st.getEdgeIdsByType("default", "R");
-            const ids = self.st.getEdgesByType(a, "R", null, "default");
+            const ids = self.st.getEdgesByType(a, "R", null, "default") catch {
+                _ = self.errors.fetchAdd(1, .monotonic);
+                continue;
+            };
             a.free(ids);
             _ = self.reads.fetchAdd(1, .monotonic);
         }
@@ -221,7 +224,7 @@ test "SONNY-3233: two edge writers on different graphs, with edge deletes and ed
         // Each graph holds the edges its writer made and did not delete.
         const a = testing.allocator;
         for ([_][]const u8{ "g1", "g2" }, 0..) |g, i| {
-            const ids = f.st.getEdgesByType(a, "E", null, g);
+            const ids = try f.st.getEdgesByType(a, "E", null, g);
             defer a.free(ids);
             const want = race.edges[i].load(.monotonic) - race.removed[i].load(.monotonic);
             if (ids.len != want) std.debug.print("  {s}: {d} edges, want {d}\n", .{ g, ids.len, want });

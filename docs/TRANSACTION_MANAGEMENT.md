@@ -305,8 +305,14 @@ OOM kill, power loss). What holds, as of the SONNY-738 sweep:
   shard refuse every write, commit and checkpoint; geode then refuses the
   graph's reads and writes with 58000 `AbortNotUndone` until the server
   restarts, which reopens the graph at its committed state (nothing
-  uncommitted reached disk). A commit that fails after the in-memory copy
-  took the writes aborts the transaction and refuses the graph the same way
+  uncommitted reached disk). The same holds for a write graph-storage
+  commits on its own (a label add or remove, a relationship create or
+  delete, a relationship property remove outside a statement transaction on
+  its shard): graph-storage aborts it when it fails and returns the write's
+  error, and geode reads the shard's `abort_not_undone` after the failure
+  and quarantines the graph (SONNY-6601 (3)). A commit that fails after
+  the in-memory copy took the writes aborts the transaction and refuses the
+  graph the same way
   (58000 `CommitFailed`). Neither is reopened in place: geode keeps the
   graph's nodes, relationships, label counts and indexes in memory beside
   the engine and has no path that rebuilds them for one graph while the

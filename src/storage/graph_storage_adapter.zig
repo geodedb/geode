@@ -794,6 +794,30 @@ fn exactNodePropertyIndexShardForParts(label_id: gs.LabelId, property_key: []con
     return @intCast(exactNodePropertyIndexHash(label_id, property_key, value_hash) % exact_node_property_index_shard_count);
 }
 
+/// SONNY-6646 (6): an exact-index key, unbuilt: `StringHashMap`'s hash of
+/// the encoded key (`encodeKeyInto`) is `exactNodePropertyIndexHash` of its
+/// parts (Wyhash's streaming and one-shot forms agree), so a posting is found
+/// without encoding (or allocating) the key.
+const ExactKeyParts = struct {
+    label_id: gs.LabelId,
+    property_key: []const u8,
+    value_hash: u64,
+};
+
+const ExactKeyPartsContext = struct {
+    pub fn hash(_: ExactKeyPartsContext, k: ExactKeyParts) u64 {
+        return exactNodePropertyIndexHash(k.label_id, k.property_key, k.value_hash);
+    }
+
+    pub fn eql(_: ExactKeyPartsContext, k: ExactKeyParts, key: []const u8) bool {
+        if (key.len != 4 + 4 + k.property_key.len + 8) return false;
+        if (std.mem.readInt(u32, key[0..4], .little) != k.label_id) return false;
+        if (std.mem.readInt(u32, key[4..8], .little) != k.property_key.len) return false;
+        if (!std.mem.eql(u8, key[8 .. 8 + k.property_key.len], k.property_key)) return false;
+        return std.mem.readInt(u64, key[8 + k.property_key.len ..][0..8], .little) == k.value_hash;
+    }
+};
+
 fn exactNodePropertyIndexShardForEncodedKey(key: []const u8) usize {
     return @intCast(std.hash.Wyhash.hash(0, key) % exact_node_property_index_shard_count);
 }
@@ -952,18 +976,17 @@ const NodePropertyExactIndex = struct {
         try gop.value_ptr.append(self.allocator, node_id);
     }
 
+    /// SONNY-6646 (6): allocation-free for any key: the entry is found from
+    /// its parts (`ExactKeyPartsContext`). Past the 1 KiB scratch the key
+    /// was built on the heap, and a failed allocation left the entry.
     fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
-        var key_buf: [1024]u8 = undefined;
-        const encoded = self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash) catch return;
-        defer if (encoded.owned) |owned| self.allocator.free(owned);
-        const probe_key = encoded.key;
-        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
-        const shard = &self.shards[shard_idx];
+        const parts = ExactKeyParts{ .label_id = label_id, .property_key = property_key, .value_hash = value_hash };
+        const shard = &self.shards[exactNodePropertyIndexShardForParts(label_id, property_key, value_hash)];
         const io = std.Io.Threaded.global_single_threaded.io();
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
 
-        if (shard.postings.getPtr(probe_key)) |list| {
+        if (shard.postings.getPtrAdapted(parts, ExactKeyPartsContext{})) |list| {
             var i: usize = 0;
             while (i < list.items.len) : (i += 1) {
                 if (list.items[i] == node_id) {
@@ -972,7 +995,7 @@ const NodePropertyExactIndex = struct {
                 }
             }
             if (list.items.len == 0) {
-                if (shard.postings.fetchRemove(probe_key)) |kv| {
+                if (shard.postings.fetchRemoveAdapted(parts, ExactKeyPartsContext{})) |kv| {
                     self.allocator.free(kv.key);
                     var list_copy = kv.value;
                     list_copy.deinit(self.allocator);
@@ -2115,6 +2138,21 @@ fn abortShardedCounted(mg: *ManagedGraph, txn: gs.TxnId) anyerror!void {
     return abortCounted(mg.engine.shards[si], shardedTxnLocal(txn));
 }
 
+// CANARY: REQ=REQ-SONNY-6601-AUTOCOMMIT-ABORT-QUARANTINE; FEATURE="TransactionManagement"; ASPECT=AutoCommitAbortNotUndone; STATUS=TESTED; TEST=tests/test_sonny6601_autocommit_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6601 (3): an auto-commit engine write (`mg.engine.addLabel`,
+/// `removeLabel`, `addEdge`, `removeEdge`, `removeEdgeProperty`) on the
+/// shard of `node_id` failed. graph-storage aborted it itself
+/// (`abortFailedWrite`) and returned the write's error; if that abort could
+/// not undo the write, the shard now refuses every write, commit and
+/// checkpoint (`abort_not_undone`), which only the shard's state shows.
+/// Quarantine the graph then, as an explicit abort's `AbortNotUndone` does
+/// (`noteAbortFailure`); it went on serving from memory beside the refused
+/// shard. Read on the writing thread, after its write (the shard's
+/// single-writer contract).
+fn noteAutoCommitFailure(mg: *ManagedGraph, node_id: u64, err: anyerror, site: []const u8) void {
+    if (mg.shardEngineForNode(node_id).abort_not_undone != null) quarantineAfterTxnFailure(mg, .abort_not_undone, err, site);
+}
+
 fn noteAbortFailure(mg: *ManagedGraph, err: anyerror, site: []const u8) void {
     switch (err) {
         error.AbortNotUndone => quarantineAfterTxnFailure(mg, .abort_not_undone, err, site),
@@ -3093,10 +3131,54 @@ fn addIndexedNodePropertyHash(mg: *ManagedGraph, label_id: gs.LabelId, node_id: 
     try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
 
-fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) void {
-    const value_hash = hashStorageProperty(mg.engine.allocator, value) catch return;
-    mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
-}
+// CANARY: REQ=REQ-SONNY-6646-EXACT-INDEX-PROPERTY-WRITE; FEATURE="StorageIntegrity"; ASPECT=ExactIndexMove; STATUS=TESTED; TEST=tests/test_sonny6646_exact_index_property_write.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6646 (6): one node property's exact-index move, for every label of
+/// the node. `prepare` (both hashes) runs before the engine write;
+/// `addNew` before the commit, with `undoNew` if the write then fails;
+/// `removeOld` after it, which cannot fail. The old entry was removed after
+/// the commit by a remover that `catch return`ed (a hash or key allocation),
+/// leaving the node findable by a value it no longer held; the new one was
+/// added after it with a `try`, failing a committed write.
+const ExactIndexMove = struct {
+    key: []const u8,
+    indexed: bool,
+    old_hash: ?u64,
+    new_hash: u64,
+    added: usize = 0,
+
+    fn prepare(mg: *ManagedGraph, key: []const u8, old_value: ?gs.PropertyValue, new_value: gs.PropertyValue) !ExactIndexMove {
+        if (!graph_store.shouldIndexProperty(key)) return .{ .key = key, .indexed = false, .old_hash = null, .new_hash = 0 };
+        return .{
+            .key = key,
+            .indexed = true,
+            .old_hash = if (old_value) |o| try hashStorageProperty(mg.engine.allocator, o) else null,
+            .new_hash = try hashStorageProperty(mg.engine.allocator, new_value),
+        };
+    }
+
+    /// The value does not change in the index: nothing to move.
+    fn unchanged(self: *const ExactIndexMove) bool {
+        return !self.indexed or (self.old_hash != null and self.old_hash.? == self.new_hash);
+    }
+
+    fn addNew(self: *ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) !void {
+        if (self.unchanged()) return;
+        for (label_ids) |label_id| {
+            try mg.exact_node_property_index.addEx(label_id, self.key, self.new_hash, node_id, false);
+            self.added += 1;
+        }
+    }
+
+    fn undoNew(self: *const ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) void {
+        for (label_ids[0..self.added]) |label_id| mg.exact_node_property_index.remove(label_id, self.key, self.new_hash, node_id);
+    }
+
+    fn removeOld(self: *const ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) void {
+        if (self.unchanged()) return;
+        const old_hash = self.old_hash orelse return;
+        for (label_ids) |label_id| mg.exact_node_property_index.remove(label_id, self.key, old_hash, node_id);
+    }
+};
 
 /// Zero-copy variant: index a property using pre-encoded bytes from the iterator.
 /// Avoids the decode-then-re-encode round-trip that `addIndexedNodeProperty` performs.
@@ -3844,6 +3926,21 @@ pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
 /// drops it.
 pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
+// CANARY: REQ=REQ-SONNY-6601-HALF-WRITE-SEAM; FEATURE="TransactionManagement"; ASPECT=PropertyWriteFaultSeam; STATUS=TESTED; TEST=tests/test_sonny6601_half_write_rollback.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6601 (1) test seam (test builds only): runs in a node property
+/// write (`setNodeProperty`, `setNodePropertiesBatch`, `removeNodeProperty`)
+/// after its `putPropertyTxn` and before its `putNodeTxn`. An error it
+/// returns fails the write there, half done: the property chain written in
+/// the transaction, the node record not.
+pub const PropertyWriteFault = error{PropertyWriteFaultInjected};
+pub var property_write_midpoint_hook: if (builtin.is_test) ?*const fn () PropertyWriteFault!void else void = if (builtin.is_test) null else {};
+
+inline fn propertyWriteMidpoint() PropertyWriteFault!void {
+    if (builtin.is_test) {
+        if (property_write_midpoint_hook) |hook| try hook();
+    }
+}
+
 /// SONNY-3031 fault injection for tests: the next N commits of a session
 /// engine transaction fail (`error.InjectedSessionCommitFailure`) before
 /// they reach the engine, as a failed WAL append or fsync would.
@@ -4361,7 +4458,8 @@ pub const StorageAdapter = struct {
     checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    /// SONNY-6523 (6): light checkpoints that failed (`checkpointAllLight`);
+    /// SONNY-6523 (6): checkpoints that failed (`checkpointAllLight`, and
+    /// since SONNY-6646 (7) `checkpointAll`);
     /// `adapter_checkpoint_failures_total` in the runtime metrics.
     checkpoint_failures_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// SONNY-6523 (6): how often a failing light checkpoint was logged at
@@ -5598,9 +5696,8 @@ pub const StorageAdapter = struct {
         // graph lookup mutex and redo shard routing for every bulk CREATE.
         // CANARY: REQ=REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT; FEATURE="StorageIntegrity"; ASPECT=ExactIndexRollback; STATUS=TESTED; TEST=tests/test_sonny6601_bulk_insert_index_abort.zig; OWNER=storage; UPDATED=2026-11-15
         // SONNY-6601 (2): the exact-index entries are added before the
-        // commit; an insert that fails before the in-memory store holds the
-        // node takes them back (the abort and the slot release above undo
-        // the rest). They stayed, naming a node the abort removed under a
+        // commit; an insert that fails before it takes them back (the abort
+        // and the slot release above undo the rest). They stayed, naming a node the abort removed under a
         // slot the next insert reuses. Removed by the hash computed when
         // added, so the removal cannot fail on an allocation.
         var value_hashes_buf: [16]u64 = undefined;
@@ -5631,10 +5728,38 @@ pub const StorageAdapter = struct {
             try node_shard.putNodeTxn(slot_id, rec, local_txn);
         }
 
+        // CANARY: REQ=REQ-SONNY-6646-BULK-INSERT-POST-COMMIT; FEATURE="StorageIntegrity"; ASPECT=InMemoryCopyBeforeCommit; STATUS=TESTED; TEST=tests/test_sonny6646_bulk_insert_post_commit.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6646 (5): the node and its properties go into the in-memory
+        // store BEFORE the commit. The properties were copied after it, and a
+        // failure there reported an error for a node that was committed (in
+        // the engine, and in memory without some of its properties): the
+        // client's retry made a second one. A failure before the commit now
+        // takes the node back out of the in-memory store (`undoReservedNode`
+        // cannot fail; its key room is reserved here), then the errdefers
+        // above give the slot back, take back the exact-index entries and
+        // abort the engine transaction.
+        var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+        const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+            entries_buf[0..props.len]
+        else
+            try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+        defer if (props.len > entries_buf.len) self.allocator.free(entries);
+        var longest_property_key: usize = 0;
+        for (props, 0..) |kv, i| {
+            entries[i] = .{ .key = kv.key, .value = kv.value };
+            longest_property_key = @max(longest_property_key, kv.key.len);
+        }
+        var mem_undo = try store.reserveReservedNodeUndo(labels, graph_name, request_tenant, longest_property_key);
+        defer mem_undo.deinit(store);
+
         {
             mg.string_indexes_mutex.lockUncancelable(io);
             defer mg.string_indexes_mutex.unlock(io);
             try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
+        }
+        {
+            errdefer store.undoReservedNode(&mem_undo, reserved_id, graph_name);
+            if (props.len > 0) try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
         }
         slot_kept = true;
         // SONNY-6529: the store's in-memory copy holds the node now; a failed
@@ -5644,20 +5769,6 @@ pub const StorageAdapter = struct {
             quarantineAfterTxnFailure(mg, .commit_failed, err, "bulk node insert commit");
             return err;
         };
-
-        if (props.len > 0) {
-            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
-            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
-                entries_buf[0..props.len]
-            else
-                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
-            defer if (props.len > entries_buf.len) self.allocator.free(entries);
-
-            for (props, 0..) |kv, i| {
-                entries[i] = .{ .key = kv.key, .value = kv.value };
-            }
-            try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
-        }
         // GAP-0900: feed the checkpoint-cadence signal. The group-commit bulk
         // fast path bypasses notifyMutation / GraphStore.dirty, so without this
         // the checkpoint cadence never sees bulk-ingest pressure and never fires
@@ -7416,10 +7527,13 @@ pub const StorageAdapter = struct {
         // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
         // routes to the co-located add on shard(from); the WithPublicId
         // variant is the same single-shard WAL txn carrying the inline id.
-        const _edge_id2 = if (public_id != 0)
-            try mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
+        const _edge_id2 = (if (public_id != 0)
+            mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
         else
-            try mg.engine.addEdge(from_id, to_id, rel_type);
+            mg.engine.addEdge(from_id, to_id, rel_type)) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship create (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
         _ok_12e = true;
         // OTel Task 13: graph data model mutation counter.
         _om12e.recordEdgeMutation(.create, graph_name, .success);
@@ -7466,7 +7580,10 @@ pub const StorageAdapter = struct {
                 return;
             }
         }
-        try mg.engine.removeEdge(from_id, to_id, edge_id);
+        mg.engine.removeEdge(from_id, to_id, edge_id) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship delete (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
         _ok_13de = true;
     }
 
@@ -7606,6 +7723,7 @@ pub const StorageAdapter = struct {
 
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
+        var index_move = try ExactIndexMove.prepare(mg, key, old_value, storage_val); // SONNY-6646 (6)
 
         // R7/R8 (2026-04-22): batch putProperty + putNode into one txn on the
         // node's shard. Join the statement txn's local txn if it is on the
@@ -7625,25 +7743,20 @@ pub const StorageAdapter = struct {
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, local_txn);
-
-        if (own_txn) try node_shard.commitTxn(local_txn);
 
         // RC-4: the OLD value's exact-index posting is dropped only once the
         // durable write has SUCCEEDED. Dropping it up-front (as this used to,
         // before `putPropertyTxn`) left DURABLE index/value divergence on ANY
         // failure — the node kept its old value but became invisible to
-        // `MATCH (n:L {k: <old>})`, and the divergence survived restart. Every
-        // fallible step now precedes both index mutations, so the index can
-        // only ever move from "old value" to "new value", never to neither.
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-        for (label_ids) |label_id| {
-            try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
-        }
+        // `MATCH (n:L {k: <old>})`, and the divergence survived restart.
+        // SONNY-6646 (6): the new value's entries go in before the commit
+        // (taken back if it fails), so nothing after it can fail.
+        errdefer index_move.undoNew(mg, label_ids, node_id);
+        try index_move.addNew(mg, label_ids, node_id);
+        if (own_txn) try node_shard.commitTxn(local_txn);
+        index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Batch property entry: a key with either a value to set or null to remove.
@@ -7660,6 +7773,7 @@ pub const StorageAdapter = struct {
         key: []const u8,
         old_value: ?gs.PropertyValue,
         new_value: gs.PropertyValue,
+        index_move: ExactIndexMove, // SONNY-6646 (6)
     };
 
     /// Set or remove multiple properties on a node under a single mutex
@@ -7719,6 +7833,7 @@ pub const StorageAdapter = struct {
             else
                 .null;
             errdefer freeTemporaryStorageProperty(self.allocator, storage_val);
+            const index_move = try ExactIndexMove.prepare(mg, entry.key, old_value, storage_val); // SONNY-6646 (6)
 
             const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn) catch |err|
                 return mapPropertyEntryError(err, entry.key);
@@ -7728,23 +7843,19 @@ pub const StorageAdapter = struct {
                 .key = entry.key,
                 .old_value = old_value,
                 .new_value = storage_val,
+                .index_move = index_move,
             });
         }
 
         // Write the node record once after all property mutations.
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, local_txn);
+        // SONNY-6646 (6): the new values' entries before the commit (taken
+        // back if it fails), the old values' removed after it.
+        errdefer for (pending.items) |*p| p.index_move.undoNew(mg, label_ids, node_id);
+        for (pending.items) |*p| try p.index_move.addNew(mg, label_ids, node_id);
         if (own_txn) try node_shard.commitTxn(local_txn);
-
-        for (pending.items) |p| {
-            if (p.old_value) |existing| {
-                for (label_ids) |label_id| {
-                    removeIndexedNodeProperty(mg, label_id, node_id, p.key, existing);
-                }
-            }
-            for (label_ids) |label_id| {
-                try addIndexedNodeProperty(mg, label_id, node_id, p.key, p.new_value);
-            }
-        }
+        for (pending.items) |*p| p.index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Remove a property from a node by writing a null tombstone.
@@ -7773,6 +7884,7 @@ pub const StorageAdapter = struct {
         // SONNY-6472 (3): that txn is the statement/session engine txn when
         // it is on the node's shard (as in setNodeProperty), so the request's
         // same-shard changes commit, and are lost to a crash, together.
+        var index_move = try ExactIndexMove.prepare(mg, key, old_value, .null); // SONNY-6646 (6)
         const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
         const txn = joined orelse try node_shard.beginTxn();
         // SONNY-6529: graph-storage undoes the failed removal.
@@ -7780,6 +7892,7 @@ pub const StorageAdapter = struct {
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, txn);
 
         // Commit on the SAME per-shard engine that started the txn.
@@ -7790,19 +7903,14 @@ pub const StorageAdapter = struct {
         // shard and raise `error.TxnNotFound`. Mirrors setNodeProperty /
         // setNodePropertiesBatch / setEdgeProperty which already commit
         // through node_shard / from_shard directly.
-        if (joined == null) try node_shard.commitTxn(txn);
-
         // RC-4: drop the old posting only once the tombstone is durable —
         // a failure before this point must leave the index describing the
-        // value the node still holds.
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-        for (label_ids) |label_id| {
-            try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
-        }
+        // value the node still holds. SONNY-6646 (6): the tombstone's entry
+        // before the commit, so nothing after it can fail.
+        errdefer index_move.undoNew(mg, label_ids, node_id);
+        try index_move.addNew(mg, label_ids, node_id);
+        if (joined == null) try node_shard.commitTxn(txn);
+        index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Get a property from a node, returned in graph-storage representation.
@@ -10162,8 +10270,17 @@ pub const StorageAdapter = struct {
     ///
     /// Used by the CLEAN-SHUTDOWN path and explicit/test callers so a restart
     /// loads the derived indexes from disk without a rebuild.
+    ///
+    /// SONNY-6646 (7): a graph's failed engine checkpoint is counted and
+    /// logged as a light one's is (`noteCheckpointFailure`); it was a WARN
+    /// on every call, counted nowhere.
     pub fn checkpointAll(self: *StorageAdapter) !void {
-        return self.checkpointAllEx(false, true);
+        const failures_before = self.checkpoint_failures_total.load(.acquire);
+        self.checkpointAllEx(false, true) catch |err| {
+            self.noteCheckpointFailure(null, err, .full);
+            return err;
+        };
+        if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
     }
 
     /// GAP-0900 Layer-2: incremental/bounded checkpoint of every graph.
@@ -10184,7 +10301,7 @@ pub const StorageAdapter = struct {
     pub fn checkpointAllLight(self: *StorageAdapter) !void {
         const failures_before = self.checkpoint_failures_total.load(.acquire);
         self.checkpointAllEx(true, true) catch |err| {
-            self.noteCheckpointFailure(null, err);
+            self.noteCheckpointFailure(null, err, .light);
             return err;
         };
         // A graph whose engine checkpoint failed is counted by
@@ -10192,17 +10309,18 @@ pub const StorageAdapter = struct {
         if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
     }
 
-    /// SONNY-6523 (6): light checkpoints that failed since this adapter opened.
+    /// SONNY-6523 (6): checkpoints (light, and full since SONNY-6646 (7))
+    /// that failed since this adapter opened.
     pub fn checkpointFailuresTotal(self: *const StorageAdapter) u64 {
         return self.checkpoint_failures_total.load(.acquire);
     }
 
-    /// SONNY-6523 (6): ERROR lines a failing light checkpoint has logged.
+    /// SONNY-6523 (6): ERROR lines failing checkpoints have logged.
     pub fn checkpointFailureErrorLogs(self: *const StorageAdapter) u64 {
         return self.checkpoint_failure_error_logs.load(.acquire);
     }
 
-    fn noteCheckpointFailure(self: *StorageAdapter, graph: ?[]const u8, err: anyerror) void {
+    fn noteCheckpointFailure(self: *StorageAdapter, graph: ?[]const u8, err: anyerror, kind: enum { light, full }) void {
         _ = self.checkpoint_failures_total.fetchAdd(1, .acq_rel);
         const lio = std.Io.Threaded.global_single_threaded.io();
         self.checkpoint_failure_log_mutex.lockUncancelable(lio);
@@ -10213,7 +10331,11 @@ pub const StorageAdapter = struct {
             .suppressed => {},
             .first, .repeated => {
                 _ = self.checkpoint_failure_error_logs.fetchAdd(1, .acq_rel);
-                slog.err("light checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)", &.{
+                const msg = switch (kind) {
+                    .light => "light checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)",
+                    .full => "full checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)",
+                };
+                slog.err(msg, &.{
                     SAttr.string("graph", graph orelse "(all)"),
                     SAttr.string("error", @errorName(err)),
                     SAttr.uint("consecutive_failures", consecutive),
@@ -10227,7 +10349,7 @@ pub const StorageAdapter = struct {
         self.checkpoint_failure_log_mutex.lockUncancelable(lio);
         const recovered = self.checkpoint_failure_log.noteSuccess();
         self.checkpoint_failure_log_mutex.unlock(lio);
-        if (recovered) |n| slog.info("light checkpoint succeeded again", &.{SAttr.uint("after_consecutive_failures", n)});
+        if (recovered) |n| slog.info("checkpoint succeeded again", &.{SAttr.uint("after_consecutive_failures", n)});
     }
 
     /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
@@ -10695,12 +10817,15 @@ pub const StorageAdapter = struct {
             mg.engine.checkpointLight() catch |err| {
                 // SONNY-6523 (6): counted, and logged at ERROR once per
                 // cause (it was a WARN on every tick, forever).
-                self.noteCheckpointFailure(mg.name, err);
+                self.noteCheckpointFailure(mg.name, err, .light);
                 engine_ok = false;
             };
         } else {
             mg.engine.checkpoint() catch |err| {
-                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                // CANARY: REQ=REQ-SONNY-6646-FULL-CHECKPOINT-FAILURE-LOG; FEATURE="CrashRecovery"; ASPECT=FullCheckpointFailureLogLimit; STATUS=TESTED; TEST=tests/test_sonny6646_full_checkpoint_failure_log.zig; OWNER=storage; UPDATED=2026-11-15
+                // SONNY-6646 (7): counted and limited as the light one is
+                // (a WARN on every failing call before).
+                self.noteCheckpointFailure(mg.name, err, .full);
                 engine_ok = false;
             };
         }
@@ -12569,10 +12694,16 @@ pub const StorageAdapter = struct {
             if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
                 try node_shard.addLabelTxn(node_id, label_id, local);
             } else {
-                try mg.engine.addLabel(node_id, label_id);
+                mg.engine.addLabel(node_id, label_id) catch |err| {
+                    noteAutoCommitFailure(mg, node_id, err, "label add (auto-commit)"); // SONNY-6601 (3)
+                    return err;
+                };
             }
         } else {
-            try mg.engine.addLabel(node_id, label_id);
+            mg.engine.addLabel(node_id, label_id) catch |err| {
+                noteAutoCommitFailure(mg, node_id, err, "label add (auto-commit)"); // SONNY-6601 (3)
+                return err;
+            };
         }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
@@ -12600,10 +12731,16 @@ pub const StorageAdapter = struct {
             if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
                 try node_shard.removeLabelTxn(node_id, label_id, local);
             } else {
-                try mg.engine.removeLabel(node_id, label_id);
+                mg.engine.removeLabel(node_id, label_id) catch |err| {
+                    noteAutoCommitFailure(mg, node_id, err, "label remove (auto-commit)"); // SONNY-6601 (3)
+                    return err;
+                };
             }
         } else {
-            try mg.engine.removeLabel(node_id, label_id);
+            mg.engine.removeLabel(node_id, label_id) catch |err| {
+                noteAutoCommitFailure(mg, node_id, err, "label remove (auto-commit)"); // SONNY-6601 (3)
+                return err;
+            };
         }
     }
 
@@ -12649,7 +12786,10 @@ pub const StorageAdapter = struct {
                 return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
             }
         }
-        try mg.engine.removeEdgeProperty(from_id, edge_id, key);
+        mg.engine.removeEdgeProperty(from_id, edge_id, key) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship property remove (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
     }
 
     // ------------------------------------------------------------------
