@@ -27,10 +27,11 @@
 // which also covers the Raft log's own fsync (persist before apply,
 // SONNY-6611): it must stay under the election timeout.
 //
-// The creates use a label the graph already has: a label new to a graph
-// makes graph-storage write that graph's label dictionary durably (two
-// fsyncs) on first use, under `inner_mutex` too. That cost does not depend
-// on the graph's size and is not hydration; it is tracked separately.
+// The follower's creates use a label new to the graph: graph-storage writes
+// a new name to the graph's label dictionary durably (two fsyncs per shard
+// set) on first use, which took 40-80 ms under `inner_mutex` until the
+// names an entry writes were interned with its graphs' hydration, before
+// `inner_mutex` (SONNY-6633 item 4, SONNY-6636).
 //
 // CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
 
@@ -207,9 +208,9 @@ test "SONNY-6631: a follower applies a batch entry writing another graph not hyd
     // back to "not hydrated yet" as a restart leaves it, its lock held by
     // a reader (SONNY-6567 (6c)).
     try store.markPendingHydrationForTest("gb");
-    const inner1 = try createCmd(allocator, "gb", "S6631");
+    const inner1 = try createCmd(allocator, "gb", "F6631");
     defer allocator.free(inner1);
-    const inner2 = try createCmd(allocator, "gb", "S6631");
+    const inner2 = try createCmd(allocator, "gb", "F6631");
     defer allocator.free(inner2);
     const batch = try cr.serializeBatch(allocator, null, &.{
         .{ .mutation = .create, .graph = "gb", .data = inner1 },
@@ -262,7 +263,7 @@ test "SONNY-6631: a follower applies a batch entry writing another graph not hyd
         handled_ms, apply_ms, CRITICAL_SECTION_MS, probe.max_wait_ms, probe.samples, spinners, ELECTION_TIMEOUT_MS,
     });
     try testing.expectEqual(@as(u64, 1), c.raft.appliedIndex());
-    try testing.expectEqual(NODES + 2, countLabel(store, "gb", "S6631"));
+    try testing.expectEqual(@as(usize, 2), countLabel(store, "gb", "F6631"));
     try testing.expect(apply_ms <= CRITICAL_SECTION_MS);
     try testing.expect(probe.max_wait_ms < ELECTION_TIMEOUT_MS);
 }

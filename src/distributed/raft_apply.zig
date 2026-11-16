@@ -295,23 +295,50 @@ pub fn prehydrateForApply(cmd: Command) void {
     const store = g_store orelse return;
     switch (cmd) {
         .graph_mutation => |gm| {
+            const graph = if (gm.graph.len > 0) gm.graph else "default";
             // SONNY-6605: a build that fails transiently is tried again by the
             // apply, which fails if it fails again.
-            store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default") catch {};
+            store.ensureGraphHydratedForReplicatedApply(graph) catch {};
             const body = if (cluster_replication.isTenantPayload(gm.data))
                 (cluster_replication.splitTenant(gm.data) catch return).inner
             else
                 gm.data;
-            if (!cluster_replication.isBatchPayload(body)) return;
-            // A malformed batch is refused by its apply; nothing to do here.
-            cluster_replication.forEachBatchGraph(body, store, hydrateBatchGraph) catch {};
+            if (cluster_replication.isBatchPayload(body)) {
+                // A malformed batch is refused by its apply; nothing to do here.
+                cluster_replication.forEachBatchGraph(body, store, prehydrateBatchEntry) catch {};
+            } else internNamesOf(graph, body);
         },
         else => {},
     }
 }
 
-fn hydrateBatchGraph(store: *GraphStore, graph: []const u8) void {
-    store.ensureGraphHydratedForReplicatedApply(if (graph.len > 0) graph else "default") catch {};
+fn prehydrateBatchEntry(store: *GraphStore, graph: []const u8, payload: []const u8) void {
+    const g = if (graph.len > 0) graph else "default";
+    store.ensureGraphHydratedForReplicatedApply(g) catch {};
+    internNamesOf(g, payload);
+}
+
+// CANARY: REQ=REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY; FEATURE="DistributedCluster"; ASPECT=PrehydrateInternsNames; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6633 (4): give the labels and relationship types a lone-entry
+/// payload writes their label ids before the apply, so a name new to the
+/// graph is not written to disk (fsynced) under `inner_mutex`
+/// (`StorageAdapter.internNamesForReplicatedApply`). The payload's own
+/// graph wins over the entry's. Best effort.
+fn internNamesOf(entry_graph: []const u8, payload: []const u8) void {
+    // Not on a thread holding a graph's lock or the store lock (a leader's
+    // proposer inside its statement): pinning takes the adapter's tier-0
+    // handle mutex, never taken after a graph lock. The apply assigns them.
+    if (graph_storage_adapter.threadHoldsAnyGraphOrStoreLock()) return;
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const effect = cluster_replication.effectOf(a, payload) catch return;
+    var names: std.ArrayList([]const u8) = .empty;
+    for (effect.created) |c| names.appendSlice(a, c.labels) catch return;
+    names.appendSlice(a, effect.written_labels) catch return;
+    names.appendSlice(a, effect.edge_types) catch return;
+    adapter.internNamesForReplicatedApply(if (effect.graph.len > 0) effect.graph else entry_graph, names.items);
 }
 
 // CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
