@@ -3800,6 +3800,9 @@ pub fn build(b: *std.Build) void {
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
+    // SONNY-6543: a named step for tests/conformance_tests.zig (it ran only in
+    // the sharded aggregate).
+    b.step("test-conformance-patch", "Run tests/conformance_tests.zig (parser conformance patches, the GQL status JSON format, and the SQLSTATE a parse refusal is reported with)").dependOn(&run_conformance_patch_tests.step);
 
     // GAP-0257: Comprehensive ISO 39075:2024 conformance test suite
     const iso_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_iso_conformance.zig"), .target = target, .optimize = optimize }) });
