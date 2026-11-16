@@ -155,3 +155,28 @@ test "SONNY-6646 (4): getEdgesByType answers all the edges or an error whichever
     try testing.expect(errors > 0);
     try testing.expectEqual(@as(usize, 0), wrong);
 }
+
+test "SONNY-6646: addNodeLabelNoSave leaks nothing whichever allocation fails" {
+    // The undo of a REMOVE n:L. It copied the label, then allocated the
+    // node's new label array; when that failed the copy leaked
+    // (std.testing.allocator reports the leak).
+    var fault = OneShotFail{ .child = testing.allocator };
+    var store = try graph_store.GraphStore.init(fault.allocator());
+    defer store.deinit();
+    var labels = [_][]const u8{"A6646n"};
+    const id = try store.createNodeWithGraph(&labels, G);
+
+    var failures: usize = 0;
+    var k: usize = 0;
+    while (k < 64) : (k += 1) {
+        fault.arm(k);
+        const result = store.addNodeLabelNoSave(id, "B6646n");
+        const induced = fault.disarm();
+        if (result) |_| {
+            // Back to one label for the next attempt.
+            try store.removeNodeLabel(id, "B6646n");
+        } else |_| failures += 1;
+        if (!induced) break;
+    }
+    try testing.expect(failures > 0);
+}

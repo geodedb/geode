@@ -3135,7 +3135,12 @@
   committed batch failed). A failed FULL engine checkpoint is counted
   (`adapter_checkpoint_failures_total`) and logged at ERROR once per cause
   (`full checkpoint failed; ...`), as the light one is; it was a WARN on
-  every call. Regressions: `zig build test-sonny6646-store-silent-failures`,
+  every call; `checkpointAll` (an explicit checkpoint, a backup's save, a
+  cluster snapshot) returns `error.CheckpointFailed` once every graph was
+  tried, instead of reporting success, and `saveToFileEx(false)` writes the
+  other graphs' snapshots before returning it, leaving the store dirty.
+  `addNodeLabelNoSave` frees its label copy when the label array cannot be
+  allocated (it leaked). Regressions: `zig build test-sonny6646-store-silent-failures`,
   `test-sonny6646-bulk-insert-post-commit`,
   `test-sonny6646-exact-index-property-write`,
   `test-sonny6646-full-checkpoint-failure-log`.
