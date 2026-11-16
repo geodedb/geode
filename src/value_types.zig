@@ -132,7 +132,7 @@ pub const EvalError = error{
     // geode#877 (c): `knn('embeddings', …)` on a MISSPELLED property returned an
     // empty list, so a typo was indistinguishable from "your data has no
     // neighbours". Same diagnostic class as `UnknownFunction` above — it needs
-    // its own identity to carry GQLSTATE 42703 (undefined_column) instead of
+    // its own identity to carry GQLSTATE 42002 (invalid reference, SONNY-6543) instead of
     // being folded into a silent empty result.
     // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
     UnknownProperty,

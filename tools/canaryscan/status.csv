@@ -3936,6 +3936,7 @@ REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,InMemoryCatalog,TESTED,src/schem
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DropIndexLockedAndSaved,TESTED,src/execution.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DbIndexesLocked,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,VectorReadersLocked,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
+REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,BuildAfterDropRecheck,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-15
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,ProcessLifetimeIndexManager,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DropIndexPersisted,TESTED,src/schema/catalog.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,Regression,TESTED,tests/test_sonny2795_drop_index_catalog.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
@@ -4176,6 +4177,7 @@ REQ-SONNY-3147-AUDIT-HASH-COVERAGE,Audit Verification,RecomputeEveryRecordHash,T
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,AuditDurability,WriterHashesWholeRecord,TESTED,src/security/audit.zig,tests/test_sonny3147_audit_hash_coverage.zig,,security,2026-11-12
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,AuditDurability,CanonicalRecordHash,TESTED,src/security/rls_core.zig,tests/test_sonny3147_audit_hash_coverage.zig,,security,2026-11-12
 REQ-SONNY-3147-AUDIT-HASH-COVERAGE,Audit Verification,FullRecordEventHash,TESTED,tests/test_sonny3147_audit_hash_coverage.zig,tests/test_sonny3147_audit_hash_coverage.zig,,security,2026-11-12
+REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,RepeatedMapKey,TESTED,src/eval.zig,tests/test_sonny3148_write_leaks.zig,,eval,2026-11-15
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,TraversalBuffers,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,WithStageItems,TESTED,src/execution/match_operations.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,EvaluatedValueOwnership,TESTED,src/execution/value_utilities.zig,tests/test_sonny3148_write_leaks.zig,,engine,2026-09-27
@@ -4891,6 +4893,8 @@ REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,ListingErrorPropagates,TESTED,src/
 REQ-SONNY-6541-SHOW-TABLES-ERRORS,SHOW TABLES,Regression,TESTED,tests/test_sonny6541_show_tables_errors.zig,tests/test_sonny6541_show_tables_errors.zig,,execution,2026-11-14
 REQ-SONNY-6542-TEST-SOURCE-REACHABILITY,TestSourceReachabilityGuard,TestInfra,TESTED,scripts/ci/test_source_reachability.zig,scripts/ci/test_source_reachability.zig,,ci,2026-11-14
 REQ-SONNY-6542-TEST-SOURCE-REACHABILITY,TestSourceReachabilityGuard,RevivedTests,TESTED,tests/test_sonny6542_revived.zig,tests/test_sonny6542_revived.zig,,ci,2026-11-14
+REQ-SONNY-6543-ISO-STATUS-CODES,GQLStatus,Table8InvalidReference,TESTED,src/server/proto_util.zig,tests/test_sonny6543_iso_status_codes.zig,,server,2026-11-15
+REQ-SONNY-6543-ISO-STATUS-CODES,GQLStatus,Table8InvalidReference,TESTED,tests/test_sonny6543_iso_status_codes.zig,,,server,2026-11-15
 REQ-SONNY-6544-DSN-USERINFO,DSN credentials,UserinfoAndRedaction,TESTED,src/client/dsn_credentials.zig,tests/test_sonny6544_dsn_redaction.zig,,cli,2026-11-14
 REQ-SONNY-6544-DSN-USERINFO,DSN credentials,LastAtSplitAndRedaction,TESTED,tests/test_sonny6544_dsn_credentials.zig,tests/test_sonny6544_dsn_credentials.zig,,cli,2026-11-14
 REQ-SONNY-6544-DSN-USERINFO,DSN credentials,RedactionTable,TESTED,tests/test_sonny6544_dsn_redaction.zig,tests/test_sonny6544_dsn_redaction.zig,,cli,2026-11-14
@@ -5175,6 +5179,13 @@ REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,RegistrySwap,TEST
 REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_graph_restore_swap.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
 REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_snapshot_over_quic.zig,tests/test_sonny6636_snapshot_over_quic.zig,,distributed,2026-11-15
 REQ-SONNY-6636-STUB-QUIC-WARNING,Raft Wrapper Transport Dispatch,StubConnectWarns,TESTED,src/distributed/raft_consensus.zig,"""SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing""",,distributed,2026-11-15
+REQ-SONNY-6637-ARITY-TABLE,BuiltinFunctions,BindTimeArity,TESTED,src/execution/scope_check.zig,tests/test_sonny6637_function_arity.zig,,engine,2026-11-15
+REQ-SONNY-6637-ARITY-TABLE,BuiltinFunctions,SharedArityTable,TESTED,tests/test_sonny6637_function_arity.zig,tests/test_sonny6637_function_arity.zig,,eval,2026-11-15
+REQ-SONNY-6637-LET-SEQUENTIAL,LetStatement,DefinitionsSeeEarlierOnes,TESTED,src/gql/parser.zig,tests/test_sonny6637_query_items.zig,,parser,2026-11-15
+REQ-SONNY-6637-QUERY-ITEMS,ShortestPath,TwoArgumentForm,TESTED,tests/test_sonny6637_query_items.zig,tests/test_sonny6637_query_items.zig,,eval,2026-11-15
+REQ-SONNY-6637-SET-OMITTED-RESULT,WriteStep,NoReturnNoRows,TESTED,src/execution/match_operations.zig,tests/test_sonny6637_query_items.zig,,engine,2026-11-15
+REQ-SONNY-6637-SHORTEST-PATH-NODES,ShortestPath,TwoArgumentForm,TESTED,src/eval.zig,tests/test_sonny6637_query_items.zig,,eval,2026-11-15
+REQ-SONNY-6637-SHORTEST-PATH-NODES,ShortestPath,TwoArgumentForm,TESTED,src/gql/parser.zig,tests/test_sonny6637_query_items.zig,,parser,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

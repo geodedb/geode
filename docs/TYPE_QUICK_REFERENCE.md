@@ -63,8 +63,6 @@ Pressure(1013.25, "hPa")              -- Atmospheric pressure
 Url("https://example.com/path?q=1")   -- WHATWG normalized
 Domain("example.com")                  -- FQDN with punycode
 UUID("550e8400-e29b-41d4-a716-446655440000")  -- UUID
-Enum("Priority", "HIGH")               -- Enum type with value
-Array([1, 2, 3])                       -- Homogeneous array
 Bit("B'10101'")                        -- Bit string
 VarBit("B'10101'")                     -- Variable bit string
 Range("int4", 1, 10, "[)")            -- Half-open range [1, 10)
@@ -74,6 +72,13 @@ Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
 ```
 
 ## Common Function Patterns
+
+Every function shown here is dispatched; how many operands each takes is in
+`src/eval/function_arity.zig` (a call with another count is refused with
+42000). SONNY-6637 removed functions this page listed that no dispatch
+answered: `Enum()`, `Array()`, `length_chars()`, `now()`, `date_add()`,
+`ts_sub()`, `age()`, `jsonb_typeof()`, `jsonb_set()`, `array_get()`,
+`bit_or()`, `bit_xor()`, `bit_get()`, `bit_set()` and `bounds()`.
 
 ### Numeric Operations
 
@@ -86,7 +91,6 @@ decimal_div(a, b)                                      -- Division (banker's rou
 ### String Functions
 
 ```text
-length_chars(text)                     -- Character count (Unicode)
 trim(text)                            -- Remove whitespace
 lower(text) / upper(text)             -- Case conversion
 ```
@@ -94,11 +98,8 @@ lower(text) / upper(text)             -- Case conversion
 ### Temporal Functions
 
 ```text
-now()                                  -- Current timestamp
 current_date / current_time           -- Current date/time
-date_add(date, interval)              -- Add interval
-ts_sub(timestamp, interval)           -- Subtract interval
-age(ts1, ts2)                        -- Interval between timestamps
+current_timestamp()                   -- Current timestamp
 date_part("year", timestamp)         -- Extract component
 ```
 
@@ -158,8 +159,6 @@ st_within(geom1, geom2)              -- Spatial within test
 ```text
 jsonb_get(doc, "$.path.to.value")    -- Extract by path
 jsonb_exists(doc, "key")             -- Check key existence
-jsonb_typeof(value)                  -- Get JSON type
-jsonb_set(doc, path, new_value)      -- Update value
 ```
 
 ### URL/Domain Functions
@@ -186,18 +185,13 @@ uuid_equal(uuid1, uuid2)             -- Bytewise comparison
 ```text
 array_length(arr)                    -- Get array length
 array_contains(arr, value)           -- Check membership
-array_get(arr, index)               -- Get element by index
 ```
 
 ### Bit String Functions
 
 ```text
 bit_and(bits1, bits2)               -- Bitwise AND
-bit_or(bits1, bits2)                -- Bitwise OR
-bit_xor(bits1, bits2)               -- Bitwise XOR
 bit_count(bits)                     -- Count set bits
-bit_get(bits, position)             -- Get bit at position
-bit_set(bits, position, value)     -- Set bit value
 ```
 
 ### Range Functions
@@ -207,7 +201,6 @@ range_contains(range, value)        -- Check if value in range
 range_overlaps(range1, range2)     -- Check range overlap
 lower(range)                        -- Get lower bound
 upper(range)                        -- Get upper bound
-bounds(range)                       -- Get bounds type ("[)", "[]", etc.)
 ```
 
 ### Vector Operations (ML/AI)

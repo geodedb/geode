@@ -361,6 +361,65 @@ fn ensureVectorIndex(allocator: std.mem.Allocator, property: []const u8) !void {
     try execution.statement_dispatcher.ensureAdvancedVectorIndexForProperty(allocator, property);
 }
 
+// SONNY-2795 (remaining): a DROP INDEX landing between the knn path's copy
+// of the catalog row (`ensureAdvancedVectorIndexForProperty`) and its build
+// found no runtime index to tear down, and the build then left one, with its
+// dimension pin, and no catalog row until the next DROP or restart. The
+// build now reads the row again under the shared catalog lock and tears down
+// what it built when the row is gone.
+//
+// A lock-wait proof, not a timing race: the test holds the global index
+// manager mutex, which the build takes right after its copy (creating or
+// finding the manager) and DROP INDEX never takes. The DROP runs to
+// completion while the build waits there; then the build is let go.
+fn dropOnThread(h: *Harness, done: *std.atomic.Value(bool)) void {
+    var r = h.exec("DROP INDEX v2795race") catch |err| {
+        std.debug.print("DROP INDEX failed: {s}\n", .{@errorName(err)});
+        return;
+    };
+    r.deinit(h.arena.allocator());
+    done.store(true, .release);
+}
+
+fn ensureOnThread(allocator: std.mem.Allocator, failed: *?anyerror) void {
+    ensureVectorIndex(allocator, "emb_race") catch |err| {
+        failed.* = err;
+    };
+}
+
+fn dropBetweenCopyAndBuild(h: *Harness) !void {
+    try h.run("CREATE INDEX v2795race ON V2795R (emb_race) USING vector WITH (metric = 'l2')");
+    try h.restart();
+    // After the restart only the catalog row is there; the knn path builds
+    // the runtime index from it on first use.
+    try testing.expectEqual(@as(usize, 1), try h.indexes("v2795race"));
+
+    index_manager.global_index_manager_mutex.lockUncancelable(io());
+    var held = true;
+    defer if (held) index_manager.global_index_manager_mutex.unlock(io());
+
+    var failed: ?anyerror = null;
+    const builder = try std.Thread.spawn(.{}, ensureOnThread, .{ h.allocator, &failed });
+    // The builder copies the row under the shared catalog lock, releases
+    // it, and waits for the manager mutex. 500 ms is orders of magnitude
+    // longer than that copy takes.
+    sleepMs(500);
+    var dropped = std.atomic.Value(bool).init(false);
+    const dropper = try std.Thread.spawn(.{}, dropOnThread, .{ h, &dropped });
+    dropper.join();
+    try testing.expect(dropped.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), try h.indexes("v2795race"));
+
+    index_manager.global_index_manager_mutex.unlock(io());
+    held = false;
+    builder.join();
+    if (failed) |err| return err;
+
+    const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
+    try testing.expect(!mgr.hasAdvancedVectorIndexForProperty("emb_race"));
+    try testing.expect(!mgr.vector_dim_registry.contains("v2795race"));
+}
+
 // One harness for every HNSW phase, and last in the file: the hnsw library
 // keeps a worker pool alive across index lifetimes, so a later test's store
 // re-init would tear global state out from under parked pool threads
@@ -409,6 +468,10 @@ test "SONNY-2795 (3)+(2): the global index manager does not adopt a request allo
         const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
         try testing.expect(mgr.hasAdvancedVectorIndexForProperty("emb"));
     }
+
+    // SONNY-2795 (remaining): a DROP INDEX between the knn path's catalog
+    // copy and its build.
+    try dropBetweenCopyAndBuild(&h);
 
     // A dropped vector index is gone after a restart, and the rebuild does
     // not bring it back.

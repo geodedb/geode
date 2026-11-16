@@ -175,6 +175,8 @@ pub const sharded_store = @import("graph_storage").sharded_store;
 pub const pooled = @import("transport/thread_pool");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
+/// SONNY-6637: the shared function operand-count table.
+pub const function_arity = @import("eval/function_arity.zig");
 pub const diagnostics = @import("diagnostics.zig");
 // Re-export type promotion utilities for advanced types roundtrip tests
 pub const type_promotion = @import("eval/type_promotion.zig");

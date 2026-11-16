@@ -4174,7 +4174,7 @@ pub fn validateGroupBy(ret: ast.ReturnClause, group_by: ?ast.GroupBy) !void {
 /// group — a silent wrong result. Validate that each identifier-shaped key
 /// resolves to a RETURN alias, a pattern/path variable, a WITH/LET/UNWIND
 /// binding, or a parameter; reject unresolvable keys with
-/// error.UnknownGroupKey (SQLSTATE 42703).
+/// error.UnknownGroupKey (SQLSTATE 42002).
 pub fn validateGroupByResolvable(q: ast.Query) !void {
     const gb = q.group_by orelse return;
     for (gb.keys) |key_expr| {
@@ -4664,7 +4664,7 @@ const HavingGrouping = struct { items: []const ast.ReturnItem, keys: []const ast
 ///
 /// Over groups and per row, a name that is no column, input binding or query
 /// parameter fails the query with `error.UnknownHavingReference` (SQLSTATE
-/// 42703); inside an aggregate, an alias is the item's expression.
+/// 42002); inside an aggregate, an alias is the item's expression.
 const HavingFilter = struct {
     /// The predicate as evaluated: the rewritten HAVING over groups.
     expr: ast.Expr,

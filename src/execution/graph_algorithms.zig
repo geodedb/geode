@@ -736,6 +736,14 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     return sink.count;
 }
 
+/// SONNY-6637 item 1: whether the walk queues `id`, reached at `depth`: a
+/// node not reached yet, and with `all` one first reached at this depth too
+/// (another parent of a shortest path through it).
+fn shouldQueue(visited: *const std.AutoHashMap(u64, u32), id: u64, depth: u32, all: bool) bool {
+    const first = visited.get(id) orelse return true;
+    return all and first == depth;
+}
+
 /// Find shortest path between nodes using BFS
 /// CANARY: REQ=REQ-GQL-SHORTESTPATH; FEATURE="ShortestPath"; ASPECT=BFS; STATUS=IMPL; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=engine; UPDATED=2025-10-12
 pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern, all: bool, env: Env) !Value {
@@ -810,8 +818,16 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         depth: u32,
     };
 
-    var visited = std.AutoHashMap(u64, bool).init(allocator);
+    // SONNY-6637 item 1: the depth each node was first reached at. With
+    // `all`, a node reached again at that depth by another parent is queued
+    // again, so every shortest path to the end is walked; a node was queued
+    // once, so `allShortestPaths` answered one path where there were more.
+    var visited = std.AutoHashMap(u64, u32).init(allocator);
     defer visited.deinit();
+    // The neighbours queued from the node being expanded: two parallel
+    // relationships to one neighbour are one path.
+    var queued_from_current = std.AutoHashMap(u64, void).init(allocator);
+    defer queued_from_current.deinit();
 
     var queue = std.ArrayList(*PathNode).empty;
     defer queue.deinit(allocator);
@@ -839,7 +855,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     start_path_node.* = .{ .node_id = start_id.?, .parent = null, .depth = 0 };
     all_nodes.appendAssumeCapacity(start_path_node);
     try queue.append(allocator, start_path_node);
-    try visited.put(start_id.?, true);
+    try visited.put(start_id.?, 0);
 
     var found_paths = std.ArrayList(*PathNode).empty;
     defer found_paths.deinit(allocator);
@@ -865,6 +881,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
             continue;
         }
         if (max_depth) |m| if (current.depth >= m) continue;
+        queued_from_current.clearRetainingCapacity();
 
         // Explore neighbors using adjacency indexes (O(degree) instead of O(E))
         if (hop.rel.dir != .left) if ((try store.getOutgoingEdgeIdsOrError(current.node_id))) |out_edge_ids| {
@@ -877,13 +894,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 // visible to the session scope, and the neighbour must not be
                 // denied by RLS.
                 if (!scope.stepVisible(store, edge, neighbor_id)) continue;
-                if (!visited.contains(neighbor_id)) {
+                if (shouldQueue(&visited, neighbor_id, current.depth + 1, all) and (try queued_from_current.fetchPut(neighbor_id, {})) == null) {
                     try all_nodes.ensureUnusedCapacity(allocator, 1);
                     const neighbor_node = try allocator.create(PathNode);
                     neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
                     all_nodes.appendAssumeCapacity(neighbor_node);
                     try queue.append(allocator, neighbor_node);
-                    try visited.put(neighbor_id, true);
+                    try visited.put(neighbor_id, current.depth + 1);
                 }
             }
         };
@@ -895,13 +912,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                     if (!typeAllowed(hop.rel.types, edge.label)) continue;
                     const neighbor_id = edge.from_id;
                     if (!scope.stepVisible(store, edge, neighbor_id)) continue;
-                    if (!visited.contains(neighbor_id)) {
+                    if (shouldQueue(&visited, neighbor_id, current.depth + 1, all) and (try queued_from_current.fetchPut(neighbor_id, {})) == null) {
                         try all_nodes.ensureUnusedCapacity(allocator, 1);
                         const neighbor_node = try allocator.create(PathNode);
                         neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
                         all_nodes.appendAssumeCapacity(neighbor_node);
                         try queue.append(allocator, neighbor_node);
-                        try visited.put(neighbor_id, true);
+                        try visited.put(neighbor_id, current.depth + 1);
                     }
                 }
             }

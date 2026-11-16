@@ -82,7 +82,7 @@
 //     (numeric_value_out_of_range), next to error.IntegerOverflow.
 //   * error.UnknownProperty must be ADDED to value_types.EvalError, listed in
 //     eval.isPropagatableEvalError (so a nested call does not collapse it to
-//     NULL), and mapped to 42703 (undefined_column) in proto_util.mapError.
+//     NULL), and mapped to 42002 (invalid reference; 42703 before SONNY-6543) in proto_util.mapError.
 // The over-the-wire twin of this file asserts both GQLSTATEs:
 // ../geode-test-harness/geodetestlab-cli/specs/vector_knn_contract.yml
 //

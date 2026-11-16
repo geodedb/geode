@@ -24,7 +24,7 @@
 //     (`RETURN n.i AS amt ... HAVING sum(amt) > 100`); it was NULL for every
 //     row, so every group was dropped;
 //   * a HAVING name that is no column, binding or parameter is refused with
-//     42703; it was NULL.
+//     42002 (SONNY-6543; 42703 before); it was NULL.
 // Every check runs in the three legacy sessions and on a persisted deployment
 // with no policy or tenant scope (the planned read and the GROUP BY fast
 // paths), with the node cache bounded (the default: the fast paths read the
@@ -476,7 +476,7 @@ fn checkUnknownNames(s: *Session, f: *Failures) !void {
     try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > $lim", lim, &.{ "'a', 10", "'b', 10" });
     // Anything else is refused: over groups, inside an aggregate, per row
     // (SONNY-6525 item 2: by the statement's scope check, 42000, before the
-    // HAVING's own 42703).
+    // HAVING's own 42002).
     try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.VariableNotInScope);
     try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.VariableNotInScope);
     try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.VariableNotInScope);

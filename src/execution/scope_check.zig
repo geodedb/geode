@@ -36,8 +36,28 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const grouped_having = @import("grouped_having.zig");
+const function_arity = @import("../eval/function_arity.zig");
 
 pub const Error = error{ VariableNotInScope, OutOfMemory };
+
+// CANARY: REQ=REQ-SONNY-6637-ARITY-TABLE; FEATURE="BuiltinFunctions"; ASPECT=BindTimeArity; STATUS=TESTED; TEST=tests/test_sonny6637_function_arity.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6637 item 3: a call of a function in the shared arity table
+/// (src/eval/function_arity.zig) with another number of operands violates a
+/// Syntax Rule: 42000 (`WrongArgumentCount`) before anything runs (ISO/IEC
+/// 39075:2024 4.7.3 step 4 e). Checked on every call expression of the
+/// statement by the walk `param_check.checkStatement` runs; a call that no
+/// row reaches is refused too (the dispatch alone refused only an evaluated
+/// one, and an aggregate's never). A procedure a CALL names is not a
+/// function call (its caller skips it).
+pub fn checkCallArity(e: *const ast.Expr) error{WrongArgumentCount}!void {
+    const call = switch (e.*) {
+        .Call => |c| c,
+        else => return,
+    };
+    var buf: [256]u8 = undefined;
+    const name = function_arity.calleeName(call.callee, &buf) orelse return;
+    try function_arity.check(name, call.args.len);
+}
 
 /// The variables in scope at a point: every name (`open`: not known, so
 /// every name), and the expression-local ones around it.

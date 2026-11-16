@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T04:29:43.43674881Z",
+  "generated_at": "2026-11-16T04:30:39.102908166Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -61771,6 +61771,20 @@
         },
         {
           "feature": "SchemaCatalog",
+          "aspect": "BuildAfterDropRecheck",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "SchemaCatalog",
           "aspect": "ProcessLifetimeIndexManager",
           "status": "TESTED",
           "files": [
@@ -65491,6 +65505,20 @@
     {
       "id": "REQ-SONNY-3148-WRITE-LEAKS",
       "features": [
+        {
+          "feature": "WriteStatementOwnership",
+          "aspect": "RepeatedMapKey",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3148_write_leaks.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        },
         {
           "feature": "WriteStatementOwnership",
           "aspect": "TraversalBuffers",
@@ -77175,6 +77203,26 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6543-ISO-STATUS-CODES",
+      "features": [
+        {
+          "feature": "GQLStatus",
+          "aspect": "Table8InvalidReference",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig",
+            "tests/test_sonny6543_iso_status_codes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6543_iso_status_codes.zig"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6544-DSN-USERINFO",
       "features": [
         {
@@ -81721,6 +81769,129 @@
           ],
           "benches": [],
           "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6637-ARITY-TABLE",
+      "features": [
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "BindTimeArity",
+          "status": "TESTED",
+          "files": [
+            "src/execution/scope_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_function_arity.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "SharedArityTable",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6637_function_arity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_function_arity.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6637-LET-SEQUENTIAL",
+      "features": [
+        {
+          "feature": "LetStatement",
+          "aspect": "DefinitionsSeeEarlierOnes",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6637-QUERY-ITEMS",
+      "features": [
+        {
+          "feature": "ShortestPath",
+          "aspect": "TwoArgumentForm",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6637-SET-OMITTED-RESULT",
+      "features": [
+        {
+          "feature": "WriteStep",
+          "aspect": "NoReturnNoRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6637-SHORTEST-PATH-NODES",
+      "features": [
+        {
+          "feature": "ShortestPath",
+          "aspect": "TwoArgumentForm",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "ShortestPath",
+          "aspect": "TwoArgumentForm",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6637_query_items.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-11-15"
         }
       ]
@@ -86817,7 +86988,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4285
+      "TESTED": 4295
     },
     "by_aspect": {
       "2PC": 3,
@@ -87072,6 +87243,7 @@
       "Benchmarks": 2,
       "Betweenness": 2,
       "BidirectionalGuard": 1,
+      "BindTimeArity": 1,
       "Binding": 1,
       "BindingAggregation": 2,
       "BindingCreation": 1,
@@ -87106,6 +87278,7 @@
       "BridgeContract": 1,
       "BridgeLeverage": 1,
       "Build": 1,
+      "BuildAfterDropRecheck": 1,
       "BuildConfig": 1,
       "BuildConfiguration": 1,
       "BuildIntegration": 10,
@@ -87629,6 +87802,7 @@
       "DeferredRebuild": 1,
       "Definition": 1,
       "DefinitionContext": 1,
+      "DefinitionsSeeEarlierOnes": 1,
       "Delete": 2,
       "DeleteCodec": 1,
       "DeleteExecution": 1,
@@ -88951,6 +89125,7 @@
       "NoResendAfterSend": 1,
       "NoRetainedNodeCopies": 1,
       "NoReturnClause": 2,
+      "NoReturnNoRows": 1,
       "NoRoleBypasses": 1,
       "NoRoleIsNone": 1,
       "NoRolesUnauthorized": 1,
@@ -89725,6 +89900,7 @@
       "ReownArmResults": 1,
       "RepairThroughputBench": 1,
       "RepairsDerivableOldEnvelopeDamage": 1,
+      "RepeatedMapKey": 1,
       "RepeatedTarget": 1,
       "ReplDispatchRegression": 1,
       "ReplLoopError": 1,
@@ -90025,6 +90201,7 @@
       "ShardWorkerCoalescing": 1,
       "ShardedMergePropertyIndex": 1,
       "SharedAnswers": 1,
+      "SharedArityTable": 1,
       "SharedAstConcurrentHits": 1,
       "SharedBackupDecode": 1,
       "SharedConnState": 1,
@@ -90303,6 +90480,7 @@
       "TLSConnection": 1,
       "TLSOneShot": 1,
       "TLSSecurity": 1,
+      "Table8InvalidReference": 1,
       "TableCheck": 1,
       "TablePreScan": 1,
       "TaggedUnion": 1,
@@ -90407,6 +90585,7 @@
       "Truthy": 1,
       "TsanCompanionsInstrumented": 1,
       "Tutorial": 1,
+      "TwoArgumentForm": 3,
       "TxnAttribution": 1,
       "TxnConflictMatrixVarianceEnvelope": 1,
       "TxnControl": 1,
