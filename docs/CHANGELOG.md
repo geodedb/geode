@@ -3073,6 +3073,36 @@
 
 ### Fixed
 
+- **Offline auth commands name a missing data directory; `grant` /
+  `revoke` answer `--help` without the auth store; `query` / `shell`
+  refuse `--log-level`; the MCP server reports no data from an unreachable
+  server and passes list and map parameters (SONNY-6586).** `geode user`,
+  `role`, `policy`, `grant`, `revoke` and `auth reseal` given a data
+  directory that does not exist failed with `DataDirLockUnavailable` (the
+  lock file cannot be created in it); they now say the directory does not
+  exist, change nothing and create nothing (`geode auth init` still
+  creates it). `geode grant` and `geode revoke` opened the auth store, and
+  took the data directory's lock, before looking at `--help` or their
+  arguments, so `--help` and a usage error failed while a server held the
+  directory or when it did not exist; they also took the value of
+  `--data-dir` as the grantee when no `--to` / `--from` was given, and
+  took whatever followed the command (`--data-dir` included) as the
+  permission. The permission is now the first positional argument.
+  `geode query --log-level` and `geode shell --log-level` were accepted and
+  ignored (neither writes a log; `geode tenant` forwards it to query).
+  **User-visible:** they now exit 2; `--log-level` is a `geode serve`
+  option. With the server unreachable, the MCP `schema` and `stats`
+  resources answered `"node_labels": []` / `"node_count": 0`, which read
+  as an empty graph; every resource now answers
+  `{"error": "Server unavailable (<error>): nothing was read"}`. The MCP
+  `query` tool refused a list or map parameter (`UnsupportedParamType`);
+  a JSON array is now a LIST and an object a MAP (nested up to 64 deep,
+  freed on a part-way failure). `docs/NIX_DEPLOYMENT.md` told operators
+  to run `geode --config=... --validate-config`, an option that does not
+  exist; it now says `geode serve` refuses to start on a config it cannot
+  load. `geode authn stepup-check` / `stepup-mark` were already refused
+  (SONNY-6554). Regression: `zig build test-sonny6586-cli-truth`.
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),

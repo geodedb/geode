@@ -31,7 +31,6 @@ pub const GeodeClientError = error{
     OutOfMemory,
     ServerError,
     InvalidParams,
-    UnsupportedParamType,
     /// SONNY-6617 (3): a gRPC endpoint with TLS on (geode-client-zig's gRPC
     /// client has no TLS); `endpointErrorMessage` says what to do.
     TlsNotImplemented,
@@ -180,7 +179,17 @@ pub const GeodeClient = struct {
         self.connected = true;
     }
 
-    fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value) !schema.Value {
+    /// How deeply a parameter's lists and maps may nest (as `geode query
+    /// --param`).
+    const max_param_depth = 64;
+
+    // CANARY: REQ=REQ-SONNY-6586-MCP-LIST-MAP-PARAMS; FEATURE="MCPBackendTools"; ASPECT=ListAndMapParameters; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=mcp; UPDATED=2026-11-15
+    /// SONNY-6586: a JSON array is a LIST and an object a MAP (geode's wire
+    /// Value has both, and the server decodes both). They were refused
+    /// (UnsupportedParamType). A value that fails part-way frees what it
+    /// built: the MCP server is long-running.
+    fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
+        if (depth > max_param_depth) return GeodeClientError.InvalidParams;
         return switch (value) {
             .null => .{ .kind = .{ .null_val = .{} } },
             .bool => |b| .{ .kind = .{ .bool_val = b } },
@@ -188,7 +197,26 @@ pub const GeodeClient = struct {
             .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
             .number_string => |v| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, v), .kind = .STRING } } },
             .string => |v| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, v), .kind = .STRING } } },
-            .array, .object => GeodeClientError.UnsupportedParamType,
+            .array => |arr| blk: {
+                var list: schema.ListValue = .{ .values = .empty };
+                errdefer list.deinit(allocator);
+                try list.values.ensureTotalCapacityPrecise(allocator, arr.items.len);
+                for (arr.items) |item| list.values.appendAssumeCapacity(try jsonToProtoValue(allocator, item, depth + 1));
+                break :blk .{ .kind = .{ .list_val = list } };
+            },
+            .object => |obj| blk: {
+                var map: schema.MapValue = .{ .entries = .empty };
+                errdefer map.deinit(allocator);
+                try map.entries.ensureTotalCapacityPrecise(allocator, obj.count());
+                var it = obj.iterator();
+                while (it.next()) |entry| {
+                    const key = try allocator.dupe(u8, entry.key_ptr.*);
+                    errdefer allocator.free(key);
+                    const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
+                    map.entries.appendAssumeCapacity(.{ .key = key, .value = val });
+                }
+                break :blk .{ .kind = .{ .map_val = map } };
+            },
         };
     }
 
@@ -212,7 +240,7 @@ pub const GeodeClient = struct {
         while (it.next()) |entry| {
             const name = try self.allocator.dupe(u8, entry.key_ptr.*);
             errdefer self.allocator.free(name);
-            var value = try jsonToProtoValue(self.allocator, entry.value_ptr.*);
+            var value = try jsonToProtoValue(self.allocator, entry.value_ptr.*, 0);
             errdefer value.deinit(self.allocator);
             try params.append(self.allocator, .{ .name = name, .value = value });
         }

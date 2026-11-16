@@ -70,9 +70,17 @@ arguments), a backend that cannot be reached, and a statement the server
 reports as failed (for `query`, `schema`, `explain` and `graphs`
 alike). A `resources/read` whose endpoint DSN is unusable answers
 the resource with a `{"error": "<reason>"}` text document (the library can
-only report a Zig error name, which would drop the reason); when the
-server is unreachable, `schema` and `stats` answer their offline
-documents (`"note": "Server unavailable"`).
+only report a Zig error name, which would drop the reason). When the
+server is unreachable, every resource answers
+`{"error": "Server unavailable (<error>): nothing was read"}`. Before
+SONNY-6586, `schema` and `stats` answered `"node_labels": []` /
+`"node_count": 0` with a `"Server unavailable"` note, which read as an
+empty graph.
+
+The `query` tool's `parameters` object maps each name to a JSON value:
+`null`, a boolean, a number, a string, an array (a GQL LIST) or an object
+(a GQL MAP), nested up to 64 deep. Before SONNY-6586 an array or object
+was refused (`UnsupportedParamType`).
 
 Before SONNY-6552 the lists were pretty-printed bare arrays,
 `resources/read` was a bare `{uri,mimeType,text}`, an unknown prompt or
@@ -172,7 +180,7 @@ Geode's side of the contract (`src/mcp/server.zig`): `GeodeMcpServer.init`
 passes its own `allocator` to `mcp.Server.init`, and every handler returns
 bytes from that allocator. `tools/call` and `resources/read` results are
 built with it (`src/mcp/tools.zig`, `src/mcp/resources.zig`, including the
-offline fallback documents); the resource and prompt results are
+unreachable-server error documents); the resource and prompt results are
 serialized with it (SONNY-6552), and the tool listing and the empty
 CompleteResult are handed over as `ownedCopy` copies. Returning a string
 literal would be an invalid free.
@@ -183,7 +191,7 @@ fails on a leak and panics on an invalid free):
 - `zig build test-sonny6531-mcp-ownership` drives every method Geode
   implements through the real `mcp.Server.processMessage` dispatch (every
   tool incl. `isError` results and an unknown tool, every resource incl.
-  unknown URIs and the offline fallbacks, every prompt incl. unknown,
+  unknown URIs and an unreachable server, every prompt incl. unknown,
   completion, logging, subscribe/unsubscribe, notifications and a batch),
   with no backend, an undialable DSN, a dead endpoint and a real
   `geode serve`; then a real Debug `geode mcp --stdio` session answers

@@ -285,11 +285,11 @@ test "SONNY-6531: backend tools and resources answer an undialable endpoint DSN 
     try driveBackendMethods(server, "the port must be 1-65535", "the port must be 1-65535");
 }
 
-test "SONNY-6531: resources fall back to their offline documents without leaking" {
+test "SONNY-6531: resources answer an unreachable server without leaking" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Nothing listens on the port: the client is built, the request fails,
-    // and schema/stats answer their "Server unavailable" documents (config
-    // is answered locally by the client).
+    // and schema/stats answer a "Server unavailable" error document
+    // (SONNY-6586; config is answered locally by the client).
     // SONNY-6589 (2): the endpoint's timeout_ms bounds each failed connect
     // (geode-client-zig v0.3.18 applies it; before, each waited 30 s).
     const port = try util.getRandomPort();

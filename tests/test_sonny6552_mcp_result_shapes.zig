@@ -509,7 +509,8 @@ const live_backend_reqs = [_]Req{
 };
 
 /// Backend methods when nothing listens on the endpoint: tools answer an
-/// isError result, schema/stats their offline documents.
+/// isError result, schema/stats a "Server unavailable" error document
+/// (SONNY-6586).
 const dead_backend_reqs = [_]Req{
     .{ .id = 40, .msg =
     \\{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"query","arguments":{"query":"RETURN 1"}}}
