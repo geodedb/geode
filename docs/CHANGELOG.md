@@ -3079,7 +3079,10 @@
   name nothing had bound yet and answered NULL; each item is evaluated over
   the incoming record (ISO/IEC 39075 20.12 SR 8), so they are refused with
   42000 (`VariableNotInScope`). The WITH's ORDER BY, its WHERE and the next
-  part still read its aliases. A gRPC Handshake for a tenant at its
+  part still read its aliases. **BREAKING:** a RETURN item likewise (`RETURN
+  1 AS a, a + 1 AS b` answered NULL for b; also a CREATE / INSERT / MERGE
+  or FOR RETURN); the RETURN's GROUP BY, HAVING and ORDER BY still read its
+  aliases. A gRPC Handshake for a tenant at its
   connection quota failed with an internal error (the quota was raised as
   `OutOfMemory`); it is refused with `53300: Connection quota exceeded for
   tenant`, as QUIC refuses it. Regressions: `zig build
