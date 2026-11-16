@@ -556,20 +556,6 @@ fn PrefixedStream(comptime Inner: type) type {
     };
 }
 
-const ReplicationPayload = struct {
-    shard_id: u64 = 0,
-    snapshot: []const u8 = "",
-
-    pub const _desc_table = .{
-        .shard_id = fd(1, .{ .scalar = .uint64 }),
-        .snapshot = fd(2, .{ .scalar = .bytes }),
-    };
-
-    pub fn deinit(self: *ReplicationPayload, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
 /// SEC-D009: Replay protection guard for Raft frames.
 const ReplayGuard = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
@@ -703,7 +689,6 @@ pub const ClusterCoordinator = struct {
     raft_pool: ?*pooled.ThreadPool = null,
     network_pool: ?*pooled.ThreadPool = null,
     health_pool: ?*pooled.ThreadPool = null,
-    replication_pool: ?*pooled.ThreadPool = null,
     connection_pool: ?*pooled.ThreadPool = null,
     /// Dedicated polling thread for the intra-cluster QUIC endpoint.
     /// `accept()` blocks on `accepted.items.len > 0` via a CV — connections
@@ -1291,11 +1276,6 @@ pub const ClusterCoordinator = struct {
             self.health_pool.?.deinit();
             self.health_pool = null;
         }
-        self.replication_pool = try startLoopPool(self, runReplicationLoop);
-        errdefer {
-            self.replication_pool.?.deinit();
-            self.replication_pool = null;
-        }
     }
 
     pub fn stop(self: *ClusterCoordinator) void {
@@ -1330,10 +1310,6 @@ pub const ClusterCoordinator = struct {
         if (self.health_pool) |pool| {
             pool.deinit();
             self.health_pool = null;
-        }
-        if (self.replication_pool) |pool| {
-            pool.deinit();
-            self.replication_pool = null;
         }
         if (self.connection_pool) |pool| {
             pool.deinit();
@@ -1569,15 +1545,6 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    fn replicationLoop(self: *ClusterCoordinator) !void {
-        while (!self.shutdown.load(.acquire)) {
-            if (self.raft.state == .leader) {
-                try self.performReplication();
-            }
-            compat_sleepNs(100 * std.time.ns_per_ms);
-        }
-    }
-
     const ConnectionTaskCtx = struct {
         allocator: Allocator,
         coordinator: *ClusterCoordinator,
@@ -1635,13 +1602,6 @@ pub const ClusterCoordinator = struct {
         const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
         self.healthLoop() catch |err| {
             log.err("Health loop failed", &.{Attr.string("error", @errorName(err))});
-        };
-    }
-
-    fn runReplicationLoop(ctx: *anyopaque) void {
-        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
-        self.replicationLoop() catch |err| {
-            log.err("Replication loop failed", &.{Attr.string("error", @errorName(err))});
         };
     }
 
@@ -2323,40 +2283,6 @@ pub const ClusterCoordinator = struct {
                 shard.replica_nodes = new_replicas;
             }
         }
-    }
-
-    fn performReplication(self: *ClusterCoordinator) !void {
-        for (self.cluster_state.shards.items) |shard| {
-            if (shard.primary_node != self.node_id) continue;
-
-            for (shard.replica_nodes) |replica| {
-                try self.replicateShardToNode(shard.id, replica);
-            }
-        }
-    }
-
-    fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        // Checkpoint adapter storage before snapshotting.
-        try self.store.saveToFile();
-        // Serialize all nodes and edges as JSON-lines for replication.
-        const snapshot = try self.store.serializeSnapshot(self.allocator);
-
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        const payload_msg = ReplicationPayload{
-            .shard_id = shard_id,
-            .snapshot = snapshot,
-        };
-        try protobuf.encode(&aw.writer, self.allocator, payload_msg);
-        const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-        defer self.allocator.free(payload);
-
-        const msg = Message{
-            .msg_type = .REPLICATE_DATA,
-            .data = payload,
-        };
-
-        try self.sendToNode(node_id, msg);
     }
 
     // Helper functions

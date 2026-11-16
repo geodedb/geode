@@ -6,12 +6,13 @@
 //    raft log moved to the snapshot point and the state machine kept its old
 //    contents. A real three-node cluster (raft library, in-memory Raft
 //    storage) leaves node 3 behind, the leader compacts its log behind a
-//    snapshot of its store (`raft_snapshot_manager.encodeRaftSnapshot`),
-//    and node 3, back, must restore its store from it through the apply
-//    callbacks the cluster wires (`raft_apply`), then apply the entries
-//    after it. A store the restore cannot replace (the server's durable
-//    store) is refused: the node stops (no apply, no Raft input) instead of
-//    applying later entries on top of state it no longer has.
+//    durable snapshot (GRS3, `raft_snapshot_manager.encodeDurableSnapshot`
+//    of a closed leader data directory), and node 3, back, must restore its
+//    durable store from it through the apply callbacks the cluster wires
+//    (`raft_apply`), then apply the entries after it. A snapshot the store
+//    refuses (one naming `__geode_security`) stops the node (no apply, no
+//    Raft input) instead of applying later entries on top of state it does
+//    not have.
 // 2. Fast backtracking. A rejected AppendEntries carries the follower's
 //    hint (`conflict_index`, `conflict_term`); geode's wire format and both
 //    receive paths dropped it, so a new leader walked a short follower back
@@ -24,7 +25,7 @@
 //    named, fatal startup error, not InvalidNodeId, and the directory is
 //    left as it was.
 //
-// CANARY: REQ=REQ-SONNY-6622-RAFT-V022; FEATURE="Raft Consensus Persistence"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+// CANARY: REQ=REQ-SONNY-6622-RAFT-V022; FEATURE="Raft Consensus Persistence"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-16
 
 const std = @import("std");
 const testing = std.testing;
@@ -197,18 +198,15 @@ fn deinitLibCluster(a: std.mem.Allocator, net: *LibNet) void {
 }
 
 /// Node 3 is cut off while the leader commits `writes` entries, then the
-/// leader compacts its log behind a snapshot of `leader_store`. Returns the
-/// snapshot's index.
-fn leaveNode3Behind(net: *LibNet, leader_store: *GraphStore, writes: usize) !u64 {
+/// leader compacts its log behind `payload` (a durable snapshot). Returns
+/// the snapshot's index.
+fn leaveNode3Behind(net: *LibNet, payload: []const u8, writes: usize) !u64 {
     const leader = net.nodes[0];
     net.cut[3] = true;
     var last: u64 = 0;
     for (0..writes) |_| last = try leader.proposeCommand(.{ .write = "sonny6622" });
     try net.untilTrue(all3, AppliedAtLeast{ .node = leader, .index = last }, AppliedAtLeast.done);
     try net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[1], .index = last }, AppliedAtLeast.done);
-
-    const payload = try snapshot_manager.encodeRaftSnapshot(net.a, leader_store, null);
-    defer net.a.free(payload);
     {
         leader.inner_mutex.lockUncancelable(io);
         defer leader.inner_mutex.unlock(io);
@@ -217,40 +215,70 @@ fn leaveNode3Behind(net: *LibNet, leader_store: *GraphStore, writes: usize) !u64
     return leader.appliedIndex();
 }
 
-fn hasNode(store: *GraphStore, id: u64, label: []const u8) bool {
-    const n = store.nodes.get(id) orelse return false;
-    return n.labels.len == 1 and std.mem.eql(u8, n.labels[0], label);
+const G = "g6622";
+
+/// A scratch directory under the build's cache (removed by the caller).
+fn scratchDir(a: std.mem.Allocator, tmp: *std.testing.TmpDir, sub: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = try std.process.currentPath(io, &cwd_buf);
+    return std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}/{s}", .{ cwd_buf[0..cwd_len], &tmp.sub_path, sub });
+}
+
+fn closeStore() void {
+    geode.execution.cleanupCatalogInstance();
+    graph_store.deinitGlobalStore();
+}
+
+/// The leader's store, built in `dir` and closed: two nodes and an edge in
+/// G. Its durable snapshot (GRS3), taken on the closed directory.
+fn leaderSnapshot(a: std.mem.Allocator, dir: []const u8) ![]u8 {
+    {
+        const store = try graph_store.initGlobalStore(a, dir);
+        defer closeStore();
+        try store.loadFromFile();
+        try store.createGraph(G);
+        const n1 = try store.createNodeWithGraph(&.{"Snap6622"}, G);
+        try store.setNodeProperty(n1, "name", .{ .String = "alpha" });
+        const n2 = try store.createNodeWithGraph(&.{"Snap6622"}, G);
+        _ = try store.createEdgeWithGraph(n1, n2, "LINKS", G);
+    }
+    const ad = try geode.graph_storage_adapter.StorageAdapter.init(a, dir, .{ .data_dir = dir });
+    defer ad.deinit();
+    return snapshot_manager.encodeDurableSnapshot(a, ad, null);
 }
 
 test "SONNY-6622: a lagging follower restores its store from the leader's snapshot, then applies the entries after it" {
     const a = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    defer graph_store.setDataDirOverride(a, null);
+    const leader_dir = try scratchDir(a, &tmp, "leader");
+    defer a.free(leader_dir);
+    const follower_dir = try scratchDir(a, &tmp, "follower");
+    defer a.free(follower_dir);
 
-    // The leader's state machine, and node 3's (with a node the snapshot
-    // does not have: the restore replaces the store).
-    var leader_store = try GraphStore.init(a);
-    defer leader_store.deinit();
-    const n1 = try leader_store.createNode(&.{"Snap6622"});
-    try leader_store.setNodeProperty(n1, "name", .{ .String = "alpha" });
-    const n2 = try leader_store.createNode(&.{"Snap6622"});
-    _ = try leader_store.createEdge(n1, n2, "LINKS");
-    var follower_store = try GraphStore.init(a);
-    defer follower_store.deinit();
-    const stale = try follower_store.createNode(&.{"Stale6622"});
-    _ = stale;
-    try testing.expect(!hasNode(&follower_store, n1, "Snap6622"));
+    const payload = try leaderSnapshot(a, leader_dir);
+    defer a.free(payload);
+    // Node 3's durable store, with a node the snapshot does not have: the
+    // restore replaces the graph.
+    const follower = try graph_store.initGlobalStore(a, follower_dir);
+    defer closeStore();
+    try follower.loadFromFile();
+    try follower.createGraph(G);
+    _ = try follower.createNodeWithGraph(&.{"Stale6622"}, G);
 
     var peers = [3][2]Peer{ peersOf(1), peersOf(2), peersOf(3) };
     var net: LibNet = .{ .a = a };
     try initLibCluster(a, &net, &peers);
     defer deinitLibCluster(a, &net);
 
-    // Node 3 applies to `follower_store` through the cluster's callbacks.
-    raft_apply.setGlobalStore(&follower_store);
+    // Node 3 applies to the durable store through the cluster's callbacks.
+    raft_apply.setGlobalStore(follower);
     defer raft_apply.resetGlobalStore();
     net.nodes[2].apply_callback = &raft_apply.applyCallbackFn;
     net.nodes[2].snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
 
-    const snap_index = try leaveNode3Behind(&net, &leader_store, 20);
+    const snap_index = try leaveNode3Behind(&net, payload, 20);
     try testing.expect(net.nodes[2].appliedIndex() < snap_index);
 
     // Node 3 is back: the leader can only catch it up with the snapshot.
@@ -259,15 +287,15 @@ test "SONNY-6622: a lagging follower restores its store from the leader's snapsh
     const after = try net.nodes[0].proposeCommand(.{ .write = "after-snapshot" });
     try net.untilTrue(all3, AppliedAtLeast{ .node = net.nodes[2], .index = after }, AppliedAtLeast.done);
 
-    std.debug.print("SONNY-6622 snapshot: node 3 applied index {d} (snapshot {d}, next entry {d}); store has the leader's nodes={} edge={} stale node={}; stalled={}\n", .{
-        net.nodes[2].appliedIndex(),                                                           snap_index,                        after,
-        hasNode(&follower_store, n1, "Snap6622") and hasNode(&follower_store, n2, "Snap6622"), follower_store.edges.count() == 1, follower_store.nodes.count() != 2,
-        net.nodes[2].persistStalled(),
+    const snap_nodes = follower.countNodesByLabel(G, "Snap6622", null);
+    const stale_nodes = follower.countNodesByLabel(G, "Stale6622", null);
+    const edges = follower.countEdgesByTypeForGraph(G, "LINKS");
+    std.debug.print("SONNY-6622 snapshot: node 3 applied index {d} (snapshot {d}, next entry {d}); store has {d} of the leader's nodes, {d} edge, {d} stale node; stalled={}\n", .{
+        net.nodes[2].appliedIndex(), snap_index, after, snap_nodes, edges, stale_nodes, net.nodes[2].persistStalled(),
     });
-    try testing.expect(hasNode(&follower_store, n1, "Snap6622"));
-    try testing.expect(hasNode(&follower_store, n2, "Snap6622"));
-    try testing.expectEqual(@as(usize, 2), follower_store.nodes.count());
-    try testing.expectEqual(@as(usize, 1), follower_store.edges.count());
+    try testing.expectEqual(@as(usize, 2), snap_nodes);
+    try testing.expectEqual(@as(usize, 0), stale_nodes);
+    try testing.expectEqual(@as(usize, 1), edges);
     try testing.expect(!net.nodes[2].persistStalled());
     try testing.expectEqual(net.nodes[0].appliedIndex(), net.nodes[2].appliedIndex());
 }
@@ -276,22 +304,23 @@ test "SONNY-6622: a snapshot the store cannot take stops the follower instead of
     const a = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_len = try std.process.currentPath(io, &cwd_buf);
-    const data_dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..cwd_len], &tmp.sub_path });
-    defer a.free(data_dir);
     defer graph_store.setDataDirOverride(a, null);
+    const data_dir = try scratchDir(a, &tmp, "follower");
+    defer a.free(data_dir);
 
-    var leader_store = try GraphStore.init(a);
-    defer leader_store.deinit();
-    _ = try leader_store.createNode(&.{"Snap6622"});
+    // A durable snapshot no store takes: it names `__geode_security`.
+    var empty = try geode.graph_archive.Builder.init(a);
+    const empty_archive = try empty.finish(a);
+    defer a.free(empty_archive);
+    const payload = try snapshot_manager.assembleDurableSnapshot(a, &.{.{ .name = "__geode_security", .uuid = [_]u8{0x42} ** 16 }}, empty_archive, null);
+    defer a.free(payload);
 
     // Node 3's store is the server's durable store.
     const durable = try graph_store.initGlobalStore(a, data_dir);
-    defer graph_store.deinitGlobalStore();
-    defer geode.execution.cleanupCatalogInstance();
-    try durable.createGraph("g6622");
-    _ = try durable.createNodeWithGraphAndTenant(&.{"Kept6622"}, "g6622", graph_store.DEFAULT_TENANT_ID);
+    defer closeStore();
+    try durable.loadFromFile();
+    try durable.createGraph(G);
+    _ = try durable.createNodeWithGraphAndTenant(&.{"Kept6622"}, G, graph_store.DEFAULT_TENANT_ID);
 
     var peers = [3][2]Peer{ peersOf(1), peersOf(2), peersOf(3) };
     var net: LibNet = .{ .a = a };
@@ -302,17 +331,17 @@ test "SONNY-6622: a snapshot the store cannot take stops the follower instead of
     net.nodes[2].apply_callback = &raft_apply.applyCallbackFn;
     net.nodes[2].snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
 
-    const snap_index = try leaveNode3Behind(&net, &leader_store, 20);
+    const snap_index = try leaveNode3Behind(&net, payload, 20);
     net.cut[3] = false;
     // Long enough for the leader to send the snapshot and retry it.
     for (0..400) |_| net.round(all3);
 
     std.debug.print("SONNY-6622 refused snapshot: node 3 applied index {d} (snapshot {d}); stalled={}; its store kept its node={}\n", .{
-        net.nodes[2].appliedIndex(), snap_index, net.nodes[2].persistStalled(), durable.countNodesByLabel("g6622", "Kept6622", null) == 1,
+        net.nodes[2].appliedIndex(), snap_index, net.nodes[2].persistStalled(), durable.countNodesByLabel(G, "Kept6622", null) == 1,
     });
     try testing.expect(net.nodes[2].persistStalled());
     try testing.expect(net.nodes[2].appliedIndex() < snap_index);
-    try testing.expectEqual(@as(usize, 1), durable.countNodesByLabel("g6622", "Kept6622", null));
+    try testing.expectEqual(@as(usize, 1), durable.countNodesByLabel(G, "Kept6622", null));
 }
 
 // ---------------------------------------------------------------------------

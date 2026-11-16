@@ -3095,7 +3095,41 @@
   that node only after the copy. **Still open:** the raft library writes
   the snapshot (and a leader re-reads it to send it) under `inner_mutex`,
   141-167 ms for that store and growing with it (`src/distributed/README.md`).
-  Regression: `zig build test-sonny6636-server-snapshot`.
+  Regressions: `zig build test-sonny6636-server-snapshot`, `zig build
+  test-sonny6636-cluster-snapshot` (three `geode serve` processes: bounded
+  logs, a follower down past the leader's compaction catches up from its
+  snapshot and survives SIGKILL and restart with every row exactly once).
+
+- **A peer's Raft outbox keeps one send of the leader's snapshot (SONNY-6636).**
+  The raft library sends a snapshot as a burst of 64 KiB InstallSnapshot
+  chunks and, while the peer does not answer, the whole burst again every
+  few rounds; the per-peer outbox coalesced only AppendEntries. A follower
+  down for a minute came back to thousands of queued chunks of older
+  snapshots (6410 `UnexpectedOffset` and 609 `StaleSnapshot` refusals in a
+  three-process cluster), restored the oldest first and never caught up
+  with the newest. A chunk at offset 0 now replaces every snapshot chunk
+  still queued for that peer. Regression: `zig build
+  test-sonny6636-outbox-snapshot`.
+
+- **The lossy JSON-lines Raft snapshot (GRS2) and the shard replication
+  loop are removed (SONNY-6636).** `GraphStore.serializeSnapshot`,
+  `raft_snapshot_manager.createSnapshotData` / `installSnapshotData` /
+  `encodeRaftSnapshot` / `installRaftSnapshot` and the fulltext rebuild
+  hook they needed are deleted, and so is
+  `ClusterCoordinator.replicateShardToNode` with the replication loop that
+  sent a JSON-lines copy of the whole store to a hand-populated shard's
+  replicas (nothing in production fills shards). A durable snapshot (GRS3)
+  is the only Raft snapshot. `test-sonny6622-raft-v022-adapt`,
+  `test-sonny6633-snapshot-wire` and `test-sonny6636-snapshot-over-quic`
+  now restore a GRS3 snapshot of a closed leader data directory into a
+  durable follower; the GRS2-only tests (`tests/test_raft_snapshot_manager.zig`,
+  `test-sonny2810-snapshot-float`, `test-sonny6595-fts-snapshot-restart`)
+  and the GRS2 tests in `test-fts-apply-symmetry`,
+  `test-sonny3317-round15-minors` and `test-startup-lazy-hydrate` are
+  removed. **BREAKING:** any Raft snapshot that is not GRS3 is refused
+  (`RaftSnapshotUnknownFormat`), and so is every snapshot for an in-memory
+  store (`RaftSnapshotNeedsDurableStore`): a cluster node runs on a durable
+  store.
 
 - **A replayed Raft entry skips a node or edge endpoint a later entry
   deleted, and applies the rest (SONNY-6636).** A restarted node replays

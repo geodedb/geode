@@ -2705,6 +2705,21 @@ pub fn build(b: *std.Build) void {
     const cluster_replicable_mut_step = b.step("test-cluster-replicable-mutations", "Run 3-node subprocess edge/delete/merge/SET replication regression (2026-06-09 gaps)");
     cluster_replicable_mut_step.dependOn(&run_cluster_replicable_mut_tests.step);
 
+    // SONNY-6636 (c): server-side Raft snapshots in a cluster of three
+    // `geode serve` processes (127.0.0.51-53, GEODE_RAFT_SNAPSHOT_ENTRIES
+    // small): sustained writes keep every node's log bounded, a follower
+    // down past the leader's compaction catches up from its snapshot and
+    // survives SIGKILL and restart with every row exactly once.
+    const sonny6636_cluster_snapshot_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6636_cluster_snapshot.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6636_cluster_snapshot_tests.root_module.link_libc = true;
+    const run_sonny6636_cluster_snapshot_tests = b.addRunArtifact(sonny6636_cluster_snapshot_tests);
+    spawnsBuiltGeode(sonny6636_cluster_snapshot_tests);
+    b.step("test-sonny6636-cluster-snapshot", "Run SONNY-6636 (c) regression (three geode serve processes with GEODE_RAFT_SNAPSHOT_ENTRIES=25: sustained writes make every node snapshot its durable store and compact its Raft log, so the log stays bounded; a follower SIGKILLed and kept down while the leader compacts past it restores the leader's snapshot when it restarts and applies the entries after it; killed again and restarted on its data directory it holds every row exactly once, as every node does)").dependOn(&run_sonny6636_cluster_snapshot_tests.step);
+
     // Task A2 (2026-06-08 raft-transport-stream-starvation plan): per-peer
     // non-blocking outbox drain isolation.  Drives the `send_override` hook
     // with one message per peer {1,2,3} where peer 3's override blocks ~1s,
@@ -4529,6 +4544,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_first_boot_pw_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_sonny6636_cluster_snapshot_tests.step, 1, test_shard_loads, test_shard_index);
     // "committed write -> client Timeout -> retry double-insert" fix (2026-06-12):
     // now GREEN, folded into the shard aggregate (RC-1 commit-aware wait, RC-2
     // distinct cluster-write SQLSTATE outcomes, RC-3 idempotency-key apply dedup).
@@ -4633,17 +4649,6 @@ pub fn build(b: *std.Build) void {
     const gap0856_dist_explain_step = b.step("test-gap0856", "Run GAP-0856 distributed EXPLAIN/PROFILE node-local-scope test");
     gap0856_dist_explain_step.dependOn(&run_gap0856_dist_explain_tests.step);
     shardDep(test_step, &run_gap0856_dist_explain_tests.step, 1, test_shard_loads, test_shard_index);
-
-    // GAP-0519: Raft snapshot manager creation + installation round-trip tests
-    const raft_snap_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_snapshot_manager.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_snap_test_mod.addImport("geode", root_mod);
-    const raft_snap_tests = b.addTest(.{ .root_module = raft_snap_test_mod });
-    const run_raft_snap_tests = b.addRunArtifact(raft_snap_tests);
-    shardDep(test_step, &run_raft_snap_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0520: Raft apply callback — routes committed commands to GraphStore
     const raft_apply_test_mod = b.createModule(.{
@@ -10701,16 +10706,6 @@ pub fn build(b: *std.Build) void {
     const sonny6595_vec_step = b.step("test-sonny6595-vector-write-paths", "Run SONNY-6595 items 1-2 against a real server with QUIC and plaintext gRPC listeners: after CREATE INDEX ... USING vector, every node write path (index backfill, executor and fast-path MERGE ON CREATE SET and SET, a replaced vector, executor MERGE, /*+BATCH*/ bulk MERGE, MATCH ... SET) leaves knn() answering each node for its own vector, immediately, after a SIGKILL and restart, and after a checkpoint and restart; and every path refuses a wrong-dimension vector with the executor's error");
     sonny6595_vec_step.dependOn(&run_sonny6595_vec_tests.step);
 
-    // SONNY-6595 item 4: a snapshot installed after a restart, before any
-    // write, rebuilds the fulltext indexes (in-process store and catalog).
-    const sonny6595_snap_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_fts_snapshot_restart.zig"), .target = target, .optimize = optimize }) });
-    sonny6595_snap_tests.root_module.addImport("geode", root_mod);
-    sonny6595_snap_tests.root_module.link_libc = true;
-    const run_sonny6595_snap_tests = b.addRunArtifact(sonny6595_snap_tests);
-    shardDep(test_step, &run_sonny6595_snap_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6595_snap_step = b.step("test-sonny6595-fts-snapshot-restart", "Run SONNY-6595 item 4: a raft snapshot installed on a restarted node before any write rebuilds its fulltext indexes from the restored store (a node the snapshot restores under a tombstoned id is found again, one it drops is not)");
-    sonny6595_snap_step.dependOn(&run_sonny6595_snap_tests.step);
-
     // SONNY-6595 item 3: a DELETE with no MATCH is refused, and so is one in a
     // CALL subquery (the context.bindings branch of executeDelete was unreachable).
     const sonny6595_del_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_standalone_delete.zig"), .target = target, .optimize = optimize }) });
@@ -11096,16 +11091,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3377_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3377_step = b.step("test-sonny3377-unlabeled-edge-scan-reload", "Run SONNY-3377 regression (MATCH ()-[e]->() WHERE e.zz = 1 RETURN count(e), and its unfiltered, typed and count(*) forms, answer after a reload, clean or crash-style)");
     sonny3377_step.dependOn(&run_sonny3377_tests.step);
-
-    // SONNY-2810: Float properties of every magnitude, integral, NaN and
-    // infinite, survive a raft snapshot round trip as Floats.
-    const sonny2810_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2810_snapshot_float.zig"), .target = target, .optimize = optimize });
-    sonny2810_test_mod.addImport("geode", root_mod);
-    const sonny2810_tests = b.addTest(.{ .root_module = sonny2810_test_mod });
-    const run_sonny2810_tests = b.addRunArtifact(sonny2810_tests);
-    shardDep(test_step, &run_sonny2810_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny2810_step = b.step("test-sonny2810-snapshot-float", "Run SONNY-2810 regression (node and edge Float properties - 1e40, the f64 extremes, subnormals, 3.0, -0.0, NaN, infinities - survive createSnapshotData + installSnapshotData exactly, as Floats)");
-    sonny2810_step.dependOn(&run_sonny2810_tests.step);
 
     // SONNY-3121: the self-locking bulk MERGE helpers the QUIC handler calls
     // directly with group commit off hold a pin on their graph, and fail
