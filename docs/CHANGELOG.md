@@ -3073,6 +3073,45 @@
 
 ### Fixed
 
+- **`geode mcp --port` serves; MCP HTTP clients get sessions; mcp
+  v0.1.26 (SONNY-6644).** The HTTP transport (the transport unless
+  `--stdio` is given) printed "MCP server listening on port N" and exited
+  0: the library's `serveHttp` returns once its listener thread runs, and
+  the command returned and stopped the server. It now serves until SIGINT
+  or SIGTERM. With mcp v0.1.26 the transport keeps Streamable HTTP
+  sessions: `initialize` answers an `Mcp-Session-Id` the client sends on
+  every later request; a request without one is 400 and an unknown one
+  404; each client has its own session, so one client no longer receives
+  another's notifications. **User-visible:** an HTTP client must send
+  `initialize` first and keep the session id. Regression: `zig build
+  test-sonny6644-mcp-http-session`.
+
+- **An online `REVOKE` of nothing is refused; `geode user permissions`
+  shows real grants; legacy permission records can be pruned
+  (SONNY-6647).** `REVOKE <privilege> ON GRAPH <graph> FROM <user>`
+  (`geode.auth.revoke`) answered "Revoked ..." whether or not the user held
+  the privilege there. **User-visible:** it is refused with SQLSTATE 42704
+  (`GrantNotHeld`) and nothing changes, as offline `geode revoke` refuses
+  it; `REVOKE ALL` succeeds when any of the three was held. `geode user
+  permissions <user>` listed every stored permission record, whoever's
+  (records no authorization path reads), and printed `read` for a user
+  with none or a user that does not exist; it now prints the user's role
+  and its per-graph grants, and refuses an unknown user. New `geode auth
+  prune-legacy-permissions [--dry-run]` lists or removes the inert records
+  the offline `geode grant` stored before SONNY-6586. Regressions: `zig
+  build test-sonny6647-revoke-not-held`, `zig build
+  test-sonny6647-user-permissions`.
+
+- **One JSON-to-wire parameter converter; the CDC lifecycle canary runs
+  (SONNY-6647).** `geode query --param` and the MCP query tool share
+  `src/client/param_json.zig` (`geode.param_json`; it was
+  `src/cli/param_json.zig`, and `src/mcp/client.zig` had its own copy).
+  `tests/canary_cdc_lifecycle.zig` is the named step `zig build
+  test-canary-cdc-lifecycle` (no step compiled it).
+  `docs/DOCKER_OVERVIEW.md` no longer lists `GEODE_QUERY_MEM_LIMIT_BYTES`
+  and `GEODE_SPILL_THRESHOLD_BYTES`, which no source reads (SONNY-6596
+  above records their removal).
+
 - **Offline `geode grant` / `geode revoke` are the online `GRANT ... ON
   GRAPH` (SONNY-6586).** They stored a free-form permission record (any
   name, the user in its conditions) that no authorization path reads, and

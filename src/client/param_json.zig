@@ -1,5 +1,6 @@
-//! `geode query --param <name> <json>`: the JSON value as geode's wire
-//! value (lists and maps included). Moved out of src/cli/main.zig.
+//! A JSON value as geode's wire value (lists and maps included): `geode
+//! query --param <name> <json>` and the MCP query tool's `parameters`
+//! (SONNY-6647: one converter; src/mcp/client.zig had its own copy).
 
 const std = @import("std");
 const schema = @import("schema");

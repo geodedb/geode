@@ -8299,6 +8299,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and an unreachable server, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
     }
+    // SONNY-6644: geode mcp --port serves Streamable HTTP sessions (mcp
+    // v0.1.26) until SIGTERM (real binary).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6644_mcp_http_session.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6644-mcp-http-session", "Run SONNY-6644 regression (geode mcp --no-auth --port 0 keeps serving after it prints its port; initialize without a session answers an Mcp-Session-Id, a request without one is 400 and an unknown one 404, the session's notification is 202 and its tools/list 200 with the same id, a second client's initialize gets another session; SIGTERM ends it with exit 0)").dependOn(&run_tests.step);
+    }
     // SONNY-6585: a JSON-RPC error from geode's MCP server carries a message
     // and data naming what was wrong (mcp v0.1.23 setErrorDetail).
     {
@@ -16946,17 +16957,46 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6586-offline-grant-rule", "Run SONNY-6586 follow-up regression (offline geode grant / revoke follow the online GRANT <privilege> ON GRAPH rule: READ, WRITE, SCHEMA or ALL only - admin is a role, refused to anyone - on one --graph, never '*' or none, to a user that exists; a grant stores the GraphGrant records GRANT stores (ALL is three) and no free-form Permission record, revoke removes them and refuses a privilege not held, and the chain verifies)").dependOn(&run_tests.step);
     }
+    // SONNY-6647: an online REVOKE of a privilege not held is refused, as
+    // offline (a real server); geode user permissions lists the user's role
+    // and GraphGrant records, and geode auth prune-legacy-permissions removes
+    // the inert Permission records the old offline grant stored (real CLI).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6647_revoke_not_held.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6647-revoke-not-held", "Run SONNY-6647 item 1 regression (against a real geode serve: REVOKE READ / ALL ON GRAPH of a privilege the user does not hold there, and geode.auth.revoke of '*' with no such grant, are refused with SQLSTATE 42704; a held privilege is revoked once, and REVOKE ALL succeeds when any of the three is held)").dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6647_user_permissions.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6647-user-permissions", "Run SONNY-6647 item 2 regression (geode user permissions prints the user's role and its GraphGrant records by graph, not the store's Permission records or invented privileges, and refuses a user that does not exist; geode auth prune-legacy-permissions --dry-run lists the inert Permission records the old offline grant stored, and without --dry-run removes them with the chain still verifying and the grants untouched)").dependOn(&run_tests.step);
+    }
     // SONNY-6586: geode query --param's JSON conversion frees a list or map
     // that fails part-way (allocation-failure sweep, depth limit).
     {
-        const param_json_mod = b.createModule(.{ .root_source_file = b.path("src/cli/param_json.zig"), .target = target, .optimize = optimize });
+        const param_json_mod = b.createModule(.{ .root_source_file = b.path("src/client/param_json.zig"), .target = target, .optimize = optimize });
         param_json_mod.addImport("schema", schema_mod);
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6586_param_json_alloc.zig"), .target = target, .optimize = optimize });
         mod.addImport("param_json", param_json_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6586-param-json-alloc", "Run SONNY-6586 follow-up regression (geode query --param's JSON-to-wire conversion, src/cli/param_json.zig: an allocation failure at any point of a nested list/map conversion, and a value nested past the depth limit after siblings were built, leave nothing allocated)").dependOn(&run_tests.step);
+        b.step("test-sonny6586-param-json-alloc", "Run SONNY-6586 follow-up regression (the JSON-to-wire conversion of geode query --param and the MCP query tool, src/client/param_json.zig: an allocation failure at any point of a nested list/map conversion, and a value nested past the depth limit after siblings were built, leave nothing allocated)").dependOn(&run_tests.step);
     }
 
     // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
@@ -19997,6 +20037,7 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 regression (SET and REMOVE take a variable named with an ISO/IEC 39075 non-reserved word such as type or property; a reserved word such as MATCH is refused as a variable; fixed by SONNY-6564)", .weight = 1 },
         .{ .file = "tests/test_sonny6564_identifier_words.zig", .step = "test-sonny6564-identifier-words", .desc = "Run SONNY-6564 regression (ISO/IEC 39075 21.3: every non-reserved word names a variable in every binding position - SET, REMOVE, DELETE, FOR, UNWIND, aliases, parameters included; every reserved and pre-reserved word is refused there with a 42000 naming the delimited form, which works; labels, types and property names take any word; 16.11 quantifiers {m,n} {n} {m,} {,n} + * read into the *m..n bounds; over QUIC and gRPC against a real geode serve)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
+        .{ .file = "tests/canary_cdc_lifecycle.zig", .step = "test-canary-cdc-lifecycle", .desc = "Run the CDC engine lifecycle canary (REQ-GQL-042; SONNY-6647 made it a step: start, a second start AlreadyRunning, stop, an idempotent stop, and the start/stop lifecycle events)", .weight = 1 },
         .{ .file = "tests/test_sonny6593_cdc_start_lifecycle.zig", .step = "test-sonny6593-cdc-start-lifecycle", .desc = "Run SONNY-6593 item 3 regression (a CDCEngine.start() that fails at any allocation leaves the engine stopped with no start lifecycle event; the start that succeeds records exactly one)", .weight = 1 },
         .{ .file = "tests/test_sonny6570_cdc_honesty.zig", .step = "test-sonny6570-cdc-honesty", .desc = "Run SONNY-6570 regression (every CALL cdc.* answers from the CDC engine or is refused 0A000; every CDC procedure and frame is Admin only on QUIC and gRPC; CDC changes are audited and the chain verifies; gRPC serves the .proto's GetCdcDiagnostics / ControlCdc; startCDC frees the engine when start() fails)", .weight = 2 },
         .{ .file = "tests/test_sonny6596_approximate_literal.zig", .step = "test-sonny6596-approximate-literal", .desc = "Run SONNY-6596 item 1 regression (ISO/IEC 39075 21.2: a numeric literal with an exponent - 1.5E0, 1E3, 1.0e308 - is an approximate numeric literal evaluated as a DOUBLE and declared DOUBLE on the wire; beyond the DOUBLE range it is refused; 1.25 stays an exact DECIMAL)", .weight = 1 },

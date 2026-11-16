@@ -125,6 +125,7 @@ pub const commands = [_]Command{
             .{ .names = &.{"validate"}, .options = &.{v("--token")} },
             .{ .names = &.{ "init", "verify" }, .options = &.{data_dir} },
             .{ .names = &.{"reseal"}, .options = &.{ data_dir, v("--accept-legacy-policy"), v("--drop-legacy-policy") } },
+            .{ .names = &.{"prune-legacy-permissions"}, .options = &.{ data_dir, f("--dry-run") } },
         },
     },
     .{ .names = &.{"login"}, .options = &login_options },

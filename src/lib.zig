@@ -396,6 +396,8 @@ pub const quic_query_runner = @import("client/quic_query_runner.zig");
 pub const query_runner = @import("client/query_runner.zig");
 pub const query_scope = @import("client/query_scope.zig");
 pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
+// SONNY-6647: JSON to wire values, for geode query --param and the MCP query tool.
+pub const param_json = @import("client/param_json.zig");
 // SONNY-6593: the gRPC RPCs the server registers (geode.proto's service).
 pub const grpc_service_methods = @import("transport/grpc_service_methods.zig");
 // Bug 731 (#2): HELLO-response decode seam shared with src/cli/main.zig so the

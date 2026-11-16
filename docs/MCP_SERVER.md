@@ -9,7 +9,7 @@ The Geode MCP (Model Context Protocol) server (`src/mcp/server.zig`)
 exposes graph-database operations and the GQL language bridge to
 AI/LLM clients over the MCP JSON-RPC protocol (stdio and HTTP
 transports). It is built on the pinned `mcp` library (`build.zig.zon`
-`.mcp` = v0.1.23).
+`.mcp` = v0.1.26).
 
 This document records exactly which MCP methods Geode implements,
 which it intentionally does not, and the one upstream-library caveat
@@ -62,6 +62,15 @@ the message was the Zig error name (`InvalidParams`) and there was no data.
 | `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` | `Prompt <name>: missing required argument '<arg>'` (or `takes no argument`, `is not a string`) / `{"name"}` |
 | `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) | `Invalid cursor: ...` / `{"cursor"}` |
 | `resources/read` of a URI geode does not serve | `-32002` (resource not found) | `Resource not found: <uri>` / `{"uri"}` |
+
+Over HTTP (`geode mcp --port <port>`, the transport unless `--stdio` is
+given; it serves until SIGINT or SIGTERM) the endpoint is `POST /mcp` and
+each client has a session (mcp v0.1.26, SONNY-6644): `initialize` answers an
+`Mcp-Session-Id` header that the client sends on every later request. A
+request without one is `400`, an unknown or expired one `404` (sessions
+idle 30 minutes with no open connection expire), and `DELETE /mcp` with
+the header ends it. Before, `geode mcp --port` exited as soon as it printed
+its port.
 
 A notification (no `id`) is never answered, even when it fails, and a
 `tools/call` the client cancels with `notifications/cancelled` gets no
@@ -215,7 +224,7 @@ fails on a leak and panics on an invalid free):
 
 ### Known upstream advertisement caveat
 
-The pinned `mcp` library (v0.1.23, as v0.1.22) **hardcodes**
+The pinned `mcp` library (v0.1.26, as v0.1.22) **hardcodes**
 `"resources":{"subscribe":true,"listChanged":true}` in the
 `initialize` response (`mcp.zig` `handleInitialize`, ~line 3193) and
 exposes **no `ServerOptions` field to override it**. Geode therefore

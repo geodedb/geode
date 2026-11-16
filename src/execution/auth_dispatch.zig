@@ -1828,6 +1828,8 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // action or none. It logged the failure and reported "Granted". With no
     // persistence callback installed nothing can be saved, and the call fails.
     var persist_failure: ?anyerror = null;
+    // SONNY-6647: whether the revoke took away a privilege the user held.
+    var held = false;
     if (is_grant) {
         if (g_grant_persist.grant_fn) |f| {
             f(g_grant_persist.ctx, uid, resource, actions) catch |e| {
@@ -1843,7 +1845,7 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         // Every action is attempted; each revoke takes its privilege away
         // in memory first, so a failed save leaves nothing in force.
         for (actions) |action| {
-            _ = f(g_grant_persist.ctx, uid, resource, action) catch |e| {
+            const was_held = f(g_grant_persist.ctx, uid, resource, action) catch |e| {
                 log.warn("revoke persist failed", &.{
                     Attr.string("err", @errorName(e)),
                     Attr.string("user", target),
@@ -1851,7 +1853,9 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
                     Attr.uint("action", @as(u64, action)),
                 });
                 if (persist_failure == null) persist_failure = e;
+                continue;
             };
+            held = held or was_held;
         }
     } else persist_failure = error.NoGrantPersistence;
 
@@ -1860,6 +1864,14 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         schema_change_notifier.notify();
         freeStatusScaffold(allocator, columns, row, rows);
         return if (is_grant) error.GrantNotPersisted else error.RevokeNotPersisted;
+    }
+    // CANARY: REQ=REQ-SONNY-6647-REVOKE-NOT-HELD; FEATURE="GQL Auth DDL"; ASPECT=RevokeOfNothingRefused; STATUS=TESTED; TEST=tests/test_sonny6647_revoke_not_held.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6647: a revoke that took nothing away (the user holds none of
+    // the privileges on the graph) is refused (42704), as offline `geode
+    // revoke` refuses it. It answered "Revoked ..." whatever was held.
+    if (!is_grant and !held) {
+        freeStatusScaffold(allocator, columns, row, rows);
+        return error.GrantNotHeld;
     }
 
     // Return the status row with wording the geodetestlab spec asserts.

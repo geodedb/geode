@@ -1711,7 +1711,6 @@ REQ-GQL-042,CDC Backfill Latency,API,BENCHED,src/canary.zig,,BenchmarkCANARY_REQ
 REQ-GQL-042,CDC_CONTROL,Refactor,TESTED,src/server/main.zig,TestCANARY_REQ_GQL_042_CDC_ControlReset,,server,2025-09-20
 REQ-GQL-042,CDC Engine,API,TESTED,src/streaming/cdc_enhanced.zig,TestCANARY_REQ_GQL_042_CDC_API,,streaming,2026-11-14
 REQ-GQL-042,CDC Lifecycle,API,TESTED,src/streaming/cdc_enhanced.zig,TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle,,streaming,2026-11-14
-REQ-GQL-042,CDC Lifecycle,API,TESTED,tests/canary_cdc_lifecycle.zig,,,streaming,2026-11-14
 REQ-GQL-042,CDC Engine,Retention,TESTED,src/streaming/cdc_enhanced.zig,TestCANARY_REQ_GQL_042_CDC_Retention,,streaming,2026-11-14
 REQ-GQL-042,CDC Engine,Ingest,BENCHED,src/streaming/cdc_enhanced.zig,,BenchmarkCANARY_REQ_GQL_042_CDC_Ingest,streaming,2025-09-20
 REQ-GQL-042,CDC Engine,ChangeStream,BENCHED,src/streaming/cdc_enhanced.zig,TestCANARY_REQ_GQL_042_CDC_ChangeStreamPromote,BenchmarkCANARY_REQ_GQL_042_CDC_ChangeStreamPerf,streaming,2025-09-20
@@ -1756,6 +1755,7 @@ REQ-GQL-042,CDC Backfill Latency,API,BENCHED,tests/benchmark_cdc_backfill_latenc
 REQ-GQL-042,CDC,CDCWatermarkAdvanceVarianceEnvelope,BENCHED,tests/benchmark_cdc_watermark_advance_variance.zig,,BenchmarkCANARY_REQ_GQL_042_CDCWatermarkAdvanceVarianceEnvelope,cdc,2026-11-14
 REQ-GQL-042,CDC Engine,AdaptiveDiffPerfThresholdEnvInvalidParse,TESTED,tests/canary_cdc_adaptive_diff_min_ratio_env.zig,TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnvInvalidParse,,streaming,2026-11-14
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,tests/canary_cdc_jitter_thresholds.zig,TestCANARY_REQ_GQL_042_CDC_JitterThresholds,,streaming,2026-11-14
+REQ-GQL-042,CDC Lifecycle,API,TESTED,tests/canary_cdc_lifecycle.zig,tests/canary_cdc_lifecycle.zig,,streaming,2026-11-15
 REQ-GQL-042,CDC Resume Token Restart,API,TESTED,tests/canary_cdc_resume_token_restart.zig,TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart,,streaming,2026-11-14
 REQ-GQL-042,CDC Engine,ChangeStreamMalformedLogBufferWrap,TESTED,tests/canary_cdc_stream_malformed_wrap.zig,TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBufferWrap,,streaming,2026-11-14
 REQ-GQL-042,CDC Engine,GuardrailReset,TESTED,tests/cdc_guardrail_reset.zig,TestCANARY_REQ_GQL_042_CDC_GuardrailReset,,streaming,2026-11-14
@@ -5001,7 +5001,7 @@ REQ-SONNY-6586-MCP-LIST-MAP-PARAMS,MCPBackendTools,ListAndMapParameters,TESTED,s
 REQ-SONNY-6586-MCP-OFFLINE-RESOURCES,MCPBackendTools,NoOfflineData,TESTED,src/mcp/resources.zig,tests/test_sonny6586_cli_truth.zig,,mcp,2026-11-15
 REQ-SONNY-6586-OFFLINE-GRANT-RULE,OfflineAuthStoreSafety,GrantMatchesOnlineGrant,TESTED,src/cli/auth_cli.zig,tests/test_sonny6586_offline_grant_rule.zig,,security,2026-11-15
 REQ-SONNY-6586-OFFLINE-GRANT-RULE,OfflineAuthStoreSafety,GrantMatchesOnlineGrant,TESTED,tests/test_sonny6586_offline_grant_rule.zig,,,security,2026-11-15
-REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,src/cli/param_json.zig,tests/test_sonny6586_param_json_alloc.zig,,cli,2026-11-15
+REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,src/client/param_json.zig,tests/test_sonny6586_param_json_alloc.zig,,cli,2026-11-15
 REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,tests/test_sonny6586_param_json_alloc.zig,,,cli,2026-11-15
 REQ-SONNY-6586-QUERY-LOG-LEVEL,CliOptions,LogLevelRefused,TESTED,src/cli/main.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
 REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,tests/test_sonny6587_canary_markers.zig,tests/test_sonny6587_canary_markers.zig,,governance,2026-11-15
@@ -5204,6 +5204,13 @@ REQ-SONNY-6639-RELOAD-OOM,StorageIntegrity,Regression,TESTED,tests/test_sonny663
 REQ-SONNY-6640-ADAPTER-PROPERTY-READ-ERRORS,StorageIntegrity,Regression,TESTED,tests/test_sonny6640_adapter_property_read_errors.zig,tests/test_sonny6640_adapter_property_read_errors.zig,,storage,2026-11-15
 REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE,StorageIntegrity,OperatorMessage,TESTED,src/server/proto_util.zig,tests/test_sonny6642_wal_corrupted_quarantine.zig,,storage,2026-11-15
 REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE,StorageIntegrity,Regression,TESTED,tests/test_sonny6642_wal_corrupted_quarantine.zig,tests/test_sonny6642_wal_corrupted_quarantine.zig,,storage,2026-11-15
+REQ-SONNY-6644-MCP-HTTP-SESSION,MCPServer,HttpTransportStaysUp,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6644_mcp_http_session.zig,,mcp,2026-11-16
+REQ-SONNY-6644-MCP-HTTP-SESSION,MCPServer,HttpTransportSessions,TESTED,tests/test_sonny6644_mcp_http_session.zig,tests/test_sonny6644_mcp_http_session.zig,,mcp,2026-11-16
+REQ-SONNY-6647-PRUNE-LEGACY-PERMISSIONS,OfflineAuthStoreSafety,PruneInertPermissionRecords,TESTED,src/cli/auth_cli.zig,tests/test_sonny6647_user_permissions.zig,,security,2026-11-15
+REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6647_revoke_not_held.zig,,security,2026-11-15
+REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,tests/test_sonny6647_revoke_not_held.zig,,,security,2026-11-15
+REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6647_user_permissions.zig,,security,2026-11-15
+REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,tests/test_sonny6647_user_permissions.zig,,,security,2026-11-15
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T04:30:50.397243043Z",
+  "generated_at": "2026-11-16T05:20:21.815807493Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -25906,8 +25906,7 @@
           "aspect": "API",
           "status": "TESTED",
           "files": [
-            "src/streaming/cdc_enhanced.zig",
-            "tests/canary_cdc_lifecycle.zig"
+            "src/streaming/cdc_enhanced.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle"
@@ -26485,6 +26484,20 @@
           "benches": [],
           "owner": "streaming",
           "updated": "2026-11-14"
+        },
+        {
+          "feature": "CDC Lifecycle",
+          "aspect": "API",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_cdc_lifecycle.zig"
+          ],
+          "tests": [
+            "tests/canary_cdc_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "streaming",
+          "updated": "2026-11-15"
         },
         {
           "feature": "CDC Resume Token Restart",
@@ -78925,7 +78938,7 @@
           "aspect": "ParamConversionFreesOnFailure",
           "status": "TESTED",
           "files": [
-            "src/cli/param_json.zig",
+            "src/client/param_json.zig",
             "tests/test_sonny6586_param_json_alloc.zig"
           ],
           "tests": [
@@ -82137,6 +82150,98 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6644-MCP-HTTP-SESSION",
+      "features": [
+        {
+          "feature": "MCPServer",
+          "aspect": "HttpTransportStaysUp",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6644_mcp_http_session.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "MCPServer",
+          "aspect": "HttpTransportSessions",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6644_mcp_http_session.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6644_mcp_http_session.zig"
+          ],
+          "benches": [],
+          "owner": "mcp",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6647-PRUNE-LEGACY-PERMISSIONS",
+      "features": [
+        {
+          "feature": "OfflineAuthStoreSafety",
+          "aspect": "PruneInertPermissionRecords",
+          "status": "TESTED",
+          "files": [
+            "src/cli/auth_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6647_user_permissions.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6647-REVOKE-NOT-HELD",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "RevokeOfNothingRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig",
+            "tests/test_sonny6647_revoke_not_held.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6647_revoke_not_held.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6647-USER-PERMISSIONS",
+      "features": [
+        {
+          "feature": "OfflineAuthStoreSafety",
+          "aspect": "PermissionsAreGraphGrants",
+          "status": "TESTED",
+          "files": [
+            "src/cli/user_mgmt_cli.zig",
+            "tests/test_sonny6647_user_permissions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6647_user_permissions.zig"
+          ],
+          "benches": [],
+          "owner": "security",
           "updated": "2026-11-15"
         }
       ]
@@ -87233,7 +87338,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4309
+      "TESTED": 4315
     },
     "by_aspect": {
       "2PC": 3,
@@ -87245,7 +87350,7 @@
       "AESGCMParameters": 1,
       "AGGREGATION_EVALUATION": 1,
       "AND_OR": 1,
-      "API": 8,
+      "API": 9,
       "ASIN": 1,
       "AST": 6,
       "ASTAction": 1,
@@ -88818,6 +88923,8 @@
       "HoverLabel": 1,
       "HoverProperty": 1,
       "HoverTenantGate": 1,
+      "HttpTransportSessions": 1,
+      "HttpTransportStaysUp": 1,
       "HydrateCatalog": 1,
       "HydrateGpsOnly": 1,
       "HydrateUser": 1,
@@ -89676,6 +89783,7 @@
       "PermissionFilter": 1,
       "PermissionGrant": 1,
       "PermissionIdSequence": 1,
+      "PermissionsAreGraphGrants": 1,
       "PermissiveRestrictive": 1,
       "PermitGatedMutationRetry": 1,
       "PersistCallbacks": 1,
@@ -89898,6 +90006,7 @@
       "ProximityProc": 1,
       "ProximityRowFilter": 1,
       "ProximitySearch": 1,
+      "PruneInertPermissionRecords": 1,
       "PublicSurface": 1,
       "PublicationContract": 1,
       "PublishedSync": 1,
@@ -90233,6 +90342,7 @@
       "RevokeFailureReported": 1,
       "RevokeGraphPermission": 2,
       "RevokeMatchesPrincipal": 1,
+      "RevokeOfNothingRefused": 1,
       "RevokePlaintextProcedure": 1,
       "RevokeUserGraphPermission": 1,
       "RevokeWriteThrough": 1,
