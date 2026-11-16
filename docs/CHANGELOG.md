@@ -3073,6 +3073,22 @@
 
 ### Fixed
 
+- **An online `REVOKE` of nothing is refused; `geode user permissions`
+  shows real grants; legacy permission records can be pruned
+  (SONNY-6647).** `REVOKE <privilege> ON GRAPH <graph> FROM <user>`
+  (`geode.auth.revoke`) answered "Revoked ..." whether or not the user held
+  the privilege there. **User-visible:** it is refused with SQLSTATE 42704
+  (`GrantNotHeld`) and nothing changes, as offline `geode revoke` refuses
+  it; `REVOKE ALL` succeeds when any of the three was held. `geode user
+  permissions <user>` listed every stored permission record, whoever's
+  (records no authorization path reads), and printed `read` for a user
+  with none or a user that does not exist; it now prints the user's role
+  and its per-graph grants, and refuses an unknown user. New `geode auth
+  prune-legacy-permissions [--dry-run]` lists or removes the inert records
+  the offline `geode grant` stored before SONNY-6586. Regressions: `zig
+  build test-sonny6647-revoke-not-held`, `zig build
+  test-sonny6647-user-permissions`.
+
 - **One JSON-to-wire parameter converter; the CDC lifecycle canary runs
   (SONNY-6647).** `geode query --param` and the MCP query tool share
   `src/client/param_json.zig` (`geode.param_json`; it was

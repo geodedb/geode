@@ -351,6 +351,70 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+// CANARY: REQ=REQ-SONNY-6647-PRUNE-LEGACY-PERMISSIONS; FEATURE="OfflineAuthStoreSafety"; ASPECT=PruneInertPermissionRecords; STATUS=TESTED; TEST=tests/test_sonny6647_user_permissions.zig; OWNER=security; UPDATED=2026-11-15
+/// `geode auth prune-legacy-permissions [--dry-run] [--data-dir <dir>]`
+/// (SONNY-6647): the Permission records in __geode_security, which the
+/// offline `geode grant` stored before SONNY-6586 (a free-form name, the
+/// grantee in its conditions). No authorization path reads them: per-graph
+/// privileges are GraphGrant records and global privilege is the role.
+/// `--dry-run` lists them; otherwise they are removed and the chain sealed.
+pub fn cmdAuthPruneLegacyPermissions(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    if (hasHelpFlag(argv, start_idx)) {
+        printPruneUsage();
+        return;
+    }
+    var dry_run = false;
+    for (argv[start_idx..]) |a| {
+        if (std.mem.eql(u8, a, "--dry-run")) dry_run = true;
+    }
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+
+    var ids = std.ArrayList(u64).empty;
+    defer ids.deinit(allocator);
+    var it = mgr.storage.permission_cache.iterator();
+    while (it.next()) |entry| try ids.append(allocator, entry.key_ptr.*);
+    std.mem.sort(u64, ids.items, {}, std.sort.asc(u64));
+
+    if (ids.items.len == 0) {
+        printOut("No legacy permission records.\n", .{});
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+    for (ids.items) |id| {
+        const record = mgr.storage.permission_cache.get(id).?;
+        const holder = record.getConditions() orelse "";
+        printOut("  {s} (to '{s}'{s}{s})\n", .{ record.getName(), holder, if (record.getResource().len > 0) ", resource " else "", record.getResource() });
+    }
+    if (dry_run) {
+        printOut("{d} legacy permission records; none is read by any authorization path. Run without --dry-run to remove them.\n", .{ids.items.len});
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+    // SONNY-2798: verify the chain before the change; the change is sealed.
+    cli_auth.requireIntactChain(allocator, &mgr, "auth", "prune-legacy-permissions");
+    for (ids.items) |id| {
+        mgr.storage.removePermission(id) catch |err| {
+            std.debug.print("Error: could not remove permission record {d} ({s}); the records removed before it are saved.\n", .{ id, @errorName(err) });
+            cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
+    printOut("Removed {d} legacy permission records.\n", .{ids.items.len});
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    std.process.exit(@intFromEnum(ExitCode.success));
+}
+
+fn printPruneUsage() void {
+    printOut("geode auth prune-legacy-permissions - Remove the Permission records the offline geode grant stored before SONNY-6586\n", .{});
+    printOut("Usage: geode auth prune-legacy-permissions [--dry-run] [--data-dir <dir>]\n", .{});
+    printOut("No authorization path reads these records; --dry-run lists them.\n", .{});
+}
+
 // Helper functions for usage messages
 
 fn printPolicyUsage() void {

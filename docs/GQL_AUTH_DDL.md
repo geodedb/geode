@@ -431,6 +431,18 @@ user in its conditions) that no authorization path reads, and printed
 "Granted"; their only rule refused `admin` unless the grantee was named
 `admin`.
 
+`geode user permissions <user>` prints the user's role and its per-graph
+grants (`<graph>: READ, WRITE, ...`), and refuses a user that does not
+exist. It listed every stored permission record, whoever's, and printed
+`read` for a user with none (SONNY-6647).
+
+The permission records the old `geode grant` stored stay in
+`__geode_security`, inert. `geode auth prune-legacy-permissions --dry-run`
+lists them; `geode auth prune-legacy-permissions` removes them and seals
+the HMAC chain (offline, like every `geode auth` store command). Nothing
+removes them at startup: whether to keep them as a record is the
+operator's choice.
+
 ### Per-graph grant semantics
 
 **Security fix (2026-10, REQ-SEC-PER-GRAPH-GRANTS).** For every role:
@@ -442,7 +454,7 @@ user in its conditions) that no authorization path reads, and printed
 | `GRANT WRITE ON GRAPH g TO u` | `u` may change data on `g`, and on no other graph. |
 | `GRANT SCHEMA ON GRAPH g TO u` | `u` may create, replace or drop graph `g` (`CREATE GRAPH g`, `DROP GRAPH g`). Graph DDL also passes the write and bind gates, so a role without global write needs `WRITE` on `g` too (and `READ`, if it cannot bind `g` otherwise). Index and constraint DDL apply to every graph and still need the global schema permission (or a `FOR SCHEMA` policy on `*`). |
 | `GRANT ALL ON GRAPH g TO u` | All three, on `g`. |
-| `REVOKE ... ON GRAPH g FROM u` | Takes the privilege away. |
+| `REVOKE ... ON GRAPH g FROM u` | Takes the privilege away. A privilege `u` does not hold on `g` is refused with SQLSTATE 42704 and nothing changes (`REVOKE ALL` succeeds when `u` held any of the three); it answered "Revoked" before SONNY-6647. |
 | A deny policy covering `g` | Overrides a grant on `g`. |
 
 - **Additive.** A grant widens access beyond the global role, on its graph

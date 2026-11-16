@@ -437,6 +437,7 @@ fn printAuthUsage() void {
         "  init                   Bootstrap admin user into graph store (offline)\n" ++
         "  reseal                 Recompute HMAC chain (offline)\n" ++
         "  verify                 Check HMAC chain integrity (offline)\n" ++
+        "  prune-legacy-permissions  Remove the inert permission records the old offline grant stored (offline; --dry-run lists them)\n" ++
         "\n" ++
         "Login Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
@@ -3499,6 +3500,9 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     } else if (std.mem.eql(u8, subcmd, "reseal")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthReseal(allocator, argv, subcmd_idx + 1);
+    } else if (std.mem.eql(u8, subcmd, "prune-legacy-permissions")) {
+        // SONNY-6647: remove the inert Permission records of the old offline grant.
+        try auth_cli.cmdAuthPruneLegacyPermissions(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "verify")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthVerify(allocator, argv, subcmd_idx + 1);

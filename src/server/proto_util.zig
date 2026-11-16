@@ -238,6 +238,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.
         // SONNY-1333: the privilege is taken away in memory first.
+        // SONNY-6647: REVOKE of a privilege the user does not hold there.
+        error.GrantNotHeld => .{ .code = "42704", .message = "The user holds no such privilege on that graph; nothing was revoked" },
         error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph: the privilege is removed now but returns at the next start. Retry it" },
         // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
         // SONNY-6324: the FLE catalog fails closed (58030 io_error, as the
