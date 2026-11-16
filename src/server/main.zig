@@ -2199,6 +2199,21 @@ pub fn main() !void {
         break :blk instance_id_buf[0..];
     };
 
+    // SONNY-6665: test hook, Debug builds only (see
+    // raft_consensus.armTestDropSnapshotChunks): this node loses the next N
+    // inbound InstallSnapshot chunks that are neither a snapshot's first nor
+    // its last.
+    if (comptime geode.distributed.raft_consensus.snapshot_chunk_drop_hook_available) {
+        const drops = envUsize(gpa, "GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", 0, 0, 1_000_000);
+        if (drops > 0) {
+            geode.distributed.raft_consensus.armTestDropSnapshotChunks(@intCast(drops)) catch |err| {
+                log.err("GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS refused", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            log.warn("TEST HOOK: inbound InstallSnapshot chunks will be dropped (Debug build only)", &.{Attr.int("count", @intCast(drops))});
+        }
+    }
+
     const cluster_token = getEnvVarOwned(gpa, "GEODE_CLUSTER_TOKEN") catch null;
     defer if (cluster_token) |t| gpa.free(t);
     const node_id = getEnvVarOwned(gpa, "GEODE_NODE_ID") catch null;

@@ -477,6 +477,51 @@ pub fn stubConnectWarnedForTesting() bool {
     return test_stub_connect_warned.load(.acquire);
 }
 
+// CANARY: REQ=REQ-SONNY-6665-SNAPSHOT-CHUNK-DROP-HOOK; FEATURE="Raft Snapshot Persistence"; ASPECT=LostChunkHook; STATUS=TESTED; TEST=tests/test_sonny6665_cluster_snapshot_resume.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6665: a lost InstallSnapshot chunk for tests, compiled only into
+/// test and Debug builds (release builds are ReleaseSafe or ReleaseFast and
+/// have none of it). Armed with a count `n` (`armTestDropSnapshotChunks`):
+/// this node drops the next `n` inbound chunks that are neither a
+/// snapshot's first nor its last, as if lost in transit, and logs every
+/// inbound chunk while armed. A spawned Debug `geode serve` arms it from
+/// GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS.
+pub const snapshot_chunk_drop_hook_available = builtin.is_test or builtin.mode == .Debug;
+var test_snapshot_chunk_drops = std.atomic.Value(u32).init(0);
+var test_snapshot_chunk_trace = std.atomic.Value(bool).init(false);
+
+pub fn armTestDropSnapshotChunks(n: u32) error{SnapshotChunkDropHookUnavailable}!void {
+    if (comptime !snapshot_chunk_drop_hook_available) return error.SnapshotChunkDropHookUnavailable;
+    test_snapshot_chunk_drops.store(n, .release);
+    test_snapshot_chunk_trace.store(n > 0, .release);
+}
+
+/// SONNY-6665: whether the hook drops this inbound chunk (it logs it
+/// either way while armed).
+fn testDropsSnapshotChunk(from: u64, is: InstallSnapshot) bool {
+    if (comptime !snapshot_chunk_drop_hook_available) return false;
+    if (!test_snapshot_chunk_trace.load(.acquire)) return false;
+    var left = test_snapshot_chunk_drops.load(.acquire);
+    while (is.offset > 0 and !is.done and left > 0) {
+        left = test_snapshot_chunk_drops.cmpxchgWeak(left, left - 1, .acq_rel, .acquire) orelse {
+            log.warn("TEST HOOK: InstallSnapshot chunk dropped (Debug build only)", &.{
+                Attr.uint("from", from),
+                Attr.uint("snapshot_index", is.last_included_index),
+                Attr.uint("chunk_offset", is.offset),
+                Attr.uint("chunk_bytes", is.data.len),
+            });
+            return true;
+        };
+    }
+    log.warn("TEST HOOK: InstallSnapshot chunk received (Debug build only)", &.{
+        Attr.uint("from", from),
+        Attr.uint("snapshot_index", is.last_included_index),
+        Attr.uint("chunk_offset", is.offset),
+        Attr.uint("chunk_bytes", is.data.len),
+        Attr.boolean("done", is.done),
+    });
+    return false;
+}
+
 const quic = if (builtin.is_test) test_quic else real_quic;
 
 /// The raft transport's QUIC in test builds: a no-op stub (nothing is sent),
@@ -3504,6 +3549,8 @@ pub const RaftNode = struct {
     }
 
     pub fn handleMessage(self: *RaftNode, from: u64, msg: Message) !void {
+        // SONNY-6665: the Debug-only lost-chunk hook.
+        if (msg == .install_snapshot and testDropsSnapshotChunk(from, msg.install_snapshot)) return;
         // SONNY-6567 (6b), SONNY-6631: the graphs the carried entries'
         // applies write are hydrated here, on the receiving thread, before
         // `inner_mutex` (see `prehydrate_callback`). An entry not committed

@@ -2719,6 +2719,36 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny6636_cluster_snapshot_tests);
     b.step("test-sonny6636-cluster-snapshot", "Run SONNY-6636 (c) regression (three geode serve processes with GEODE_RAFT_SNAPSHOT_ENTRIES=25: sustained writes make every node snapshot its durable store and compact its Raft log, so the log stays bounded; a follower SIGKILLed and kept down while the leader compacts past it restores the leader's snapshot when it restarts and applies the entries after it; killed again and restarted on its data directory it holds every row exactly once, as every node does)").dependOn(&run_sonny6636_cluster_snapshot_tests.step);
 
+    // SONNY-6665: raft v0.2.5 adopted over geode's wire. Three geode serve
+    // processes (127.0.0.51-53): a follower down past the leader's
+    // compaction installs the leader's snapshot over QUIC, and one chunk
+    // lost on the way (the Debug-only GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS
+    // hook) is re-sent from the follower's offset, not from 0.
+    const sonny6665_cluster_resume_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6665_cluster_snapshot_resume.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6665_cluster_resume_tests.root_module.link_libc = true;
+    const run_sonny6665_cluster_resume_tests = b.addRunArtifact(sonny6665_cluster_resume_tests);
+    spawnsBuiltGeode(sonny6665_cluster_resume_tests);
+    b.step("test-sonny6665-cluster-snapshot-resume", "Run SONNY-6665 regression (three geode serve processes: a follower SIGKILLed and kept down while the leader compacts past it installs the leader's snapshot over the real QUIC transport when it restarts; one InstallSnapshot chunk lost on the way is re-sent from the offset the follower reports, never from offset 0; every row arrives exactly once)").dependOn(&run_sonny6665_cluster_resume_tests.step);
+
+    // SONNY-6665: InstallSnapshot's digest and configuration and
+    // InstallSnapshotResponse's last_index / next_offset (raft v0.2.5)
+    // round-trip through a geode Raft frame and geodeMessageToRaftLib.
+    const sonny6665_wire_fields_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6665_wire_fields.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6665_wire_fields_tests.root_module.addImport("geode", root_mod);
+    sonny6665_wire_fields_tests.root_module.addImport("raft_schema", raft_schema_mod);
+    sonny6665_wire_fields_tests.root_module.addImport("protobuf", protobuf_mod);
+    sonny6665_wire_fields_tests.root_module.link_libc = true;
+    const run_sonny6665_wire_fields_tests = b.addRunArtifact(sonny6665_wire_fields_tests);
+    b.step("test-sonny6665-wire-fields", "Run SONNY-6665 regression (an InstallSnapshot's BLAKE3 digest and cluster configuration, and an InstallSnapshotResponse's success, last_index and next_offset, cross encodeRaftFrame / decodeRaftFrame and geodeMessageToRaftLib intact; an older peer's response without them reads them as 0)").dependOn(&run_sonny6665_wire_fields_tests.step);
+
     // Task A2 (2026-06-08 raft-transport-stream-starvation plan): per-peer
     // non-blocking outbox drain isolation.  Drives the `send_override` hook
     // with one message per peer {1,2,3} where peer 3's override blocks ~1s,
@@ -4547,6 +4577,8 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny6636_cluster_snapshot_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_sonny6665_cluster_resume_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_sonny6665_wire_fields_tests.step, 1, test_shard_loads, test_shard_index);
     // "committed write -> client Timeout -> retry double-insert" fix (2026-06-12):
     // now GREEN, folded into the shard aggregate (RC-1 commit-aware wait, RC-2
     // distinct cluster-write SQLSTATE outcomes, RC-3 idempotency-key apply dedup).
@@ -20179,6 +20211,7 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6636_outbox_snapshot.zig", .step = "test-sonny6636-outbox-snapshot", .desc = "Run SONNY-6636 (c) regression (a Raft transport's per-peer outbox keeps one send of the leader's snapshot: a burst starting at offset 0 replaces every snapshot chunk still queued for that peer - a hundred stale sends to a down peer leave only the newest, whole and in order - and leaves other messages and other peers' chunks alone)", .weight = 1 },
         .{ .file = "tests/test_sonny6636_server_snapshot.zig", .step = "test-sonny6636-server-snapshot", .desc = "Run SONNY-6636 (b) regression (three Raft nodes on FileStorage in process, one applying into the engine-backed global store holding a 1500-node graph: past RaftNode.snapshot_policy's entry threshold the node holds its applies, snapshots the store on its snapshot thread off inner_mutex and compacts its Raft log at that index, so the log stays bounded; the leader and a follower both snapshot; a follower cut off behind the leader's compaction installs its snapshot; no tick or message delivery takes a quarter of the election timeout while the snapshot copy takes longer; nothing held back is lost; after a restart the log starts at the snapshot and the idempotency table comes back from it)", .weight = 2 },
         .{ .file = "tests/test_sonny6636_drop_graph_merge_purge.zig", .step = "test-sonny6636-drop-graph-merge-purge", .desc = "Run SONNY-6636 follow-up regression (lean index mode, a small node cache: DROP GRAPH leaves none of the graph's MERGE entries, evicted holders' included, and none of its lean backfill marks; a graph re-created under the name creates a MERGE value once and then matches it)", .weight = 1 },
+        .{ .file = "tests/test_sonny6665_snapshot_resume.zig", .step = "test-sonny6665-snapshot-resume", .desc = "Run SONNY-6665 regression (three Raft nodes exchanging geode Raft frames as the QUIC path does: a follower behind the leader's compacted log loses one chunk of a 5-chunk snapshot; the leader re-sends from the offset the follower reports (InstallSnapshotResponse last_index / next_offset, raft v0.2.5), never from offset 0, and the follower installs it)", .weight = 1 },
         .{ .file = "tests/test_sonny6633_snapshot_wire.zig", .step = "test-sonny6633-snapshot-wire", .desc = "Run SONNY-6633 item 1 regression (three Raft nodes exchanging geode Raft frames, encodeRaftFrame / decodeRaftFrame / RaftNode.handleMessage as the QUIC path does: a follower behind the leader's compacted log installs the snapshot, chunk data, BLAKE3 digest and configuration carried by the frames, restores its store from it and applies the entries after it; a refused snapshot reaches the leader as a refusal; the new fields round-trip and read as absent from an older peer)", .weight = 1 },
         .{ .file = "tests/test_sonny6631_apply_hydration_off_mutex.zig", .step = "test-sonny6631-apply-hydration-off-mutex", .desc = "Run SONNY-6631 regression (under one spinning thread per CPU, a follower applying a statement batch whose entries write a 20,000-node graph not hydrated yet, and a node replaying its committed log after a restart onto such a graph, hold the Raft inner_mutex at most 50 ms, well under the 250 ms election timeout; every entry applies)", .weight = 1 },
         .{ .file = "tests/test_sonny6563_vote_persist_before_send.zig", .step = "test-sonny6563-vote-persist-before-send", .desc = "Run SONNY-6563 regression (a cluster node's granted RequestVote reply reaches the network only after the hard state recording the vote is on disk: a crash after the reply cannot lose the vote)", .weight = 1 },
