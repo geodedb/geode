@@ -6930,6 +6930,11 @@ pub const StorageAdapter = struct {
         // `mergeTenantScope`); a same-key node of another tenant is a miss.
         if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, mergeTenantScope(request_tenant))) |probe_id| {
             if (apply_on_match) {
+                // SONNY-6672: the matched node's shard lock (tuple lock ->
+                // rwlock SHARED, still held -> shard lock).
+                const match_shard = self.nodeEngineShard(graph_name, probe_id);
+                mg.shard_locks[match_shard].lockUncancelable(io);
+                defer mg.shard_locks[match_shard].unlock(io);
                 try store.setNodeProperty(probe_id, merge_key, merge_value);
                 for (on_create_props) |kv| {
                     if (std.mem.eql(u8, kv.key, merge_key)) continue;
@@ -7115,6 +7120,11 @@ pub const StorageAdapter = struct {
             // already hold the matched values); on_create_props that name a
             // merge key are skipped to avoid clobbering the index tuple.
             if (apply_on_match) {
+                // SONNY-6672: the matched node's shard lock (tuple lock ->
+                // rwlock SHARED, still held -> shard lock).
+                const match_shard = self.nodeEngineShard(graph_name, existing);
+                mg.shard_locks[match_shard].lockUncancelable(io);
+                defer mg.shard_locks[match_shard].unlock(io);
                 for (merge_props) |kv| {
                     try store.setNodeProperty(existing, kv.key, kv.value);
                 }
@@ -8544,6 +8554,24 @@ pub const StorageAdapter = struct {
     /// places a node's slot round-robin. A node the graph does not map falls
     /// back to `shardIndex(node_id)` (its op then finds no source and writes
     /// nothing).
+    // CANARY: REQ=REQ-SONNY-6672-MERGE-ONMATCH-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=MatchedNodeShard; STATUS=TESTED; TEST=tests/test_sonny6672_bulk_merge_onmatch_shard.zig; OWNER=storage; UPDATED=2026-11-16
+    /// SONNY-6672: the engine shard of the node a bulk MERGE of
+    /// `label {key: value}` matches now (in the request's tenant), or null
+    /// when none does. The coordinator routes an ON MATCH MERGE there, so the
+    /// matched node is written by its own shard's worker. A hint: a node the
+    /// MERGE matches only by the time it runs is still written under its
+    /// shard's lock (`bulkMergeNodeWithReservedIdForTenant`).
+    pub fn mergeMatchEngineShard(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8, value: graph_store.PropertyValue, request_tenant: []const u8) ?usize {
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = 0;
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, key, value, mergeTenantScope(request_tenant), &id)) {
+            .found => {},
+            .not_found, .not_indexable => return null,
+        }
+        const slot = store.nodeSlotOf(graph_name, id) orelse return null;
+        return self.shardOfSlot(slot);
+    }
+
     pub fn nodeEngineShard(self: *StorageAdapter, graph_name: []const u8, node_id: u64) usize {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const slot = store.nodeSlotOf(graph_name, node_id) orelse return sharded_store.shardIndex(node_id);
