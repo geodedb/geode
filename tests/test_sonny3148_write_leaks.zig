@@ -292,3 +292,38 @@ test "SONNY-3148: a variable-length relationship variable frees its edge list, r
         .{ .query = "MATCH (n:G)-[r:R*1..2]->(x:X) WITH n, r WHERE n.i = 5 SET n.x = 1 RETURN size(r) AS s, r AS rels", .want = &.{"1|[<Edge>]"}, .checks = &gx(&.{"5"}) },
     });
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-3148 (2026-11 follow-up): a `+` concatenation, and a map literal
+// that repeats a key. `+` of two strings or two lists allocates its result
+// (src/eval.zig `evalBinary` .Add) as `||` does, but only `||` was freed
+// (`value_utilities.evaluatesFresh` / `freeEvaluatedValue` knew `.Concat`
+// only). A map literal's repeated key replaced the earlier value with
+// `map.put`, and what the earlier value's expression allocated was lost.
+
+test "SONNY-3148: a + concatenation of strings or lists and a map literal's repeated key are freed" {
+    try runShapes("+ concatenation and repeated map keys", &.{
+        // An initial WITH (query_execution `executeWithInitialWith`).
+        .{ .query = "WITH 'k' + '1' AS tag MATCH (n:G) WHERE n.i = 5 SET n.x = 1 RETURN tag AS t", .want = &.{"k1"}, .checks = &gx(&.{"5"}) },
+        .{ .query = "WITH 'k' + '1' AS tag MATCH (n:G) WHERE n.i = 5 SET n.s = tag", .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|k1"} },
+        } },
+        .{ .query = "WITH $rows + $rows AS rr MATCH (n:G) WHERE n.i = 5 SET n.x = 1 RETURN size(rr) AS c", .rows_param = true, .want = &.{"6"}, .checks = &gx(&.{"5"}) },
+        .{ .query = "WITH $rows + $rows AS rr MATCH (n:G) WHERE n.i = 5 SET n.c = size(rr)", .rows_param = true, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.c IS NOT NULL RETURN n.i, n.c", .want = &.{"5|6"} },
+        } },
+        .{ .query = "WITH {a: 'x' || '1', a: 'y' || '2'} AS m MATCH (n:G) WHERE n.i = 5 SET n.s = m.a RETURN m AS m", .want = &.{"{a:y2}"}, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|y2"} },
+        } },
+        .{ .query = "WITH {a: toUpper('p'), a: 'q' + 'r', b: 1} AS m MATCH (n:G) WHERE n.i = 5 SET n.s = m.a", .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|qr"} },
+        } },
+        // A WITH stage after the MATCH (match_operations `ownWithStageValues`).
+        .{ .query = "MATCH (n:G) WITH n, n.g + '-x' AS s WHERE n.i >= 8 SET n.s = s RETURN s AS s, n.i AS i", .want = &.{ "b-x|8", "b-x|9" }, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{ "8|b-x", "9|b-x" } },
+        } },
+        .{ .query = "MATCH (n:G) WITH n, {g: n.g || '1', g: n.g + '2'} AS m WHERE n.i = 9 SET n.s = m.g RETURN m AS m", .want = &.{"{g:b2}"}, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"9|b2"} },
+        } },
+    });
+}

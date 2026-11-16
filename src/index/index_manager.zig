@@ -56,7 +56,10 @@ const url = @import("../types/url.zig");
 const cryptographic = @import("../types/cryptographic.zig");
 
 var global_index_manager: ?*IndexManager = null;
-var global_index_manager_mutex: std.Io.Mutex = std.Io.Mutex.init;
+/// Guards the creation and teardown of `global_index_manager`. Public for
+/// tests/test_sonny2795_drop_index_catalog.zig, which holds it to stop the
+/// knn path's lazy build between its catalog copy and its build.
+pub var global_index_manager_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // Comprehensive index management for graph database
 // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="IndexRebuild"; ASPECT=DeferredRebuild; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
