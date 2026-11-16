@@ -29,7 +29,7 @@
 //! the aggregates (`error.NestedAggregate`).
 //!
 //! A name that is no column, input binding, comprehension variable or query
-//! parameter is refused with `error.UnknownHavingReference` (SQLSTATE 42703),
+//! parameter is refused with `error.UnknownHavingReference` (SQLSTATE 42002, SONNY-6543),
 //! over groups, inside an aggregate and per row. SONNY-2675: it evaluated to
 //! NULL, so a misspelt alias silently dropped every group. (GAP-0926 had kept
 //! that NULL for HAVING on purpose; outside a HAVING it is unchanged.)

@@ -204,7 +204,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GroupingError => .{ .code = "42803", .message = "grouping error: non-aggregated expression not in GROUP BY" },
         // GAP-0914: a GROUP BY key that resolves to no alias, variable, or
         // binding is rejected instead of collapsing rows into one null group.
-        error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
+        // CANARY: REQ=REQ-SONNY-6543-ISO-STATUS-CODES; FEATURE="GQLStatus"; ASPECT=Table8InvalidReference; STATUS=TESTED; TEST=tests/test_sonny6543_iso_status_codes.zig; OWNER=server; UPDATED=2026-11-15
+        // SONNY-6543: an invalid reference is ISO/IEC 39075:2024 Table 8's
+        // "syntax error or access rule violation - invalid reference", 42002
+        // (here, for HAVING and for knn()'s property). It was 42703, the
+        // PostgreSQL undefined_column code. BREAKING for a client matching it.
+        error.UnknownGroupKey => .{ .code = "42002", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
         error.UnorderedPagination => .{ .code = "US001", .message = "OFFSET requires ORDER BY clause" },
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
         // GAP-0917: statement failed mid-transaction; everything until
@@ -224,7 +229,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3348 (round 18, I2): COMMIT of a transaction a failed
         // statement aborted: it was rolled back, and it is over.
         error.TransactionRolledBack => .{ .code = "40000", .message = "The transaction failed and was rolled back; COMMIT did not commit it" },
-        error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        // SONNY-6543: a Syntax Rule refusal with no explicit condition is
+        // 42000 (ISO/IEC 39075:2024 4.7.3 step 4 e); it was the PostgreSQL
+        // 42601. BREAKING for a client matching it.
+        error.UnionColumnCountMismatch => .{ .code = "42000", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
         // SONNY-2791: the __geode_* graphs are the engine's own.
@@ -472,7 +480,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
         // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
         // binding or parameter; it used to evaluate to NULL (GAP-0926).
-        error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        error.UnknownHavingReference => .{ .code = "42002", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
         // SONNY-2696: a NEXT-chained part computes only an aggregate call and
         // arithmetic over aggregates; it answered any other expression over an
         // aggregate as NULL or as one row's value.
@@ -545,7 +553,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // Previously an empty list with SQLSTATE 00000 — indistinguishable from
         // "no neighbours". Same diagnostic posture as UnknownFunction above.
         // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
-        error.UnknownProperty => .{ .code = "42703", .message = "Unknown property: no row in scope supplies this property" },
+        error.UnknownProperty => .{ .code = "42002", .message = "Unknown property: no row in scope supplies this property" },
         // docs/@BUGS_731.md bug 8d: a wrong-arity / wrong-value function call
         // (e.g. the docs' `knn(d.embedding, $q, 10)`, which is missing the
         // metric and passes a vector where a property NAME belongs) reached the

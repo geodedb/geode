@@ -5,7 +5,7 @@
 //   GAP-0914 — "GROUP BY on an unresolvable identifier collapses to one null
 //   group". `RETURN n.cat AS s, count(*) AS c GROUP BY nosuch` silently
 //   grouped every row under a single null key instead of erroring — a silent
-//   wrong result. Expected: error.UnknownGroupKey (SQLSTATE 42703).
+//   wrong result. Expected: error.UnknownGroupKey (SQLSTATE 42002 since SONNY-6543).
 //
 //   GAP-0916 — "`sum()` of a string column silently returns 0" while
 //   `avg()` of the same column returns NULL — inconsistent, and neither

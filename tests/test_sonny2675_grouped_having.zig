@@ -297,7 +297,7 @@ fn checkMode(mode: Mode) !void {
 
     // A name that is neither a column nor a binding is refused (it was NULL,
     // GAP-0926's silent-accept, which dropped every group); SONNY-6525 item
-    // 2: by the statement's scope check (42000), before the HAVING's 42703.
+    // 2: by the statement's scope check (42000), before the HAVING's 42002.
     try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.VariableNotInScope);
     try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.VariableNotInScope);
 
@@ -340,6 +340,6 @@ test "SONNY-2675: a refused HAVING reaches the client as SQLSTATE 42803 (0A000 f
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.UngroupedHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.AggregateInRowFilter).code);
     try testing.expectEqualStrings("0A000", geode.proto_util.mapError(error.UnsupportedGroupedHavingPredicate).code);
-    try testing.expectEqualStrings("42703", geode.proto_util.mapError(error.UnknownHavingReference).code);
+    try testing.expectEqualStrings("42002", geode.proto_util.mapError(error.UnknownHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.NestedAggregate).code);
 }

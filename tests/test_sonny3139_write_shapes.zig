@@ -40,7 +40,7 @@ const h = @import("sonny738_write_harness.zig");
 
 // SONNY-6525 item 2: a statement that names a variable nothing binds is
 // refused with 42000 before its write shape is checked (it was the write
-// shape's WriteClauseNotApplied, or a HAVING's 42703); nothing is written
+// shape's WriteClauseNotApplied, or a HAVING's 42002); nothing is written
 // either way.
 const out_of_scope = error.VariableNotInScope;
 
@@ -217,7 +217,7 @@ const group_cases = [_]Case{
     } },
     // With the SONNY-2675 merge (strict grouped HAVING): the WITH's HAVING is
     // evaluated once, by the WITH stage. The RETURN after the write has no
-    // column c, so a second evaluation there would fail with 42703.
+    // column c, so a second evaluation there would fail with 42002.
     .{ .write = "MATCH (n:G) WITH n, count(*) AS c GROUP BY n HAVING c = 1 SET n.x = 1 RETURN count(*) AS k", .want = &.{"10"}, .checks = &gx(&.{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" }) },
     // An aggregate named only in the HAVING is computed for each group, over
     // the rows the session may see: tenant_b's :G rows and the hidden one
