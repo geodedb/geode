@@ -499,7 +499,7 @@
         // on data they cannot read; only a genuine torn tail is truncated on
         // open.
         // 2026-11-15: v0.1.25 (eca478c, SONNY-6628, SONNY-738) — truncateAfter fails
-        // closed too. graph-storage v0.4.20 pins it; raft v0.2.2 and
+        // closed too. graph-storage v0.4.20 pins it; raft v0.2.3 and
         // timeseries-storage v0.2.22 still pin v0.1.24. build.zig points
         // all three libraries' "wal" import at this module, so exactly one
         // wal (v0.1.25) is compiled; the v0.1.24 entries in their manifests
@@ -745,9 +745,15 @@
         // advanceApply()); fast backtracking (AppendEntriesResponse
         // conflict_index / conflict_term, match_index = the rejected
         // prev_log_index); saving a snapshot trims the log.
+        // 2026-11-15: v0.2.3 (27b2b22, SONNY-6636, breaking) — still wal
+        // v0.1.24; InProcessTransport copies an InstallSnapshot's data and
+        // configuration (it read the freed chunk); a refused snapshot is
+        // re-sent after 16, 32, 64 ... rounds (at most 256,
+        // SNAPSHOT_RESEND_MAX_TICKS), not at the next round, and a
+        // successful install resets the backoff.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.2#25614ee74e6b06169922fc6c713508b3c0d31318",
-            .hash = "raft-0.2.2-PqJyvvLZCQA6yz61iyXPkRk3bc8sxUPK5G3J-VRwIoLC",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.3#27b2b22dfb29cde087f419741592658d243868c2",
+            .hash = "raft-0.2.3-PqJyvo_wCQC0iRuXBMl6JlTHp2vqdr7E8w-ohPOFRazg",
         },
 
         // =======================================================================

@@ -168,7 +168,9 @@ SONNY-6279.
   InstallSnapshot
   carries its chunk data, BLAKE3 digest and configuration on the wire, and a
   refused snapshot reaches the leader as a refusal; a snapshot carries the
-  idempotency-key table (`test-sonny6633-snapshot-wire`).
+  idempotency-key table (`test-sonny6633-snapshot-wire`). raft v0.2.3: the
+  leader re-sends a refused snapshot after 16, 32, 64 ... rounds (at most
+  256), not at the next round; a successful install resets the backoff.
 
 ### Raft snapshots into the durable store (SONNY-6633 item 2: blocked)
 
