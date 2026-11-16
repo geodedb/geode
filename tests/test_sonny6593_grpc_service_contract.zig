@@ -171,3 +171,36 @@ test "SONNY-6593 (2): geode serve answers exactly the gRPC RPCs geode.proto decl
     }
     try testing.expectEqual(@as(usize, 0), wrong);
 }
+
+test "SONNY-6593 (2): the paths the gRPC server registers are geode.proto's RPCs" {
+    // `GeodeGrpcServer.registerHandlers` registers
+    // `grpc_service_methods.paths` and nothing else, so this list is what
+    // the server serves; the probe above checks it against a running one.
+    const a = testing.allocator;
+    const methods = geode.grpc_service_methods;
+    const proto = try readRepoFile(a, "src/proto/geode.proto");
+    defer a.free(proto);
+    var declared = try declaredRpcs(a, proto);
+    defer declared.deinit(a);
+
+    var wrong: usize = 0;
+    for (declared.items) |d| {
+        if (!isDeclared(&methods.names, d)) {
+            std.debug.print("SONNY-6593: geode.proto declares {s}; the server does not register it\n", .{d});
+            wrong += 1;
+        }
+    }
+    for (methods.names) |n| {
+        if (!isDeclared(declared.items, n)) {
+            std.debug.print("SONNY-6593: the server registers {s}; geode.proto does not declare it\n", .{n});
+            wrong += 1;
+        }
+    }
+    try testing.expectEqual(declared.items.len, methods.names.len);
+    for (methods.names, methods.paths) |n, p| {
+        const want = try std.mem.concat(a, u8, &.{ service_prefix, n });
+        defer a.free(want);
+        try testing.expectEqualStrings(want, p);
+    }
+    try testing.expectEqual(@as(usize, 0), wrong);
+}

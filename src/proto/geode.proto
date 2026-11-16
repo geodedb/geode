@@ -13,6 +13,13 @@ service GeodeService {
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
   rpc GetCdcDiagnostics(CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
   rpc ControlCdc(CdcControlRequest) returns (CdcControlResponse);
+  // Savepoints inside the session's open transaction.
+  rpc Savepoint(SavepointRequest) returns (SavepointResponse);
+  rpc RollbackTo(RollbackToRequest) returns (RollbackToResponse);
+  // Server backup and restore; administrators only.
+  rpc Backup(BackupRequest) returns (BackupResponse);
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
+  rpc UploadBackup(UploadBackupRequest) returns (UploadBackupResponse);
 }
 
 // ============================================================================

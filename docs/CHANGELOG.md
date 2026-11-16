@@ -3103,6 +3103,21 @@
   load. `geode authn stepup-check` / `stepup-mark` were already refused
   (SONNY-6554). Regression: `zig build test-sonny6586-cli-truth`.
 
+- **The gRPC listener serves exactly the RPCs `geode.proto` declares
+  (SONNY-6593).** It served `Savepoint`, `RollbackTo`, `Backup`, `Restore`
+  and `UploadBackup`, which `src/proto/geode.proto` (the contract the
+  clients ship and generate from) did not declare, so no generated client
+  could call them; they are now declared with the request and response
+  messages the QUIC transport already uses (additive: the wire format and
+  existing RPCs are unchanged). It also served `CdcDiag` / `CdcCtrl`,
+  undeclared aliases of `GetCdcDiagnostics` / `ControlCdc` that no client
+  calls. **User-visible:** they now answer grpc-status 12
+  (UNIMPLEMENTED). The served list is
+  `src/transport/grpc_service_methods.zig`. Regression: `zig build
+  test-sonny6593-grpc-service-contract` (the list against the .proto, and
+  every declared and undeclared name probed on a real `geode serve
+  --listen-grpc`).
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),
