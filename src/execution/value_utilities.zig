@@ -432,14 +432,16 @@ pub fn adoptProjectionRowValues(
 
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=EvaluatedValueOwnership; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
 /// SONNY-3148: whether `eval.evalExpr` allocates the value of `expr` for it:
-/// a list literal's list, a map literal's map, a string concatenation, and a
-/// call that always allocates (`callAlwaysAllocates`). Every other
+/// a list literal's list, a map literal's map, a string concatenation (`||`,
+/// and `+` of two strings or two lists, which allocates its string or list
+/// the same way: SONNY-3148 follow-up, it was left to leak), and a call that
+/// always allocates (`callAlwaysAllocates`). Every other
 /// expression may borrow its value (an identifier or a parameter the
 /// caller's, a string literal the AST's, a property the store's).
 pub fn evaluatesFresh(expr: ast_mod.Expr) bool {
     return switch (expr) {
         .ArrayLit, .Map => true,
-        .Binary => |b| b.op == .Concat,
+        .Binary => |b| b.op == .Concat or b.op == .Add,
         .Call => |call| callAlwaysAllocates(call.callee.*),
         else => false,
     };
@@ -471,7 +473,18 @@ pub fn freeEvaluatedValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, valu
             }
             map.deinit();
         },
-        .Binary => |b| if (b.op == .Concat and value == .Str) allocator.free(value.Str),
+        // `+` of two strings or two lists allocates the result (its list
+        // holds the operands' elements, which are not its own); of numbers
+        // or temporal values, nothing.
+        .Binary => |b| switch (b.op) {
+            .Concat => if (value == .Str) allocator.free(value.Str),
+            .Add => switch (value) {
+                .Str => |str| allocator.free(str),
+                .List => |list| allocator.free(list),
+                else => {},
+            },
+            else => {},
+        },
         .Call => |call| if (callAlwaysAllocates(call.callee.*) and value == .Str) allocator.free(value.Str),
         else => {},
     }
@@ -501,7 +514,14 @@ pub fn rowsHoldEvaluated(rows: []const []Value, expr: ast_mod.Expr, value: Value
             }
             return false;
         },
-        .Binary, .Call => return evaluatesFresh(expr) and value == .Str and rowsHoldBytes(rows, value.Str),
+        .Binary, .Call => {
+            if (!evaluatesFresh(expr)) return false;
+            return switch (value) {
+                .Str => |str| rowsHoldBytes(rows, str),
+                .List => |list| expr == .Binary and expr.Binary.op == .Add and rowsHoldBytes(rows, std.mem.sliceAsBytes(list)),
+                else => false,
+            };
+        },
         else => return false,
     }
 }

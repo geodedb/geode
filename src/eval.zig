@@ -588,6 +588,7 @@ const decimal_text = @import("types/decimal_text.zig");
 // Import call handlers module for function call evaluation helpers
 const call_handlers = @import("eval/call_handlers.zig");
 const function_arity = @import("eval/function_arity.zig");
+const value_utilities = @import("execution/value_utilities.zig");
 // GAP-0537: dedicated handler modules extracted from the fallback .Call branch
 const ts_call_handlers = @import("eval/ts_call_handlers.zig");
 const quantifier_call_handlers = @import("eval/quantifier_call_handlers.zig");
@@ -2165,9 +2166,25 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Map => |props| blk_map: {
             // Create a map from properties
             var map = std.StringHashMap(Value).init(allocator);
-            for (props) |prop| {
+            for (props, 0..) |prop, i| {
                 const val = try evalExpr(allocator, prop.value.*, env);
-                try map.put(prop.key, val);
+                // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=RepeatedMapKey; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=eval; UPDATED=2026-11-15
+                // SONNY-3148: a later property of the same key replaces the
+                // earlier value, and what the earlier value's expression
+                // allocated is freed (`map.put` dropped it). Only what it
+                // allocated: a borrowed value (a property, a parameter) is
+                // left (`value_utilities.freeEvaluatedValue`).
+                const slot = try map.getOrPut(prop.key);
+                if (slot.found_existing) {
+                    var j = i;
+                    while (j > 0) {
+                        j -= 1;
+                        if (!std.mem.eql(u8, props[j].key, prop.key)) continue;
+                        value_utilities.freeEvaluatedValue(allocator, props[j].value.*, slot.value_ptr.*);
+                        break;
+                    }
+                }
+                slot.value_ptr.* = val;
             }
             break :blk_map Value{ .Map = map };
         },

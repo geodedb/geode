@@ -3084,6 +3084,13 @@
   takes `rebuild_mutex`, a lower tier). Regression: `zig build
   test-sonny2795-drop-index-catalog`.
 
+- **A `+` concatenation and a map literal's repeated key are freed
+  (SONNY-3148).** `+` of two strings or two lists allocates its result as
+  `||` does, but only `||` was freed after an initial WITH or a WITH stage
+  before a write; a map literal that repeats a key (`{a: 'x' || '1', a:
+  2}`) dropped the earlier value with what its expression allocated. Both
+  are freed now. Regression: `zig build test-sonny3148-write-leaks`.
+
 - **Invalid references answer 42002 and a UNION column-count mismatch 42000,
   as ISO/IEC 39075 Table 8 and 4.7.3 define them (SONNY-6543).**
   **BREAKING:** a GROUP BY key, a HAVING (or WHERE after RETURN) name and a
