@@ -3073,6 +3073,19 @@
 
 ### Fixed
 
+- **The storage adapter's engine-direct property reads report a read error
+  instead of an absent property (SONNY-6640).** The bulk relationship-MERGE
+  endpoint resolvers (`lookupNodeIdByLabelAndAllProps`,
+  `lookupPublicNodeIdByLabelAndAllProps`) verified each candidate with
+  `getNodeProperty(...) catch null`, so a read that failed reported an
+  existing endpoint as missing (the edge was skipped), and the ordered-index
+  column probe (`probeOrderedColumnClass`) declined the column on a read
+  error as if a value broke it. The error is returned now (a candidate the
+  engine no longer holds, `NodeNotFound`, is still no match), and so is a
+  failure to decode the value read. **API:** `probeOrderedColumnClass`
+  returns `!bool`. Regression: `zig build
+  test-sonny6640-adapter-property-read-errors`.
+
 - **A reload that runs out of memory fails instead of crashing the server;
   a reload clears every hydration latch (SONNY-6639).**
   `GraphStore.clearNodes` (the first step of `loadFromFile`, and of a Raft
@@ -8672,6 +8685,12 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **`tests/stress_storage_massive.zig` and its `zig build stress` step
+  (SONNY-6640):** it did not compile (no `geode` import, `std.rand`,
+  `std.time.Timer`), and what it checked, a second `GraphStore` reloading
+  the first one's legacy per-store file, no longer exists (`loadFromFile`
+  reads the global storage adapter).
 
 - **`src/client/repl/repl_config.zig` `Config.load` / `save` (SONNY-6554):**
   written against removed Zig APIs and never compiled (no caller), with

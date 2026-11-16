@@ -7004,17 +7004,10 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
 
-    // Massive Scale Storage Stress Test
-    const stress_storage_massive = b.addTest(.{
-        .name = "stress_storage_massive", // Set name to allow filtering
-        .root_module = b.createModule(.{ .root_source_file = b.path("tests/stress_storage_massive.zig"), .target = target, .optimize = optimize }),
-    });
-    // GraphStore stress test - no legacy storage imports required.
-
-    const run_stress_storage = b.addRunArtifact(stress_storage_massive);
-    // Only run if explicitly requested via filter or a separate step (optional: create "stress" step)
-    const stress_step = b.step("stress", "Run massive storage stress tests");
-    stress_step.dependOn(&run_stress_storage.step);
+    // SONNY-6640: the `stress` step (tests/stress_storage_massive.zig) was
+    // removed: it did not compile (no `geode` module, std.rand, Timer), and
+    // what it checked (a second GraphStore reloading the first's legacy
+    // per-store file) no longer exists: loadFromFile reads the global adapter.
 
     gpu_phase1_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase1_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);

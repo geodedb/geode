@@ -7808,6 +7808,18 @@ pub const StorageAdapter = struct {
         return _prop;
     }
 
+    /// SONNY-6640: `getNodeProperty` for a node a posting or IdMap named,
+    /// which may have been deleted since: such a node (`NodeNotFound`) holds
+    /// no property (null); any other error is the read's, returned as itself.
+    /// The verifiers below used `catch null`, so a read that failed took a
+    /// node that exists for one that does not match.
+    fn getCandidateNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !?gs.PropertyValue {
+        return self.getNodeProperty(graph_name, node_id, key, self.allocator) catch |err| switch (err) {
+            error.NodeNotFound => null,
+            else => err,
+        };
+    }
+
     /// Get a node property directly from its prop_head (already known from a
     /// prior scanAllNodes), skipping the per-node getNode random read.
     /// slot_id routes to the owning shard (same as getNodeProperty); prop_head
@@ -8557,16 +8569,17 @@ pub const StorageAdapter = struct {
     /// late to spare the build). True when every node that carries the key
     /// holds a value of one order class (INTEGER, DOUBLE or STRING) and every
     /// string is its own NFC form; false at the first value that breaks it
-    /// (a second class, a non-canonical string, a value of no ordered class)
-    /// or when a read fails. Reads through `getNodesByLabel` /
+    /// (a second class, a non-canonical string, a value of no ordered class).
+    /// SONNY-6640: a read that fails is the error (it declined the column,
+    /// as if a value broke it). Reads through `getNodesByLabel` /
     /// `getNodeProperty`, which take their own locks.
-    pub fn probeOrderedColumnClass(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8) bool {
-        const ids = self.getNodesByLabel(graph_name, label, self.allocator) catch return false;
+    pub fn probeOrderedColumnClass(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8) !bool {
+        const ids = try self.getNodesByLabel(graph_name, label, self.allocator);
         defer self.allocator.free(ids);
         const Class = enum { integer, double, string };
         var class: ?Class = null;
         for (ids) |id| {
-            const pv = (self.getNodeProperty(graph_name, id, key, self.allocator) catch return false) orelse continue;
+            const pv = (try self.getCandidateNodeProperty(graph_name, id, key)) orelse continue;
             defer freeOwnedStorageProperty(self.allocator, pv);
             const c: Class = switch (pv) {
                 .int => .integer,
@@ -8891,15 +8904,13 @@ pub const StorageAdapter = struct {
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert to the high-level domain to
                 // compare with the filter (a graph_store.PropertyValue).
-                const stored = (self.getNodeProperty(graph_name, node_id, f.key, self.allocator) catch null) orelse {
+                // SONNY-6640: a read that fails is the error, not a miss.
+                const stored = (try self.getCandidateNodeProperty(graph_name, node_id, f.key)) orelse {
                     all_match = false;
                     break;
                 };
                 defer freeOwnedStorageProperty(self.allocator, stored);
-                const actual = fromStorageProperty(self.allocator, stored) catch {
-                    all_match = false;
-                    break;
-                };
+                const actual = try fromStorageProperty(self.allocator, stored);
                 defer property_codec.freePropertyValue(self.allocator, actual);
                 if (!propertyValuesEqual(actual, f.value)) {
                     all_match = false;
@@ -9116,9 +9127,10 @@ pub const StorageAdapter = struct {
                 // Engine-direct single-property read (no cache insert).
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert + compare like the slot sibling.
-                const stored = (self.getNodeProperty(graph_name, slot, f.key, self.allocator) catch null) orelse return false;
+                // SONNY-6640: a read that fails is the error, not a miss.
+                const stored = (try self.getCandidateNodeProperty(graph_name, slot, f.key)) orelse return false;
                 defer freeOwnedStorageProperty(self.allocator, stored);
-                const actual = fromStorageProperty(self.allocator, stored) catch return false;
+                const actual = try fromStorageProperty(self.allocator, stored);
                 defer property_codec.freePropertyValue(self.allocator, actual);
                 return propertyValuesEqual(actual, f.value);
             }
