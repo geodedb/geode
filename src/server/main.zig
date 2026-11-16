@@ -2475,6 +2475,26 @@ pub fn main() !void {
         } else |_| {}
     }
 
+    // SONNY-6658: test hook, Debug builds only (see
+    // statement_undo.armTestKill): the process kills itself when a statement
+    // is about to make its (n+1)th change of one node property key.
+    if (comptime geode.statement_undo.kill_hook_available) {
+        if (getEnvVarOwned(gpa, "GEODE_TEST_STATEMENT_KILL_KEY")) |kill_key| {
+            defer gpa.free(kill_key);
+            const kill_after = envUsize(gpa, "GEODE_TEST_STATEMENT_KILL_AFTER", 0, 0, 1_000_000);
+            if (kill_after > 0) {
+                geode.statement_undo.armTestKill(kill_key, @intCast(kill_after)) catch |err| {
+                    log.err("GEODE_TEST_STATEMENT_KILL_KEY refused", &.{Attr.string("error", @errorName(err))});
+                    return err;
+                };
+                log.warn("TEST HOOK: the process kills itself at a statement's change of this property (Debug build only)", &.{
+                    Attr.string("key", kill_key),
+                    Attr.int("after", @intCast(kill_after)),
+                });
+            }
+        } else |_| {}
+    }
+
     // Task 1 (throughput plan): initialise per-mutation timing instrumentation.
     const mutation_timing = geode.mutation_timing;
     mutation_timing.init(null);

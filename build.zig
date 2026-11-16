@@ -750,6 +750,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6658-autocommit-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-6658, KNOWN_TEST_ISSUES): an auto-commit statement cut by a kill keeps the changes it committed on its other shards until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -11411,6 +11412,22 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2979c_tests);
     shardDep(test_step, &run_sonny2979c_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny2979-txn-commit-durable", "Run SONNY-2979 regression (SIGKILL of a real server: a committed transaction, over several requests or in one, survives whole beside an open one that is undone; a rolled-back one is not undone again; under GEODE_TDE_KEY txn_undo.wal is sealed and still undoes)").dependOn(&run_sonny2979c_tests.step);
+
+    // SONNY-6658 (intentionally red, docs/KNOWN_TEST_ISSUES.md): an
+    // auto-commit statement cut by a SIGKILL of a real server (the Debug
+    // crash point GEODE_TEST_STATEMENT_KILL_KEY) leaves nothing after the
+    // restart. Not in shardDep until the fix; compiled by test-compile.
+    const sonny6658_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6658_autocommit_crash_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny6658_test_mod.link_libc = true;
+    sonny6658_test_mod.addImport("geode", root_mod);
+    sonny6658_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6658_test_mod.addImport("schema", schema_mod);
+    sonny6658_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6658_tests = b.addTest(.{ .root_module = sonny6658_test_mod });
+    const run_sonny6658_tests = b.addRunArtifact(sonny6658_tests);
+    spawnsBuiltGeode(sonny6658_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6658_tests.step);
+    b.step("test-sonny6658-autocommit-crash-atomicity", "Run SONNY-6658 reproduction (intentionally red: an auto-commit statement changing nodes on several shards, cut by a SIGKILL of a real server after 8 of its changes, leaves none of them after the restart; a finished multi-shard statement survives whole)").dependOn(&run_sonny6658_tests.step);
 
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.
