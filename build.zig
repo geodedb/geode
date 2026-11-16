@@ -4663,6 +4663,19 @@ pub fn build(b: *std.Build) void {
     const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
 
+    // SONNY-6651: a replicated payload with an empty graph name writes to
+    // the default graph, never to a graph named "".
+    const sonny6651_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6651_empty_graph_payload.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sonny6651_test_mod.addImport("geode", root_mod);
+    const sonny6651_tests = b.addTest(.{ .root_module = sonny6651_test_mod });
+    const run_sonny6651_tests = b.addRunArtifact(sonny6651_tests);
+    shardDep(test_step, &run_sonny6651_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6651-empty-graph-payload", "Run SONNY-6651 regression (a replicated GNC1, GNC2, GN1K, GN2K, GMRG, GUPD, GDEL or GBAT payload whose graph name is empty, applied to a real GraphStore directly and through raft apply, writes to the default graph and creates no graph named \"\"; effectOf and forEachBatchGraph decode the empty name as default)").dependOn(&run_sonny6651_tests.step);
+
     // GAP-0870: Raft command variants (config_change / snapshot_pointer /
     // txn_prepare / txn_decide / alter_graph rejection).
     const gap0870_test_mod = b.createModule(.{
