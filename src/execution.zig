@@ -1761,7 +1761,7 @@ pub var write_conflict_retries_total: std.atomic.Value(u64) = .init(0);
 pub const max_write_conflict_retries: u32 = 3;
 
 /// SONNY-6659: should a statement that failed with `err` run again?
-/// graph-storage (from v0.4.26) refuses a write to a page another open engine
+/// graph-storage (from v0.4.25) refuses a write to a page another open engine
 /// transaction has written (`error.WriteConflict`, matched by name so this
 /// compiles against engines without it); the refused transaction is aborted
 /// and the statement's changes are undone (`endStatementFailed` returns the

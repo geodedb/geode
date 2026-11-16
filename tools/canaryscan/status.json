@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T13:47:45.829836295Z",
+  "generated_at": "2026-11-16T14:50:07.410548637Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82979,6 +82979,20 @@
         },
         {
           "feature": "TransactionManagement",
+          "aspect": "NodeIdFromTxnPage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_open_writers.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
           "aspect": "NodeBatchJoins",
           "status": "TESTED",
           "files": [
@@ -83014,6 +83028,20 @@
           ],
           "tests": [
             "tests/test_sonny6659_geode_single_writer.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "OpenWritersOnOneShard",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6659_open_writers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_open_writers.zig"
           ],
           "benches": [],
           "owner": "storage",
@@ -88317,7 +88345,7 @@
       "EXEMPT": 209,
       "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4370
+      "TESTED": 4372
     },
     "by_aspect": {
       "2PC": 3,
@@ -90508,6 +90536,7 @@
       "NodeGraphNameLoad": 1,
       "NodeGraphNamePersistence": 1,
       "NodeGraphTag": 2,
+      "NodeIdFromTxnPage": 1,
       "NodeLabelAddRemove": 1,
       "NodeLookup": 2,
       "NodeMergeFastPathGate": 1,
@@ -90604,6 +90633,7 @@
       "OneWriterOneReaderSafeFile": 1,
       "OnlyTrueAdmits": 1,
       "OpenAndCountRestoredStore": 1,
+      "OpenWritersOnOneShard": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
       "OperatorMessage": 5,

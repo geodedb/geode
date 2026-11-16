@@ -3090,8 +3090,29 @@
   when `AbortNotUndone` still happens (overlap, cross-shard WAL tail
   records, `abort_undo = .keep_writes`).
 
+- **Transactions open on one shard that create nodes there no longer
+  conflict; graph-storage v0.4.25 (SONNY-6659).** graph-storage v0.4.25 has
+  one open writer per page: a second open transaction's write to a page
+  another open one wrote fails with `WriteConflict`. Each open transaction
+  fills slab pages of its own, and `allocNodeTxn` gives it node ids from a
+  node page of its own. geode took every new node's id from the shard's
+  shared tail page (`allocNode`): `createNode`, a node batch
+  (`createNodesBatch`) and the bulk insert of the group-commit workers
+  (`bulkInsertNodeWithReservedId*`). With another transaction open on the
+  shard (a group-commit batch and a writer beside it, an embedding caller)
+  the create was refused, its statement transaction could not commit, and
+  the graph was quarantined. They now open (or join) the shard's
+  transaction first and take the id from it. A ROLLBACK in the request that
+  made the writes undoes them in the session's open engine transaction (its
+  undo writes join it), so it does not conflict with itself. Regression:
+  `zig build test-sonny6659-open-writers` (four transactions open on one
+  shard: 0 conflicts, was 4 writers refused and 8 engine conflicts; over a
+  real server, concurrent explicit transactions and one node's concurrent
+  increments answer no 40001; rollbacks and a SIGKILL keep the committed
+  state).
+
 - **A write on the shard of an open statement or session engine
-  transaction joins it (SONNY-6659).** graph-storage v0.4.26 refuses a
+  transaction joins it (SONNY-6659).** graph-storage v0.4.25 refuses a
   second open transaction's write to a page another open transaction wrote
   (`WriteConflict`): a full-page WAL image one of them committed carried
   the other's uncommitted bytes, and recovery replayed them. Two geode

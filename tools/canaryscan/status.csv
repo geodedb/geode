@@ -5253,9 +5253,11 @@ REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementLogCost,TESTED,t
 REQ-SONNY-6658-STATEMENT-KILL-HOOK,TransactionManagement,CrashPointHook,TESTED,src/statement_undo.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,AutoCommitConflictRetry,IMPL,src/execution.zig,,,storage,2026-11-16
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,WriteConflictSqlstate,TESTED,src/server/proto_util.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,NodeIdFromTxnPage,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6659_open_writers.zig,,storage,2026-11-16
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,NodeBatchJoins,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,CrossShardEdgeJoins,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,Regression,TESTED,tests/test_sonny6659_geode_single_writer.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,OpenWritersOnOneShard,TESTED,tests/test_sonny6659_open_writers.zig,tests/test_sonny6659_open_writers.zig,,storage,2026-11-16
 REQ-SONNY-6662-CLI-AUTH-LEAK,QueryCli,ConnectErrorsFreed,TESTED,tests/test_sonny6662_cli_auth_leak.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
 REQ-SONNY-6662-CLI-ERROR-MSG-FREED,QueryCli,ConnectErrorsFreed,TESTED,src/cli/main.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
 REQ-SONNY-6665-CLUSTER-SNAPSHOT-RESUME,Raft Snapshot Persistence,MultiProcessRegression,TESTED,tests/test_sonny6665_cluster_snapshot_resume.zig,tests/test_sonny6665_cluster_snapshot_resume.zig,,distributed,2026-11-16

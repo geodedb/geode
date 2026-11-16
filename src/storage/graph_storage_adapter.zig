@@ -5750,20 +5750,28 @@ pub const StorageAdapter = struct {
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
         var stmt_txn = currentStatementTxnForGraph(graph_name);
-        const node_id = if (stmt_txn) |s|
-            try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=NodeIdFromTxnPage; STATUS=TESTED; TEST=tests/test_sonny6659_open_writers.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: the shard first (the statement's, else round-robin as
+        // `allocNode` picks it), then its transaction, then the id from it
+        // (`allocNodeTxn`): while another transaction is open on the shard,
+        // the node goes on a node page of this transaction's own. A plain
+        // `allocNode` id came from the shard's shared tail page, and
+        // graph-storage 0.4.25 refuses (`WriteConflict`) a write to a page
+        // another open transaction has written.
+        const shard_idx: usize = if (stmt_txn) |s|
+            shardedTxnShard(s.txn_id)
         else
-            try mg.engine.allocNode();
-        if (node_slot_allocated_hook) |hook| hook(mg);
-        const node_shard = mg.shardEngineForNode(node_id);
-        // SONNY-6523 (2): a failure from here on gives the slot back.
-        var slot_txn_open = false;
-        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null, false);
+            @intCast(mg.engine.coordinator_txn_counter.fetchAdd(1, .monotonic) % gs.sharded_engine.SHARD_COUNT);
+        const node_shard = mg.engine.shards[shard_idx];
         // SONNY-6658: an auto-commit statement's first write opens its
         // transaction on the node's shard; a create that commits its own
         // has the statement's undo on disk first.
-        if (stmt_txn == null) stmt_txn = try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(node_id));
-        if (stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null) try statement_undo.beforeOwnEngineCommit();
+        if (stmt_txn == null) stmt_txn = try self.openAutoStatementTxn(graph_name, shard_idx);
+        const joined: ?gs.TxnId = if (stmt_txn) |s|
+            (if (shardedTxnShard(s.txn_id) == shard_idx) shardedTxnLocal(s.txn_id) else null)
+        else
+            null;
+        if (joined == null) try statement_undo.beforeOwnEngineCommit();
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -5772,17 +5780,16 @@ pub const StorageAdapter = struct {
         // local txn (one fsync for the whole statement).  Otherwise open a
         // fresh local txn on node_shard (correct isolation, one fsync per
         // createNode call instead of per sub-op).
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        slot_txn_open = true;
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
         // SONNY-6529: graph-storage undoes the failed create: the slot, the
         // shard's live-node count and the id (when it is the last one
         // issued) go back with the record.
         errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node create");
-        // SONNY-6523 (2): runs before the abort above, in the live txn.
+        const node_id = try node_shard.allocNodeTxn(local_txn);
+        if (node_slot_allocated_hook) |hook| hook(mg);
+        // SONNY-6523 (2): a failure from here on gives the slot back; runs
+        // before the abort above, in the live txn.
         errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn, own_txn);
 
         // Write an initial node record.  The txn_stamp must be non-zero so
@@ -6105,22 +6112,21 @@ pub const StorageAdapter = struct {
         // serializes otherwise-independent shard workers.
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
-        const slot_id = try node_shard.allocNode();
-        if (node_slot_allocated_hook) |hook| hook(mg);
-        // SONNY-6523 (2): a failure from here on gives the slot back.
-        var slot_txn_open = false;
-        errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, slot_id, null, false);
+        // SONNY-6659: the transaction first, then the slot from it
+        // (`allocNodeTxn`, a node page of its own while another transaction
+        // is open on the shard; see `createNode`).
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, slot_id)
+            (if (shardedTxnShard(s.txn_id) == idx) shardedTxnLocal(s.txn_id) else null)
         else
             null;
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
-        slot_txn_open = true;
         const own_txn = stmt_local == null;
         // SONNY-6529: graph-storage undoes the failed insert (slot, count,
         // id) while the store's in-memory copy does not hold the node.
         errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "bulk node insert");
+        const slot_id = try node_shard.allocNodeTxn(local_txn);
+        if (node_slot_allocated_hook) |hook| hook(mg);
         // SONNY-6523 (2): before the abort above; not once the node is in
         // the in-memory store (a later failure leaves it, as before).
         var slot_kept = false;
@@ -7826,7 +7832,7 @@ pub const StorageAdapter = struct {
         // SONNY-6659: on the shard of the statement's or session's engine
         // transaction the batch writes in it (it commits or is undone with
         // it), rather than in a second transaction open there beside it,
-        // which graph-storage 0.4.26 refuses (`WriteConflict`).
+        // which graph-storage 0.4.25 refuses (`WriteConflict`).
         const joined_shard: ?usize = if (currentStatementTxnForGraph(graph_name)) |s| blk: {
             const si = shardedTxnShard(s.txn_id);
             if (si >= shard_count) break :blk null;
@@ -7851,13 +7857,16 @@ pub const StorageAdapter = struct {
         };
         var i: usize = 0;
         while (i < n) : (i += 1) {
-            const node_id = try mg.engine.allocNode();
-            out[i] = node_id;
-            allocated = i + 1;
-            const si = gs.shard_count.shardOfNode(node_id);
+            // SONNY-6659: the shard round-robin (as `allocNode` picks it),
+            // its transaction, then the id from it (`allocNodeTxn`; see
+            // `createNode`).
+            const si: usize = @intCast(mg.engine.coordinator_txn_counter.fetchAdd(1, .monotonic) % shard_count);
             const node_shard = mg.engine.shards[si];
             if (shard_txns[si] == null) shard_txns[si] = try node_shard.beginTxn();
             const local_txn = shard_txns[si].?;
+            const node_id = try node_shard.allocNodeTxn(local_txn);
+            out[i] = node_id;
+            allocated = i + 1;
             try node_shard.putNodeTxn(node_id, rec_template, local_txn);
             for (label_ids) |label_id| {
                 try node_shard.addLabelTxn(node_id, label_id, local_txn);
@@ -8030,7 +8039,7 @@ pub const StorageAdapter = struct {
         // co-located add (it never reads `to`'s record). It committed a
         // transaction of its own there (`ShardedGraphEngine.addEdge`) while
         // that one was open: two open writers of the shard's pages, which
-        // graph-storage 0.4.26 refuses (`WriteConflict`).
+        // graph-storage 0.4.25 refuses (`WriteConflict`).
         if (try self.statementLocalTxn(graph_name, from_id)) |local| {
             // GAP-ENT-0024: the public-id-carrying path uses the
             // CO-LOCATED txn add (the id rides both durable adjacency
