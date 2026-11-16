@@ -3073,6 +3073,22 @@
 
 ### Fixed
 
+- **A chained part's WITH before its MATCH is bound; list-form shortest
+  paths are refused; a LET reads no later definition; NULL cast operands
+  are NULL (SONNY-6645).** `WITH 1 AS a WITH a, 2 AS b MATCH (n) RETURN
+  n.k, b` answered NULL for `n.k` and a WHERE on the WITH's values matched
+  nothing: the part ran its WITH as a projection of the matched rows. It
+  is now bound as parameters for the part's MATCH, as at the start of a
+  statement, also under an aggregate. `shortest_path([a, b])` and
+  `all_shortest_paths([a, b])` built a two-node path with no relationships
+  from a list; a list or another non-path operand is 22G03 (a path is
+  itself, a node the path of that node). `LET a = b, b = 1` and `LET a = a
+  + 1` read the name as NULL; a definition reads only what comes in and the
+  definitions before it (ISO 14.7 SR 7), else 42000. A NULL operand of
+  bigint, smallint, real, double, toReal, datetime, power and knn was
+  22G03; it is NULL. The FLE catalog's /tmp fallback was already removed
+  (SONNY-6274). Regression: `zig build test-sonny6645-query-followups`.
+
 - **A vector index dropped while the knn path builds it leaves no runtime
   index behind (SONNY-2795).** The knn path's lazy build
   (`ensureAdvancedVectorIndexForProperty`) copied the catalog row under the

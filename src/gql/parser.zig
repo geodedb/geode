@@ -2624,20 +2624,26 @@ pub const Parser = struct {
     /// initial WITH, whose items see none of each other, so `LET a = 1, b =
     /// a + 1` read `a` as NULL. When a definition reads an earlier one, the
     /// LET runs as a chain of parts, one per definition, each passing the
-    /// earlier ones on (`RETURN d1 NEXT RETURN a1, d2 NEXT ...`), and the
+    /// earlier ones on (SONNY-6645: also when one reads its own or a later
+    /// one) (`RETURN d1 NEXT RETURN a1, d2 NEXT ...`), and the
     /// query that follows the LET is the part after them (`tail`), reading
     /// every definition from the record the chain passes it, as a part
     /// after `MATCH ... WITH` does. Null when no definition reads an earlier
     /// one.
     noinline fn letStages(self: *Parser, items: []ast.ReturnItem) ParserError!?LetStages {
-        if (items.len < 2) return null;
+        if (items.len == 0) return null;
         const a = self.arena.allocator();
         const names = try a.alloc([]const u8, items.len);
         for (items, names) |item, *name| name.* = item.alias.?;
-        const reads_earlier = for (items[1..], 1..) |item, i| {
-            if (letMentions(&item.expr, names[0..i])) break true;
+        // SONNY-6645 item 3: and when one reads its own name or a later
+        // definition's. Each part's items are checked against what comes in
+        // (14.7 SR 7), so a definition read before it is defined is refused
+        // (42000) rather than read as NULL; an outer variable of that name
+        // is still read, as SR 7 allows.
+        const reads_definition = for (items) |item| {
+            if (letMentions(&item.expr, names)) break true;
         } else false;
-        if (!reads_earlier) return null;
+        if (!reads_definition) return null;
         const stages = try a.alloc(ast.Query, items.len);
         const tail = try a.create(ast.Query);
         for (stages, 0..) |*stage, k| {
