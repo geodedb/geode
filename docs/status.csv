@@ -5489,6 +5489,7 @@ REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,SnapshotCarriesDedup,TESTED,
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,InternOffRaftMutex,TESTED,,,distributed,2026-11-15,src/storage/graph_storage_adapter.zig,4704
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,PrehydrateInternsNames,TESTED,,,distributed,2026-11-15,src/distributed/raft_apply.zig,321
 REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,,,distributed,2026-11-15,tests/test_sonny6633_snapshot_wire.zig,20
+REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,,,distributed,2026-11-15,tests/test_sonny6636_snapshot_over_quic.zig,22
 REQ-SONNY-6636-STUB-QUIC-WARNING,Raft Wrapper Transport Dispatch,StubConnectWarns,TESTED,,,distributed,2026-11-15,src/distributed/raft_consensus.zig,4672
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
