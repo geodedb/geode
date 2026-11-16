@@ -2448,9 +2448,12 @@ pub fn dropGraphMapScans() u64 {
 /// reported as itself (a restart does not clear it). SONNY-6616: so is a
 /// graph whose manifests or WAL do not authenticate under the key
 /// (`EncryptionKeyMismatch`, graph-storage >= 0.4.20; it was `NoManifest`).
+/// SONNY-6642: so is a graph whose WAL has a damaged record with valid
+/// records after it (`WalCorrupted`, graph-storage >= 0.4.20: not a torn
+/// tail, so the log is kept as it is and the graph is not opened).
 /// SONNY-6605: a build that fails with a `TransientHydrationError` does not
 /// quarantine the graph.
-pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed, SideFileEncrypted, SideFileAuthFailed, SideFileNotSealed, TimeseriesNotEncrypted, TimeseriesNeedsTdeKey, EncryptionKeyMismatch };
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData, LabelDictionaryDiverged, AbortNotUndone, CommitFailed, SideFileEncrypted, SideFileAuthFailed, SideFileNotSealed, TimeseriesNotEncrypted, TimeseriesNeedsTdeKey, EncryptionKeyMismatch, WalCorrupted };
 
 // CANARY: REQ=REQ-SONNY-6605-HYDRATION-RETRY; FEATURE="StorageIntegrity"; ASPECT=TransientFailureRetried; STATUS=TESTED; TEST=tests/test_sonny6605_hydration_retry.zig; OWNER=storage; UPDATED=2026-11-15
 /// SONNY-6605: the hydration errors that say nothing about the graph's data:
@@ -2508,6 +2511,7 @@ const QuarantineCause = enum(u8) {
     timeseries_not_encrypted,
     timeseries_needs_tde_key,
     encryption_key_mismatch,
+    wal_corrupted,
 
     fn of(err: anyerror) QuarantineCause {
         return switch (err) {
@@ -2523,6 +2527,7 @@ const QuarantineCause = enum(u8) {
             error.TimeseriesNotEncrypted => .timeseries_not_encrypted,
             error.TimeseriesNeedsTdeKey => .timeseries_needs_tde_key,
             error.EncryptionKeyMismatch => .encryption_key_mismatch,
+            error.WalCorrupted => .wal_corrupted,
             else => .unknown,
         };
     }
@@ -2542,6 +2547,7 @@ const QuarantineCause = enum(u8) {
             .timeseries_not_encrypted => error.TimeseriesNotEncrypted,
             .timeseries_needs_tde_key => error.TimeseriesNeedsTdeKey,
             .encryption_key_mismatch => error.EncryptionKeyMismatch,
+            .wal_corrupted => error.WalCorrupted,
         };
     }
 };

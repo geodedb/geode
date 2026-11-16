@@ -764,6 +764,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // manifests or WAL do not authenticate under the key as itself (it
         // was NoManifest, which read as a missing graph).
         error.EncryptionKeyMismatch => .{ .code = "58000", .message = "EncryptionKeyMismatch: the graph's storage does not authenticate under the server's encryption key (GEODE_TDE_KEY is not the key the graph was written with, it was written without one, or its manifests or write-ahead log were modified), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY the graph was written with, or restore the graph's directory from a backup. The server log names the graph" },
+        // CANARY: REQ=REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6642_wal_corrupted_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6642: graph-storage >= 0.4.20 refuses to open a graph whose
+        // WAL has a damaged record followed by valid ones (not a torn tail)
+        // and leaves the log untouched; it was the generic GraphQuarantined.
+        error.WalCorrupted => .{ .code = "58000", .message = "WalCorrupted: a record in the middle of the graph's write-ahead log is damaged and valid records follow it, so the log cannot be replayed without losing committed writes; the graph is not opened and refuses reads and writes, and the log is left as it was. Other graphs are unaffected. Restore the graph's directory from a backup (or remove the graph with DROP GRAPH). The server log names the graph and the byte offset of the damaged record" },
         error.TimeseriesNeedsTdeKey => .{ .code = "58000", .message = "TimeseriesNeedsTdeKey: the graph's time-series data is encrypted at rest but the server runs without GEODE_TDE_KEY (or with GEODE_TS_TDE=0), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY it was written with and without GEODE_TS_TDE=0. The server log names the graph" },
         error.TimeseriesNotEncrypted => .{ .code = "58000", .message = "TimeseriesNotEncrypted: the graph holds time-series data written in plaintext before TDE covered time-series, and the server will not keep plaintext data under GEODE_TDE_KEY, so the graph is not opened and refuses reads and writes; other graphs are unaffected. See docs/TDE_FILE_LEVEL_ENCRYPTION.md: start with GEODE_TS_TDE=0 to read it as plaintext, export it, and remove the graph's timeseries directory. The server log names the graph" },
         // CANARY: REQ=REQ-SONNY-6527-LABEL-ID-SPACE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
@@ -807,6 +812,7 @@ pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
         error.TimeseriesNotEncrypted,
         error.TimeseriesNeedsTdeKey,
         error.EncryptionKeyMismatch,
+        error.WalCorrupted,
         // SONNY-6605: a graph's hydration failed transiently (the graph is
         // built again on its next access); OutOfMemory is a limit above.
         error.SystemResources,

@@ -3073,6 +3073,18 @@
 
 ### Fixed
 
+- **A graph whose WAL is damaged mid-log answers 58000 `WalCorrupted` with
+  an operator message (SONNY-6642).** graph-storage >= 0.4.20 refuses to
+  open a graph whose shard WAL has a damaged record followed by valid ones
+  (`WalCorrupted`; the log is left as it is). geode did not list the error
+  among the quarantine causes, so the graph answered the generic
+  "GraphQuarantined: the graph's indexes could not be loaded ...". It is
+  its own cause now, with a 58000 message that says the log is damaged and
+  to restore the graph from a backup or drop it (`docs/SERVER_FEATURES.md`).
+  Regression: `zig build test-sonny6642-wal-corrupted-quarantine` (a real
+  server SIGKILLed with its graph logs un-checkpointed, a middle record
+  damaged, the restarted server asked).
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),
