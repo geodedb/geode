@@ -24,6 +24,7 @@ const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
 const label_dict_divergence = @import("label_dict_divergence.zig");
+const graph_restore_intent = @import("graph_restore_intent.zig");
 const statement_undo = @import("../statement_undo.zig");
 // GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
 // executor's cancel flags so a client disconnect / stall-watchdog abort frees a
@@ -4481,6 +4482,13 @@ pub const StorageAdapter = struct {
             log.warn("cannot load the dropped-graph names {s}: {}; refusing to open the data directory", .{ self.dropped_graphs_path, err });
             return err;
         };
+        // SONNY-6636 (1): a graph restore a crash interrupted is finished
+        // (or rolled back) before any graph opens; a damaged intent refuses
+        // the open.
+        self.recoverGraphRestore() catch |err| {
+            log.warn("cannot finish the interrupted graph restore in {s}: {}; refusing to open the data directory", .{ self.data_dir, err });
+            return err;
+        };
         // SONNY-6616: graph names written in plaintext before SONNY-6616 are
         // rewritten sealed now (the plaintext copies are replaced, not
         // scrubbed: docs/TDE_FILE_LEVEL_ENCRYPTION.md).
@@ -5077,6 +5085,213 @@ pub const StorageAdapter = struct {
                 };
             }
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP; FEATURE="Raft Snapshot Persistence"; ASPECT=RegistrySwap; STATUS=TESTED; TEST=tests/test_sonny6636_graph_restore_swap.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6636 (1): a restore of whole graphs in progress
+    /// (`beginGraphRestore`). `staged_dirs[i]` is the new, empty directory
+    /// `names[i]` is restored into; the caller fills it with the graph's
+    /// files, then commits (`commitGraphRestore`, `finishGraphRestore`) or
+    /// abandons it (`abandonGraphRestore`). `deinit` frees it.
+    pub const GraphRestore = struct {
+        arena: std.heap.ArenaAllocator,
+        names: []const []const u8,
+        staged: [][16]u8,
+        staged_dirs: [][]const u8,
+        /// The graphs' uuids before the restore (a name new to this data
+        /// directory has none).
+        replaced: [][16]u8,
+        committed: bool = false,
+
+        pub fn deinit(self: *GraphRestore) void {
+            self.arena.deinit();
+            self.* = undefined;
+        }
+    };
+
+    /// SONNY-6636 (1): where a test stops a restore as a crash would
+    /// (`setGraphRestoreCrashForTesting`): after the step named, nothing more
+    /// is written or cleaned up.
+    pub const GraphRestoreStep = enum { intent_written, committed, old_deleted };
+
+    /// SONNY-6636 (1): start restoring `names` (distinct, none the default
+    /// graph's or `__geode_security`, which a restore never replaces): mint a
+    /// uuid per graph, write the restore intent naming them and the uuids they
+    /// replace (fsynced), and create each staged directory. Nothing a reader
+    /// sees changes until `commitGraphRestore`. The caller keeps every writer
+    /// of these graphs paused from here to `finishGraphRestore`.
+    pub fn beginGraphRestore(self: *StorageAdapter, names: []const []const u8) !GraphRestore {
+        // Under at-rest encryption a graph's files are sealed with a key
+        // derived from its uuid (`side_file_crypto.Cipher.forKey`), so files
+        // staged under a new uuid would not open: refused until the restore
+        // re-seals them.
+        if (self.config.encryption_key != null) return error.GraphRestoreUnderTdeNotSupported;
+        if (names.len == 0) return error.NothingToRestore;
+        for (names, 0..) |n, i| {
+            if (n.len == 0 or std.mem.eql(u8, n, graph_store.DEFAULT_GRAPH_NAME) or std.mem.eql(u8, n, "__geode_security")) return error.GraphNotRestorable;
+            for (names[0..i]) |m| if (std.mem.eql(u8, m, n)) return error.GraphNotRestorable;
+        }
+        var r: GraphRestore = .{ .arena = .init(self.allocator), .names = names, .staged = &.{}, .staged_dirs = &.{}, .replaced = &.{} };
+        errdefer r.arena.deinit();
+        const a = r.arena.allocator();
+        r.staged = try a.alloc([16]u8, names.len);
+        for (r.staged) |*u| u.* = generateUuid();
+        var replaced: std.ArrayList([16]u8) = .empty;
+        {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            for (names) |n| if (self.findRegistryEntryLocked(n)) |e| try replaced.append(a, e.uuid);
+        }
+        r.replaced = replaced.items;
+        r.staged_dirs = try a.alloc([]const u8, names.len);
+        for (r.staged_dirs, r.staged) |*d, u| d.* = try graphDirPath(a, self.data_dir, u);
+        try graph_restore_intent.write(self.allocator, self.data_dir, .{ .staged = r.staged, .replaced = r.replaced });
+        errdefer self.abandonGraphRestore(&r);
+        if (graphRestoreCrashAt(.intent_written)) return error.InjectedGraphRestoreCrash;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (r.staged_dirs) |d| try std.Io.Dir.cwd().createDirPath(io, d);
+        return r;
+    }
+
+    /// SONNY-6636 (1): put the staged graphs in place: one registry rewrite
+    /// (fsynced, with its directory) names the staged uuids. That rewrite is
+    /// the commit point: a crash before it restarts on the old graphs, one
+    /// after it on the restored ones (`recoverGraphRestore` deletes the
+    /// losing directories). The old engines leave `engines` first, so the
+    /// registry header's next ids come from the restored manifests; each is
+    /// freed by its last unpin, as `dropGraph` frees one. A restored graph
+    /// opens lazily on its next use. Refused, with nothing changed, while
+    /// this thread has a transaction on one of the graphs, or when one of
+    /// them was created or dropped since `beginGraphRestore`; abandon it
+    /// then. `GraphRestoreCommitNotDurable`: committed, but the registry's
+    /// directory could not be synced; neither finish nor abandon it (the
+    /// next open settles it from the intent).
+    pub fn commitGraphRestore(self: *StorageAdapter, r: *GraphRestore) !void {
+        const a = self.allocator;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
+        const old = try a.alloc(?[16]u8, r.names.len);
+        defer a.free(old);
+        for (r.names, old) |n, *o| {
+            o.* = if (self.findRegistryEntryLocked(n)) |e| e.uuid else null;
+            if (o.*) |u| {
+                if (!containsUuid(r.replaced, u)) return error.GraphRestoreRaced;
+            }
+            if (self.engines.get(n)) |mg| {
+                if (threadTxnOn(mg)) return error.ObjectInUse;
+            }
+        }
+        var olds_listed: usize = 0;
+        for (old) |o| olds_listed += @intFromBool(o != null);
+        if (olds_listed != r.replaced.len) return error.GraphRestoreRaced;
+
+        const detached = try a.alloc(?std.StringHashMap(*ManagedGraph).KV, r.names.len);
+        defer a.free(detached);
+        try self.registry.entries.ensureUnusedCapacity(a, r.names.len);
+        for (r.names, detached) |n, *d| d.* = self.engines.fetchRemove(n);
+
+        const committed: anyerror!void = blk: {
+            for (r.names, r.staged, old) |n, u, o| {
+                if (o != null) {
+                    for (self.registry.entries.items) |*e| {
+                        if (std.mem.eql(u8, e.name, n)) e.uuid = u;
+                    }
+                } else {
+                    self.registry.addGraph(n, u) catch |err| break :blk err;
+                }
+            }
+            // The rename is the save's last step: a save that fails leaves
+            // the old registry on disk.
+            self.saveRegistryLocked() catch |err| break :blk err;
+            break :blk {};
+        };
+        committed catch |err| {
+            // Nothing on disk names the staged uuids: put the old graphs back.
+            for (r.names, old) |n, o| {
+                if (o) |u| {
+                    for (self.registry.entries.items) |*e| {
+                        if (std.mem.eql(u8, e.name, n)) e.uuid = u;
+                    }
+                } else _ = self.registry.removeGraph(n);
+            }
+            for (detached) |d| if (d) |kv| self.engines.putAssumeCapacity(kv.key, kv.value);
+            return err;
+        };
+        r.committed = true;
+        for (detached) |d| if (d) |kv| {
+            const mg = kv.value;
+            if (self.default_engine == mg) self.default_engine = null;
+            // SONNY-3028: pinned graphs are freed by their last unpin.
+            const prev = mg.pins.fetchOr(ManagedGraph.dropped_bit, .acq_rel);
+            if (prev == 0) mg.deinit(a, false);
+        };
+        // The new registry is in place; until its directory is synced a power
+        // loss may bring the old one back. Then every directory and the
+        // intent stay (no `finishGraphRestore`): the next open keeps
+        // whichever registry is on disk and deletes the other directories.
+        syncDirOf(self.registry_path) catch |err| {
+            log.warn("graph restore committed but the registry's directory could not be synced: {}; its old and new graph directories stay until the next open", .{err});
+            return error.GraphRestoreCommitNotDurable;
+        };
+        if (graphRestoreCrashAt(.committed)) return error.InjectedGraphRestoreCrash;
+    }
+
+    /// SONNY-6636 (1): after `commitGraphRestore`, delete the replaced
+    /// graphs' directories and the intent. A failure only leaves them for
+    /// the next open to finish.
+    pub fn finishGraphRestore(self: *StorageAdapter, r: *GraphRestore) void {
+        std.debug.assert(r.committed);
+        self.deleteGraphDirs(r.replaced);
+        if (graphRestoreCrashAt(.old_deleted)) return;
+        graph_restore_intent.remove(self.allocator, self.data_dir) catch |err| {
+            log.warn("cannot remove the graph restore intent: {}; the next open removes it", .{err});
+        };
+    }
+
+    /// SONNY-6636 (1): give up a restore not committed: delete its staged
+    /// directories, then the intent.
+    pub fn abandonGraphRestore(self: *StorageAdapter, r: *GraphRestore) void {
+        std.debug.assert(!r.committed);
+        if (g_test_graph_restore_crashed) return;
+        self.deleteGraphDirs(r.staged);
+        graph_restore_intent.remove(self.allocator, self.data_dir) catch |err| {
+            log.warn("cannot remove the graph restore intent: {}; the next open removes it", .{err});
+        };
+    }
+
+    fn deleteGraphDirs(self: *StorageAdapter, uuids: []const [16]u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (uuids) |u| {
+            const path = graphDirPath(self.allocator, self.data_dir, u) catch continue;
+            defer self.allocator.free(path);
+            std.Io.Dir.cwd().deleteTree(io, path) catch |err| {
+                log.warn("cannot delete graph directory {s} left by a restore: {}", .{ path, err });
+            };
+        }
+    }
+
+    /// SONNY-6636 (1): finish a restore a crash interrupted (`init`, after the
+    /// registry loads): every directory the intent lists that the registry
+    /// does not name is deleted, then the intent. A damaged intent refuses
+    /// the open: which directories are live cannot be told.
+    fn recoverGraphRestore(self: *StorageAdapter) !void {
+        const intent = (try graph_restore_intent.read(self.allocator, self.data_dir)) orelse return;
+        defer intent.deinit(self.allocator);
+        var dropped: usize = 0;
+        for ([_][]const [16]u8{ intent.staged, intent.replaced }) |list| {
+            for (list) |u| {
+                if (self.registry.findByUuid(u) != null) continue;
+                self.deleteGraphDirs(&.{u});
+                dropped += 1;
+            }
+        }
+        try graph_restore_intent.remove(self.allocator, self.data_dir);
+        slog.info("finished a graph restore interrupted by a crash", &.{
+            SAttr.uint("directories_deleted", dropped),
+            SAttr.uint("staged", intent.staged.len),
+        });
     }
 
     /// Return the names of all known graphs. Caller owns the returned slice and
@@ -13769,6 +13984,32 @@ fn monoNanosNow() u64 {
 // ============================================================================
 // UUID generation helper
 // ============================================================================
+
+// SONNY-6636 (1): test-only crash injection for the graph restore swap
+// (`StorageAdapter.GraphRestoreStep`).
+var g_test_graph_restore_crash: ?StorageAdapter.GraphRestoreStep = null;
+var g_test_graph_restore_crashed: bool = false;
+
+/// SONNY-6636 (1): stop the next graph restore after `step` as a crash
+/// would (nothing more written or cleaned up); null stops none.
+pub fn setGraphRestoreCrashForTesting(step: ?StorageAdapter.GraphRestoreStep) void {
+    g_test_graph_restore_crash = step;
+    g_test_graph_restore_crashed = false;
+}
+
+fn graphRestoreCrashAt(step: StorageAdapter.GraphRestoreStep) bool {
+    if (comptime !builtin.is_test) return false;
+    if (g_test_graph_restore_crash != step) return false;
+    g_test_graph_restore_crashed = true;
+    return true;
+}
+
+fn containsUuid(list: []const [16]u8, u: [16]u8) bool {
+    for (list) |x| {
+        if (std.mem.eql(u8, &x, &u)) return true;
+    }
+    return false;
+}
 
 fn generateUuid() [16]u8 {
     // Pass an explicit cross-platform timestamp: uuid.newV7()'s default clock

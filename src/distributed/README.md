@@ -172,7 +172,7 @@ SONNY-6279.
   leader re-sends a refused snapshot after 16, 32, 64 ... rounds (at most
   256), not at the next round; a successful install resets the backoff.
 
-### Raft snapshots into the durable store (SONNY-6633 item 2: blocked)
+### Raft snapshots into the durable store (SONNY-6633 item 2, SONNY-6636 item 1: in progress)
 
 A snapshot cannot be restored into the server's durable store, so the
 follower refuses it (`RaftSnapshotRestoreNotDurable`) and pauses, and the
@@ -183,7 +183,9 @@ block it:
    reopened on other files while the server runs: requests hold pins and
    `rwlock`s on it, and neither graph-storage nor `StorageAdapter` has a
    swap (`storage/backup.zig` `restoreBesideDataDir` restores beside the
-   data directory and asks for a restart for the same reason).
+   data directory and asks for a restart for the same reason). The
+   adapter's crash-safe swap of whole graphs has landed (below); its
+   wiring into the Raft restore has not.
    `installSnapshotData` only rebuilds memory (`clearNodes`, `*NoSave`).
 2. **A lossy snapshot.** The JSON-lines snapshot
    (`GraphStore.serializeSnapshot`) writes every `ExtValue` property
@@ -199,18 +201,33 @@ Design to unblock it:
   table, taken at the leader's applied index: checkpoint every graph, then
   copy (hard-link) its files while the apply path is paused, outside
   `inner_mutex`.
-- **Swap:** `StorageAdapter.swapGraphFiles(name, staged_dir)` (new, and a
-  graph-storage reopen-from-directory if the engine needs one): drain pins,
-  take the graph's `rwlock` EXCLUSIVE and `replicated_apply_mutex`, close
-  the engine, `rename` live -> `<name>.old` and staged -> live on the same
-  file system, fsync the parent, reopen, drop the graph's resident caches
-  and mark it pending hydration, delete `<name>.old`.
-- **Crash safety:** before the first rename write
-  `<data_dir>/raft/restore.intent` (snapshot index and term, staged paths),
-  fsynced; startup finishes or rolls back an intent it finds before the
-  store opens. The Raft snapshot is persisted (`advancePersist`) only after
-  every graph is swapped and the intent removed: a crash before leaves the
-  node behind, and the leader sends the snapshot again.
+- **Swap (landed, SONNY-6636):** the adapter keeps each graph under
+  `<data_dir>/<uuid>` and maps names to uuids in `graph_registry.dat`, so
+  a restore never renames a live directory.
+  `StorageAdapter.beginGraphRestore(names)` mints a uuid per graph, writes
+  `<data_dir>/graph_restore.intent` (the staged uuids and the ones they
+  replace; fsynced, renamed, directory fsynced) and creates the staged
+  directories; the caller fills them; `commitGraphRestore` rewrites the
+  registry to name the staged uuids (the commit point; the old engines
+  leave `engines` and are freed by their last unpin, as `dropGraph` frees
+  one); `finishGraphRestore` deletes the replaced directories, then the
+  intent; `abandonGraphRestore` deletes the staged ones. Refused under
+  at-rest encryption: graph-storage seals a graph's files under a key
+  derived from its uuid, so staged files must be re-sealed for the new uuid
+  first (open).
+- **Crash safety (landed):** `StorageAdapter.init` reads the intent before
+  any graph opens and deletes every directory it lists that the registry
+  does not name, then the intent: a crash before the commit reopens on the
+  old graphs, one after it on the restored ones. A damaged intent refuses
+  the open. `test-sonny6636-graph-restore-swap` stops the swap at each step
+  and reopens. Still open: the snapshot index and term in the intent, and
+  persisting the Raft snapshot (`advancePersist`) only after the intent is
+  removed, so a crash before leaves the node behind and the leader sends
+  the snapshot again.
+- **Resident state (open):** after the swap, `GraphStore` must forget the
+  graph's resident state (IdMap, label index, caches) before marking it
+  pending hydration: hydration re-inserts idempotently but removes nothing,
+  so the old graph's nodes would stay visible.
 - **Off `inner_mutex`:** the swap takes graph locks, so `drainReady` must
   hand a Ready with a snapshot to a restore thread and keep the node paused
   (as `stalled_ready` does) until it finishes.
