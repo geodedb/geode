@@ -11476,7 +11476,7 @@ pub fn build(b: *std.Build) void {
     b.step("test-sonny6658-statement-undo-log", "Run SONNY-6658 regression (in-process, durable undo log installed: a one-shard auto-commit statement, CREATE or MATCH ... SET of one node, commits one engine transaction and writes nothing to txn_undo.wal; a multi-shard one is logged and sealed with COMMITTED, a failed one undone and sealed with ROLLED_BACK, and the log is left empty)").dependOn(&run_sonny6658l_tests.step);
 
     // SONNY-6659: a write made while a statement or session engine
-    // transaction is open on its shard joins it (graph-storage v0.4.26 refuses
+    // transaction is open on its shard joins it (graph-storage v0.4.25 refuses
     // a second open writer of a page with WriteConflict): a cross-shard
     // relationship and a node batch; WriteConflict answers 40001; and over a
     // real server killed with SIGKILL, both in an explicit transaction commit,

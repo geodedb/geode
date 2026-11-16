@@ -6,7 +6,7 @@
 // one shard and both write a page (a node page, or a shared slab block that
 // labels, properties and adjacency fill), the image the second one commits
 // carries the first one's uncommitted bytes, and recovery replays them.
-// graph-storage v0.4.26 refuses the second writer with
+// graph-storage v0.4.25 refuses the second writer with
 // `error.WriteConflict`: a geode write that began a second transaction on
 // the shard of an open statement or session transaction then fails instead.
 // Two writes did that:
@@ -28,7 +28,7 @@
 // The server case runs the two writes inside an explicit transaction in one
 // request, against a real `geode serve`, committed, rolled back and left
 // open, and SIGKILLs the server: after the restart the committed one is
-// whole and the other two left nothing. On v0.4.26 without the fix the
+// whole and the other two left nothing. On v0.4.25 without the fix the
 // writes fail with WriteConflict.
 //
 // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
@@ -190,7 +190,7 @@ test "SONNY-6659: a batch of new nodes, with a statement transaction open on one
 }
 
 test "SONNY-6659: a second open writer's refusal (graph-storage WriteConflict) answers 40001, retryable" {
-    // `error.WriteConflict` exists from graph-storage v0.4.26; the mapping
+    // `error.WriteConflict` exists from graph-storage v0.4.25; the mapping
     // takes it by name, so it compiles against both.
     const info = proto_util.mapError(error.WriteConflict);
     try testing.expectEqualStrings("40001", info.code);

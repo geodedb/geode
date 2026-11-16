@@ -463,7 +463,7 @@ choice of transactions to undo, and the file's lifecycle.
 ## One Open Writer per Shard (SONNY-6659)
 
 graph-storage logs full-page images, so a page has at most one open engine
-transaction writing it: from v0.4.26 a second open transaction's write to a
+transaction writing it: from v0.4.25 a second open transaction's write to a
 page the first has written (a node page, or a shared slab block that
 labels, properties and adjacency fill) fails with `WriteConflict`, and that
 transaction cannot commit. Before, the image the second one committed
@@ -482,6 +482,18 @@ geode keeps at most one engine transaction open per shard for a request:
   different shards (stored on its source's shard) and a node batch
   (`CREATE (:L), (:L), (:L)`) committed their own transaction on the open
   transaction's shard.
+- **A new node goes on a node page of its transaction's own.** Every node
+  geode creates (`createNode`, a node batch's, the bulk insert the
+  group-commit workers run) takes its id from the engine transaction it is
+  written in (`allocNodeTxn`): while another transaction is open on the
+  shard, that is a node page no other open transaction writes (graph-storage
+  also gives each open transaction slab pages of its own). Until v0.4.25 the
+  id came from the shard's shared tail page (`allocNode`), so two
+  transactions open on one shard that each created a node there conflicted
+  although they wrote unrelated data. What still conflicts between two
+  open transactions is a page with records of both: an update of the same
+  existing node (or of nodes on one node page), and relationships into
+  nearby nodes (one `in_dir` page).
 - **Writers are serialized per graph.** An executor statement holds the
   graph's write lock, its engine transactions end before the lock is
   released, and no thread holds it while a group-commit batch transaction is
@@ -503,6 +515,27 @@ geode keeps at most one engine transaction open per shard for a request:
   is quarantined, as for any failed commit (SONNY-6529), until a restart.
   geode's locking keeps every other writer off a shard while such a
   transaction is open, so no path is known to reach it.
+
+A ROLLBACK replays the transaction's undo through the store's write
+methods while the session's engine transaction may still be open (a ROLLBACK
+in the same request as the writes): each undo write on that transaction's
+shard joins it like any other write, so the undo never conflicts with the
+transaction it undoes, and the writes and their undo commit as one unit.
+Two sessions updating one node never meet in the engine: the graph's write
+lock admits one request at a time and each request ends its engine
+transaction before it lets go, so neither answers 40001 and no update is
+lost.
+
+`zig build test-sonny6659-open-writers` checks that four statement
+transactions open on one shard (as the group-commit workers open theirs),
+creating nodes there through `createNode`, a node batch and the bulk insert
+and setting their properties and labels, are never refused and all commit
+(graph-storage counts no conflict); and, over a real server, that explicit
+transactions of six sessions at once and two sessions incrementing one node
+answer no 40001 and lose no increment, that a ROLLBACK with the session's
+engine transaction open (and one in its own request) restores every kind of
+change to data that existed before, and that a SIGKILL keeps only what
+committed.
 
 `zig build test-sonny6659-geode-single-writer` checks, with a statement
 transaction open on a chosen shard, that a cross-shard relationship and a

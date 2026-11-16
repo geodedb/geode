@@ -357,7 +357,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // which checks it.
         error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a constraint (UNIQUE, NODE KEY, NOT NULL or EXISTS) now applies in this graph; the write was not applied, retry it" },
         // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=WriteConflictSqlstate; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
-        // SONNY-6659: graph-storage (from v0.4.26) refused a write to a page
+        // SONNY-6659: graph-storage (from v0.4.25) refused a write to a page
         // another open engine transaction had written: a concurrent writer
         // on the same shard. The refused transaction is aborted and the
         // statement undone; 40001 = serialization_failure, retry it. Matched
