@@ -11190,6 +11190,32 @@ pub fn build(b: *std.Build) void {
     const sonny6642_step = b.step("test-sonny6642-wal-corrupted-quarantine", "Run SONNY-6642 regression (a real server is SIGKILLed with a graph's shard logs un-checkpointed, a middle record of one log is damaged; the restarted server refuses the graph with 58000 WalCorrupted and serves the others)");
     sonny6642_step.dependOn(&run_sonny6642_tests.step);
 
+    // SONNY-6601 (2): an aborted bulk reserved-id insert leaves no entry in
+    // the exact property index.
+    const sonny6601_bi_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_bulk_insert_index_abort.zig"), .target = target, .optimize = optimize });
+    sonny6601_bi_test_mod.link_libc = true;
+    sonny6601_bi_test_mod.addImport("geode", root_mod);
+    const sonny6601_bi_tests = b.addTest(.{ .root_module = sonny6601_bi_test_mod });
+    const run_sonny6601_bi_tests = b.addRunArtifact(sonny6601_bi_tests);
+    shardDep(test_step, &run_sonny6601_bi_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_bi_step = b.step("test-sonny6601-bulk-insert-index-abort", "Run SONNY-6601 item 2 regression (a durable store, one adapter allocation failed in turn: a bulk reserved-id node insert that fails leaves every property's exact-index posting empty; the one that succeeds leaves exactly its node)");
+    sonny6601_bi_step.dependOn(&run_sonny6601_bi_tests.step);
+
+    // SONNY-6601 (6): QUIC runs START TRANSACTION ... ROLLBACK with
+    // mutations in one message (it refused it with 25001; gRPC ran it).
+    const sonny6601_qr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_quic_inline_rollback.zig"), .target = target, .optimize = optimize });
+    sonny6601_qr_test_mod.link_libc = true;
+    sonny6601_qr_test_mod.addImport("geode", root_mod);
+    sonny6601_qr_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6601_qr_test_mod.addImport("schema", schema_mod);
+    sonny6601_qr_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6601_qr_tests = b.addTest(.{ .root_module = sonny6601_qr_test_mod });
+    const run_sonny6601_qr_tests = b.addRunArtifact(sonny6601_qr_tests);
+    spawnsBuiltGeode(sonny6601_qr_tests);
+    shardDep(test_step, &run_sonny6601_qr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_qr_step = b.step("test-sonny6601-quic-inline-rollback", "Run SONNY-6601 item 6 regression (a real server over QUIC: START TRANSACTION with CREATE, MERGE, DELETE or SET and ROLLBACK in one message succeeds and leaves nothing; with COMMIT it keeps the change)");
+    sonny6601_qr_step.dependOn(&run_sonny6601_qr_tests.step);
+
     // SONNY-6605 (1): a transient hydration failure (out of memory, a
     // descriptor quota) is retried on the next access with exact counts; a
     // damaged store stays quarantined.
