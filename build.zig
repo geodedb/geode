@@ -1274,12 +1274,16 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622, SONNY-6628: geode pins wal v0.1.25 (fail-closed recovery,
-    // compaction and truncateAfter); raft v0.2.2 pins v0.1.24,
-    // graph-storage v0.4.16 and timeseries-storage v0.2.20 v0.1.23. Two wal packages cannot share one compilation (Zig 0.16:
-    // "file exists in modules 'build_optionsN' and 'build_optionsM'"), so
-    // both libraries compile against geode's wal module, as timeseries-storage
-    // does for thread_pool below. Remove once both pin geode's wal version.
+    // SONNY-6622, SONNY-6628, SONNY-738: exactly one wal is compiled,
+    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.2 and
+    // timeseries-storage v0.2.22 still pin v0.1.24. Two wal packages cannot share one
+    // compilation (Zig 0.16: "file exists in modules 'build_optionsN' and
+    // 'build_optionsM'"), so every library that imports "wal" (graph-storage
+    // here, raft below, timeseries-storage further down) has that import
+    // pointed at geode's module, as timeseries-storage does for thread_pool.
+    // Their own wal pins are then fetched but never compiled. v0.1.25 only
+    // adds a fail-closed truncateAfter to v0.1.24's API. Remove each line
+    // once that library pins geode's wal version.
     graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -1290,6 +1294,7 @@ pub fn build(b: *std.Build) void {
     const raft_ext_mod = raft_dep.module("raft");
     // SONNY-6628: raft v0.2.2 pins wal v0.1.24, geode v0.1.25 (truncateAfter
     // fails closed); one wal per compilation (see graph_storage_mod above).
+    // raft's root module is the only one of its modules that imports "wal".
     raft_ext_mod.addImport("wal", wal_ext_mod);
 
     // ==========================================================================

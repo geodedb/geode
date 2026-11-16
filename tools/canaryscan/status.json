@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T23:55:56.967773373Z",
+  "generated_at": "2026-11-15T23:56:52.419417117Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80707,6 +80707,7 @@
           "aspect": "WalDirClosedOnce",
           "status": "TESTED",
           "files": [
+            "src/timeseries/timeseries.zig",
             "tests/test_sonny6615_ts_wal_dir_close.zig"
           ],
           "tests": [

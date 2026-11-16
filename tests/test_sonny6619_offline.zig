@@ -10,7 +10,8 @@
 //!     never closes it (the wal library does not own it). The live-server
 //!     guard of the offline CLI then saw this process as a holder of the
 //!     data directory, so every offline write in a test needed `--force`.
-//!     geode's timeseries `Store.deinit` now closes it; no fixture here
+//!     timeseries-storage v0.2.22 `Engine.deinit` now closes it (geode's
+//!     own close, the interim fix, is gone: SONNY-6615); no fixture here
 //!     passes `--force`.
 //!
 // CANARY: REQ=REQ-SONNY-6619-OFFLINE; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6619_offline.zig; OWNER=security; UPDATED=2026-11-15

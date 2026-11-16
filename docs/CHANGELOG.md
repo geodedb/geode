@@ -611,6 +611,24 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
+- **Storage re-pin: graph-storage v0.4.20, timeseries-storage v0.2.22,
+  wal v0.1.25 (SONNY-738, SONNY-6615, SONNY-6616, SONNY-6622).** One wal is
+  compiled into geode, v0.1.25 (`truncateAfter` fails closed as well as
+  recovery and compaction): graph-storage v0.4.20 pins it, and build.zig
+  points raft v0.2.2's and timeseries-storage v0.2.22's `wal` import (both
+  still pin v0.1.24) at geode's module. graph-storage v0.4.18-v0.4.20: a
+  wrong key is `EncryptionKeyMismatch` (see the next entry), the graph
+  registry and the topology snapshots (`edges.idx`, `edges_exist.idx`) are
+  sealed under the key, side-file kinds 128..255 belong to the consumer, an
+  unreadable graph WAL is refused instead of truncated (`WalCorrupted` for
+  mid-log damage), a checkpoint whose WAL compaction is refused completes,
+  and `VerifyTool` no longer wipes an encrypted WAL. timeseries-storage
+  v0.2.22 closes the WAL directory its engine opened, so geode's
+  `Store.deinit` no longer closes it: the second close ran on a freed
+  descriptor number, which could already belong to another thread's handle
+  on the same directory (a watcher thread lost one after 109 store
+  open/close cycles against v0.2.22). Regression: `zig build
+  test-sonny6615-ts-wal-dir-close`.
 - **Graph names sealed under TDE; a wrong key is reported as such
   (SONNY-6616). Requires graph-storage 0.4.20.** `graph_registry.dat` and
   `dropped_graphs.dat` held every graph's name in plaintext beside the

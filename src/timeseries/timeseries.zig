@@ -340,25 +340,12 @@ pub const Store = struct {
 
         if (self.engine) |eng| {
             // CANARY: REQ=REQ-SONNY-6619-TS-WAL-DIR-RELEASE; FEATURE="Timeseries"; ASPECT=WalDirHandleClosed; STATUS=TESTED; TEST=tests/test_sonny6619_offline.zig; OWNER=storage; UPDATED=2026-11-15
-            // SONNY-6619: timeseries-storage (v0.2.20, `Engine.init`) opens
-            // `{data_dir}` for its WAL and hands it to the wal library, which
-            // does not own it (`WriteAheadLog.init` doc); neither closes it,
-            // so every Store left a descriptor in the data directory (the
-            // offline CLI's live-server guard then saw a closed process as a
-            // holder). Closed here after the engine is torn down (its WAL
-            // writes its checkpoint through it), and only while the
-            // descriptor is still that directory: should the library start
-            // closing it, a reused descriptor number is not closed. The
-            // library fix (close `wal_dir` in `Engine.deinit`, and in
-            // `Engine.init`'s errdefer) is owed upstream.
-            const wal_dir = eng.wal.inner.dir;
-            const ident = dirIdentity(wal_dir.handle);
+            // CANARY: REQ=REQ-SONNY-6615-TS-WAL-DIR-OWNER; FEATURE="Timeseries"; ASPECT=WalDirClosedOnce; STATUS=TESTED; TEST=tests/test_sonny6615_ts_wal_dir_close.zig; OWNER=storage; UPDATED=2026-11-15
+            // timeseries-storage >= 0.2.22 closes the WAL directory that
+            // `Engine.init` opened (SONNY-6619 / SONNY-6623). geode must not
+            // close it again: the number is free by then and may already be
+            // another thread's descriptor on the same directory (SONNY-6615).
             eng.deinit();
-            if (ident) |before| {
-                if (dirIdentity(wal_dir.handle)) |after| {
-                    if (before.dev == after.dev and before.ino == after.ino) wal_dir.close(std.Io.Threaded.global_single_threaded.io());
-                }
-            }
             self.allocator.free(eng.config.data_dir);
             self.allocator.destroy(eng);
             self.engine = null;
@@ -367,26 +354,6 @@ pub const Store = struct {
             p.deinit();
             self.allocator.destroy(p);
             self.pool = null;
-        }
-    }
-
-    const DirIdentity = struct { dev: u64, ino: u64 };
-
-    /// The (device, inode) a descriptor names, or null when it names none.
-    fn dirIdentity(fd: std.posix.fd_t) ?DirIdentity {
-        switch (comptime @import("builtin").os.tag) {
-            .linux => {
-                const linux = std.os.linux;
-                var stx: linux.Statx = undefined;
-                const rc = linux.statx(fd, "", linux.AT.EMPTY_PATH, .{ .INO = true }, &stx);
-                if (linux.errno(rc) != .SUCCESS) return null;
-                return .{ .dev = (@as(u64, stx.dev_major) << 32) | stx.dev_minor, .ino = stx.ino };
-            },
-            else => {
-                var st: std.c.Stat = undefined;
-                if (std.c.fstat(fd, &st) != 0) return null;
-                return .{ .dev = @intCast(st.dev), .ino = @intCast(st.ino) };
-            },
         }
     }
 
