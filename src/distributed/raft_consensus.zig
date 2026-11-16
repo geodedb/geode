@@ -1036,6 +1036,22 @@ pub const Transport = struct {
                     }
                 }
             },
+            // CANARY: REQ=REQ-SONNY-6636-OUTBOX-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=OneSnapshotSendQueued; STATUS=TESTED; TEST=tests/test_sonny6636_outbox_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+            // SONNY-6636 (c): a snapshot goes out as a burst of chunks from
+            // offset 0, sent whole again every few rounds while the peer does
+            // not answer. A new burst supersedes every chunk still queued for
+            // this peer: a peer that was down came back to thousands of stale
+            // chunks of older snapshots, restored the oldest and never caught
+            // up with the newest.
+            .install_snapshot => |is| if (is.offset == 0) {
+                var k: usize = 0;
+                while (k < pd.queue.items.len) {
+                    if (pd.queue.items[k].msg == .install_snapshot) {
+                        freeOutboundMessage(self.allocator, pd.queue.items[k].msg);
+                        _ = pd.queue.orderedRemove(k);
+                    } else k += 1;
+                }
+            },
             else => {},
         }
 
