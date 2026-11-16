@@ -6290,7 +6290,7 @@ pub const GraphStore = struct {
         const public_ids = try out_allocator.alloc(u64, n);
         errdefer out_allocator.free(public_ids);
         for (public_ids) |*pid| pid.* = generateTimeBasedId();
-        if (txn_durable_undo.active()) {
+        if (txn_durable_undo.wantsCreateIntents()) { // SONNY-6658: or an auto-commit statement
             const intents = try self.allocator.alloc(txn_undo.UndoEntry, n);
             defer self.allocator.free(intents);
             for (intents, public_ids) |*e, pid| e.* = .{ .CreateNode = .{ .node_id = pid, .graph_name = "" } };

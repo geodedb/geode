@@ -3237,6 +3237,31 @@
   test-sonny2979-txn-crash-atomicity` (now in the aggregate), `zig build
   test-sonny2979-txn-commit-durable`, `zig build
   test-sonny2979-undo-wal-format`.
+- **An auto-commit statement is crash-atomic (SONNY-6658).** A statement
+  outside BEGIN ... COMMIT whose changes spanned engine transactions (a
+  change on another shard than its engine transaction's, and every change
+  of a `MATCH ... SET`, `MATCH ... DELETE` or `MATCH ... REMOVE`, which had
+  none) committed them as it ran, so a kill mid-statement kept them after
+  the restart (red: 8 of a 32-node `SET` survived a SIGKILL). An
+  auto-commit statement's engine transaction is now committed when the
+  statement ends, and a statement that has none opens one at its first
+  write, on that write's shard. Before a change that commits an engine
+  transaction of its own, the statement's undo is written to
+  `<data dir>/txn_undo.wal` (one fsync); when it ends it is sealed with
+  COMMITTED (ROLLED_BACK when it failed), and startup undoes a statement
+  with neither, as a transaction. **Behaviour change:** a statement whose
+  changes are all on one shard writes nothing to the log and commits one
+  engine transaction (a one-node `MATCH ... SET` of several properties
+  committed one per property); one that spans shards costs one extra fsync
+  per change committed on another shard, plus two at its end. A write
+  whose undo cannot be logged is refused and the statement undone (40000).
+  A Debug-only crash point (`GEODE_TEST_STATEMENT_KILL_KEY`,
+  `GEODE_TEST_STATEMENT_KILL_AFTER`) kills the server mid-statement for
+  tests. Regressions: `zig build test-sonny6658-autocommit-crash-atomicity`
+  (a real server killed after 8 of a statement's changes), `zig build
+  test-sonny6658-statement-undo-log` (no log record and one engine commit
+  for one-shard statements; logged and sealed for multi-shard and failed
+  ones).
 
 - **A WITH item does not read a sibling item's alias; a gRPC Handshake
   past the tenant's connection quota is refused with 53300 (SONNY-6645).**

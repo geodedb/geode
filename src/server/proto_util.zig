@@ -225,6 +225,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3031: the storage engine could not commit the transaction's
         // changes; the transaction is rolled back.
         error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
+        // SONNY-6658: an auto-commit statement's undo could not be written
+        // to the durable undo log before a change; the statement was undone.
+        error.StatementUndoNotDurable => .{ .code = "40000", .message = "The statement's undo could not be written to the durable undo log; its changes were rolled back" },
+        error.StatementCommitFailed => .{ .code = "40000", .message = "The statement's changes could not be committed to storage; it was rolled back" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         // SONNY-3348 (round 18, I2): COMMIT of a transaction a failed
         // statement aborted: it was rolled back, and it is over.

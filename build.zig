@@ -11412,6 +11412,36 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2979c_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny2979-txn-commit-durable", "Run SONNY-2979 regression (SIGKILL of a real server: a committed transaction, over several requests or in one, survives whole beside an open one that is undone; a rolled-back one is not undone again; under GEODE_TDE_KEY txn_undo.wal is sealed and still undoes)").dependOn(&run_sonny2979c_tests.step);
 
+    // SONNY-6658: an auto-commit statement cut by a SIGKILL of a real server
+    // (the Debug crash point GEODE_TEST_STATEMENT_KILL_KEY) leaves nothing
+    // after the restart; a finished multi-shard statement survives whole.
+    const sonny6658_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6658_autocommit_crash_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny6658_test_mod.link_libc = true;
+    sonny6658_test_mod.addImport("geode", root_mod);
+    sonny6658_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6658_test_mod.addImport("schema", schema_mod);
+    sonny6658_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6658_tests = b.addTest(.{ .root_module = sonny6658_test_mod });
+    const run_sonny6658_tests = b.addRunArtifact(sonny6658_tests);
+    spawnsBuiltGeode(sonny6658_tests);
+    shardDep(test_step, &run_sonny6658_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6658-autocommit-crash-atomicity", "Run SONNY-6658 regression (an auto-commit statement changing nodes on several shards, cut by a SIGKILL of a real server after 8 of its changes, leaves none of them after the restart: the durable undo log txn_undo.wal undoes it; a finished multi-shard statement survives whole)").dependOn(&run_sonny6658_tests.step);
+
+    // SONNY-6658: what an auto-commit statement costs and leaves in the
+    // durable undo log, in-process with the log installed: one shard, one
+    // engine commit and no log record; several shards, logged and sealed
+    // (COMMITTED, or ROLLED_BACK when it fails), the log emptied.
+    const sonny6658l_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6658_statement_undo_log.zig"), .target = target, .optimize = optimize });
+    sonny6658l_test_mod.link_libc = true;
+    sonny6658l_test_mod.addImport("geode", root_mod);
+    sonny6658l_test_mod.addImport("logging", logging_mod);
+    sonny6658l_test_mod.addImport("rls", rls_mod);
+    sonny6658l_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6658l_tests = b.addTest(.{ .root_module = sonny6658l_test_mod });
+    const run_sonny6658l_tests = b.addRunArtifact(sonny6658l_tests);
+    shardDep(test_step, &run_sonny6658l_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6658-statement-undo-log", "Run SONNY-6658 regression (in-process, durable undo log installed: a one-shard auto-commit statement, CREATE or MATCH ... SET of one node, commits one engine transaction and writes nothing to txn_undo.wal; a multi-shard one is logged and sealed with COMMITTED, a failed one undone and sealed with ROLLED_BACK, and the log is left empty)").dependOn(&run_sonny6658l_tests.step);
+
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.
     const sonny2979w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_undo_wal_format.zig"), .target = target, .optimize = optimize });

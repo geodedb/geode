@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T08:24:26.347472669Z",
+  "generated_at": "2026-11-16T09:56:17.819785199Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82850,6 +82850,86 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6658-AUTOCOMMIT-ATOMIC",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "StatementSeal",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6658_autocommit_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "StatementDurableUndo",
+          "status": "TESTED",
+          "files": [
+            "src/statement_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6658_autocommit_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "StatementEndCommit",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6658_autocommit_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "StatementLogCost",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6658_statement_undo_log.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6658_statement_undo_log.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6658-STATEMENT-KILL-HOOK",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "CrashPointHook",
+          "status": "TESTED",
+          "files": [
+            "src/statement_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6658_autocommit_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -87941,7 +88021,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4349
+      "TESTED": 4354
     },
     "by_aspect": {
       "2PC": 3,
@@ -88607,6 +88687,7 @@
       "CounterRegistry": 1,
       "Coverage": 1,
       "CoveredEntriesNotReapplied": 1,
+      "CrashPointHook": 1,
       "Create": 1,
       "CreateClassifiedAsCreate": 1,
       "CreateConstraintValidates": 2,
@@ -91348,7 +91429,9 @@
       "StatementBatchCodec": 1,
       "StatementBatchRegression": 1,
       "StatementDispatch": 1,
+      "StatementDurableUndo": 1,
       "StatementEndCheck": 2,
+      "StatementEndCommit": 1,
       "StatementEndHook": 1,
       "StatementEndRebuild": 1,
       "StatementFallback": 1,
@@ -91357,6 +91440,7 @@
       "StatementLeadingWrite": 1,
       "StatementLimitRelay": 1,
       "StatementList": 1,
+      "StatementLogCost": 1,
       "StatementOnStream": 1,
       "StatementParsing": 1,
       "StatementProposalBatch": 1,
@@ -91365,6 +91449,7 @@
       "StatementScopedDimScratch": 1,
       "StatementScopedRecord": 1,
       "StatementScratch": 1,
+      "StatementSeal": 1,
       "StatementUndoRecord": 1,
       "StatementUndoRegression": 1,
       "StatementUndoReplay": 1,

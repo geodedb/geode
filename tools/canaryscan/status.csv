@@ -5245,6 +5245,11 @@ REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants
 REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,tests/test_sonny6647_user_permissions.zig,,,security,2026-11-15
 REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,DecodeEmptyGraphAsDefault,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
 REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,EmptyGraphIsDefault,TESTED,tests/test_sonny6651_empty_graph_payload.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
+REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementSeal,TESTED,src/execution.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
+REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementDurableUndo,TESTED,src/statement_undo.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
+REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementEndCommit,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
+REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementLogCost,TESTED,tests/test_sonny6658_statement_undo_log.zig,tests/test_sonny6658_statement_undo_log.zig,,storage,2026-11-16
+REQ-SONNY-6658-STATEMENT-KILL-HOOK,TransactionManagement,CrashPointHook,TESTED,src/statement_undo.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

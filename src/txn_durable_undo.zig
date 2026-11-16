@@ -51,6 +51,7 @@ const builtin = @import("builtin");
 const gs = @import("graph_storage");
 const txn_undo_log = @import("txn_undo_log.zig");
 const graph_store = @import("graph_store.zig");
+const statement_undo = @import("statement_undo.zig");
 const logging = @import("logging");
 const log = logging.scoped("txn_durable_undo");
 const Attr = logging.Attr;
@@ -692,8 +693,8 @@ pub fn recoverAtStartup(l: *Log, store: *graph_store.GraphStore) !RecoveryReport
         report.txns = seen.count();
         report.entries = order.len;
 
-        @import("statement_undo.zig").suspendCapture();
-        defer @import("statement_undo.zig").resumeCapture();
+        statement_undo.suspendCapture();
+        defer statement_undo.resumeCapture();
         var repair = txn_undo_log.IndexRepair.init(allocator);
         defer repair.finish(store);
         for (order) |i| {
@@ -760,10 +761,18 @@ pub fn noteCreateIntent(entry: UndoEntry) !void {
     return noteCreateIntents(&.{entry});
 }
 
+/// Does a create about to be made need its intent noted? Inside an explicit
+/// transaction, or an auto-commit statement (SONNY-6658).
+pub fn wantsCreateIntents() bool {
+    return active() or statement_undo.wantsCreateIntents();
+}
+
 /// Creates are about to make the ids of `entries` (CreateNode or CreateEdge,
-/// ids increasing): one record each, one fsync.
+/// ids increasing): one record each, one fsync. In an auto-commit statement
+/// (SONNY-6658) they are kept in its record until it next writes the log.
 pub fn noteCreateIntents(entries: []const UndoEntry) !void {
-    if (!active() or entries.len == 0) return;
+    if (entries.len == 0) return;
+    if (!active()) return statement_undo.noteCreateIntents(entries);
     try logForThread(entries);
     t_intent_lo = entryId(entries[0]);
     t_intent_hi = entryId(entries[entries.len - 1]);
@@ -776,6 +785,31 @@ pub fn noteCreated(entry: UndoEntry) !void {
     const id = entryId(entry);
     if (id != 0 and id >= t_intent_lo and id <= t_intent_hi) return;
     try logForThread(&.{entry});
+}
+
+/// SONNY-6658: auto-commit statements are logged under ids of their own,
+/// with the top bit set, so they never meet a transaction's
+/// (`txn_undo_log`'s ids count from 1).
+const statement_id_bit: u64 = @as(u64, 1) << 63;
+var next_statement_id: std.atomic.Value(u64) = .init(1);
+
+pub fn newStatementId() u64 {
+    return statement_id_bit | next_statement_id.fetchAdd(1, .monotonic);
+}
+
+/// SONNY-6658: write `entries` of auto-commit statement `id` (one fsync).
+pub fn logStatementEntries(id: u64, entries: []const UndoEntry) !void {
+    const l = g_log orelse return;
+    try l.logEntries(id, entries);
+}
+
+/// SONNY-6658: auto-commit statement `id` ended: committed (its engine
+/// transactions committed first; this record is its commit point) or rolled
+/// back (its undo committed first). A statement that wrote no entry needs
+/// none.
+pub fn markStatementEnded(id: u64, kind: RecordKind) !void {
+    const l = g_log orelse return;
+    try l.markEnded(id, kind);
 }
 
 /// The calling thread's transaction committed: its engine transactions have

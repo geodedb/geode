@@ -3686,7 +3686,22 @@ pub const StatementTxn = struct {
     /// Commit the statement txn → exactly one WAL fsync. SONNY-6529: a
     /// commit that fails aborts it and quarantines the graph
     /// (`commitMirroredTxn`).
+    ///
+    /// SONNY-6658: in an auto-commit statement (`deferToStatementEnd`) the
+    /// commit is the statement's end's: the transaction stays this thread's
+    /// statement transaction (`t_auto_statement_txn`), later writes of the
+    /// statement join it, and `commitAutoStatementTxn` commits it. A commit
+    /// that is not the statement's last first puts the statement's undo on
+    /// disk (`statement_undo.beforeOwnEngineCommit`).
     pub fn commit(self: *StatementTxn) !void {
+        if (isAutoStatementTxn(self)) return;
+        if (t_auto_statement_txn == null and deferToStatementEnd()) {
+            t_auto_statement_txn_storage = self.*;
+            t_auto_statement_txn = &t_auto_statement_txn_storage;
+            t_current_statement_txn = t_auto_statement_txn;
+            return;
+        }
+        try statement_undo.beforeOwnEngineCommit();
         t_current_statement_txn = null;
         try commitMirroredTxn(self.mg, self.txn_id, "statement commit");
     }
@@ -3707,6 +3722,8 @@ pub const StatementTxn = struct {
     /// (and the next checkpoint made them durable); 0.4.16 undoes them, and
     /// the replay then undid the same writes a second time.
     pub fn fail(self: *StatementTxn) void {
+        // SONNY-6658: deferred to its statement's end, which ends it.
+        if (isAutoStatementTxn(self)) return;
         if (t_current_statement_txn == self) t_current_statement_txn = null;
         if (t_failed_statement_txn == null and statement_undo.capturing()) {
             t_failed_statement_txn_storage = self.*;
@@ -3720,6 +3737,7 @@ pub const StatementTxn = struct {
     /// The statement wrote nothing in its transaction (a MERGE that found
     /// its node): abort it. With nothing to undo it is an ABORT record only.
     pub fn discard(self: *StatementTxn) void {
+        if (isAutoStatementTxn(self)) return; // SONNY-6658: as `fail`
         if (t_current_statement_txn == self) t_current_statement_txn = null;
         abortUnmirroredShardedTxn(self.mg, self.txn_id, "unused statement txn");
     }
@@ -3744,6 +3762,58 @@ pub fn settleFailedStatementTxn() void {
     t_failed_statement_txn = null;
     if (t_current_statement_txn == txn) t_current_statement_txn = null;
     commitMirroredTxn(txn.mg, txn.txn_id, "failed statement after its undo") catch {};
+}
+
+// CANARY: REQ=REQ-SONNY-6658-AUTOCOMMIT-ATOMIC; FEATURE="TransactionManagement"; ASPECT=StatementEndCommit; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+// SONNY-6658: an auto-commit statement's engine transaction. In an
+// auto-commit statement (outside BEGIN ... COMMIT, with the durable undo log
+// installed) the statement's engine transaction is committed when the
+// statement ends (`commitAutoStatementTxn`, from `execution`), not when the
+// executor that opened it returns (`StatementTxn.commit` hands it over), and
+// a statement that has none opens one at its first write, on that write's
+// shard (`openAutoStatementTxn`). Its changes on that shard so commit as one
+// unit, last; a change on another shard commits its own engine transaction
+// and puts the statement's undo on disk first
+// (`statement_undo.beforeOwnEngineCommit`), so a crash before the statement
+// ends is undone at the restart (`txn_durable_undo`). A change used to commit
+// its own engine transaction wherever the statement had none (`MATCH ...
+// SET`), and a kill mid-statement left those changes in place.
+threadlocal var t_auto_statement_txn: ?*StatementTxn = null;
+threadlocal var t_auto_statement_txn_storage: StatementTxn = undefined;
+
+/// SONNY-6658: is this thread's statement an auto-commit one whose engine
+/// transaction is committed at its end? Not with a session engine transaction
+/// (an explicit transaction's).
+fn deferToStatementEnd() bool {
+    return t_session_engine_txn == null and statement_undo.autoCommitStatementOpen();
+}
+
+/// SONNY-6658: `txn` is the auto-commit statement's transaction (or the
+/// executor's copy of it, handed over by `StatementTxn.commit`).
+fn isAutoStatementTxn(txn: *const StatementTxn) bool {
+    const a = t_auto_statement_txn orelse return false;
+    return a == txn or (a.mg == txn.mg and a.txn_id == txn.txn_id);
+}
+
+/// SONNY-6658: commit the auto-commit statement's engine transaction, if
+/// there is one: at the statement's end, after its undo is on disk when it
+/// went durable, or after a failed statement's undo replayed (its
+/// compensations joined it). A commit that fails aborts it and quarantines
+/// the graph (`commitMirroredTxn`).
+pub fn commitAutoStatementTxn() !void {
+    const txn = t_auto_statement_txn orelse return;
+    t_auto_statement_txn = null;
+    if (t_current_statement_txn == txn) t_current_statement_txn = null;
+    try commitMirroredTxn(txn.mg, txn.txn_id, "auto-commit statement");
+}
+
+/// SONNY-6658: the end of a request with an auto-commit statement's engine
+/// transaction still open (a statement scope that did not end it): commit
+/// it, so it never outlives the request on a pooled thread.
+pub fn settleAutoStatementTxn() void {
+    if (t_auto_statement_txn == null) return;
+    log.warn("an auto-commit statement's engine txn outlived its statement; committing it", .{});
+    commitAutoStatementTxn() catch {};
 }
 
 // R9 (2026-04-22): session-scoped engine txn — spans an entire Geode
@@ -3847,6 +3917,7 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
     if (scope.nested) return false;
     var backstop = false;
     settleFailedStatementTxn(); // SONNY-6529: never outlives the request either
+    settleAutoStatementTxn(); // SONNY-6658: nor this
     if (slot.open and t_session_engine_txn == &slot.txn) {
         // The executor commits it when the program that opened it returns,
         // and the handler before it releases the program's write lock; one
@@ -5653,7 +5724,7 @@ pub const StorageAdapter = struct {
         // transactions (3-6 commits, each a WAL fsync, for a one-node CREATE).
         mg.beginNodeCensusWrite(); // SONNY-6472 (4)
         defer mg.endNodeCensusWrite();
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        var stmt_txn = currentStatementTxnForGraph(graph_name);
         const node_id = if (stmt_txn) |s|
             try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
         else
@@ -5663,6 +5734,11 @@ pub const StorageAdapter = struct {
         // SONNY-6523 (2): a failure from here on gives the slot back.
         var slot_txn_open = false;
         errdefer if (!slot_txn_open) releaseFailedNodeSlot(node_shard, node_id, null, false);
+        // SONNY-6658: an auto-commit statement's first write opens its
+        // transaction on the node's shard; a create that commits its own
+        // has the statement's undo on disk first.
+        if (stmt_txn == null) stmt_txn = try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(node_id));
+        if (stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null) try statement_undo.beforeOwnEngineCommit();
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -7752,6 +7828,9 @@ pub const StorageAdapter = struct {
             out[i] = node_id;
         }
 
+        // SONNY-6658: the batch commits its own engine transactions: the
+        // statement's undo (the batch's intents) is on disk first.
+        try statement_undo.beforeOwnEngineCommit();
         for (mg.engine.shards, 0..) |shard, si| {
             if (shard_txns[si]) |t| try shard.commitTxn(t);
             shard_txns[si] = null;
@@ -7786,7 +7865,7 @@ pub const StorageAdapter = struct {
         // SONNY-6472 (3): join the statement/session engine txn when it is on
         // the node's shard, so the request's same-shard changes commit (and
         // are lost to a crash) together, as setNodeProperty's do.
-        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
         const txn = joined orelse try shard.beginTxn();
         // SONNY-6529: graph-storage undoes the failed delete.
         errdefer if (joined == null) abortUnmirroredTxn(mg, shard, txn, "node delete");
@@ -7904,24 +7983,24 @@ pub const StorageAdapter = struct {
         // shards correctly.  See
         // docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md §3.2.
         const same_shard = gs.shard_count.shardOfNode(from_id) == gs.shard_count.shardOfNode(to_id);
+        // SONNY-6658: `statementLocalTxn`; a create that commits its own
+        // engine transaction has the statement's undo on disk first.
+        if (!same_shard) try statement_undo.beforeOwnEngineCommit();
         if (same_shard) {
-            const stmt_txn = currentStatementTxnForGraph(graph_name);
-            if (stmt_txn) |s| {
-                if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    // GAP-ENT-0024: the public-id-carrying path uses the
-                    // CO-LOCATED txn add (the id rides both durable adjacency
-                    // records; strictly fewer pages than addEdgeTxn's two-node
-                    // write and no `to`-record read). The legacy public_id==0
-                    // surface keeps the historical addEdgeTxn byte-for-byte.
-                    const _edge_id = if (public_id != 0)
-                        try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
-                    else
-                        try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
-                    _ok_12e = true;
-                    // OTel Task 13: graph data model mutation counter (fast path).
-                    _om12e.recordEdgeMutation(.create, graph_name, .success);
-                    return _edge_id;
-                }
+            if (try self.statementLocalTxn(graph_name, from_id)) |local| {
+                // GAP-ENT-0024: the public-id-carrying path uses the
+                // CO-LOCATED txn add (the id rides both durable adjacency
+                // records; strictly fewer pages than addEdgeTxn's two-node
+                // write and no `to`-record read). The legacy public_id==0
+                // surface keeps the historical addEdgeTxn byte-for-byte.
+                const _edge_id = if (public_id != 0)
+                    try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
+                else
+                    try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                _ok_12e = true;
+                // OTel Task 13: graph data model mutation counter (fast path).
+                _om12e.recordEdgeMutation(.create, graph_name, .success);
+                return _edge_id;
             }
         }
         // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
@@ -7973,12 +8052,10 @@ pub const StorageAdapter = struct {
         defer security_hold.release();
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
-                _ok_13de = true;
-                return;
-            }
+        if (try self.statementLocalTxn(graph_name, from_id)) |local| { // SONNY-6658
+            try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
+            _ok_13de = true;
+            return;
         }
         mg.engine.removeEdge(from_id, to_id, edge_id) catch |err| {
             noteAutoCommitFailure(mg, from_id, err, "relationship delete (auto-commit)"); // SONNY-6601 (3)
@@ -8128,12 +8205,9 @@ pub const StorageAdapter = struct {
         // R7/R8 (2026-04-22): batch putProperty + putNode into one txn on the
         // node's shard. Join the statement txn's local txn if it is on the
         // same shard; otherwise open a fresh shard-local txn.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
         // SONNY-6529: graph-storage undoes the failed write (the store's
         // in-memory copy takes it only once this returns).
         errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property set");
@@ -8198,12 +8272,9 @@ pub const StorageAdapter = struct {
         defer self.allocator.free(label_ids);
 
         // R7/R8: one txn on the node's shard covering the full N-property batch.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
         // SONNY-6529: graph-storage undoes the failed batch.
         errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property batch");
 
@@ -8285,7 +8356,7 @@ pub const StorageAdapter = struct {
         // it is on the node's shard (as in setNodeProperty), so the request's
         // same-shard changes commit, and are lost to a crash, together.
         var index_move = try ExactIndexMove.prepare(mg, key, old_value, .null); // SONNY-6646 (6)
-        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
         const txn = joined orelse try node_shard.beginTxn();
         // SONNY-6529: graph-storage undoes the failed removal.
         errdefer if (joined == null) abortUnmirroredTxn(mg, node_shard, txn, "node property remove");
@@ -10092,7 +10163,7 @@ pub const StorageAdapter = struct {
         // which 0.4.16 cannot undo: every aborted relationship-property
         // write failed closed and refused the shard's writes until a
         // restart. The node-page image cost 8 KiB of WAL per write.
-        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, from_id) else null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, from_id); // SONNY-6658
         const txn = joined orelse try from_shard.beginTxn();
         errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, txn, "relationship property set");
         from_shard.setEdgePropertyTxn(from_id, to_id, edge_id, key, storage_val, txn) catch |err|
@@ -10149,8 +10220,7 @@ pub const StorageAdapter = struct {
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
         // R8/R12 parity: one txn on from_shard for all N property writes.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const joined: ?gs.TxnId = if (stmt_txn) |s| shardLocalTxnForNode(s.txn_id, from_id) else null;
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, from_id); // SONNY-6658
         const local_txn = joined orelse try from_shard.beginTxn();
         errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, local_txn, "relationship property batch");
 
@@ -13100,15 +13170,8 @@ pub const StorageAdapter = struct {
         const label_id = try resolvePersistedLabelId(mg, label);
         const node_shard = mg.shardEngineForNode(node_id);
         // R10: join active session/statement engine txn if on the same shard.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
-                try node_shard.addLabelTxn(node_id, label_id, local);
-            } else {
-                mg.engine.addLabel(node_id, label_id) catch |err| {
-                    noteAutoCommitFailure(mg, node_id, err, "label add (auto-commit)"); // SONNY-6601 (3)
-                    return err;
-                };
-            }
+        if (try self.statementLocalTxn(graph_name, node_id)) |local| { // SONNY-6658
+            try node_shard.addLabelTxn(node_id, label_id, local);
         } else {
             mg.engine.addLabel(node_id, label_id) catch |err| {
                 noteAutoCommitFailure(mg, node_id, err, "label add (auto-commit)"); // SONNY-6601 (3)
@@ -13137,15 +13200,8 @@ pub const StorageAdapter = struct {
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
         const node_shard = mg.shardEngineForNode(node_id);
         // R10: join active session/statement engine txn if on the same shard.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
-                try node_shard.removeLabelTxn(node_id, label_id, local);
-            } else {
-                mg.engine.removeLabel(node_id, label_id) catch |err| {
-                    noteAutoCommitFailure(mg, node_id, err, "label remove (auto-commit)"); // SONNY-6601 (3)
-                    return err;
-                };
-            }
+        if (try self.statementLocalTxn(graph_name, node_id)) |local| { // SONNY-6658
+            try node_shard.removeLabelTxn(node_id, label_id, local);
         } else {
             mg.engine.removeLabel(node_id, label_id) catch |err| {
                 noteAutoCommitFailure(mg, node_id, err, "label remove (auto-commit)"); // SONNY-6601 (3)
@@ -13183,18 +13239,16 @@ pub const StorageAdapter = struct {
         try refuseQuarantinedWrite(mg); // SONNY-6523
         const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
         defer security_hold.release();
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
-                const from_shard = mg.shardEngineForNode(from_id);
-                try from_shard.ensureDerivedHydrated();
-                const entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
-                if (entry.from != from_id) return error.EdgeNotFound;
-                if (entry.prop_head == 0) return; // no properties to remove
-                // Absent key: nothing to remove (no tombstone written).
-                const existing = (try from_shard.getProperty(entry.prop_head, key, self.allocator)) orelse return;
-                freeOwnedStorageProperty(self.allocator, existing);
-                return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
-            }
+        if (try self.statementLocalTxn(graph_name, from_id) != null) { // SONNY-6658
+            const from_shard = mg.shardEngineForNode(from_id);
+            try from_shard.ensureDerivedHydrated();
+            const entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
+            if (entry.from != from_id) return error.EdgeNotFound;
+            if (entry.prop_head == 0) return; // no properties to remove
+            // Absent key: nothing to remove (no tombstone written).
+            const existing = (try from_shard.getProperty(entry.prop_head, key, self.allocator)) orelse return;
+            freeOwnedStorageProperty(self.allocator, existing);
+            return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
         }
         mg.engine.removeEdgeProperty(from_id, edge_id, key) catch |err| {
             noteAutoCommitFailure(mg, from_id, err, "relationship property remove (auto-commit)"); // SONNY-6601 (3)
@@ -13646,6 +13700,9 @@ pub const StorageAdapter = struct {
     /// than silently overwriting the thread-local.
     pub fn beginStatementTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
         settleFailedStatementTxn(); // SONNY-6529
+        // SONNY-6658: an auto-commit statement's transaction is open until
+        // the statement ends; a later executor of the statement joins it.
+        if (t_current_statement_txn != null and t_current_statement_txn == t_auto_statement_txn) return error.NestedStatementTxn;
         if (t_current_statement_txn != null) {
             log.err("adapter.beginStatementTxn called with an existing statement txn on this thread (graph={s})", .{graph_name});
             return error.NestedStatementTxn;
@@ -13714,6 +13771,38 @@ pub const StorageAdapter = struct {
             .graph_name = mg.name,
         };
         t_current_statement_txn = out;
+    }
+
+    /// SONNY-6658: an auto-commit statement with no engine transaction open
+    /// on this thread (`deferToStatementEnd`) opens one on `shard_idx`, the
+    /// shard of its write, committed when the statement ends
+    /// (`commitAutoStatementTxn`). Null otherwise, and when the graph does
+    /// not exist yet.
+    fn openAutoStatementTxn(self: *StorageAdapter, graph_name: []const u8, shard_idx: usize) !?*StatementTxn {
+        if (t_current_statement_txn != null or t_failed_statement_txn != null) return null;
+        if (!deferToStatementEnd()) return null;
+        self.beginStatementTxnForShard(graph_name, shard_idx, &t_auto_statement_txn_storage) catch |err| switch (err) {
+            error.GraphNotFound => return null,
+            else => return err,
+        };
+        t_auto_statement_txn = &t_auto_statement_txn_storage;
+        return t_auto_statement_txn;
+    }
+
+    /// SONNY-6658: the engine transaction a write on node slot `slot` (a
+    /// relationship's: its source's) of `graph_name` joins: the statement's or
+    /// the session's when it is on the slot's shard, or an auto-commit
+    /// statement's opened now (`openAutoStatementTxn`). Null: the write
+    /// commits an engine transaction of its own, and the statement's undo is
+    /// on disk first (`statement_undo.beforeOwnEngineCommit`).
+    fn statementLocalTxn(self: *StorageAdapter, graph_name: []const u8, slot: u64) !?gs.TxnId {
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            if (shardLocalTxnForNode(s.txn_id, slot)) |local| return local;
+        } else if (try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(slot))) |s| {
+            return shardLocalTxnForNode(s.txn_id, slot);
+        }
+        try statement_undo.beforeOwnEngineCommit();
+        return null;
     }
 
     /// R9 (2026-04-22): open an engine transaction that lives for the
