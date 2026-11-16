@@ -404,6 +404,32 @@ pub fn useRealQuicInTests(on: bool) void {
     test_real_quic.store(on, .release);
 }
 
+/// SONNY-6636 (5): set once a stub QUIC client in this test binary was
+/// asked to connect to a peer (`warnStubConnectOnce`).
+var test_stub_connect_warned = std.atomic.Value(bool).init(false);
+
+/// SONNY-6636 (5): in a test build without `useRealQuicInTests(true)` the
+/// raft transport's client is a no-op stub: started coordinators in one
+/// process send each other no Raft frame (no leader, "peer stalled ...
+/// evicting"), which looks like a geode wiring bug. The first time a stub
+/// client is asked to connect to a peer, this says so, once per test
+/// binary. A warning, not a failure: single-node, lifecycle and in-process
+/// network tests run coordinators on the stub on purpose.
+fn warnStubConnectOnce(host: []const u8, port: u16) void {
+    if (test_stub_connect_warned.swap(true, .acq_rel)) return;
+    log.warn("raft transport in a test build: QUIC is a no-op stub, so this connection to a Raft peer sends nothing; a test whose started coordinators must reach each other calls raft_consensus.useRealQuicInTests(true) first (SONNY-6456, SONNY-6636)", &.{
+        Attr.string("peer", host),
+        Attr.uint("port", port),
+    });
+}
+
+/// SONNY-6636 (5): whether this test binary has warned that a stub client
+/// was asked to connect (`warnStubConnectOnce`).
+pub fn stubConnectWarnedForTesting() bool {
+    if (!builtin.is_test) @compileError("stubConnectWarnedForTesting is for test builds only");
+    return test_stub_connect_warned.load(.acquire);
+}
+
 const quic = if (builtin.is_test) test_quic else real_quic;
 
 /// The raft transport's QUIC in test builds: a no-op stub (nothing is sent),
@@ -430,12 +456,15 @@ const test_quic = struct {
         }
         pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {
             if (self.real) |*c| return c.connect(host, port);
+            warnStubConnectOnce(host, port);
         }
         pub fn connectInsecure(self: *QuicClient, host: []const u8, port: u16, allow_insecure: bool) !void {
             if (self.real) |*c| return c.connectInsecure(host, port, allow_insecure);
+            warnStubConnectOnce(host, port);
         }
         pub fn connectEx(self: *QuicClient, host: []const u8, port: u16, ca: ?[]const u8, cert: ?[]const u8, key: ?[]const u8) !void {
             if (self.real) |*c| return c.connectEx(host, port, ca, cert, key);
+            warnStubConnectOnce(host, port);
         }
         pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
             if (self.real) |*c| return c.waitForHandshake(timeout_secs);
@@ -4638,4 +4667,16 @@ test "raft_consensus: Transport.send uses TLS-aware connection" {
         // since getStream returns undefined. That's fine -- we're testing
         // that the TLS connection logic itself compiles and runs.
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6636-STUB-QUIC-WARNING; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=StubConnectWarns; STATUS=TESTED; TEST="SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing"; OWNER=distributed; UPDATED=2026-11-15
+test "SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing" {
+    // The default in a test build: the stub, as for a test that never
+    // called useRealQuicInTests(true).
+    try std.testing.expect(!test_real_quic.load(.acquire));
+    var client = quic.QuicClient.init(std.testing.allocator);
+    defer client.deinit();
+    try std.testing.expect(client.real == null);
+    try client.connectInsecure("127.0.0.1", 1, true);
+    try std.testing.expect(stubConnectWarnedForTesting());
 }
