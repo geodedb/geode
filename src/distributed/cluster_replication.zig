@@ -1123,6 +1123,13 @@ pub const IDEMPOTENCY_DEDUP_CAP: usize = 64 * 1024;
 /// reaches the same table and the same eviction state.
 ///
 /// The fixer owns the exact shape; the apply functions consult & populate it.
+///
+/// CANARY: REQ=REQ-SONNY-6667-DEDUP-OWNER-LOCK; FEATURE="DistributedCluster"; ASPECT=DedupSerialised; STATUS=TESTED; TEST=tests/test_sonny6667_dedup_restore_race.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6667: `mutex` serialises every use of the table: apply (`record`,
+/// `lookup`, under the Raft `inner_mutex`), a snapshot restore
+/// (`replaceFrom`, on the restore thread without `inner_mutex`), and a
+/// snapshot copy (`serialize`, on the snapshot thread). A leaf lock: held
+/// only inside these methods, never while taking another lock.
 pub const IdempotencyDedup = struct {
     allocator: std.mem.Allocator,
     /// key (owned copy) -> original raft index where the key was first applied.
@@ -1134,6 +1141,7 @@ pub const IdempotencyDedup = struct {
     /// Front cursor into `order` (the next key to evict). Entries before it have
     /// already been evicted (their slots are stale/null-equivalent).
     head: usize = 0,
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator) IdempotencyDedup {
         return .{
@@ -1143,6 +1151,17 @@ pub const IdempotencyDedup = struct {
         };
     }
 
+    fn lock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Frees the table. Its owner calls it once nothing else can use it
+    /// (SONNY-6667: after the Raft node's restore and snapshot threads
+    /// were joined, `RaftNode.quiesce`).
     pub fn deinit(self: *IdempotencyDedup) void {
         var it = self.map.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
@@ -1152,6 +1171,8 @@ pub const IdempotencyDedup = struct {
 
     /// The original raft index a key was first applied at, or null if unseen.
     pub fn lookup(self: *const IdempotencyDedup, key: []const u8) ?u64 {
+        self.lock();
+        defer self.unlock();
         return self.map.get(key);
     }
 
@@ -1160,6 +1181,12 @@ pub const IdempotencyDedup = struct {
     /// FIRST recorded index is authoritative and stable across replays. Evicts
     /// the oldest-inserted key once the cap is exceeded (deterministic LRU).
     pub fn record(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
+        self.lock();
+        defer self.unlock();
+        return self.recordLocked(key, raft_index);
+    }
+
+    fn recordLocked(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
         if (self.map.contains(key)) return; // first index wins; replay is a no-op
         const owned = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned);
@@ -1191,6 +1218,8 @@ pub const IdempotencyDedup = struct {
     /// snapshot carries it: the table is otherwise rebuilt by replaying the
     /// committed log, and a snapshot replaces the entries it covers.
     pub fn serialize(self: *const IdempotencyDedup, out: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+        self.lock();
+        defer self.unlock();
         try appendU32(out, allocator, self.map.count());
         for (self.order.items[self.head..]) |key| {
             const index = self.map.get(key) orelse continue;
@@ -1212,8 +1241,16 @@ pub const IdempotencyDedup = struct {
             try fresh.record(key, try r.readU64());
         }
         if (r.pos != data.len) return CodecError.CorruptPayload;
-        self.deinit();
-        self.* = fresh;
+        // SONNY-6667: swapped in under the lock; the old table is freed
+        // outside it (`fresh` takes it).
+        {
+            self.lock();
+            defer self.unlock();
+            std.mem.swap(std.StringHashMap(u64), &self.map, &fresh.map);
+            std.mem.swap(std.ArrayList([]const u8), &self.order, &fresh.order);
+            std.mem.swap(usize, &self.head, &fresh.head);
+        }
+        fresh.deinit();
     }
 };
 

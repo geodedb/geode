@@ -1087,6 +1087,10 @@ pub const ClusterCoordinator = struct {
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
+        // SONNY-6667: nothing ticks or steps the node now; its restore and
+        // snapshot threads, which use the store and the apply targets freed
+        // below (the idempotency table), end before any of them is freed.
+        self.raft.quiesce();
         // RC-A: `stop()` has joined every worker + the health loop, so no thread
         // can still touch the inbound registry. Free any record a worker left
         // behind (defensive — the normal path deregisters on exit) and release the

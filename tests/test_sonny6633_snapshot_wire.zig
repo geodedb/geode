@@ -36,6 +36,11 @@ const Message = raft_consensus.Message;
 const io = std.Io.Threaded.global_single_threaded.io();
 const ELECTION_TIMEOUT_MS: u64 = 250;
 const MAX_ROUNDS: usize = 4000;
+const RESTORE_DEADLINE_NS: u64 = 120 * std.time.ns_per_s;
+
+fn nowNs() u64 {
+    return @intCast(std.Io.Clock.awake.now(io).nanoseconds);
+}
 
 fn peersOf(comptime id: u64) [2]Peer {
     var out: [2]Peer = undefined;
@@ -116,11 +121,20 @@ const WireNet = struct {
         try self.deliver();
     }
 
+    /// SONNY-6667: rounds while a node is paused restoring a snapshot on
+    /// its restore thread are not counted (each waits 1 ms instead): under
+    /// load a restore outlasted MAX_ROUNDS rounds. Bounded by a deadline.
     fn untilTrue(self: *WireNet, tick: [3]bool, ctx: anytype, comptime done: fn (@TypeOf(ctx)) bool) !void {
         var r: usize = 0;
-        while (!done(ctx)) : (r += 1) {
-            if (r >= MAX_ROUNDS) return error.Timeout;
+        const deadline = nowNs() + RESTORE_DEADLINE_NS;
+        while (!done(ctx)) {
+            if (r >= MAX_ROUNDS or nowNs() > deadline) return error.Timeout;
             try self.round(tick);
+            var paused = false;
+            for (self.nodes) |n| paused = paused or n.persistStalled();
+            if (paused) {
+                io.sleep(.fromNanoseconds(std.time.ns_per_ms), .awake) catch {};
+            } else r += 1;
         }
     }
 
@@ -247,6 +261,9 @@ test "SONNY-6633 (1): a follower behind a compacted log catches up from the snap
     net.nodes[2].snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
     var follower_dedup = cr.IdempotencyDedup.init(a);
     defer follower_dedup.deinit();
+    // SONNY-6667: the nodes' restore threads use the table and the store;
+    // they end before either is freed (as ClusterCoordinator.deinit does).
+    defer for (net.nodes) |n| n.quiesce();
     raft_apply.setGlobalIdempotencyDedup(&follower_dedup);
     defer raft_apply.resetGlobalIdempotencyDedup();
 

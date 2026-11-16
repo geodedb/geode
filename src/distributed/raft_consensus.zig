@@ -392,6 +392,10 @@ pub const Statistics = struct {
     /// and synced by the snapshot thread), in nanoseconds.
     snapshot_create_max_ns: u64,
     snapshot_install_max_ns: u64,
+    /// SONNY-6667: the longest `advancePersist()` (the Ready's hard state,
+    /// entries and snapshot written and fsynced, under `inner_mutex`, before
+    /// anything it announces is sent or applied), in nanoseconds.
+    persist_max_ns: u64,
 };
 
 // CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotThreshold; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
@@ -3497,7 +3501,13 @@ pub const RaftNode = struct {
         return initWithStorageDir(allocator, id, peers, election_timeout_ms, null);
     }
 
-    pub fn deinit(self: *RaftNode) void {
+    // CANARY: REQ=REQ-SONNY-6667-QUIESCE-BEFORE-FREE; FEATURE="DistributedCluster"; ASPECT=RestoreJoinedBeforeApplyTargetsFreed; STATUS=TESTED; TEST=tests/test_sonny6667_dedup_restore_race.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6667: wait for the restore and snapshot threads to end. They
+    /// run without `inner_mutex` and use the state machine and its apply
+    /// targets (the store, the idempotency table): an owner calls this,
+    /// once nothing ticks or steps the node (no new thread starts then),
+    /// before it frees any of them. `deinit` calls it too. Idempotent.
+    pub fn quiesce(self: *RaftNode) void {
         self.state = .shutdown;
         // SONNY-6636 (3): the restore thread reads the stalled Ready's data.
         if (self.restore_thread) |t| t.join();
@@ -3505,6 +3515,10 @@ pub const RaftNode = struct {
         // SONNY-6636 (b): the snapshot thread reads the state machine.
         if (self.snapshot_thread) |t| t.join();
         self.snapshot_thread = null;
+    }
+
+    pub fn deinit(self: *RaftNode) void {
+        self.quiesce();
         if (self.snapshot_job_staged) |*st| self.inner.storage.releaseStagedSnapshot(st);
         self.snapshot_job_staged = null;
         if (self.snapshot_job_point) |*p| p.deinit();
@@ -3959,7 +3973,10 @@ pub const RaftNode = struct {
                 Attr.uint("snapshot_index", staged.metadata.index),
             });
         }
-        self.inner.advancePersist() catch |err| {
+        const persist_start = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io());
+        const persisted = self.inner.advancePersist();
+        self.notePersist(persist_start);
+        persisted catch |err| {
             self.stall(rd);
             log.err("raft storage write failed: this node sends no vote or reply, applies nothing and takes no Raft input until the write succeeds (retried every few ticks); check the Raft data directory (disk full, read-only, permissions)", &.{
                 Attr.string("error", @errorName(err)),
@@ -3990,6 +4007,12 @@ pub const RaftNode = struct {
             self.sm_applied = @max(self.sm_applied, snap.metadata.index);
         }
         self.finishReady(rd);
+    }
+
+    /// SONNY-6667: account an `advancePersist()` that started at `start`.
+    fn notePersist(self: *RaftNode, start: std.Io.Timestamp) void {
+        const ns: u64 = @intCast(@max(0, start.durationTo(std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io())).nanoseconds));
+        if (ns > self.stats.persist_max_ns) self.stats.persist_max_ns = ns;
     }
 
     /// SONNY-6617: keep `rd` and pause the node until `retryStalledPersist`

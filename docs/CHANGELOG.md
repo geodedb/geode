@@ -3073,6 +3073,26 @@
 
 ### Fixed
 
+- **A snapshot restore no longer uses a freed idempotency table
+  (SONNY-6667).** Under load `test-sonny6633-snapshot-wire` panicked
+  "incorrect alignment" in `IdempotencyDedup.deinit` from `replaceFrom` on
+  the restore thread. `ClusterCoordinator.deinit` freed the table (and the
+  applied configuration and 2PC coordinator) before `RaftNode.deinit`
+  joined the restore and snapshot threads, which run without
+  `inner_mutex` since SONNY-6636; and nothing serialised the table between
+  apply, restore and the snapshot copy. The table now has one owner lock
+  (`IdempotencyDedup.mutex`, a leaf: `record`, `lookup`, `serialize`, and
+  `replaceFrom`'s swap), and `deinit` first calls `RaftNode.quiesce`, which
+  joins both threads. The test itself freed its table before its nodes and
+  counted rounds a paused (restoring) node spent; both fixed. The
+  "InstallSnapshot ... failed: ChecksumMismatch" warnings in that run are
+  its second test, which damages the digest on purpose.
+  `test-sonny6631-apply-hydration-off-mutex` reports the longest Raft
+  `advancePersist()` (`RaftNode.stats.persist_max_ns`, new) and bounds the
+  probe's wait less that: its one failure under load (276 ms against a
+  250 ms election timeout, 0 ms apply) was disk and scheduling time, not
+  hydration. Test: `test-sonny6667-dedup-restore-race`.
+
 - **Raft snapshots: a lost chunk resumes, and no snapshot I/O runs under
   the Raft node lock (SONNY-6665; raft v0.2.6).** geode's Raft frame and
   its conversions dropped `InstallSnapshotResponse.last_index` and
