@@ -70,6 +70,8 @@ const Value = value_types.Value;
 const user_mgmt = @import("../security/user_management.zig");
 const geode_auth = @import("geode_auth");
 const auth_ddl_lock = @import("../security/auth_ddl_lock.zig");
+// SONNY-6586: the grant rule offline `geode grant` applies too.
+const graph_grant_rules = @import("../security/graph_grant_rules.zig");
 const mfa_mod = @import("mfa");
 const cluster_mod = @import("../distributed/cluster.zig");
 
@@ -1779,10 +1781,10 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // SONNY-6359: no resource: there is no global per-privilege grant model
     // (global privilege is the user's role), so it is refused (0A000) with
     // nothing changed. It answered 00000 with a "note:" status row.
-    if (resource.len == 0) {
+    graph_grant_rules.checkGraph(resource, is_grant) catch |err| {
         freeStatusScaffold(allocator, columns, row, rows);
-        return error.GlobalPrivilegeNotSupported;
-    }
+        return err;
+    };
     // CANARY: REQ=REQ-SONNY-3135-GRANT-WILDCARD-REFUSED; FEATURE="GQL Auth DDL"; ASPECT=GrantOnStarRefused; STATUS=TESTED; TEST=tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig; OWNER=security; UPDATED=2026-11-12
     // SONNY-3135 (N7d): a per-graph grant is matched by the graph a request
     // is on, and a request on `*` matches none, so a grant on graph `*`
@@ -1790,35 +1792,15 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // rework a restart turned it into a wildcard policy). Refused (0A000),
     // nothing stored. A revoke of `*` still runs, to remove such a grant an
     // older release stored.
-    if (is_grant and std.mem.eql(u8, resource, "*")) {
-        freeStatusScaffold(allocator, columns, row, rows);
-        return error.GrantWildcardNotSupported;
-    }
+    // (graph_grant_rules.checkGraph, above.)
 
-    // Map perm name (case-insensitive) to action code(s): 0=read, 1=write, 2=schema
-    // Use a small fixed-size buffer for the action list (max 3 for ALL)
-    var actions_buf: [3]u8 = undefined;
-    var actions: []u8 = actions_buf[0..0];
-    if (std.ascii.eqlIgnoreCase(perm, "READ")) {
-        actions_buf[0] = 0;
-        actions = actions_buf[0..1];
-    } else if (std.ascii.eqlIgnoreCase(perm, "WRITE")) {
-        actions_buf[0] = 1;
-        actions = actions_buf[0..1];
-    } else if (std.ascii.eqlIgnoreCase(perm, "SCHEMA")) {
-        actions_buf[0] = 2;
-        actions = actions_buf[0..1];
-    } else if (std.ascii.eqlIgnoreCase(perm, "ALL")) {
-        actions_buf[0] = 0;
-        actions_buf[1] = 1;
-        actions_buf[2] = 2;
-        actions = actions_buf[0..3];
-    } else {
-        // SONNY-6359: an error status (22023); it answered 00000 with a row
-        // "error: unknown privilege".
+    // Action codes 0=read, 1=write, 2=schema (graph_grant_rules.actionsOf).
+    // SONNY-6359: an unknown privilege is an error status (22023); it
+    // answered 00000 with a row "error: unknown privilege".
+    const actions = graph_grant_rules.actionsOf(perm) orelse {
         freeStatusScaffold(allocator, columns, row, rows);
         return error.UnknownPrivilege;
-    }
+    };
 
     // Resolve target username -> user_id via callback (null in CLI / test contexts).
     // CANARY: REQ=REQ-SONNY-6345-GRANT-MISSING-USER; FEATURE="GQL Auth DDL"; ASPECT=GrantMissingUserIsError; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12

@@ -6144,6 +6144,7 @@ pub fn build(b: *std.Build) void {
             "src/transport/stream_scheduler.zig",
             "src/index/selectivity.zig",
             "src/mcp/prompts.zig",
+            "src/security/graph_grant_rules.zig",
             "src/tools/bulk_loader.zig",
             "src/cli/tenant_cli.zig",
             "src/transactions/range_tracker.zig",

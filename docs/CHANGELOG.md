@@ -3073,6 +3073,22 @@
 
 ### Fixed
 
+- **Offline `geode grant` / `geode revoke` are the online `GRANT ... ON
+  GRAPH` (SONNY-6586).** They stored a free-form permission record (any
+  name, the user in its conditions) that no authorization path reads, and
+  printed "Granted"; their only rule refused `admin` unless the grantee was
+  named `admin`. They now apply the online rule, shared in
+  `src/security/graph_grant_rules.zig` (used by `geode.auth.grant` too):
+  `READ`, `WRITE`, `SCHEMA` or `ALL` on one `--graph` (none and `*` are
+  refused) to a user that exists, stored as the `GraphGrant` records
+  `GRANT` stores and the server loads at startup. **User-visible:**
+  `geode grant <name> --to <user>` without `--graph`, any other privilege
+  name (`admin` included: it is a role, `geode user assign-role`) and an
+  unknown user are refused; `--graph` is new (`--resource` still works).
+  Records the old command stored stay inert. Also: an allocation failure
+  while reading the arguments is reported (it was dropped). Regression:
+  `zig build test-sonny6586-offline-grant-rule`.
+
 - **`geode query --param` frees a list or map that fails part-way
   (SONNY-6586).** The conversion (`src/cli/param_json.zig`, moved out of
   `src/cli/main.zig`) leaked the elements, keys and arrays built before an

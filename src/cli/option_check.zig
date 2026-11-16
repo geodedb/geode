@@ -113,8 +113,8 @@ pub const commands = [_]Command{
             .{ .names = &.{ "list", "show", "delete" } },
         },
     },
-    .{ .names = &.{"grant"}, .options = &.{ data_dir, v("--to"), v("--resource") } },
-    .{ .names = &.{"revoke"}, .options = &.{ data_dir, v("--from"), v("--resource") } },
+    .{ .names = &.{"grant"}, .options = &.{ data_dir, v("--to"), v("--graph"), v("--resource") } },
+    .{ .names = &.{"revoke"}, .options = &.{ data_dir, v("--from"), v("--graph"), v("--resource") } },
     .{
         .names = &.{"auth"},
         .subs = &.{

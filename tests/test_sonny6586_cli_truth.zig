@@ -175,8 +175,8 @@ test "SONNY-6586 (2): offline auth commands name a missing data directory and cr
         &.{ "user", "list" },
         &.{ "role", "list" },
         &.{ "policy", "list" },
-        &.{ "grant", "read:data", "--to", "bob" },
-        &.{ "revoke", "read:data", "--from", "bob" },
+        &.{ "grant", "READ", "--to", "bob", "--graph", "g6586" },
+        &.{ "revoke", "READ", "--from", "bob", "--graph", "g6586" },
         &.{ "auth", "reseal" },
     }) |cmd| {
         var argv: std.ArrayList([]const u8) = .empty;

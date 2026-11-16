@@ -475,6 +475,8 @@ pub const security = struct {
     pub const policy_catalog = @import("security/policy_catalog.zig");
     /// SONNY-6329: one auth / policy DDL operation at a time.
     pub const auth_ddl_lock = @import("security/auth_ddl_lock.zig");
+    // SONNY-6586: the per-graph grant rule (online GRANT and offline geode grant).
+    pub const graph_grant_rules = @import("security/graph_grant_rules.zig");
     // GPS Phase 5 (Task 5-4): minimal expression compiler for GPS policy predicates.
     pub const policy_expression = @import("security/policy_expression.zig");
     // GPS Phase 6 (Task 6-1): global monotonic policy version counter for cache invalidation.
