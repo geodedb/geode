@@ -11198,7 +11198,7 @@ pub fn build(b: *std.Build) void {
     const sonny6601_bi_tests = b.addTest(.{ .root_module = sonny6601_bi_test_mod });
     const run_sonny6601_bi_tests = b.addRunArtifact(sonny6601_bi_tests);
     shardDep(test_step, &run_sonny6601_bi_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6601_bi_step = b.step("test-sonny6601-bulk-insert-index-abort", "Run SONNY-6601 item 2 regression (a durable store, one adapter allocation failed in turn: a bulk reserved-id node insert that fails leaves every property's exact-index posting empty; the one that succeeds leaves exactly its node)");
+    const sonny6601_bi_step = b.step("test-sonny6601-bulk-insert-index-abort", "Run SONNY-6601 item 2 regression (a durable store, one store allocation failed in turn during a bulk reserved-id node insert: every property's exact-index posting holds exactly the nodes that exist; an insert that fails before its commit leaves none)");
     sonny6601_bi_step.dependOn(&run_sonny6601_bi_tests.step);
 
     // SONNY-6601 (6): QUIC runs START TRANSACTION ... ROLLBACK with
