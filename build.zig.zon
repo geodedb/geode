@@ -344,9 +344,16 @@
         // a handler give the error message and data; a handler result that
         // is not exactly one JSON value is answered -32603; the built-in
         // "barrier" tool is gone. Same json/thread_pool/otel/fips pins.
+        // 2026-11-16: v0.1.26 (c0c0178c, SONNY-6644): Streamable HTTP
+        // sessions (initialize answers an Mcp-Session-Id every later request
+        // must carry: 400 without, 404 unknown; per-client streams), a
+        // thread per HTTP connection, full-body reads; v0.1.24/25: a client's
+        // reply resolves a server request, duplicate in-flight ids are
+        // -32600. createTask/getTask return copies (geode uses neither).
+        // Same json/thread_pool/otel/fips pins.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.23#472a64bb3e4e183c8a9d11b31f784a5a847e5a3f",
-            .hash = "mcp-0.1.23-exAeBGh0CQBwMMuSNqSVDSGJXYXi8PmyaeZ_jqQJj8d2",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.26#c0c0178cbdd037abf46d9cbc3338a16bd09fb256",
+            .hash = "mcp-0.1.26-exAeBPQiCwDRiWMeX2tjdmmFeAq0JiM99ZujsNjCcT0Z",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible
