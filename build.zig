@@ -19288,6 +19288,25 @@ pub fn build(b: *std.Build) void {
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
 
+    // SONNY-6624: an MFA reset without proof is audited as
+    // MFA_RESET_BY_ADMIN (actor and target); DROP USER removes the stored
+    // and the in-memory MFA attempt records.
+    const sonny6624_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6624_mfa_reset_audit.zig"), .target = target, .optimize = optimize });
+    sonny6624_test_mod.link_libc = true;
+    sonny6624_test_mod.addImport("geode", root_mod);
+    sonny6624_test_mod.addImport("schema", schema_mod);
+    sonny6624_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6624_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6624_test_mod.addImport("logging", logging_mod);
+    sonny6624_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6624_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6624_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    sonny6624_test_mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+    const sonny6624_tests = b.addTest(.{ .root_module = sonny6624_test_mod });
+    const run_sonny6624_tests = b.addRunArtifact(sonny6624_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6624_tests.step);
+    b.step("test-sonny6624-mfa-reset-audit", "Run the SONNY-6624 regression (geode.auth.mfa_disable, which needs no proof of possession, leaves a MFA_RESET_BY_ADMIN audit record with the actor and the target; DROP USER removes the stored MfaAttempts record and the in-memory attempt record, and a user made again under the name is not locked out after a restart)").dependOn(&run_sonny6624_tests.step);
+
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are
     // read-only procedures.
