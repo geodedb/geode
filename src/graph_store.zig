@@ -2765,7 +2765,7 @@ pub const GraphStore = struct {
     edge_type_count_rwlock: std.Io.RwLock = std.Io.RwLock.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
-    // `removeNodeLabel`, and their `NoSave` variants) against the
+    // `addNodeLabelNoSave` and `removeNodeLabel`) against the
     // snapshot reader in `cloneNodesFrom`.  Held EXCLUSIVE for the brief
     // free+reassign window in the writers; held SHARED across the
     // `source.nodes` walk in `cloneNodesFrom`.  Leaf-level: no other
@@ -16883,65 +16883,6 @@ pub const GraphStore = struct {
             }
             // SONNY-3109: mirror addNodeLabel (the undo of a REMOVE n:L).
             self.addNodeMergeEntriesForLabel(node, label);
-        }
-    }
-
-    /// Remove a label from a node without saving (used during rollback)
-    pub fn removeNodeLabelNoSave(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        if (self.nodes.getPtr(node_id)) |node| {
-            var found_index: ?usize = null;
-            for (node.labels, 0..) |existing_label, i| {
-                if (std.mem.eql(u8, existing_label, label)) {
-                    found_index = i;
-                    break;
-                }
-            }
-
-            if (found_index) |index| {
-                // SONNY-6302: the removers' key room, before any change.
-                var keys = try RemoverKeyRoom.reserve(self.allocator, longestLabelRemovalName(node, label));
-                defer keys.deinit(self.allocator);
-
-                // Free the label being removed
-                self.allocator.free(node.labels[index]);
-
-                const new_labels = try self.allocator.alloc([]const u8, node.labels.len - 1);
-                var new_index: usize = 0;
-                for (node.labels, 0..) |existing_label, i| {
-                    if (i != index) {
-                        new_labels[new_index] = existing_label;
-                        new_index += 1;
-                    }
-                }
-
-                // GAP-825: same free+reassign window as removeNodeLabel —
-                // must be serialised against `cloneNodesFrom` snapshot
-                // readers.
-                {
-                    const io = std.Io.Threaded.global_single_threaded.io();
-                    self.labels_rwlock.lockUncancelable(io);
-                    defer self.labels_rwlock.unlock(io);
-
-                    if (node.labels.len > 0) {
-                        self.allocator.free(node.labels);
-                    }
-
-                    node.labels = new_labels;
-                }
-
-                keys.install(); // SONNY-6302
-                self.removeFromLabelIndex(node.graph_name, label, node_id);
-                // SONNY-3109: mirror removeNodeLabel (the undo of a SET n:L).
-                self.removeNodeMergeEntriesForLabel(node, label);
-                // PERF-C (issue #814): mirror removeNodeLabel.
-                var prop_it_nosave_rm = node.properties.iterator();
-                while (prop_it_nosave_rm.next()) |p| {
-                    const pkey = p.key_ptr.*;
-                    if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
-                }
-                self.decLabelCount(node.graph_name, node.tenant_id, label);
-            }
         }
     }
 };
