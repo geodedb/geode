@@ -751,6 +751,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny2979-txn-commit-durable", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): needs the durable undo log; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -11232,6 +11233,23 @@ pub fn build(b: *std.Build) void {
     if (g_test_compile_step) |c| c.dependOn(&sonny2979_tests.step);
     const sonny2979_step = b.step("test-sonny2979-txn-crash-atomicity", "Run SONNY-2979 reproduction (intentionally red: a transaction open at a SIGKILL of a real server, over several requests or left open by one, leaves nothing after the restart)");
     sonny2979_step.dependOn(&run_sonny2979_tests.step);
+
+    // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a committed
+    // transaction survives a SIGKILL whole beside an open one that is undone;
+    // a rolled-back one is not undone again; under GEODE_TDE_KEY the durable
+    // undo log is sealed. Not in shardDep until the fix; compiled by
+    // test-compile.
+    const sonny2979c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_commit_durable.zig"), .target = target, .optimize = optimize });
+    sonny2979c_test_mod.link_libc = true;
+    sonny2979c_test_mod.addImport("geode", root_mod);
+    sonny2979c_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2979c_test_mod.addImport("schema", schema_mod);
+    sonny2979c_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2979c_tests = b.addTest(.{ .root_module = sonny2979c_test_mod });
+    const run_sonny2979c_tests = b.addRunArtifact(sonny2979c_tests);
+    spawnsBuiltGeode(sonny2979c_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2979c_tests.step);
+    b.step("test-sonny2979-txn-commit-durable", "Run SONNY-2979 reproduction (intentionally red: SIGKILL of a real server; a committed transaction survives whole beside an open one that must be undone; a rolled-back one is not undone again; under GEODE_TDE_KEY txn_undo.wal is sealed)").dependOn(&run_sonny2979c_tests.step);
 
     // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
     // session-graph gate (internal, permission, existence) and creates a
