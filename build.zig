@@ -11159,6 +11159,44 @@ pub fn build(b: *std.Build) void {
     const sonny6597_flush_step = b.step("test-sonny6597-hydration-flush-race", "Run SONNY-6597 regression (a hydration scan while a checkpoint writes the shard's dirty pages finds a node created since the last checkpoint, with no false DataCorruption quarantine, and hydrates a property SET since then with its new value)");
     sonny6597_flush_step.dependOn(&run_sonny6597_flush_tests.step);
 
+    // SONNY-6639: a reload that runs out of memory resetting the store fails
+    // with OutOfMemory (it panicked) and clears every hydration latch.
+    const sonny6639_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6639_reload_oom.zig"), .target = target, .optimize = optimize });
+    sonny6639_test_mod.link_libc = true;
+    sonny6639_test_mod.addImport("geode", root_mod);
+    const sonny6639_tests = b.addTest(.{ .root_module = sonny6639_test_mod });
+    const run_sonny6639_tests = b.addRunArtifact(sonny6639_tests);
+    shardDep(test_step, &run_sonny6639_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6639_step = b.step("test-sonny6639-reload-oom", "Run SONNY-6639 regression (GraphStore.loadFromFile fails with OutOfMemory when an allocation of its store reset fails, and leaves the store whole; it clears needs_reset with done and failed)");
+    sonny6639_step.dependOn(&run_sonny6639_tests.step);
+
+    // SONNY-6640: the adapter's engine-direct property reads (the bulk
+    // relationship-MERGE endpoint resolvers, the ordered-index column probe)
+    // report a read error; they took it for an absent property.
+    const sonny6640_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6640_adapter_property_read_errors.zig"), .target = target, .optimize = optimize });
+    sonny6640_test_mod.link_libc = true;
+    sonny6640_test_mod.addImport("geode", root_mod);
+    const sonny6640_tests = b.addTest(.{ .root_module = sonny6640_test_mod });
+    const run_sonny6640_tests = b.addRunArtifact(sonny6640_tests);
+    shardDep(test_step, &run_sonny6640_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6640_step = b.step("test-sonny6640-adapter-property-read-errors", "Run SONNY-6640 regression (a durable store, the adapter allocator failing from the k-th allocation: lookupNodeIdByLabelAndAllProps, lookupPublicNodeIdByLabelAndAllProps and probeOrderedColumnClass answer the healthy answer or an error, never a missing node or a declined column)");
+    sonny6640_step.dependOn(&run_sonny6640_tests.step);
+
+    // SONNY-6642: a graph WAL damaged mid-log (graph-storage WalCorrupted)
+    // is refused as WalCorrupted with an operator message after a crash.
+    const sonny6642_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6642_wal_corrupted_quarantine.zig"), .target = target, .optimize = optimize });
+    sonny6642_test_mod.link_libc = true;
+    sonny6642_test_mod.addImport("geode", root_mod);
+    sonny6642_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6642_test_mod.addImport("schema", schema_mod);
+    sonny6642_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6642_tests = b.addTest(.{ .root_module = sonny6642_test_mod });
+    const run_sonny6642_tests = b.addRunArtifact(sonny6642_tests);
+    spawnsBuiltGeode(sonny6642_tests);
+    shardDep(test_step, &run_sonny6642_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6642_step = b.step("test-sonny6642-wal-corrupted-quarantine", "Run SONNY-6642 regression (a real server is SIGKILLed with a graph's shard logs un-checkpointed, a middle record of one log is damaged; the restarted server refuses the graph with 58000 WalCorrupted and serves the others)");
+    sonny6642_step.dependOn(&run_sonny6642_tests.step);
+
     // SONNY-6605 (1): a transient hydration failure (out of memory, a
     // descriptor quota) is retried on the next access with exact counts; a
     // damaged store stays quarantined.
