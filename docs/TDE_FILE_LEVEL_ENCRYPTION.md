@@ -27,11 +27,22 @@ SIGKILL, after a restart and after a clean stop: none of them is found.
 What stays in clear:
 
 - File names, sizes and modification times.
-- graph-storage files that hold ids, counts and checksums only: `labels.idx`,
-  `edges.idx`, `edges_exist.idx`, `free.store`, `wal/graph.uuid`, and the
-  manifests (authenticated with an HMAC under the key, not encrypted).
-  `edges.idx` / `edges_exist.idx` show which nodes are connected and by
-  which relationship-type id (the graph's shape, not its names or values).
+- graph-storage files that hold ids, counts and checksums only (SONNY-6635
+  reviewed each; graph-storage's docs/operations.md, "What the key covers"):
+  - `labels.idx`: for each label *id*, the ids of the nodes carrying it.
+    The names are in the sealed `labels.dict`; what shows is which nodes
+    share a label id, and how many.
+  - `free.store`: the free-page bitmap of each store file (page numbers).
+  - The manifests: graph uuid, counters, page, node and edge counts.
+    Authenticated with an HMAC under the key, not encrypted: read first at
+    open, a forged or rolled-back one is refused; the counts say no more
+    than the file sizes do.
+  - `wal/graph.uuid` (the uuid, also the directory's name) and
+    `data_dir.identity`'s file name (its contents are sealed).
+
+  None holds a name, a value or an edge's endpoints, so sealing them would
+  hide only sizes the file system shows anyway. (Since graph-storage 0.4.19
+  `edges.idx` / `edges_exist.idx`, the graph's shape, are sealed.)
 - The Raft hard state (`<data_dir>/raft/hard_state`: the current term and
   the node id voted for, two u64 and a CRC32, 20 bytes) and `snapshot.meta`
   (index, term, voter ids). Deliberately not sealed (SONNY-6616): they hold
@@ -55,12 +66,44 @@ What stays in clear:
 `dropped_graphs.dat` (the names of dropped graphs) are sealed under
 `GEODE_TDE_KEY` with the same envelope (graph-storage's
 `GraphRegistry.saveToFileWith`; geode's consumer kind for the dropped
-list), bound to graph-storage's `registry.SEAL_UUID`. A plaintext pair
-written by an earlier build is read under the key and rewritten sealed
-when the data directory is opened. Without the key, or under another key,
-the data directory is refused (`SideFileEncrypted` / `SideFileAuthFailed`).
-Requires graph-storage 0.4.20. An older geode cannot read a sealed
-registry and refuses the data directory: there is no downgrade.
+list). Without the key, or under another key, the data directory is
+refused (`SideFileEncrypted` / `SideFileAuthFailed`).
+
+**Bound to the data directory (SONNY-6635).** Both files were sealed under
+graph-storage's `registry.SEAL_UUID`, the same in every data directory, so
+either one copied from another data directory under the same key
+authenticated. They are sealed under the directory's own identity now:
+`data_dir.identity` (graph-storage 0.4.26 `registry.DataDirIdentity`: a
+random uuid made once, and a "registry bound" flag; sealed, owner-only). A
+copy from another directory fails authentication (`SideFileAuthFailed`).
+The identity file carried along with the copy carries the identity (a
+restore of the directory's own files); putting back a directory's own
+earlier registry is not detected.
+
+**No plaintext once sealed (SONNY-6635).** A plaintext registry was read
+under the key at every open (the one-time upgrade), so anyone who could
+write the directory could substitute one: rename graphs, swap two graphs'
+names, hide graphs. It is refused (`SideFileNotSealed`) once the directory
+has been sealed, recorded twice, both authenticated: the identity's flag,
+and any graph manifest at format_version 5 (sealed side files), which
+survives deleting the identity file (a graph's manifest cannot be removed
+without losing the graph). The one-time upgrade still runs for a store from
+a build that never sealed it (V4 manifests, a plaintext registry, no
+identity), and for a registry sealed under `SEAL_UUID` by the SONNY-6616
+build: read once, resealed under a new identity, the binding recorded last
+(an upgrade cut short resumes). Residual: a store upgraded from V4 whose
+graphs were never opened since still has V4 manifests, so deleting its
+identity file reopens the upgrade until any graph is opened (the
+`__geode_security` graph is opened at every server start). Residual: with
+the identity file deleted, a registry sealed under `SEAL_UUID` (by a
+SONNY-6616 build, in this directory or another under the same key) is read
+as that build's and adopted; graph manifests do not tell the two builds
+apart. The graph-restore intent (SONNY-6636) and `txn_undo.wal` are still
+sealed under `SEAL_UUID`: an intent or undo record an earlier build left
+must stay readable.
+Requires graph-storage 0.4.26 (0.4.20 sealed the registry under
+`SEAL_UUID`). An older geode cannot read a registry sealed under the
+identity and refuses the data directory: there is no downgrade.
 
 A graph whose manifests or WAL do not authenticate under the key is
 refused with `58000 EncryptionKeyMismatch` (graph-storage 0.4.20; it was

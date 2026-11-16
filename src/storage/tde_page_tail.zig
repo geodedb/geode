@@ -276,11 +276,10 @@ pub fn scan(allocator: Allocator, data_dir: []const u8, key: ?[32]u8) !Report {
         defer allocator.free(reg_path);
         // SONNY-6616: the registry is sealed under the at-rest key. It only
         // names the graphs in the report; without the key the scan goes on
-        // with uuids and reports that it needs the key.
-        var cipher = gs.side_file_crypto.Cipher.forKey(key, gs.registry.SEAL_UUID);
-        defer if (cipher) |*c| c.deinit();
+        // with uuids and reports that it needs the key. SONNY-6635: read
+        // under the data directory's identity, as the adapter reads it.
         if (pathExists(reg_path)) {
-            _ = registry.loadFromFileWith(reg_path, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = false }) catch |err| switch (err) {
+            graph_storage_adapter.readRegistryOffline(allocator, &registry, data_dir, key) catch |err| switch (err) {
                 error.SideFileEncrypted => report.needs_key = true,
                 else => return err,
             };

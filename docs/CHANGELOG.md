@@ -4,6 +4,30 @@
 
 ### Security
 
+- **Under TDE a data directory's graph registry is bound to it, and a
+  plaintext registry is refused once it has been sealed (SONNY-6635).**
+  `graph_registry.dat` and `dropped_graphs.dat` were sealed under
+  graph-storage's `registry.SEAL_UUID`, the same in every data directory,
+  so either file copied from another data directory under the same key
+  authenticated; and a plaintext registry was read under the key at every
+  open (the SONNY-6616 one-time upgrade), so anyone able to write the
+  directory could rename, swap or hide graphs. Both files are now sealed
+  under the directory's own identity (graph-storage 0.4.26
+  `registry.DataDirIdentity`, `data_dir.identity`, sealed). Once the
+  identity records the binding, and while any graph manifest is at
+  format_version 5, a plaintext registry is refused (`SideFileNotSealed`);
+  a copied one fails authentication (`SideFileAuthFailed`). A store from a
+  build that never sealed the registry, or sealed it under `SEAL_UUID`, is
+  upgraded once. The offline readers (`graphRegisteredOnDisk`,
+  `tde_page_tail.scan`) read it the same way (`readRegistryOffline`).
+  graph-storage 0.4.26 also makes `VerifyTool`'s WAL copy inside the
+  graph's directory (0700), not under `/tmp`. **BREAKING (operator):** a
+  data directory opened by this build cannot be opened by an earlier one,
+  and a copied or restored `graph_registry.dat` must come with its
+  `data_dir.identity`. Residuals in docs/TDE_FILE_LEVEL_ENCRYPTION.md (the
+  restore intent and `txn_undo.wal` stay under `SEAL_UUID`). Regression:
+  `zig build test-sonny6635-registry-binding` (and
+  `test-sonny6616-tde-residuals`).
 - **`geode fle migrate-encrypt` no longer reports a migration it did not
   perform; the FLE admin commands have executed tests (SONNY-6321).**
   `fle_commands.migrateEncrypt` (and so `geode fle migrate-encrypt`)

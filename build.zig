@@ -750,7 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6635-registry-binding", .reason = "intentionally red TDD reproduction (SONNY-6635); compiled by test-compile; registered through shardDep by the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10733,7 +10732,7 @@ pub fn build(b: *std.Build) void {
     sonny6635_test_mod.addImport("graph_storage", graph_storage_mod);
     const sonny6635_tests = b.addTest(.{ .root_module = sonny6635_test_mod });
     const run_sonny6635_tests = b.addRunArtifact(sonny6635_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6635_tests.step);
+    shardDep(test_step, &run_sonny6635_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6635-registry-binding", "Run SONNY-6635 regression (under TDE a sealed graph registry or dropped-graph list copied from another data directory does not authenticate; a plaintext registry is refused once the data directory has been sealed, also with its identity file deleted; a store from a build that never sealed the registry upgrades once)").dependOn(&run_sonny6635_tests.step);
 
     // SONNY-6615: exactly one owner closes the time-series WAL directory.
