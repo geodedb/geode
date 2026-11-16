@@ -14576,6 +14576,24 @@ pub fn build(b: *std.Build) void {
     const run_sonny6637_qi_tests = b.addRunArtifact(sonny6637_qi_tests);
     shardDep(test_step, &run_sonny6637_qi_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6637-query-items", "Run SONNY-6637 items 1, 2, 4 and 5 regression (shortestPath(a, b) / allShortestPaths(a, b) walk the graph between the two nodes and refuse a non-node with 22G03; MATCH ... SET or REMOVE with no RETURN answers no rows, also in a FOR body; a quantified relationship list on a comma or multi-hop pattern leaks nothing; a LET definition sees the definitions before it in the same LET; in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6637_qi_tests.step);
+    // SONNY-6637 item 3: the shared function arity table. See tests/test_sonny6637_function_arity.zig.
+    const sonny6637_fa_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6637_function_arity.zig"), .target = target, .optimize = optimize });
+    sonny6637_fa_mod.addImport("geode", root_mod);
+    sonny6637_fa_mod.addImport("logging", logging_mod);
+    sonny6637_fa_mod.link_libc = true;
+    const sonny6637_fa_tests = b.addTest(.{ .root_module = sonny6637_fa_mod });
+    const run_sonny6637_fa_tests = b.addRunArtifact(sonny6637_fa_tests);
+    shardDep(test_step, &run_sonny6637_fa_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6637-function-arity", "Run SONNY-6637 item 3 regression (one comptime table, src/eval/function_arity.zig, gives every built-in, extension and timeseries function's operand count; every entry called with NULL operands at its least and greatest count is a call of it, and one past either is WrongArgumentCount (42000) before anything runs, aggregates included; every function docs/TYPE_QUICK_REFERENCE.md shows is in the table)").dependOn(&run_sonny6637_fa_tests.step);
+    // SONNY-6543: ISO/IEC 39075 Table 8 status codes. See tests/test_sonny6543_iso_status_codes.zig.
+    const sonny6543_sc_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6543_iso_status_codes.zig"), .target = target, .optimize = optimize });
+    sonny6543_sc_mod.addImport("geode", root_mod);
+    sonny6543_sc_mod.addImport("logging", logging_mod);
+    sonny6543_sc_mod.link_libc = true;
+    const sonny6543_sc_tests = b.addTest(.{ .root_module = sonny6543_sc_mod });
+    const run_sonny6543_sc_tests = b.addRunArtifact(sonny6543_sc_tests);
+    shardDep(test_step, &run_sonny6543_sc_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6543-iso-status-codes", "Run SONNY-6543 regression (ISO/IEC 39075 Table 8: an invalid reference - a GROUP BY key, a HAVING name, knn()'s property - is 42002, not 42703; a UNION column-count mismatch is the Syntax Rule refusal 42000, not 42601; the CDC Admin refusal is 42501 on both transports; no mapping sends 42703 or 42601)").dependOn(&run_sonny6543_sc_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
@@ -16210,7 +16228,7 @@ pub fn build(b: *std.Build) void {
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md
-    const count_pushdown_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_count_nodes_pushdown_perf.zig"), .target = target, .optimize = optimize });
+    const count_pushdown_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_count_nodes_pushdown_perf.zig"), .target = target, .optimize = optimize, .link_libc = true });
     count_pushdown_test_mod.addImport("geode", root_mod);
     const count_pushdown_tests = b.addTest(.{ .root_module = count_pushdown_test_mod });
     const run_count_pushdown_tests = b.addRunArtifact(count_pushdown_tests);
