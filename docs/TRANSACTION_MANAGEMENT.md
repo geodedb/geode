@@ -263,12 +263,13 @@ These features implement ISO/IEC 39075:2024 GQL standard:
    rollback-to-savepoint requests are implemented; GQL has no SAVEPOINT
    statement here
 
-## Crash Durability and Atomicity (SONNY-2979)
+## Crash Durability and Atomicity (SONNY-2979, SONNY-6658)
 
 An explicit transaction (BEGIN or START TRANSACTION ... COMMIT, over one
 request or several) is atomic across a crash (kill -9, OOM kill, power
 loss): after the restart either all of it is there (it committed) or none
-of it (it was open, or rolled back).
+of it (it was open, or rolled back). So is an auto-commit statement (one
+statement outside BEGIN ... COMMIT), SONNY-6658: below.
 
 How:
 
@@ -365,20 +366,64 @@ How:
   transaction id, which restarts at 1 in every process.
 - **Cost.** One fsync of `txn_undo.wal` per change inside an explicit
   transaction (one per batch of creates), plus one at COMMIT and one at
-  ROLLBACK. Auto-commit statements write nothing to it.
+  ROLLBACK. For auto-commit statements, below.
 - **COMMIT is durable.** Once COMMIT returns, every change of the
   transaction has been fsynced to the engine WAL (per-commit fsync), and a
   committed change made inside the transaction is never undone by recovery
   (SONNY-2978: the session's engine transaction no longer batches its WAL
   page images past other transactions' commits on its shard).
 
+Auto-commit statements (SONNY-6658), with the durable undo log installed
+(every `geode serve`):
+
+- **One engine transaction, committed at the statement's end.** The
+  statement's engine transaction (the one CREATE, MERGE and the batch
+  create open, or, for a statement that has none, such as `MATCH ... SET`,
+  `MATCH ... DELETE` or `MATCH ... REMOVE`, one opened by its first write
+  on that write's shard) is committed when the statement ends, after its
+  UNIQUE checks, not when the executor that opened it returns
+  (`graph_storage_adapter.commitAutoStatementTxn`). Every change of the
+  statement on that shard joins it, so they reach the WAL as one commit,
+  last. A change of `MATCH ... SET` used to commit an engine transaction of
+  its own each, so a one-node `SET n.a = 1, n.b = 2` now commits once
+  instead of twice.
+- **The undo goes to disk only when the statement spans engine
+  transactions.** A change that commits an engine transaction of its own
+  (one on another shard, a relationship between two shards, a batch create,
+  a change the engine commits itself) is not the statement's last commit.
+  Before it, every entry of the statement's undo record (`statement_undo`)
+  not yet on disk, and the intents of the creates it is about to make, are
+  appended to `txn_undo.wal` under the statement's own id (top bit set, so
+  it never meets a transaction's) with one fsync
+  (`statement_undo.beforeOwnEngineCommit`). When the statement ends, the
+  rest is written, its engine transaction commits, and a COMMITTED record
+  seals it: its commit point (the statement fails, and is undone, if it
+  cannot be written). A statement whose changes all join its engine
+  transaction writes nothing to the log: no extra fsync.
+- **A failed statement** is undone through its record, as before; its
+  engine transaction, which the undo joined, commits; then, if it went to
+  the log, ROLLED_BACK is written.
+- **Recovery** is the transactions': a statement with entries and neither
+  record is undone at startup.
+- **Cost.** Nothing for a statement whose changes are on one shard. For one
+  that spans shards: one fsync of the log before each change that commits
+  on its own (that change's own engine commit was already an fsync), one
+  before the statement's engine commit and one for COMMITTED.
+- **Errors.** A write whose undo cannot be put on disk is refused and the
+  statement undone: 40000 ("The statement's undo could not be written to
+  the durable undo log"). An engine commit of the statement that fails:
+  40000 ("The statement's changes could not be committed to storage"), and
+  the graph is quarantined as for any failed commit (SONNY-6529).
+
 Residuals:
 
-- **Auto-commit statements** are not covered: a statement outside an
-  explicit transaction that changes several shards and is cut by a crash
-  keeps the changes already committed in the engine (one engine transaction
-  on the statement's shard, one per change on the others). Run it inside
-  BEGIN ... COMMIT to make it crash-atomic.
+- **Auto-commit statements outside the log or the statement scope.** An
+  embedding caller with no durable undo log installed, and the write paths
+  that run outside an executor statement (the bulk MERGE fast path, the
+  group-commit node path), commit as before; a program of several
+  auto-commit statements is atomic per statement, not as a whole. A
+  statement's write made on a worker thread that joined it (SONNY-6362)
+  commits on its own, after the statement's undo is on disk.
 - **Isolation is unchanged.** As at ROLLBACK, the undo at recovery restores
   the values the transaction found; a change another session committed on
   top of an uncommitted change of the transaction is overwritten by it.

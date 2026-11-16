@@ -98,6 +98,7 @@ const schema_change_notifier = @import("execution/schema_change_notifier.zig");
 pub const admin_ddl = @import("execution/admin_ddl.zig");
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 
 // Cluster-mode imports retained for the (currently disabled) propose path
 // in .CreateGraph and future statements that will route through Raft. The
@@ -1653,6 +1654,9 @@ pub fn leaveEntryPoint() void {
     // SONNY-6529: a failed statement's transaction kept for its undo replay
     // (`StatementTxn.fail`) does not outlive the program.
     storage_adapter.settleFailedStatementTxn();
+    // SONNY-6658: nor an auto-commit statement's (its statement's end
+    // commits it; this is a backstop).
+    storage_adapter.settleAutoStatementTxn();
     // SONNY-3135 (N7b) aborted the session engine transaction of a program
     // that failed in its transaction (`failEntryPoint`): the transaction is
     // rolled back (GAP-0917, by the executor or the handler), and a commit
@@ -2072,7 +2076,9 @@ pub fn beginStatementScope(owns: bool) void {
 pub var session_txn_replay_joined_total: std.atomic.Value(u64) = .init(0);
 
 /// The errors a failed statement's scope can answer instead of its own.
-pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIncomplete };
+/// SONNY-6658: or the auto-commit statement's undo could not be put on disk,
+/// or its engine transaction did not commit (its changes are undone).
+pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIncomplete, StatementUndoNotDurable, StatementCommitFailed };
 
 // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementScopeFailed; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=execution; UPDATED=2026-09-29
 /// SONNY-3348: the statement that opened the scope `owns` failed with
@@ -2099,8 +2105,10 @@ pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementSc
     if (owns and statement_undo.pendingCount() > 0 and txn_undo_log.threadInTxn() and storage_adapter.hasThreadSessionTxn())
         _ = session_txn_replay_joined_total.fetchAdd(1, .monotonic);
     const over_budget = owns and statement_undo.budgetExceeded();
+    const durable_id = if (owns) statement_undo.takeDurableId() else 0; // SONNY-6658
     const undone = statement_undo.finishFailed(owns);
     if (owns) storage_adapter.settleFailedStatementTxn();
+    if (owns) endFailedAutoCommitStatement(durable_id, undone);
     flushFulltextRebuilds(owns, null); // SONNY-6368
     if (!undone) return error.StatementUndoIncomplete;
     if (over_budget) return error.WriteQueryBudgetExceeded;
@@ -2131,8 +2139,49 @@ pub fn endStatementSucceeded(owns: bool, catalog: *catalog_mod.Catalog) (stateme
     // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=StatementEndHook; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=execution; UPDATED=2026-11-11
     if (owns) unique_constraints.checkStatementWrites(catalog) catch |err| return endStatementFailed(owns, err);
     statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
+    if (owns) commitAutoCommitStatement() catch |err| return endStatementFailed(owns, err);
     try statement_undo.finishSucceeded(owns);
     flushFulltextRebuilds(owns, catalog); // SONNY-6368
+}
+
+// CANARY: REQ=REQ-SONNY-6658-AUTOCOMMIT-ATOMIC; FEATURE="TransactionManagement"; ASPECT=StatementSeal; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6658: the end of an auto-commit statement that succeeded, still
+/// under the graph lock it holds. When a change of it committed an engine
+/// transaction of its own (it went durable), what of its undo is not on disk
+/// yet is written; its engine transaction commits (one commit for its
+/// changes on that shard); then a COMMITTED record seals it, its commit
+/// point. An error fails the statement, which undoes its changes
+/// (`endStatementFailed`). No-op in an explicit transaction.
+fn commitAutoCommitStatement() (statement_undo.DurableError || error{StatementCommitFailed})!void {
+    try statement_undo.flushBeforeStatementCommit();
+    storage_adapter.commitAutoStatementTxn() catch |err| {
+        log.warn("an auto-commit statement's engine transaction did not commit", &.{Attr.string("error", @errorName(err))});
+        return error.StatementCommitFailed;
+    };
+    const id = statement_undo.durableId();
+    if (id == 0) return;
+    txn_durable_undo.markStatementEnded(id, .committed) catch |err| {
+        log.err("could not seal an auto-commit statement in the durable undo log; it is rolled back", &.{Attr.string("error", @errorName(err))});
+        return error.StatementUndoNotDurable;
+    };
+    _ = statement_undo.takeDurableId();
+}
+
+/// SONNY-6658: the end of an auto-commit statement that failed, after its
+/// undo replayed: its engine transaction, which the replay's compensations
+/// joined, commits; then, when it went durable (`durable_id`) and every
+/// change was undone, a ROLLED_BACK record says a restart has nothing to
+/// undo. Otherwise the restart undoes it again (each entry checks what is
+/// there).
+fn endFailedAutoCommitStatement(durable_id: u64, undone: bool) void {
+    const committed = if (storage_adapter.commitAutoStatementTxn()) |_| true else |err| blk: {
+        log.warn("a failed auto-commit statement's engine transaction did not commit after its undo", &.{Attr.string("error", @errorName(err))});
+        break :blk false;
+    };
+    if (durable_id == 0 or !undone or !committed) return;
+    txn_durable_undo.markStatementEnded(durable_id, .rolled_back) catch |err| {
+        log.err("could not record a failed auto-commit statement's rollback; the next start undoes it again", &.{Attr.string("error", @errorName(err))});
+    };
 }
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
