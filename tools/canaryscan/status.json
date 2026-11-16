@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T15:06:37.807969995Z",
+  "generated_at": "2026-11-16T15:39:57.967840838Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83287,6 +83287,53 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6671-WORKER-SHARD",
+      "features": [
+        {
+          "feature": "High-Concurrency Mutations",
+          "aspect": "ForeignShardWriteCounter",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6671_group_commit_routing.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "High-Concurrency Mutations",
+          "aspect": "EngineShardOfPublicId",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6671_group_commit_routing.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "High-Concurrency Mutations",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6671_group_commit_routing.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6671_group_commit_routing.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88378,7 +88425,7 @@
       "EXEMPT": 209,
       "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4374
+      "TESTED": 4377
     },
     "by_aspect": {
       "2PC": 3,
@@ -89443,6 +89490,7 @@
       "Engine": 14,
       "EngineAbortCounters": 1,
       "EngineBatch2": 1,
+      "EngineShardOfPublicId": 1,
       "EngineStateOnly": 1,
       "EnhancedPolicy": 1,
       "EnhancedViewWiring": 1,
@@ -89693,6 +89741,7 @@
       "FlowControl": 1,
       "FollowerRemovedTextRebuild": 1,
       "ForAndSubqueryStages": 1,
+      "ForeignShardWriteCounter": 1,
       "ForgetResidentStateAfterSwap": 1,
       "ForkJoin": 1,
       "FormatString": 1,
@@ -91288,7 +91337,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 427,
+      "Regression": 428,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
