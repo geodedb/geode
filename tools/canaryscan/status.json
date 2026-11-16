@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T16:31:22.867176081Z",
+  "generated_at": "2026-11-16T17:51:03.9675731Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83478,6 +83478,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6689-DATA-DIR-SEAL-MARKER",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "UpgradeMarkerRefusesTransplant",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6689_data_dir_transplant.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6689-DATA-DIR-TRANSPLANT",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6689_data_dir_transplant.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6689_data_dir_transplant.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6689-UNDO-LOG-IDENTITY",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "UndoLogBoundToDataDir",
+          "status": "TESTED",
+          "files": [
+            "src/txn_durable_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6689_data_dir_transplant.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88569,7 +88626,7 @@
       "EXEMPT": 209,
       "IMPL": 568,
       "STUB": 18,
-      "TESTED": 4383
+      "TESTED": 4386
     },
     "by_aspect": {
       "2PC": 3,
@@ -91486,7 +91543,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 430,
+      "Regression": 431,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -92265,6 +92322,7 @@
       "UndoEntry": 1,
       "UndoIndexRegression": 1,
       "UndoIndexRepairHook": 1,
+      "UndoLogBoundToDataDir": 1,
       "UndoLogCore": 2,
       "UndoLogSavepoint": 1,
       "UnenforcedDenyRefused": 1,
@@ -92336,6 +92394,7 @@
       "UpdateCodec": 1,
       "UpdateValidation": 1,
       "UpgradeAtLogin": 1,
+      "UpgradeMarkerRefusesTransplant": 1,
       "UsageExamples": 1,
       "UseGraphAuthorization": 1,
       "UseGraphRejection": 1,

@@ -94,13 +94,27 @@ build: read once, resealed under a new identity, the binding recorded last
 (an upgrade cut short resumes). Residual: a store upgraded from V4 whose
 graphs were never opened since still has V4 manifests, so deleting its
 identity file reopens the upgrade until any graph is opened (the
-`__geode_security` graph is opened at every server start). Residual: with
-the identity file deleted, a registry sealed under `SEAL_UUID` (by a
-SONNY-6616 build, in this directory or another under the same key) is read
-as that build's and adopted; graph manifests do not tell the two builds
-apart. The graph-restore intent (SONNY-6636) and `txn_undo.wal` are still
-sealed under `SEAL_UUID`: an intent or undo record an earlier build left
-must stay readable.
+`__geode_security` graph is opened at every server start).
+
+**Upgrade marker; restore intent and undo log bound too (SONNY-6689).**
+The first open by this build records the upgrade in `data_dir.seal`
+(owner-only, sealed under the key and bound to `SEAL_UUID`, so it reads
+without the identity): the identity's uuid and a flag. From then on the
+data directory is refused when `data_dir.identity` is missing
+(`DataDirIdentityMissing`: with it gone, a registry sealed under
+`SEAL_UUID`, which any directory under the key could have written, was
+adopted as a SONNY-6616 build's) or is not the one the marker names
+(`DataDirIdentityMismatch`: a donor directory's identity copied in with its
+registry). The graph-restore intent (SONNY-6636) and `txn_undo.wal`
+(SONNY-2979) are sealed under the identity, so one moved from another
+directory under the key is refused (`CorruptGraphRestoreIntent`,
+`SideFileAuthFailed`). One an earlier build sealed under `SEAL_UUID` is
+read in the open that records the marker (the undo log is resealed under
+the identity first; the marker is written last, so an upgrade cut short
+resumes) and refused after. Residual: deleting both `data_dir.identity`
+and `data_dir.seal` reopens the one-time upgrade (no other file records
+it), and a directory's own files copied back together, marker included,
+are accepted (a restore of the directory).
 Requires graph-storage 0.4.26 (0.4.20 sealed the registry under
 `SEAL_UUID`). An older geode cannot read a registry sealed under the
 identity and refuses the data directory: there is no downgrade.

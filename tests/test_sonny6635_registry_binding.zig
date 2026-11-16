@@ -137,7 +137,11 @@ test "SONNY-6635 (2): a plaintext registry substituted in a sealed data director
     // Deleting the identity file does not reopen the upgrade path: the
     // graph's manifests (format_version 5, authenticated) say this
     // directory was written by a build that seals the registry.
+    // SONNY-6689: the upgrade marker refuses first (the identity is gone);
+    // with the marker deleted too, the manifests still do.
     deleteIfPresent(try std.fmt.allocPrint(aa, "{s}/data_dir.identity", .{path}));
+    try testing.expectError(error.DataDirIdentityMissing, StorageAdapter.init(testing.allocator, path, tdeConfig(key)));
+    deleteIfPresent(try std.fmt.allocPrint(aa, "{s}/data_dir.seal", .{path}));
     try testing.expectError(error.SideFileNotSealed, StorageAdapter.init(testing.allocator, path, tdeConfig(key)));
     try testing.expectError(error.SideFileNotSealed, geode.graph_storage_adapter.graphRegisteredOnDisk(testing.allocator, path, "renamed6635", key));
 
@@ -212,6 +216,7 @@ test "SONNY-6635 (2): a store from a build that never sealed the registry upgrad
         try writeAll(drop_path, dropped.items);
     }
     deleteIfPresent(id_path);
+    deleteIfPresent(try std.fmt.allocPrint(aa, "{s}/data_dir.seal", .{path})); // SONNY-6689: nor the marker
     {
         const adapter = try StorageAdapter.init(testing.allocator, path, tdeConfig(key));
         defer adapter.deinit();
@@ -269,6 +274,7 @@ test "SONNY-6635 (1): a registry sealed by graph-storage 0.4.20-0.4.25 (under SE
     }
     const legacy = try readAll(aa, reg_path);
     deleteIfPresent(id_path);
+    deleteIfPresent(try std.fmt.allocPrint(aa, "{s}/data_dir.seal", .{path})); // SONNY-6689: nor the marker
     {
         const adapter = try StorageAdapter.init(testing.allocator, path, tdeConfig(key));
         defer adapter.deinit();

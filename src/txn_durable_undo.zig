@@ -64,10 +64,85 @@ pub const file_name = "txn_undo.wal";
 /// the exact-index and dropped-graphs files).
 pub const side_kind_txn_undo = gs.side_file_crypto.Kind.consumer(3);
 
-/// The cipher records are sealed with under at-rest key `key` (null: none).
 pub const Cipher = gs.side_file_crypto.Cipher;
+
+/// The cipher earlier builds sealed records with under `key`: bound to
+/// graph-storage's shared `SEAL_UUID` (null without a key). SONNY-6689: a
+/// log sealed under it is only read by `resealLegacy`.
 pub fn cipherForKey(key: ?[32]u8) ?Cipher {
     return Cipher.forKey(key, gs.registry.SEAL_UUID);
+}
+
+// CANARY: REQ=REQ-SONNY-6689-UNDO-LOG-IDENTITY; FEATURE="TDEFileLevelEncryption"; ASPECT=UndoLogBoundToDataDir; STATUS=TESTED; TEST=tests/test_sonny6689_data_dir_transplant.zig; OWNER=security; UPDATED=2026-11-16
+/// The cipher records are sealed with under at-rest key `key` (null: none).
+/// SONNY-6689: bound to the data directory's identity
+/// (`gs.registry.DataDirIdentity`, made by `StorageAdapter.init`), so a log
+/// moved from another directory under the key does not authenticate. It
+/// was bound to the shared `SEAL_UUID`; such a log is resealed once by
+/// `resealLegacy`. Under a key with no identity it is refused.
+pub fn cipherForDataDir(allocator: std.mem.Allocator, data_dir: []const u8, key: ?[32]u8) !?Cipher {
+    const k = key orelse return null;
+    const id = (try gs.registry.DataDirIdentity.load(allocator, data_dir, k)) orelse return error.DataDirIdentityMissing;
+    return Cipher.init(k, id.uuid);
+}
+
+/// SONNY-6689: reseal `data_dir`'s log under the directory identity
+/// (`binding`) when an earlier build sealed it under `SEAL_UUID`: every
+/// record that frames is decoded under the old cipher and written again
+/// under the new one (a torn tail is dropped, as recovery drops it), to a
+/// temporary file renamed over the log and the directory fsynced. True when
+/// it resealed. A log already under the identity (a reseal whose marker was
+/// not recorded) is left as it is; one under neither is an error.
+pub fn resealLegacy(allocator: std.mem.Allocator, data_dir: []const u8, key: [32]u8, binding: [16]u8) !bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = try std.fs.path.join(allocator, &.{ data_dir, file_name });
+    defer allocator.free(path);
+    const raw = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1 << 40)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer allocator.free(raw);
+    if (raw.len == 0) return false;
+    var bound = Cipher.init(key, binding);
+    defer bound.deinit();
+    var legacy = cipherForKey(key).?;
+    defer legacy.deinit();
+    var parsed = parse(allocator, &legacy, raw) catch |err| switch (err) {
+        error.SideFileAuthFailed => {
+            var already = try parse(allocator, &bound, raw);
+            already.deinit(allocator);
+            return false;
+        },
+        else => return err,
+    };
+    defer parsed.deinit(allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    var payload: std.ArrayListUnmanaged(u8) = .empty;
+    defer {
+        std.crypto.secureZero(u8, payload.items);
+        payload.deinit(allocator);
+    }
+    for (parsed.records.items) |r| {
+        payload.clearRetainingCapacity();
+        if (r.entry) |e| try encodeEntry(allocator, &payload, e);
+        try appendRecord(allocator, &out, &bound, r.kind, r.boot, r.txn, payload.items);
+    }
+    const tmp = try std.fmt.allocPrint(allocator, "{s}.reseal", .{path});
+    defer allocator.free(tmp);
+    {
+        const f = try std.Io.Dir.cwd().createFile(io, tmp, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
+        defer f.close(io);
+        try f.writeStreamingAll(io, out.items);
+        try f.sync(io);
+    }
+    try std.Io.Dir.cwd().rename(tmp, std.Io.Dir.cwd(), path, io);
+    var dir = try std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true });
+    defer dir.close(io);
+    try (std.Io.File{ .handle = dir.handle, .flags = .{ .nonblocking = false } }).sync(io);
+    log.info("resealed the transaction undo log under the data directory's identity (SONNY-6689)", &.{Attr.uint("records", parsed.records.items.len)});
+    return true;
 }
 
 /// A record larger than this does not frame (a corrupt length).
@@ -542,11 +617,12 @@ pub const Log = struct {
         errdefer file.close(io);
         var boot_bytes: [8]u8 = undefined;
         try io.randomSecure(&boot_bytes);
+        const cipher = try cipherForDataDir(allocator, data_dir, encryption_key);
         self.* = .{
             .allocator = allocator,
             .path = path,
             .file = file,
-            .cipher = cipherForKey(encryption_key),
+            .cipher = cipher,
             .boot = std.mem.readInt(u64, &boot_bytes, .little),
             .end = try file.length(io),
         };

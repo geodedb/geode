@@ -750,7 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6689-data-dir-transplant", .reason = "intentionally red TDD reproduction (SONNY-6689); compiled by test-compile; registered through shardDep by the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10745,7 +10744,7 @@ pub fn build(b: *std.Build) void {
     sonny6689_test_mod.addImport("graph_storage", graph_storage_mod);
     const sonny6689_tests = b.addTest(.{ .root_module = sonny6689_test_mod });
     const run_sonny6689_tests = b.addRunArtifact(sonny6689_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6689_tests.step);
+    shardDep(test_step, &run_sonny6689_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6689-data-dir-transplant", "Run SONNY-6689 regression (under TDE, after the one-time registry upgrade, a directory whose data_dir.identity is deleted or replaced by a donor's is refused even with a SEAL_UUID-sealed registry; a graph-restore intent or txn_undo.wal moved from another data directory under the same key is refused; a SEAL_UUID-sealed one is read once in a directory not yet upgraded and refused after)").dependOn(&run_sonny6689_tests.step);
 
     // SONNY-6615: exactly one owner closes the time-series WAL directory.

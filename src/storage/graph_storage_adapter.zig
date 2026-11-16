@@ -25,6 +25,7 @@ const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
 const label_dict_divergence = @import("label_dict_divergence.zig");
 const graph_restore_intent = @import("graph_restore_intent.zig");
+const txn_durable_undo = @import("../txn_durable_undo.zig");
 const statement_undo = @import("../statement_undo.zig");
 // GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
 // executor's cancel flags so a client disconnect / stall-watchdog abort frees a
@@ -347,6 +348,86 @@ pub const side_kind_dropped_graphs = gs.side_file_crypto.Kind.consumer(2);
 pub const side_kind_graph_restore = gs.side_file_crypto.Kind.consumer(3);
 /// SONNY-6636 (3): a Raft log position (`graph_restore_intent.RaftPoint`).
 pub const RaftPoint = graph_restore_intent.RaftPoint;
+/// SONNY-6689: `data_dir.seal` (`DataDirSealMarker`).
+pub const side_kind_data_dir_seal = gs.side_file_crypto.Kind.consumer(4);
+
+// CANARY: REQ=REQ-SONNY-6689-DATA-DIR-SEAL-MARKER; FEATURE="TDEFileLevelEncryption"; ASPECT=UpgradeMarkerRefusesTransplant; STATUS=TESTED; TEST=tests/test_sonny6689_data_dir_transplant.zig; OWNER=security; UPDATED=2026-11-16
+/// SONNY-6689: the record, under a key, that a data directory has been
+/// upgraded: `data_dir.seal`, owner-only, sealed under the key and bound to
+/// graph-storage's `SEAL_UUID` (it must be readable with the identity file
+/// gone), holding the identity's uuid and flags. With the marker present
+/// the directory is refused when `data_dir.identity` is missing
+/// (`DataDirIdentityMissing`: a `SEAL_UUID`-sealed registry, which any
+/// directory under the key could have written, was adopted then) or names
+/// another uuid (`DataDirIdentityMismatch`: a donor's identity copied in
+/// with its registry). `side_files_bound`: the restore intent and
+/// `txn_undo.wal` are sealed under the identity, and a `SEAL_UUID`-sealed
+/// one is refused. Layout: magic `GEODSEAL` (8) | version u32 (1) | flags
+/// u32 | uuid (16) | CRC32 u32 over the preceding 32 bytes.
+pub const DataDirSealMarker = struct {
+    uuid: [16]u8,
+    flags: u32 = 0,
+
+    pub const file_name = "data_dir.seal";
+    pub const side_files_bound: u32 = 1;
+    const magic = "GEODSEAL".*;
+    const size: usize = 8 + 4 + 4 + 16 + 4;
+    const version: u32 = 1;
+
+    fn path(allocator: Allocator, data_dir: []const u8) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{s}/" ++ file_name, .{data_dir});
+    }
+
+    /// The marker of `data_dir` under `key`; null when there is none. One
+    /// that is not sealed, does not authenticate or does not parse is an
+    /// error.
+    pub fn load(allocator: Allocator, data_dir: []const u8, key: [32]u8) !?DataDirSealMarker {
+        const p = try path(allocator, data_dir);
+        defer allocator.free(p);
+        const raw = gs.side_file_crypto.readWholeFile(allocator, p) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
+        defer c.deinit();
+        // `decode` owns `raw` from here.
+        const decoded = try gs.side_file_crypto.decode(allocator, .{ .cipher = &c, .require_sealed = true }, side_kind_data_dir_seal, file_name, raw);
+        defer allocator.free(decoded.bytes);
+        const d = decoded.bytes;
+        if (d.len != size or !std.mem.eql(u8, d[0..8], &magic)) return error.InvalidData;
+        if (std.mem.readInt(u32, d[32..36], .little) != std.hash.Crc32.hash(d[0..32])) return error.ChecksumMismatch;
+        if (std.mem.readInt(u32, d[8..12], .little) != version) return error.UnsupportedVersion;
+        var m = DataDirSealMarker{ .uuid = undefined, .flags = std.mem.readInt(u32, d[12..16], .little) };
+        @memcpy(&m.uuid, d[16..32]);
+        return m;
+    }
+
+    /// Write the marker atomically (owner-only) and fsync the directory.
+    pub fn save(self: DataDirSealMarker, allocator: Allocator, data_dir: []const u8, key: [32]u8) !void {
+        var buf: [size]u8 = undefined;
+        @memcpy(buf[0..8], &magic);
+        std.mem.writeInt(u32, buf[8..12], version, .little);
+        std.mem.writeInt(u32, buf[12..16], self.flags, .little);
+        @memcpy(buf[16..32], &self.uuid);
+        std.mem.writeInt(u32, buf[32..36], std.hash.Crc32.hash(buf[0..32]), .little);
+        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
+        defer c.deinit();
+        const disk = try gs.side_file_crypto.encode(allocator, &c, side_kind_data_dir_seal, file_name, &buf);
+        defer allocator.free(disk);
+        const p = try path(allocator, data_dir);
+        defer allocator.free(p);
+        try gs.side_file_crypto.writeAtomic(allocator, p, disk);
+        try graph_restore_intent.syncDir(data_dir);
+    }
+
+    /// SONNY-6689: refuse `identity` when the marker says the directory was
+    /// upgraded and it is missing or another directory's.
+    pub fn check(marker: ?DataDirSealMarker, identity: ?gs.registry.DataDirIdentity) !void {
+        const m = marker orelse return;
+        const id = identity orelse return error.DataDirIdentityMissing;
+        if (!std.mem.eql(u8, &id.uuid, &m.uuid)) return error.DataDirIdentityMismatch;
+    }
+};
 
 fn exactIndexSealKind(name: []const u8) gs.side_file_crypto.Kind {
     return if (std.mem.eql(u8, name, prop_rev_index_file_name)) side_kind_prop_rev else side_kind_prop_exact;
@@ -4701,6 +4782,9 @@ pub const StorageAdapter = struct {
     /// SONNY-6635: the data directory's identity under a key (null without
     /// one): its registry and dropped-graph list are sealed under it.
     data_dir_identity: ?gs.registry.DataDirIdentity = null,
+    /// SONNY-6689: the directory's upgrade marker under a key, as read at
+    /// open and as recorded since (`recordDataDirSeal`).
+    data_dir_seal: ?DataDirSealMarker = null,
     mutex: std.Io.Mutex,
     /// SONNY-6472 (2): names of graphs dropped since this adapter opened
     /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
@@ -4858,6 +4942,16 @@ pub const StorageAdapter = struct {
                 log.warn("cannot load the data directory identity in {s}: {}; refusing to open the data directory", .{ owned_dir, err });
                 return err;
             };
+            // SONNY-6689: once upgraded, the identity must be there and be
+            // the one the marker names.
+            self.data_dir_seal = DataDirSealMarker.load(allocator, owned_dir, key) catch |err| {
+                log.warn("cannot load the data directory's upgrade marker in {s}: {}; refusing to open the data directory", .{ owned_dir, err });
+                return err;
+            };
+            DataDirSealMarker.check(self.data_dir_seal, self.data_dir_identity) catch |err| {
+                log.warn("the data directory {s} was upgraded under the TDE key, but its identity file is {s}; refusing to open it (SONNY-6689)", .{ owned_dir, if (err == error.DataDirIdentityMissing) "missing" else "another directory's" });
+                return err;
+            };
         }
         // SONNY-6430: a registry that exists but cannot be loaded is an
         // error. It was a warning, and the adapter started with no graphs.
@@ -4891,6 +4985,18 @@ pub const StorageAdapter = struct {
             log.warn("cannot finish the interrupted graph restore in {s}: {}; refusing to open the data directory", .{ self.data_dir, err });
             return err;
         };
+        // SONNY-6689: a `txn_undo.wal` an earlier build sealed under
+        // `SEAL_UUID` is resealed under the identity, then the marker
+        // records the upgrade (last, so an upgrade cut short resumes).
+        if (self.config.encryption_key) |key| {
+            if (self.legacySideFilesReadable()) {
+                _ = txn_durable_undo.resealLegacy(self.allocator, self.data_dir, key, self.data_dir_identity.?.uuid) catch |err| {
+                    log.warn("cannot reseal the transaction undo log in {s}: {}; refusing to open the data directory", .{ self.data_dir, err });
+                    return err;
+                };
+            }
+            try self.recordDataDirSeal(key);
+        }
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
         // BEFORE any graph is opened. Graphs open lazily (openGraphLocked) on
@@ -5554,12 +5660,25 @@ pub const StorageAdapter = struct {
     /// graph-storage's shared `SEAL_UUID`, not the data directory's identity
     /// (as the registry now is): an intent an earlier build left by an
     /// interrupted restore must stay readable at the next open.
-    fn graphRestoreCipher(self: *const StorageAdapter) ?gs.side_file_crypto.Cipher {
-        return gs.side_file_crypto.Cipher.forKey(self.config.encryption_key, gs.registry.SEAL_UUID);
+    /// SONNY-6689: under the data directory's identity, so an intent moved
+    /// from another directory under the key does not authenticate. An intent
+    /// an earlier build sealed under `SEAL_UUID` is read only in the open
+    /// that records the upgrade marker (`recoverGraphRestore`).
+    fn graphRestoreCipher(self: *const StorageAdapter) !?gs.side_file_crypto.Cipher {
+        return self.dataDirWriteCipher();
+    }
+
+    /// SONNY-6689: may a side file an earlier build sealed under
+    /// `SEAL_UUID` (the restore intent, `txn_undo.wal`) still be read? Only
+    /// until the marker records that they are under the identity.
+    fn legacySideFilesReadable(self: *const StorageAdapter) bool {
+        if (self.config.encryption_key == null) return false;
+        const m = self.data_dir_seal orelse return true;
+        return m.flags & DataDirSealMarker.side_files_bound == 0;
     }
 
     fn writeGraphRestoreIntent(self: *StorageAdapter, committed: bool, entries: []const graph_restore_intent.Entry, raft: graph_restore_intent.RaftPoint) !void {
-        var cipher = self.graphRestoreCipher();
+        var cipher = try self.graphRestoreCipher();
         defer if (cipher) |*c| c.deinit();
         try graph_restore_intent.write(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore, .{ .committed = committed, .entries = entries, .raft = raft });
     }
@@ -5770,9 +5889,20 @@ pub const StorageAdapter = struct {
     /// directories are deleted; committed, the swap is finished. A damaged
     /// intent refuses the open: which directories are live cannot be told.
     fn recoverGraphRestore(self: *StorageAdapter) !void {
-        var cipher = self.graphRestoreCipher();
+        var cipher = try self.graphRestoreCipher();
         defer if (cipher) |*c| c.deinit();
-        var owned = (try graph_restore_intent.read(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore)) orelse return;
+        // SONNY-6689: an intent sealed under `SEAL_UUID` by an earlier build
+        // is read once, before the marker records the upgrade.
+        const read_owned = graph_restore_intent.read(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore) catch |err| switch (err) {
+            error.CorruptGraphRestoreIntent => blk: {
+                if (!self.legacySideFilesReadable()) return err;
+                var legacy = gs.side_file_crypto.Cipher.init(self.config.encryption_key.?, gs.registry.SEAL_UUID);
+                defer legacy.deinit();
+                break :blk try graph_restore_intent.read(self.allocator, self.data_dir, &legacy, side_kind_graph_restore);
+            },
+            else => return err,
+        };
+        var owned = read_owned orelse return;
         defer owned.deinit();
         const intent = owned.intent;
         if (intent.committed) {
@@ -13418,6 +13548,18 @@ pub const StorageAdapter = struct {
     /// written last, so an upgrade cut short reads the resealed files under
     /// the identity next time (`classifyDataDirFile`) and resumes. From then
     /// on a plaintext or `SEAL_UUID`-sealed file is refused.
+    /// SONNY-6689: record (once) that the directory is upgraded and its
+    /// side files are under the identity.
+    fn recordDataDirSeal(self: *StorageAdapter, key: [32]u8) !void {
+        const id = self.data_dir_identity orelse return error.DataDirIdentityMissing;
+        if (self.data_dir_seal) |m| {
+            if (m.flags & DataDirSealMarker.side_files_bound != 0) return;
+        }
+        const m = DataDirSealMarker{ .uuid = id.uuid, .flags = DataDirSealMarker.side_files_bound };
+        try m.save(self.allocator, self.data_dir, key);
+        self.data_dir_seal = m;
+    }
+
     fn bindDataDirFiles(self: *StorageAdapter, key: [32]u8) !void {
         var id = self.data_dir_identity orelse blk: {
             const fresh = try gs.registry.DataDirIdentity.generate();
@@ -15841,5 +15983,7 @@ pub fn readRegistryOffline(allocator: std.mem.Allocator, registry: *gs.registry.
     const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
     defer allocator.free(registry_path);
     const identity: ?gs.registry.DataDirIdentity = if (encryption_key) |k| try gs.registry.DataDirIdentity.load(allocator, data_dir, k) else null;
+    // SONNY-6689: as `StorageAdapter.init` checks it.
+    if (encryption_key) |k| try DataDirSealMarker.check(try DataDirSealMarker.load(allocator, data_dir, k), identity);
     _ = try loadDataDirRegistry(allocator, registry, data_dir, registry_path, encryption_key, identity);
 }
