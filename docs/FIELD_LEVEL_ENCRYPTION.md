@@ -258,8 +258,9 @@ geode show rotation-status --tenant T
 geode policy grant plaintext S.F --role R
 geode policy revoke plaintext S.F --role R
 
-# Migration
-geode migrate encrypt --tenant T --field S.F --batch 1000
+# Migration: not supported in this release (SONNY-6321). `geode fle
+# migrate-encrypt <tenant> <schema> <field>` validates its arguments and is
+# refused with an error; no value is read or encrypted.
 ```
 
 ---
@@ -894,15 +895,11 @@ Run: `python3 extended_test_runner.py`
 
 2. **New writes:** Immediately encrypted
 
-3. **Backfill existing data:**
-
-   ```bash
-   geode migrate encrypt --tenant default --field Person.ssn --batch 1000
-   ```
-
-   - Iterates records in batches
-   - Encrypts plaintext → envelope
-   - Resumable on failure
+3. **Backfill existing data:** not supported in this release (SONNY-6321).
+   `geode fle migrate-encrypt` reported a finished migration ("Migration
+   Complete", exit 0) without reading or encrypting a value; it is now
+   refused with an error. Values stored before the field was configured as
+   encrypted stay as they were stored until they are written again.
 
 4. **Access during migration:**
    - Authorized users: still see values (plaintext or decrypted)

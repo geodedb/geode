@@ -51,7 +51,8 @@ fn printFLEUsage() void {
         "  show-rotation <tenant>                        Show key rotation status\n" ++
         "  show-policy <schema>                          Show encryption policy for schema\n" ++
         "  grant-plaintext <schema> <field> <role>       Grant READ_PLAINTEXT privilege\n" ++
-        "  migrate-encrypt <tenant> <schema> <field> [batch_size]  Migrate plaintext to encrypted\n" ++
+        "  migrate-encrypt <tenant> <schema> <field> [batch_size]  not supported in this release (SONNY-6321):\n" ++
+        "                                                refused with an error; no value is encrypted\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode fle show-rotation default\n" ++
@@ -125,7 +126,10 @@ fn handleGrantPlaintext(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
     std.debug.print("\n✓ Privilege granted successfully\n", .{});
 }
 
-// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-FLE-MIGRATE-CLI-001; FEATURE="FLEMigrateCLI"; ASPECT=CLI; STATUS=IMPL; OWNER=security; UPDATED=2026-11-16
+// SONNY-6321: stays IMPL: the command parses and validates its arguments
+// and delegates, and the migration it names is refused as unsupported
+// (REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED, tests/test_sonny6321_fle_admin_cli.zig).
 // GAP-0147 FIX: Properly delegate to fle_commands.migrateEncrypt with full validation
 fn handleMigrateEncrypt(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (start_idx + 2 >= argv.len) {

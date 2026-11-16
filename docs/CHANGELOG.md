@@ -4,6 +4,26 @@
 
 ### Security
 
+- **`geode fle migrate-encrypt` no longer reports a migration it did not
+  perform; the FLE admin commands have executed tests (SONNY-6321).**
+  `fle_commands.migrateEncrypt` (and so `geode fle migrate-encrypt`)
+  printed "Migration Complete" and "Records migrated: 0" and exited 0
+  without reading or encrypting a value: nothing in any build sets the
+  storage it migrates through. An operator was told a field's existing
+  plaintext was encrypted while it stayed plaintext on disk. It now
+  validates the schema and field and is refused as unsupported
+  (`error.Unsupported`, a non-zero exit); the help says so.
+  **BREAKING (operator):** scripts that ran `geode fle migrate-encrypt` and
+  checked its exit status now see a failure. `test-sonny6321-fle-admin-cli`
+  executes the admin command dispatcher (grant-plaintext and
+  revoke-plaintext against a persisted catalog, show-policy, show-rotation,
+  unknown schemas, fields and commands) and the `geode fle` binary
+  (grant-plaintext into GEODE_DATA_DIR's catalog, show-policy), so
+  REQ-FLE-ADMIN-001 is TESTED. REQ-FLE-MIGRATE-CLI-001 stays IMPL, and
+  REQ-FLE-MIGRATE-001, REQ-FLE-BATCH-001 and fle_commands'
+  REQ-FLE-STORAGE-001 (the batch migration behind a storage callback no
+  caller sets, encrypting under an identity readers do not use) are
+  downgraded to IMPL. Regression: `zig build test-sonny6321-fle-admin-cli`.
 - **An inline property map on an FLE-encrypted field matches as `WHERE`
   does (SONNY-6335, items 3 and 4).** `MATCH (n:L {ssn: 'x'})` and
   `-[:R {p: 'x'}]->` compared the stored envelope, so they matched for no

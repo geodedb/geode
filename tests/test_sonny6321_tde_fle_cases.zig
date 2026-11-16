@@ -25,9 +25,9 @@
 //     (8) a field configured through geode.fle.configureField is stored as
 //         an FLE envelope by a CREATE through the executor and read back as
 //         plaintext only by a role it is visible to.
-//   REQ-FLE-ADMIN-001 and REQ-FLE-MIGRATE-CLI-001 stay IMPL: fle_commands
-//   rotateKey prints a completed rotation without rotating anything, and
-//   the migrate-encrypt CLI has no storage to migrate (out of scope here).
+//   REQ-FLE-ADMIN-001 and REQ-FLE-MIGRATE-CLI-001 are not backed here: see
+//   tests/test_sonny6321_fle_admin_cli.zig (ADMIN-001 TESTED there; the
+//   migrate-encrypt CLI is refused as unsupported and stays IMPL).
 //   (9) the promoted markers cite this file.
 //
 // CANARY: REQ=REQ-SONNY-6321-TDE-FLE-CASES; FEATURE="TDEProcedures"; ASPECT=OltpAuthClusterFleEvidence; STATUS=TESTED; TEST=tests/test_sonny6321_tde_fle_cases.zig; OWNER=tde; UPDATED=2026-11-12
