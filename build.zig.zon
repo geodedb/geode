@@ -788,8 +788,8 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.21#a65956014c391e69a9451c14f5c01d354b0946a3",
-            .hash = "gql-0.1.21-T1ANDaRJDABmb-hJIGWLWeEgrA0pvBaYzC8cDJb7zY5N",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.22#d9dfb9ec4806f0eaa9e8fb6c4ecd4068a62bda42",
+            .hash = "gql-0.1.22-T1ANDchWDAAgAach6i-xfzgh8MTjPPTEfIJGfNCkAsMU",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection

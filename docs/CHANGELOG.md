@@ -3093,10 +3093,11 @@
   library's `syntaxError` (42601), a parser limit included; it prints the
   refusal's own code (`geode.parseErrorStatus`): 42000 for a syntax error,
   54000 / 54001 for a parser limit, as the QUIC and gRPC front ends send.
-  The library side (`SQLSTATE.SYNTAX_ERROR` 42000, `UNDEFINED_OBJECT`
-  42002, `invalidCharacterValueForCast`) is gql v0.1.22, not pinned yet;
-  `tests/conformance_tests.zig` reads the library's constant, so it passes
-  on either pin. Regression: `zig build test-conformance-patch` (a new
+  The library side is gql v0.1.22, now pinned (`d9dfb9ec`): **BREAKING**
+  for an embedder of the gql library, `SQLSTATE.SYNTAX_ERROR` is 42000
+  (was 42601), `UNDEFINED_OBJECT` 42002 (was 42703), and
+  `invalidCharacter` is `invalidCharacterValueForCast`.
+  `tests/conformance_tests.zig` reads the library's constant. Regression: `zig build test-conformance-patch` (a new
   named step for that file).
 
 - **A function, procedure, parameter, index, constraint or user that does
