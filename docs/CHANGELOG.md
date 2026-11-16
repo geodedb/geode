@@ -3090,6 +3090,22 @@
   when `AbortNotUndone` still happens (overlap, cross-shard WAL tail
   records, `abort_undo = .keep_writes`).
 
+- **A group-commit worker writes only its own engine shard (SONNY-6671).**
+  The coordinator routed a relationship op (bulk insert, bulk MERGE,
+  `MATCH ... CREATE`) to the worker of `shardIndex(source public id)`, and
+  the bulk relationship paths locked that shard. A relationship is written
+  on its source's engine shard, which is that shard only for a node the
+  bulk insert created; the executor places a node's slot round-robin. So a
+  relationship from an executor-created node was written by another
+  shard's worker, beside the owning worker and its open batch transaction
+  and without that shard's lock. Relationship ops now route to, and lock,
+  the source's engine shard (`StorageAdapter.nodeEngineShard`). New
+  counter `graph_storage_adapter.group_commit_foreign_shard_writes_total`
+  (writes a worker made on another shard; zero in a correct server).
+  Regression: `zig build test-sonny6671-group-commit-routing` (96 of 96
+  relationships from executor-created nodes were written by another
+  worker; 0 after).
+
 - **Transactions open on one shard that create nodes there no longer
   conflict; graph-storage v0.4.25 (SONNY-6659).** graph-storage v0.4.25 has
   one open writer per page: a second open transaction's write to a page

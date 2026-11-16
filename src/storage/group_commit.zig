@@ -6,10 +6,13 @@
 //! docs/superpowers/specs/2026-04-25-sharded-coordinator-restoration-design.md).
 //!
 //! Each per-graph coordinator runs 16 shard workers on
-//! `pooled.ThreadPool`. `submit(op)` routes by
-//! `sharded_store.shardIndex(op.shardKey())`:
-//!   * node inserts / merges route by the pre-allocated node id
-//!   * regular edge inserts route by source_id
+//! `pooled.ThreadPool`. `submit(op)` routes to a worker by shard:
+//!   * node inserts / merges by `shardIndex` of the pre-allocated node id
+//!     (the bulk insert allocates the node's slot on that shard)
+//!   * relationship ops by the source's ENGINE shard
+//!     (`StorageAdapter.nodeEngineShard`, SONNY-6671): the relationship is
+//!     written there, and an executor-created node's slot is placed
+//!     round-robin, not on `shardIndex` of its public id
 //!   * bulk_match_create_edge resolves source_id at submit time
 //!     under mg.rwlock SHARED and then routes by the resolved id
 //!     (orphan sources silently return 0 without enqueuing)
@@ -589,7 +592,13 @@ pub const ShardedCoordinator = struct {
             },
         }
 
-        const shard_idx = graph_storage.sharded_store.shardIndex(op.shardKey());
+        // SONNY-6671: a relationship op to the worker of its source's engine
+        // shard (where it is written), not of the hashed public id's, which
+        // is that shard only for a node the bulk insert created.
+        const shard_idx = switch (op.*) {
+            .bulk_insert_edge, .bulk_merge_edge, .bulk_match_create_edge => self.adapter.nodeEngineShard(self.graph_name, op.shardKey()),
+            else => graph_storage.sharded_store.shardIndex(op.shardKey()),
+        };
         const s = &self.shards[shard_idx];
 
         const enqueue_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;

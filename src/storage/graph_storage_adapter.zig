@@ -6373,7 +6373,7 @@ pub const StorageAdapter = struct {
         // all live on the source shard, with no cross-shard 2PC. So only the
         // SOURCE shard lock is needed; the old ascending two-lock dance for a
         // cross-shard target is gone (there is no dst-shard write to protect).
-        const src_shard = sharded_store.shardIndex(source_id);
+        const src_shard = self.nodeEngineShard(graph_name, source_id); // SONNY-6671
 
         exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
         const _t_start = monoNanosNow();
@@ -6508,7 +6508,7 @@ pub const StorageAdapter = struct {
         // existence-index dedup probe in the inner already runs on the source
         // shard held EXCLUSIVE here, so two racing same-tuple MERGEs still
         // serialize and cannot both miss-then-create (no duplicate edge).
-        const src_shard = sharded_store.shardIndex(source_id);
+        const src_shard = self.nodeEngineShard(graph_name, source_id); // SONNY-6671
 
         exclusiveWaitingBackoff(mg);
         const _t_start = monoNanosNow();
@@ -6725,11 +6725,11 @@ pub const StorageAdapter = struct {
         // contention. This is the lock-side half of the throughput unlock.
         var i: usize = 0;
         while (i < edges.len) {
-            const src_shard = sharded_store.shardIndex(edges[i].source_id);
+            const src_shard = self.nodeEngineShard(graph_name, edges[i].source_id); // SONNY-6671
             mg.shard_locks[src_shard].lockUncancelable(io);
 
             // Drain the maximal run sharing this source shard under the one hold.
-            while (i < edges.len and sharded_store.shardIndex(edges[i].source_id) == src_shard) : (i += 1) {
+            while (i < edges.len and self.nodeEngineShard(graph_name, edges[i].source_id) == src_shard) : (i += 1) {
                 self.applyOneMerge(mg, store, graph_name, &edges[i]);
             }
 
@@ -8532,6 +8532,22 @@ pub const StorageAdapter = struct {
     /// importing graph_storage directly.
     pub fn shardOfSlot(_: *StorageAdapter, slot: u64) usize {
         return gs.shard_count.shardOfNode(slot);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6671-WORKER-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=EngineShardOfPublicId; STATUS=TESTED; TEST=tests/test_sonny6671_group_commit_routing.zig; OWNER=storage; UPDATED=2026-11-16
+    /// SONNY-6671: the engine shard that holds public node id `node_id` of
+    /// `graph_name`: its slot's. A relationship is written on its source's
+    /// engine shard, so the group-commit coordinator routes a relationship
+    /// op to that shard's worker and the bulk relationship paths take that
+    /// shard's lock. `shardIndex(node_id)` is that shard only for a node the
+    /// bulk insert created (it allocates the slot there); the executor
+    /// places a node's slot round-robin. A node the graph does not map falls
+    /// back to `shardIndex(node_id)` (its op then finds no source and writes
+    /// nothing).
+    pub fn nodeEngineShard(self: *StorageAdapter, graph_name: []const u8, node_id: u64) usize {
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const slot = store.nodeSlotOf(graph_name, node_id) orelse return sharded_store.shardIndex(node_id);
+        return self.shardOfSlot(slot);
     }
 
     /// Find all node IDs with the given label in a graph.
