@@ -19304,7 +19304,7 @@ pub fn build(b: *std.Build) void {
     sonny6624_test_mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
     const sonny6624_tests = b.addTest(.{ .root_module = sonny6624_test_mod });
     const run_sonny6624_tests = b.addRunArtifact(sonny6624_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6624_tests.step);
+    shardDep(test_step, &run_sonny6624_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6624-mfa-reset-audit", "Run the SONNY-6624 regression (geode.auth.mfa_disable, which needs no proof of possession, leaves a MFA_RESET_BY_ADMIN audit record with the actor and the target; DROP USER removes the stored MfaAttempts record and the in-memory attempt record, and a user made again under the name is not locked out after a restart)").dependOn(&run_sonny6624_tests.step);
 
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own

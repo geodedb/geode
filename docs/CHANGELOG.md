@@ -4,6 +4,21 @@
 
 ### Security
 
+- **An MFA reset without proof is audited as `MFA_RESET_BY_ADMIN`
+  (SONNY-6624).** `geode.auth.mfa_disable` needs no proof of possession
+  (no code, or a code checked for its format only: the Admin recovery
+  route), and left only the security graph's `MFA_DISABLE` record, which
+  names the target and not who disabled it. Every `mfa_disable` that takes
+  effect now also writes a `MFA_RESET_BY_ADMIN` audit record
+  (`configuration_change`) with the actor (`details.username`, the
+  actor's user id) and the target (`details.target_user`), and whether a
+  code was supplied. A supplied code does not make it an ordinary disable,
+  because it is not verified: otherwise any six digits would avoid the
+  distinct record. New regression coverage: DROP USER removes both the stored `MfaAttempts`
+  record and the in-memory attempt record, so a user made again under the
+  name is not locked out, before or after a restart. Regression: `zig
+  build test-sonny6624-mfa-reset-audit`.
+
 - **`geode.auth.mfa_enable` is under the MFA attempt limiter; removing a
   SecurityManager user cannot leave its sessions; offline `mfa enable`
   counts malformed codes (SONNY-6623).** `mfa_enable` checked the TOTP
