@@ -1699,6 +1699,21 @@ pub const UserStorageBackend = struct {
         return record;
     }
 
+    /// SONNY-6273: a test-only fault hook. While non-zero, each
+    /// `persistChainRoot` consumes one and fails after writing the chain
+    /// hash and before the record count, as a chain-root write that failed
+    /// part way (the four properties are not written atomically). Production
+    /// code never sets it.
+    pub var fail_chain_root_writes_for_testing: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+    fn takeChainRootFault() bool {
+        var n = fail_chain_root_writes_for_testing.load(.acquire);
+        while (n > 0) {
+            n = fail_chain_root_writes_for_testing.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return true;
+        }
+        return false;
+    }
+
     pub fn persistChainRoot(self: *Self, chain_hash_hex: []const u8, record_count: u64, hmac_key_id: []const u8) !void {
         const node_id = self.chain_root_node orelse blk: {
             const new_id = try self.createEntityNode(AUTH_CHAIN_ROOT_LABEL);
@@ -1707,6 +1722,7 @@ pub const UserStorageBackend = struct {
         };
 
         try self.store.setNodeProperty(node_id, "chain_hash", .{ .String = chain_hash_hex });
+        if (takeChainRootFault()) return error.ChainRootWriteFailed;
         try self.store.setNodeProperty(node_id, "record_count", .{ .Int = safeI64(record_count) });
         try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = compat_milliTimestamp() });
         try self.store.setNodeProperty(node_id, "hmac_key_id", .{ .String = hmac_key_id });
