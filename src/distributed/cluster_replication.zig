@@ -616,16 +616,24 @@ fn applyMultiCreatePayloadAt(
         const to_id = resolveEndpointAt(to_ep, lane_base, node_count) orelse return CodecError.CorruptPayload;
         const edge_id = lane_base + MAX_MULTI_NODES + @as(u64, @intCast(j));
 
+        // SONNY-6636 (b): an endpoint that is not there (a later entry
+        // deleted it, and a restarted node replays this one) skips the edge,
+        // not the rest of the entry: a GBAT batch's later writes must still
+        // land, or the store keeps what an earlier replayed entry put back.
+        // Every replica applies an entry onto the same state, so all of them
+        // skip it or none does.
+        var created = true;
         store.createEdgeWithId(edge_id, from_id, to_id, edge_type, graph) catch |err| switch (err) {
             error.EdgeAlreadyExists => {}, // idempotent re-apply
+            error.NodeSlotMappingMissing, error.NodeNotFound => created = false,
             else => return err,
         };
 
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
             const p = try readProp(&r);
-            // Idempotent: setEdgeProperty no-ops if the edge is absent and
-            // overwrites in place otherwise (repairs a partial first-apply).
+            if (!created) continue;
+            // Idempotent: overwrites in place (repairs a partial first-apply).
             try store.setEdgeProperty(edge_id, p.key, p.value);
         }
     }
@@ -856,9 +864,12 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     while (pi < nprops) : (pi += 1) {
         const p = try readProp(&r);
         const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
-        // Idempotent: setNodeProperty no-ops if the node is absent and overwrites
-        // in place otherwise.
-        try store.setNodeProperty(node_id, p.key, p.value);
+        // Idempotent: overwrites in place. SONNY-6636 (b): a node that is not
+        // there (deleted by a later entry, this one replayed) is skipped.
+        store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        };
         if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
     }
 
@@ -985,9 +996,13 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         while (si < nset) : (si += 1) {
             const p = try readProp(&r);
             const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
-            // Idempotent: setNodeProperty no-ops if the node is absent and
-            // overwrites in place otherwise.
-            try store.setNodeProperty(node_id, p.key, p.value);
+            // Idempotent: overwrites in place. SONNY-6636 (b): a node that is
+            // not there (deleted by a later entry, this one replayed) is
+            // skipped, and the entry goes on to the next node.
+            store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+                error.NodeNotFound => continue,
+                else => return err,
+            };
             if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
         }
 
