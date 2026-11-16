@@ -285,3 +285,99 @@ test "SONNY-6335 (2): a fulltext index made before its field was encrypted (an e
     try testing.expect(!try dirContains(testing.allocator, e.f.h.data_dir, secret));
     try testing.expect(!try dirContains(testing.allocator, e.f.h.data_dir, "zebra"));
 }
+
+// ---------------------------------------------------------------------------
+// (3) inline property maps on an encrypted field, (4) count() over a refusal
+// ---------------------------------------------------------------------------
+
+const other_master_key = "5336b5336b5336b5336b5336b5336b5336b5336b5336b5336b5336b5336b5336";
+
+/// The rows' first column as integers, in order.
+fn ints(e: *Env, fle_role: ?[]const u8, query: []const u8) ![]i64 {
+    const res = e.exec(fle_role, null, query) catch |err| {
+        std.debug.print("{s}: {s}\n", .{ query, @errorName(err) });
+        return err;
+    };
+    const out = try e.arena.allocator().alloc(i64, res.rows.len);
+    for (res.rows, 0..) |row, i| out[i] = switch (row[0]) {
+        .Int => |v| v,
+        else => return error.UnexpectedValue,
+    };
+    std.mem.sort(i64, out, {}, std.sort.asc(i64));
+    return out;
+}
+
+/// `inline` and `where` answer the same rows for `fle_role`.
+fn sameAsWhere(e: *Env, fle_role: ?[]const u8, inline_q: []const u8, where_q: []const u8, want: []const i64) !void {
+    const a = try ints(e, fle_role, inline_q);
+    const b = try ints(e, fle_role, where_q);
+    if (!std.mem.eql(i64, a, b) or !std.mem.eql(i64, a, want)) {
+        std.debug.print("SONNY-6335 (3), role {s}:\n  {s} -> {any}\n  {s} -> {any}\n  want {any}\n", .{ fle_role orelse "-", inline_q, a, where_q, b, want });
+        return error.InlineMapDisagreesWithWhere;
+    }
+}
+
+test "SONNY-6335 (3): an inline property map on an encrypted node or edge field matches exactly as the WHERE equality does, for each role" {
+    var e: Env = undefined;
+    try e.init();
+    defer e.deinit();
+    try e.encrypt("M6335", "ssn");
+    try e.encrypt("Q6335", "p");
+    try e.run("CREATE (:M6335 {k: 1, ssn: '" ++ secret ++ "'})-[:Q6335 {k: 10, p: '" ++ secret ++ "'}]->(:M6335 {k: 2, ssn: 'other'})");
+    try e.run("CREATE (:M6335 {k: 3, ssn: '" ++ secret ++ "'})");
+
+    // The plaintext role: the value it reads is the one it matches.
+    try sameAsWhere(&e, "pii", "MATCH (n:M6335 {ssn: '" ++ secret ++ "'}) RETURN n.k", "MATCH (n:M6335) WHERE n.ssn = '" ++ secret ++ "' RETURN n.k", &.{ 1, 3 });
+    try sameAsWhere(&e, "pii", "MATCH (n {ssn: '" ++ secret ++ "'}) RETURN n.k", "MATCH (n) WHERE n.ssn = '" ++ secret ++ "' RETURN n.k", &.{ 1, 3 });
+    try sameAsWhere(&e, "pii", "MATCH ()-[r:Q6335 {p: '" ++ secret ++ "'}]->() RETURN r.k", "MATCH ()-[r:Q6335]->() WHERE r.p = '" ++ secret ++ "' RETURN r.k", &.{10});
+    try sameAsWhere(&e, "pii", "MATCH ()-[r {p: '" ++ secret ++ "'}]->() RETURN r.k", "MATCH ()-[r]->() WHERE r.p = '" ++ secret ++ "' RETURN r.k", &.{10});
+    try sameAsWhere(&e, "pii", "MATCH (a:M6335)-[:Q6335]->(b:M6335 {ssn: 'other'}) RETURN a.k", "MATCH (a:M6335)-[:Q6335]->(b:M6335) WHERE b.ssn = 'other' RETURN a.k", &.{1});
+    try sameAsWhere(&e, "pii", "MATCH (a:M6335 {ssn: '" ++ secret ++ "'})-[:Q6335 {p: '" ++ secret ++ "'}]->(b) RETURN b.k", "MATCH (a:M6335)-[r:Q6335]->(b) WHERE a.ssn = '" ++ secret ++ "' AND r.p = '" ++ secret ++ "' RETURN b.k", &.{2});
+    try sameAsWhere(&e, "pii", "MATCH (n:M6335 {ssn: 'nobody'}) RETURN n.k", "MATCH (n:M6335) WHERE n.ssn = 'nobody' RETURN n.k", &.{});
+    // Counted, too (the count fast paths).
+    try sameAsWhere(&e, "pii", "MATCH (n:M6335 {ssn: '" ++ secret ++ "'}) RETURN count(n)", "MATCH (n:M6335) WHERE n.ssn = '" ++ secret ++ "' RETURN count(n)", &.{2});
+    try sameAsWhere(&e, "pii", "MATCH ()-[r:Q6335 {p: '" ++ secret ++ "'}]->() RETURN count(r)", "MATCH ()-[r:Q6335]->() WHERE r.p = '" ++ secret ++ "' RETURN count(r)", &.{1});
+
+    // A role without plaintext reads "[REDACTED]": neither form matches the
+    // value (nor reveals it by matching).
+    try sameAsWhere(&e, "other", "MATCH (n:M6335 {ssn: '" ++ secret ++ "'}) RETURN n.k", "MATCH (n:M6335) WHERE n.ssn = '" ++ secret ++ "' RETURN n.k", &.{});
+    try sameAsWhere(&e, "other", "MATCH ()-[r:Q6335 {p: '" ++ secret ++ "'}]->() RETURN r.k", "MATCH ()-[r:Q6335]->() WHERE r.p = '" ++ secret ++ "' RETURN r.k", &.{});
+    try sameAsWhere(&e, "other", "MATCH (n:M6335 {ssn: '" ++ secret ++ "'}) RETURN count(n)", "MATCH (n:M6335) WHERE n.ssn = '" ++ secret ++ "' RETURN count(n)", &.{0});
+
+    // The stored ciphertext itself matches for nobody.
+    const ids = e.f.st.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "M6335") orelse return error.NoNodes;
+    const stored = (try e.f.st.getNodePropertyOrError(ids[0], "ssn")).?.String;
+    const q = try std.fmt.allocPrint(e.arena.allocator(), "MATCH (n:M6335 {{ssn: '{s}'}}) RETURN n.k", .{stored});
+    try testing.expectEqual(@as(usize, 0), (try ints(&e, "pii", q)).len);
+    try testing.expectEqual(@as(usize, 0), (try ints(&e, "other", q)).len);
+
+    // Values that do not decrypt (another master key): an error, as WHERE.
+    _ = setenv("GEODE_MASTER_KEY", other_master_key, 1);
+    fle_integration.resetGlobalKeyStateForTesting();
+    try testing.expectEqual(error.FleDecryptionFailed, e.refused("MATCH (n:M6335) WHERE n.ssn = 'x' RETURN n.k"));
+    try testing.expectEqual(error.FleDecryptionFailed, e.refused("MATCH (n:M6335 {ssn: 'x'}) RETURN n.k"));
+    try testing.expectEqual(error.FleDecryptionFailed, e.refused("MATCH ()-[r:Q6335 {p: 'x'}]->() RETURN r.k"));
+}
+
+test "SONNY-6335 (4): MATCH ()-[r]->() WHERE r.p = ... RETURN count(r) over an encrypted field that does not decrypt answers 58030, not 0" {
+    var e: Env = undefined;
+    try e.init();
+    defer e.deinit();
+    try e.encrypt("C6335", "p");
+    try e.run("CREATE (:X6335)-[:C6335 {p: '" ++ secret ++ "'}]->(:Y6335)");
+    try testing.expectEqualSlices(i64, &.{1}, try ints(&e, "pii", "MATCH ()-[r]->() WHERE r.p = '" ++ secret ++ "' RETURN count(r)"));
+
+    _ = setenv("GEODE_MASTER_KEY", other_master_key, 1);
+    fle_integration.resetGlobalKeyStateForTesting();
+    for ([_][]const u8{
+        "MATCH ()-[r]->() WHERE r.p = '" ++ secret ++ "' RETURN count(r)",
+        "MATCH ()-[r:C6335]->() WHERE r.p = '" ++ secret ++ "' RETURN count(r)",
+        "MATCH ()-[r]->() WHERE r.p = '" ++ secret ++ "' RETURN count(*)",
+        "MATCH (a)-[r]->(b) WHERE r.p = '" ++ secret ++ "' RETURN count(r)",
+    }) |q| {
+        if (e.exec("pii", null, q)) |res| {
+            std.debug.print("SONNY-6335 (4): {s} answered {any} over a field that does not decrypt (want 58030)\n", .{ q, res.rows });
+            return error.DecryptFailureSwallowed;
+        } else |err| try expectSqlstate(err, "58030");
+    }
+}

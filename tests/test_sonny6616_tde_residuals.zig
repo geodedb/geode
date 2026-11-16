@@ -101,6 +101,29 @@ fn holders(aa: std.mem.Allocator, root: []const u8, needle: []const u8) !usize {
     return n;
 }
 
+/// SONNY-6635: rewrite every manifest slot under `root` at format_version 4
+/// under `key`, as graph-storage <= 0.4.16 wrote them under a key.
+fn manifestsToV4(aa: std.mem.Allocator, root: []const u8, key: [32]u8) !usize {
+    var dir = try std.Io.Dir.cwd().openDir(io(), root, .{ .iterate = true });
+    defer dir.close(io());
+    var walker = try dir.walk(testing.allocator);
+    defer walker.deinit();
+    var paths: std.ArrayList([]const u8) = .empty;
+    while (try walker.next(io())) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.eql(u8, entry.basename, "manifest.a") and !std.mem.eql(u8, entry.basename, "manifest.b")) continue;
+        try paths.append(aa, try std.fmt.allocPrint(aa, "{s}/{s}", .{ root, entry.path }));
+    }
+    var n: usize = 0;
+    for (paths.items) |p| {
+        var m = (try gs.manifest.Manifest.readFromFileWithKey(aa, p, key)) orelse continue;
+        m.format_version = gs.manifest.MANIFEST_VERSION;
+        try m.writeToFileWithKey(aa, p, key);
+        n += 1;
+    }
+    return n;
+}
+
 fn tdeConfig(key: ?[32]u8) gs.GraphConfig {
     return .{ .page_size = 4096, .buffer_pool_pages = 64, .encryption_key = key };
 }
@@ -157,16 +180,22 @@ test "SONNY-6616: a plaintext registry and dropped-graph list from an earlier bu
         try adapter.checkpointAll();
     }
     // What an earlier build left: both files in the plaintext layout.
+    // SONNY-6635: and what else such a build left - manifests at
+    // format_version 4 (it did not seal side files) and no data-directory
+    // identity; a plaintext registry beside V5 manifests is refused.
     {
         var reg = gs.registry.GraphRegistry.init(testing.allocator);
         defer reg.deinit();
-        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
-        defer c.deinit();
-        _ = try reg.loadFromFileWith(reg_path, .{ .cipher = &c, .require_sealed = true });
+        try geode.graph_storage_adapter.readRegistryOffline(testing.allocator, &reg, path, key);
         try reg.saveToFile(reg_path);
+        const id_path = try std.fmt.allocPrint(aa, "{s}/data_dir.identity", .{path});
+        var c = (try gs.registry.DataDirIdentity.load(aa, path, key)).?.cipher(key).?;
+        defer c.deinit();
         const sealed = try readAll(aa, drop_path);
         const plain = try c.open(aa, geode.graph_storage_adapter.side_kind_dropped_graphs, "dropped_graphs.dat", sealed);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = drop_path, .data = plain });
+        try std.Io.Dir.cwd().deleteFile(io(), id_path);
+        try testing.expect(try manifestsToV4(aa, path, key) > 0);
     }
     try testing.expectEqual(@as(usize, 2), try holders(aa, path, kept_graph) + try holders(aa, path, dropped_graph));
     {
@@ -228,16 +257,17 @@ test "SONNY-6616: a graph opened under another key is refused with EncryptionKey
     // registry cipher matches but whose graph-storage key does not: rewrite
     // the registry under the other key, as a data directory moved between
     // servers with different keys would look graph by graph.
+    // SONNY-6635: the data-directory identity (sealed under the key) too.
     const other = randomKey();
     {
-        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
-        defer c.deinit();
-        var c2 = gs.side_file_crypto.Cipher.init(other, gs.registry.SEAL_UUID);
-        defer c2.deinit();
         const reg_path = try std.fmt.allocPrint(aa, "{s}/graph_registry.dat", .{path});
         var reg = gs.registry.GraphRegistry.init(testing.allocator);
         defer reg.deinit();
-        _ = try reg.loadFromFileWith(reg_path, .{ .cipher = &c, .require_sealed = true });
+        try geode.graph_storage_adapter.readRegistryOffline(testing.allocator, &reg, path, key);
+        const id = (try gs.registry.DataDirIdentity.load(aa, path, key)).?;
+        try id.save(aa, path, other);
+        var c2 = id.cipher(other).?;
+        defer c2.deinit();
         try reg.saveToFileWith(reg_path, &c2);
     }
     const adapter = try StorageAdapter.init(testing.allocator, path, tdeConfig(other));

@@ -2071,6 +2071,24 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
     }
     // SONNY-6619: SecurityManager's copy follows.
     if (g_sm_hooks.set_mfa_enabled_fn) |f| f(g_sm_hooks.ctx, username, is_enable);
+    // CANARY: REQ=REQ-SONNY-6624-MFA-RESET-AUDIT; FEATURE="MFA authentication"; ASPECT=ResetByAdminAudited; STATUS=TESTED; TEST=tests/test_sonny6624_mfa_reset_audit.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6624: no mfa_disable proves possession of the second factor (no
+    // code, or one checked for its format only), so every one is an MFA
+    // reset by the Admin who called it, and is audited as such, with the
+    // actor and the target. The security graph's MFA_DISABLE record names
+    // the target only. A supplied code does not make it an ordinary
+    // disable: it was not verified.
+    if (!is_enable) {
+        const audit_mod = @import("../security/audit.zig");
+        audit_mod.logSecurityGraphEvent(allocator, .{
+            .event_type = .configuration_change,
+            .action = "MFA_RESET_BY_ADMIN",
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+            .username = context.user orelse "",
+            .target_username = username,
+            .details = if (code.len == 0) "MFA disabled without proof of possession: no code" else "MFA disabled without proof of possession: code checked for format only, not verified",
+        });
+    }
     const status = try std.fmt.allocPrint(allocator, "MFA {s} for {s}", .{ if (is_enable) "enabled" else "disabled", username });
     defer allocator.free(status);
     // SONNY-6602: enable answers the not-enforced warning as well.

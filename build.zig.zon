@@ -743,8 +743,18 @@
             // own; plain `allocNode` while another transaction is open
             // shares a node page and conflicts. Same dependencies as v0.4.24.
             // Tagged on f92e685, same tree as the release commit 9d84132.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.25#f92e685bca0a493c9879bf83921af0d93db8dc79",
-            .hash = "graph_storage-0.4.25-9UyJS2s7NwDrdZBB4UFjWjLoMhLm9_jcMEAawQypt9c1",
+            // v0.4.26 (2026-11-16, SONNY-6635): a data directory's registry
+            // is sealed under its own identity (`registry.DataDirIdentity`,
+            // `data_dir.identity`, sealed; a random uuid and a "registry
+            // bound" flag), not the shared `SEAL_UUID`, so a registry copied
+            // from another data directory under the same key fails
+            // authentication; `side_file_crypto.Kind.data_dir_identity` (9).
+            // `VerifyTool` copies the WAL into `.verify-wal-<random>` inside
+            // the graph's directory (0700), not $TMPDIR. Additive API, same
+            // dependencies as v0.4.25. Pinned to the release commit e850df3
+            // on MR !35 (fix/sonny-6635-registry-identity), not tagged yet.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.26#4ba18a017d5f800e2acf973e6fe36932a5bb25c6",
+            .hash = "graph_storage-0.4.26-9UyJS9lyNwCuF0IKB6A7dsduW2V5z0b1t-CZxfZTjx_N",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T16:04:55.118311656Z",
+  "generated_at": "2026-11-16T18:06:09.556593931Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -14564,14 +14564,16 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "ADMIN",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/admin/fle_commands.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_fle_admin_cli.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-12"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -14617,14 +14619,14 @@
         {
           "feature": "FLE Batch Re-encryption",
           "aspect": "ProgressTracking",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/admin/fle_commands.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -15509,14 +15511,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "Migration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/admin/fle_commands.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -15533,7 +15535,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-12"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -15800,14 +15802,14 @@
         {
           "feature": "FLE Storage Callback",
           "aspect": "StorageIntegration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/admin/fle_commands.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-16"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -68696,6 +68698,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6273-DROP-POLICY-RESTORE",
+      "features": [
+        {
+          "feature": "GPS Policy Persistence",
+          "aspect": "RecordsRestoredWhenUnsealed",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6273_drop_policy_atomic.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6274-FLE-CATALOG-NO-TMP",
       "features": [
         {
@@ -69557,6 +69578,44 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6321-FLE-ADMIN-CLI",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "AdminCommandsAndMigrateRefusal",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6321_fle_admin_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6321_fle_admin_cli.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "MigrateRefusedWithoutStorage",
+          "status": "TESTED",
+          "files": [
+            "src/admin/fle_commands.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6321_fle_admin_cli.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -70509,6 +70568,25 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6335-INLINE-MAP-FLE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "InlineMapReadsAsWhere",
+          "status": "TESTED",
+          "files": [
+            "src/execution/pattern_helpers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -81678,6 +81756,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6624-MFA-RESET-AUDIT",
+      "features": [
+        {
+          "feature": "MFA authentication",
+          "aspect": "ResetByAdminAudited",
+          "status": "TESTED",
+          "files": [
+            "src/execution/auth_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6624_mfa_reset_audit.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "MFA authentication",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6624_mfa_reset_audit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6624_mfa_reset_audit.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX",
       "features": [
         {
@@ -81868,6 +81979,39 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6635-REGISTRY-BINDING",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "DataDirIdentityAndSealedMarker",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -88456,9 +88600,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 566,
+      "IMPL": 568,
       "STUB": 18,
-      "TESTED": 4379
+      "TESTED": 4385
     },
     "by_aspect": {
       "2PC": 3,
@@ -88522,6 +88666,7 @@
       "Addition": 2,
       "AddressGrammar": 1,
       "AdminAllowed": 4,
+      "AdminCommandsAndMigrateRefusal": 1,
       "AdminOnlyKeyAdministration": 1,
       "AdminResetOverWire": 1,
       "AdminShortcut": 1,
@@ -89194,6 +89339,7 @@
       "DEGREES": 1,
       "DML": 1,
       "DataDirCreation": 1,
+      "DataDirIdentityAndSealedMarker": 1,
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
       "DataExceptionGqlstatus": 1,
@@ -90139,6 +90285,7 @@
       "InitialWithInChainedPart": 2,
       "InlineCert": 1,
       "InlineKey": 1,
+      "InlineMapReadsAsWhere": 1,
       "InlineNodeProps": 1,
       "InlineRelProps": 1,
       "InlineTestRoot": 1,
@@ -90489,6 +90636,7 @@
       "MfaVerifyErrors": 1,
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
+      "MigrateRefusedWithoutStorage": 1,
       "Migration": 4,
       "MigrationHmacKey": 1,
       "MigrationModule": 2,
@@ -91339,6 +91487,7 @@
       "RecordKind": 1,
       "RecordKinds": 1,
       "RecordTenantIdentity": 1,
+      "RecordsRestoredWhenUnsealed": 1,
       "RecursiveCheck": 1,
       "RedReproduction": 1,
       "RedactionOnDenial": 1,
@@ -91371,7 +91520,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 429,
+      "Regression": 431,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91440,6 +91589,7 @@
       "ReservedNodeUndo": 1,
       "ReservedWordRefusal": 1,
       "ReservedWords": 2,
+      "ResetByAdminAudited": 1,
       "ResetGuardrails": 1,
       "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,

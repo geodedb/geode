@@ -10,6 +10,7 @@ const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
 const value_utilities = @import("value_utilities.zig");
+const fle_integration = @import("../fle_integration.zig");
 const valuesEqual = execution.valuesEqual;
 
 // Local type aliases
@@ -309,6 +310,67 @@ pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u
     return true;
 }
 
+/// SONNY-6335 (3): the record an inline property map is compared against,
+/// for the FLE read policy (`fle_integration.readStoredString`).
+pub const FleOwner = struct {
+    kind: fle_integration.EntityKind,
+    type_name: []const u8,
+    id: u64,
+    tenant: []const u8,
+};
+
+pub fn nodeOwner(node: anytype) FleOwner {
+    return .{ .kind = .node, .type_name = if (node.labels.len > 0) node.labels[0] else "Unknown", .id = node.id, .tenant = node.tenant_id };
+}
+
+pub fn edgeOwner(edge: anytype) FleOwner {
+    return .{ .kind = .edge, .type_name = edge.label, .id = edge.id, .tenant = edge.tenant_id };
+}
+
+// CANARY: REQ=REQ-SONNY-6335-INLINE-MAP-FLE; FEATURE="FieldLevelEncryption"; ASPECT=InlineMapReadsAsWhere; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6335 (3): a stored property as an inline property map
+/// (`(n:L {p: v})`, `-[:R {p: v}]->`) compares it: a string through the same
+/// FLE read policy as `WHERE n.p = v` (`n.p`'s member read), so the two agree.
+/// They did not: the map compared the stored envelope, which matched for no
+/// one, while WHERE matched the plaintext for a role that may read it. A role
+/// without plaintext compares "[REDACTED]" (no match, nothing revealed); a
+/// searchable field it may not search, or bytes that do not decrypt, are the
+/// statement's error (42501, 58030), as in WHERE. Without FLE fields the
+/// stored bytes, lock-free. What it decrypts is lent from the statement's
+/// scratch arena.
+pub fn storedValueForMatch(allocator: std.mem.Allocator, owner: FleOwner, key: []const u8, stored: graph_store.PropertyValue) !Value {
+    return switch (stored) {
+        .String => |s| .{ .Str = try fle_integration.readStoredString(value_utilities.lentAllocator(allocator), owner.kind, owner.type_name, key, s, owner.id, owner.tenant) },
+        else => propertyValueToValue(stored),
+    };
+}
+
+/// SONNY-6335 (3): does an inline property map anywhere in `pattern` name a
+/// field FLE-encrypted in any type (`fle_integration.fieldEncryptedInAnyType`;
+/// false at once without FLE fields)? The engine-direct reads
+/// (`planned_read_runtime`, `node_scan_stream`) compare a map against the
+/// stored bytes, the envelope of an encrypted value, which matched for no
+/// one; they decline such a pattern, and the executor, which compares as
+/// WHERE reads (`storedValueForMatch`), answers it.
+pub fn patternMapsNameEncryptedField(pattern: ast.GraphPattern) bool {
+    if (!fle_integration.hasEncryptedFields()) return false;
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| if (propsNameEncryptedField(head.props)) return true;
+        for (chain.hops) |hop| {
+            if (propsNameEncryptedField(hop.left.props) or propsNameEncryptedField(hop.rel.props) or propsNameEncryptedField(hop.right.props)) return true;
+        }
+    }
+    return false;
+}
+
+/// SONNY-6335 (3): `patternMapsNameEncryptedField` for one map.
+pub fn propsNameEncryptedField(props: ?[]ast.Property) bool {
+    for (props orelse return false) |prop| {
+        if (fle_integration.fieldEncryptedInAnyType(prop.key)) return true;
+    }
+    return false;
+}
+
 /// Check if an edge's properties match the required property constraints from a RelPattern.
 /// Returns true if all required properties exist and match, or if no properties are required.
 // CANARY: REQ=REQ-SONNY-6296-REL-MAP-PARAMS; FEATURE="PatternMatching"; ASPECT=RelationshipMapParameters; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
@@ -330,7 +392,7 @@ pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edg
     };
     for (props) |prop| {
         if (edge.properties.get(prop.key)) |edge_prop_val| {
-            const edge_val = propertyValueToValue(edge_prop_val);
+            const edge_val = try storedValueForMatch(allocator, edgeOwner(&edge), prop.key, edge_prop_val);
             const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
             if (!valuesEqual(edge_val, expected_val)) return false;
         } else {

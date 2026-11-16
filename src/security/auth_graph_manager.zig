@@ -1617,8 +1617,18 @@ pub const AuthGraphManager = struct {
     /// failure there changes nothing. Then the records go and the computed
     /// seal is stored, which allocates nothing of this manager's. Only if
     /// the graph store fails that write is the chain sealed again (twice),
-    /// as before.
+    /// as before; if both reseals fail too, the removed records are put
+    /// back and the chain is sealed over them, so the failed statement
+    /// leaves the policy stored, in the catalog, and under a chain that
+    /// verifies.
     pub fn dropPolicy(self: *Self, hmac_key: *const [32]u8, name: []const u8) !void {
+        // SONNY-6273: its own unit of undo (SONNY-1333). The failed DROP
+        // POLICY statement's undo replayed these store writes, the put-back
+        // below included, behind the record maps: the record put back was
+        // left with no node HMAC (verifyChain: RecordHmacMismatch). A
+        // ROLLBACK after a dropped policy brought its node back the same way.
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
         var ids: std.ArrayList(u64) = .empty;
         defer ids.deinit(self.allocator);
         {
@@ -1629,6 +1639,12 @@ pub const AuthGraphManager = struct {
         }
         if (ids.items.len == 0) return error.PolicyNotFound;
 
+        // SONNY-6273: the records as they were, to put back if no seal of
+        // the records without them can be stored.
+        var removed: std.ArrayList(UserStorageBackend.PolicyRecord) = .empty;
+        defer removed.deinit(self.allocator);
+        try removed.ensureTotalCapacity(self.allocator, ids.items.len);
+
         var removal_failure: ?anyerror = null;
         var sealed = false;
         {
@@ -1636,10 +1652,12 @@ pub const AuthGraphManager = struct {
             defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             const seal = try self.computeSealLocked(hmac_key, .{}, ids.items);
             for (ids.items) |policy_id| {
+                const before = self.storage.getPolicy(policy_id);
                 self.storage.removePolicy(policy_id) catch |err| {
                     removal_failure = err;
                     break;
                 };
+                if (before) |r| removed.appendAssumeCapacity(r);
             }
             if (removal_failure == null) {
                 if (self.persistSealLocked(seal)) |_| {
@@ -1650,7 +1668,25 @@ pub const AuthGraphManager = struct {
         // A removal that stopped part way, or a seal the graph store did not
         // take: seal what is there now (a retry, as a revoke's), so the
         // chain matches the records whatever is answered.
-        if (!sealed) self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
+        if (!sealed) {
+            self.sealChain(hmac_key) catch self.sealChain(hmac_key) catch |err| {
+                // CANARY: REQ=REQ-SONNY-6273-DROP-POLICY-RESTORE; FEATURE="GPS Policy Persistence"; ASPECT=RecordsRestoredWhenUnsealed; STATUS=TESTED; TEST=tests/test_sonny6273_drop_policy_atomic.zig; OWNER=security; UPDATED=2026-11-15
+                // SONNY-6273: no seal of the records without the policy could
+                // be stored, so the chain root still describes them (or a
+                // seal that failed part way). The records go back, and the
+                // chain is sealed over what is then stored, so the chain and
+                // the records agree (the next start verifies: it failed with
+                // AuthChainTampered) and the failed statement keeps the
+                // policy, as the catalog does.
+                log.err("DROP POLICY: no chain seal could be stored; putting the policy records back", &.{Attr.string("error", @errorName(err))});
+                for (removed.items) |record| {
+                    self.storage.restorePolicyRecord(record) catch |rerr| logRestoreFailure("policy record", rerr);
+                    self.recomputeAndStorePolicyHmac(record.id, hmac_key) catch |rerr| logRestoreFailure("policy HMAC", rerr);
+                }
+                self.sealChain(hmac_key) catch |rerr| logRestoreFailure("chain seal", rerr);
+                return err;
+            };
+        }
         if (removal_failure) |err| return err;
         for (ids.items) |policy_id| self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
     }

@@ -45,10 +45,11 @@ const fle_hmac = @import("fle_hmac"); // GAP-0207 FIX: Import hmac for blind ind
 const annotations = @import("../schema/annotations.zig");
 
 // Field-Level Encryption Admin Commands
-// CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=TESTED; TEST=tests/test_sonny6321_fle_admin_cli.zig; OWNER=security; UPDATED=2026-11-16
 // SONNY-6386: rotateKey no longer fabricates a rotation (it refuses as
-// unsupported, REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED); this marker stays IMPL
-// for grant/revoke/migrate/show, which have no executed test here.
+// unsupported, REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED). SONNY-6321:
+// grant/revoke/show and the command dispatcher are executed against a
+// persisted catalog, and migrateEncrypt refuses as unsupported.
 
 /// Admin CLI commands for Field-Level Encryption management
 /// Provides commands for key rotation, policy management, and migration
@@ -88,7 +89,9 @@ pub const MigrationArgs = struct {
 };
 
 // GAP-0207 FIX: Migration state tracking for progress monitoring and checkpointing
-// CANARY: REQ=REQ-FLE-BATCH-001; FEATURE="FLE Batch Re-encryption"; ASPECT=ProgressTracking; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+// CANARY: REQ=REQ-FLE-BATCH-001; FEATURE="FLE Batch Re-encryption"; ASPECT=ProgressTracking; STATUS=IMPL; OWNER=security; UPDATED=2026-11-16
+// SONNY-6321: IMPL. Nothing sets the storage callback the batch runs
+// through, so no test (and no build) executes it.
 pub const MigrationState = struct {
     tenant_id: []const u8,
     schema_name: []const u8,
@@ -112,7 +115,10 @@ pub const MigrationState = struct {
 };
 
 // GAP-0207 FIX: Storage callback interface for real batch re-encryption
-// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FLE Storage Callback"; ASPECT=StorageIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FLE Storage Callback"; ASPECT=StorageIntegration; STATUS=IMPL; OWNER=security; UPDATED=2026-11-16
+// SONNY-6321: IMPL. No caller sets it (`setStorageCallback`); its
+// envelopes are not bound to the identity readers decrypt under
+// (`fle_integration.recordIdentity`, SONNY-6335).
 pub const StorageCallback = struct {
     context: *anyopaque,
     // Query records with the specified field
@@ -434,7 +440,11 @@ pub fn revokePlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
     });
 }
 
-// CANARY: REQ=REQ-FLE-MIGRATE-001; FEATURE="FieldLevelEncryption"; ASPECT=Migration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
+/// SONNY-6321: the message of a migration refused for want of storage.
+pub const migration_unsupported_message =
+    "FLE migrate-encrypt is not supported in this release (SONNY-6321): this build has no storage path that re-encrypts existing values, so no value was read or encrypted. Values written after a field is configured as encrypted are encrypted on write.";
+
+// CANARY: REQ=REQ-FLE-MIGRATE-001; FEATURE="FieldLevelEncryption"; ASPECT=Migration; STATUS=IMPL; OWNER=security; UPDATED=2026-11-16
 // GAP-0207 FIX: Implemented real batch re-encryption with storage callback interface
 /// Migrate field from plaintext to encrypted
 /// Performs batched encryption of existing plaintext data to encrypted format
@@ -467,6 +477,17 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
         return error.FieldNotFound;
     };
     defer fle_catalog.freeFieldCopy(allocator, field_meta);
+
+    // CANARY: REQ=REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED; FEATURE="FieldLevelEncryption"; ASPECT=MigrateRefusedWithoutStorage; STATUS=TESTED; TEST=tests/test_sonny6321_fle_admin_cli.zig; OWNER=security; UPDATED=2026-11-16
+    // SONNY-6321: no build sets the storage this migrates through
+    // (`setStorageCallback`). Without it this printed "Migration Complete"
+    // and "Records migrated: 0" and returned success: the operator was told
+    // the field's existing values were encrypted while they stayed
+    // plaintext. Refused as unsupported, claiming nothing.
+    if (global_storage_callback == null) {
+        std.debug.print("Error: {s}\n", .{migration_unsupported_message});
+        return error.Unsupported;
+    }
 
     // 2. Initialize key manager and get FEK (Field Encryption Key)
     const key_manager = try fle_key_manager.initFromEnv(allocator);
@@ -712,7 +733,7 @@ fn printUsage() void {
     std.debug.print("  geode fle revoke-plaintext <schema> <field> <role>\n", .{});
     std.debug.print("    Revoke plaintext read permission from a role\n\n", .{});
     std.debug.print("  geode fle migrate-encrypt <tenant> <schema> <field> [batch_size]\n", .{});
-    std.debug.print("    Migrate field from plaintext to encrypted\n\n", .{});
+    std.debug.print("    not supported in this release (SONNY-6321); refused with an error\n\n", .{});
     std.debug.print("  geode fle show-rotation <tenant>\n", .{});
     std.debug.print("    Show key rotation status\n\n", .{});
     std.debug.print("  geode fle show-policy <schema>\n", .{});

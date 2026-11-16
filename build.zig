@@ -10723,6 +10723,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6616_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6616-tde-residuals", "Run SONNY-6616 regression (invalidating a graph's exact property index removes prop_rev.idx with prop_exact.idx, with and without an at-rest key)").dependOn(&run_sonny6616_tests.step);
 
+    // SONNY-6635: the data directory's registry and dropped-graph list are
+    // sealed under its own identity; a plaintext registry is refused once
+    // the directory has been sealed.
+    const sonny6635_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6635_registry_binding.zig"), .target = target, .optimize = optimize });
+    sonny6635_test_mod.link_libc = true;
+    sonny6635_test_mod.addImport("geode", root_mod);
+    sonny6635_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6635_tests = b.addTest(.{ .root_module = sonny6635_test_mod });
+    const run_sonny6635_tests = b.addRunArtifact(sonny6635_tests);
+    shardDep(test_step, &run_sonny6635_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6635-registry-binding", "Run SONNY-6635 regression (under TDE a sealed graph registry or dropped-graph list copied from another data directory does not authenticate; a plaintext registry is refused once the data directory has been sealed, also with its identity file deleted; a store from a build that never sealed the registry upgrades once)").dependOn(&run_sonny6635_tests.step);
+
     // SONNY-6615: exactly one owner closes the time-series WAL directory.
     const sonny6615_wal_dir_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6615_ts_wal_dir_close.zig"), .target = target, .optimize = optimize });
     sonny6615_wal_dir_mod.link_libc = true;
@@ -12510,6 +12522,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_fle_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_fle_step = b.step("test-sonny6386-fle-rotate-key-unsupported", "Run SONNY-6386 item 2 regression (geode fle rotate-key and fle_commands.rotateKey refuse every scope as unsupported, SONNY-6387, exit non-zero and claim no rotation; fle --help and show-rotation do not advertise or report one)");
     sonny6386_fle_step.dependOn(&run_sonny6386_fle_tests.step);
+    // SONNY-6321: the FLE admin commands and `geode fle` CLI, executed;
+    // migrate-encrypt claims no migration it did not perform.
+    const sonny6321_fle_admin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6321_fle_admin_cli.zig"), .target = target, .optimize = optimize });
+    sonny6321_fle_admin_test_mod.link_libc = true;
+    sonny6321_fle_admin_test_mod.addImport("geode", root_mod);
+    const sonny6321_fle_admin_tests = b.addTest(.{ .root_module = sonny6321_fle_admin_test_mod });
+    const run_sonny6321_fle_admin_tests = b.addRunArtifact(sonny6321_fle_admin_tests);
+    spawnsBuiltGeode(sonny6321_fle_admin_tests);
+    shardDep(test_step, &run_sonny6321_fle_admin_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6321_fle_admin_step = b.step("test-sonny6321-fle-admin-cli", "Run SONNY-6321 FLE admin regression (fle_commands.migrateEncrypt and geode fle migrate-encrypt refuse as unsupported instead of reporting a migration they did not perform; executeCommand grant/revoke/show change and report the persisted catalog and refuse unknown schemas, fields and commands; geode fle grant-plaintext writes GEODE_DATA_DIR's catalog and show-policy reports it)");
+    sonny6321_fle_admin_step.dependOn(&run_sonny6321_fle_admin_tests.step);
     const sonny6386_rb_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_remote_backup_atomic_output.zig"), .target = target, .optimize = optimize });
     sonny6386_rb_test_mod.link_libc = true;
     sonny6386_rb_test_mod.addImport("geode", root_mod);
@@ -19719,6 +19742,25 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_reg_tests.step, 1, test_shard_loads, test_shard_index);
         b.step(reg.step, reg.desc).dependOn(&run_reg_tests.step);
     }
+
+    // SONNY-6624: an MFA reset without proof is audited as
+    // MFA_RESET_BY_ADMIN (actor and target); DROP USER removes the stored
+    // and the in-memory MFA attempt records.
+    const sonny6624_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6624_mfa_reset_audit.zig"), .target = target, .optimize = optimize });
+    sonny6624_test_mod.link_libc = true;
+    sonny6624_test_mod.addImport("geode", root_mod);
+    sonny6624_test_mod.addImport("schema", schema_mod);
+    sonny6624_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6624_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6624_test_mod.addImport("logging", logging_mod);
+    sonny6624_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6624_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6624_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    sonny6624_test_mod.addImport("auth_startup_hydration", auth_startup_hydration_mod);
+    const sonny6624_tests = b.addTest(.{ .root_module = sonny6624_test_mod });
+    const run_sonny6624_tests = b.addRunArtifact(sonny6624_tests);
+    shardDep(test_step, &run_sonny6624_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6624-mfa-reset-audit", "Run the SONNY-6624 regression (geode.auth.mfa_disable, which needs no proof of possession, leaves a MFA_RESET_BY_ADMIN audit record with the actor and the target; DROP USER removes the stored MfaAttempts record and the in-memory attempt record, and a user made again under the name is not locked out after a restart)").dependOn(&run_sonny6624_tests.step);
 
     // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
     // decisions for the session's graph; geode.tenant.list / show are

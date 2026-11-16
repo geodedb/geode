@@ -357,3 +357,45 @@ test "SONNY-6273: a dropped policy stored twice: every failure point leaves both
         if (!induced) break;
     }
 }
+
+/// SONNY-6273 (follow-up): the next `n` chain-root writes fail part way
+/// (`UserStorageBackend.fail_chain_root_writes_for_testing`: the chain hash
+/// written, the record count not).
+fn failChainRootWrites(n: u32) void {
+    @FieldType(AuthGraphManager, "storage").fail_chain_root_writes_for_testing.store(n, .release);
+}
+
+test "SONNY-6273: a DROP POLICY whose chain-root write fails, and both reseals too, puts the records back: the chain verifies and the next start loads the policy" {
+    defer failChainRootWrites(0);
+    for ([_]Effect{ .allow, .deny }) |effect| {
+        var w: World = undefined;
+        try w.init(effect);
+        defer w.deinit();
+        const ga = w.ga();
+        if (effect == .deny) _ = try fx.expectRefused(ga, w.bob, BOB_WRITES, "42501");
+
+        // The drop's own seal and its two reseals.
+        failChainRootWrites(3);
+        const code = try fx.outcome(ga, w.admin, "DROP POLICY " ++ NAME);
+        failChainRootWrites(0);
+        if (code == null) {
+            std.debug.print("SONNY-6273: DROP POLICY succeeded although its chain root was never stored\n", .{});
+            return error.DropSucceededUnsealed;
+        }
+        if (!w.stored() or !w.inCatalog()) {
+            std.debug.print("SONNY-6273: DROP POLICY failed ({s}) with its chain root unstored, but stored={}, catalog={}\n", .{ code.?, w.stored(), w.inCatalog() });
+            return error.FailedDropChangedState;
+        }
+        w.agm.verifyChain(&HMAC_KEY) catch |err| {
+            std.debug.print("SONNY-6273: after a DROP POLICY whose chain root was never stored the chain does not verify: {s} (the next start fails with AuthChainTampered)\n", .{@errorName(err)});
+            return err;
+        };
+        try testing.expect(try w.nextStartLoads());
+        if (effect == .deny) _ = try fx.expectRefused(ga, w.bob, BOB_WRITES, "42501");
+        // The retry drops it.
+        try fx.expectRuns(ga, w.admin, "DROP POLICY " ++ NAME);
+        try testing.expect(!w.stored());
+        try w.agm.verifyChain(&HMAC_KEY);
+        try testing.expect(!(try w.nextStartLoads()));
+    }
+}

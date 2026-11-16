@@ -4,6 +4,95 @@
 
 ### Security
 
+- **Under TDE a data directory's graph registry is bound to it, and a
+  plaintext registry is refused once it has been sealed (SONNY-6635).**
+  `graph_registry.dat` and `dropped_graphs.dat` were sealed under
+  graph-storage's `registry.SEAL_UUID`, the same in every data directory,
+  so either file copied from another data directory under the same key
+  authenticated; and a plaintext registry was read under the key at every
+  open (the SONNY-6616 one-time upgrade), so anyone able to write the
+  directory could rename, swap or hide graphs. Both files are now sealed
+  under the directory's own identity (graph-storage 0.4.26
+  `registry.DataDirIdentity`, `data_dir.identity`, sealed). Once the
+  identity records the binding, and while any graph manifest is at
+  format_version 5, a plaintext registry is refused (`SideFileNotSealed`);
+  a copied one fails authentication (`SideFileAuthFailed`). A store from a
+  build that never sealed the registry, or sealed it under `SEAL_UUID`, is
+  upgraded once. The offline readers (`graphRegisteredOnDisk`,
+  `tde_page_tail.scan`) read it the same way (`readRegistryOffline`).
+  graph-storage 0.4.26 also makes `VerifyTool`'s WAL copy inside the
+  graph's directory (0700), not under `/tmp`. **BREAKING (operator):** a
+  data directory opened by this build cannot be opened by an earlier one,
+  and a copied or restored `graph_registry.dat` must come with its
+  `data_dir.identity`. Residuals in docs/TDE_FILE_LEVEL_ENCRYPTION.md (the
+  restore intent and `txn_undo.wal` stay under `SEAL_UUID`). Regression:
+  `zig build test-sonny6635-registry-binding` (and
+  `test-sonny6616-tde-residuals`).
+- **`geode fle migrate-encrypt` no longer reports a migration it did not
+  perform; the FLE admin commands have executed tests (SONNY-6321).**
+  `fle_commands.migrateEncrypt` (and so `geode fle migrate-encrypt`)
+  printed "Migration Complete" and "Records migrated: 0" and exited 0
+  without reading or encrypting a value: nothing in any build sets the
+  storage it migrates through. An operator was told a field's existing
+  plaintext was encrypted while it stayed plaintext on disk. It now
+  validates the schema and field and is refused as unsupported
+  (`error.Unsupported`, a non-zero exit); the help says so.
+  **BREAKING (operator):** scripts that ran `geode fle migrate-encrypt` and
+  checked its exit status now see a failure. `test-sonny6321-fle-admin-cli`
+  executes the admin command dispatcher (grant-plaintext and
+  revoke-plaintext against a persisted catalog, show-policy, show-rotation,
+  unknown schemas, fields and commands) and the `geode fle` binary
+  (grant-plaintext into GEODE_DATA_DIR's catalog, show-policy), so
+  REQ-FLE-ADMIN-001 is TESTED. REQ-FLE-MIGRATE-CLI-001 stays IMPL, and
+  REQ-FLE-MIGRATE-001, REQ-FLE-BATCH-001 and fle_commands'
+  REQ-FLE-STORAGE-001 (the batch migration behind a storage callback no
+  caller sets, encrypting under an identity readers do not use) are
+  downgraded to IMPL. Regression: `zig build test-sonny6321-fle-admin-cli`.
+- **An inline property map on an FLE-encrypted field matches as `WHERE`
+  does (SONNY-6335, items 3 and 4).** `MATCH (n:L {ssn: 'x'})` and
+  `-[:R {p: 'x'}]->` compared the stored envelope, so they matched for no
+  one, while `WHERE n.ssn = 'x'` matched the plaintext for a role that may
+  read it. Every inline-map comparison of the executor (node and edge maps,
+  the multi-node, single-hop and variable-length traversals, the pattern
+  walks of graph_algorithms, the WHERE pushdown) now reads the stored
+  string through the FLE read policy (`fle_integration.readStoredString`):
+  plaintext for a permitted role, `"[REDACTED]"` (no match) for any other,
+  and a value that does not decrypt is the statement's error (58030). The
+  planned read and the streaming node scan, which compare stored bytes,
+  decline a pattern whose map names an encrypted field
+  (`pattern_helpers.patternMapsNameEncryptedField`). **User-visible:** such
+  patterns now return rows for a permitted role, and fail with 58030 where
+  the value does not decrypt (they returned nothing). Item 4 (`WHERE r.p =
+  ... RETURN count(r)` answering 0 over a refused decrypt) already failed
+  with 58030 on this branch; the regression now pins it. Regression: `zig
+  build test-sonny6335-fle-identity-and-indexes`.
+- **A `DROP POLICY` whose chain-root write keeps failing puts the policy
+  back (SONNY-6273, follow-up).** When the graph store did not take the
+  new chain seal and both reseals failed too, the policy's records stayed
+  removed while the statement failed and the catalog kept the policy: the
+  chain root could be half written (the chain hash stored, the record count
+  not), the chain did not verify, and the next start refused to load the
+  security graph (`AuthChainTampered`). Now the removed records are put
+  back, their HMACs recomputed and the chain sealed over them: the failed
+  statement leaves the policy stored, in force and under a chain that
+  verifies, and the retry drops it. Regression: `zig build
+  test-sonny6273-drop-policy-atomic` (chain-root write failing part way, for
+  an allow and a deny policy).
+- **An MFA reset without proof is audited as `MFA_RESET_BY_ADMIN`
+  (SONNY-6624).** `geode.auth.mfa_disable` needs no proof of possession
+  (no code, or a code checked for its format only: the Admin recovery
+  route), and left only the security graph's `MFA_DISABLE` record, which
+  names the target and not who disabled it. Every `mfa_disable` that takes
+  effect now also writes a `MFA_RESET_BY_ADMIN` audit record
+  (`configuration_change`) with the actor (`details.username`, the
+  actor's user id) and the target (`details.target_user`), and whether a
+  code was supplied. A supplied code does not make it an ordinary disable,
+  because it is not verified: otherwise any six digits would avoid the
+  distinct record. New regression coverage: DROP USER removes both the stored `MfaAttempts`
+  record and the in-memory attempt record, so a user made again under the
+  name is not locked out, before or after a restart. Regression: `zig
+  build test-sonny6624-mfa-reset-audit`.
+
 - **`geode.auth.mfa_enable` is under the MFA attempt limiter; removing a
   SecurityManager user cannot leave its sessions; offline `mfa enable`
   counts malformed codes (SONNY-6623).** `mfa_enable` checked the TOTP
@@ -838,8 +927,8 @@
   fsync per commit, 5 interleaved rounds of 100 operations, medians, load
   average 8-10: CREATE 19.9 -> 20.0 ms, a node SET 21.6 -> 19.8 ms, a
   relationship's first property SET 24.2 -> 24.9 ms, an auto-commit SET
-  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET
-  + ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
+  over 10 nodes failing on its last row 367 -> 357 ms, BEGIN + CREATE + SET +
+  ROLLBACK 508 -> 527 ms: all within noise (-8% to +4%). No regression on
   the commit path.
 - **The security graph's label-page re-log is gone (SONNY-6529).**
   `relogSecurityLabelPageTxn` re-imaged a node's label page in the
@@ -3487,8 +3576,8 @@
   statement, also under an aggregate. `shortest_path([a, b])` and
   `all_shortest_paths([a, b])` built a two-node path with no relationships
   from a list; a list or another non-path operand is 22G03 (a path is
-  itself, a node the path of that node). `LET a = b, b = 1` and `LET a = a
-  + 1` read the name as NULL; a definition reads only what comes in and the
+  itself, a node the path of that node). `LET a = b, b = 1` and `LET a =
+  a + 1` read the name as NULL; a definition reads only what comes in and the
   definitions before it (ISO 14.7 SR 7), else 42000. A NULL operand of
   bigint, smallint, real, double, toReal, datetime, power and knn was
   22G03; it is NULL. The FLE catalog's /tmp fallback was already removed
@@ -4106,8 +4195,9 @@
   now reads every Markdown doc under `docs/` (it read one), and the examples
   that did not parse are fixed: one-line statements that ran together end in
   `;`, and syntax templates (`[...]`, `<...>`, signature listings such as
-  docs/TYPE_QUICK_REFERENCE.md's) are ```text blocks. Examples of features
-  Geode does not have are marked so in the prose and kept as ```text, or
+  docs/TYPE_QUICK_REFERENCE.md's) are fenced `text` blocks. Examples of
+  features Geode does not have are marked so in the prose and kept as fenced
+  `text` blocks, or
   rewritten to the supported form: GQL `BACKUP`/`RESTORE`, `ANALYZE INDEX`,
   `REBUILD INDEX`, `SAVEPOINT`/`ROLLBACK TO`, `db.info()`/`db.stats()`,
   `score()`, `point()`/`within()`/`bbox()`/`intersects()` (the spatial

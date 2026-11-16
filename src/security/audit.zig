@@ -105,6 +105,9 @@ pub const SecurityGraphEvent = struct {
     action: []const u8,
     user_id: u64 = 0,
     username: []const u8 = "",
+    // SONNY-6624: the user the event acted on, when that is not `username`
+    // (the actor): recorded as the `target_user` detail.
+    target_username: []const u8 = "",
     details: ?[]const u8 = null,
     // GAP-0919: denials are audited too — a failure result raises severity to
     // warning and records result=failure instead of the success default.
@@ -214,6 +217,9 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
 
     if (event.username.len != 0) {
         detail_map.put("username", allocator.dupe(u8, event.username) catch return) catch return;
+    }
+    if (event.target_username.len != 0) {
+        detail_map.put("target_user", allocator.dupe(u8, event.target_username) catch return) catch return;
     }
     if (event.details) |details| {
         detail_map.put("details", allocator.dupe(u8, details) catch return) catch return;

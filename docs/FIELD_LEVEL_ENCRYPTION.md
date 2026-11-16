@@ -258,8 +258,9 @@ geode show rotation-status --tenant T
 geode policy grant plaintext S.F --role R
 geode policy revoke plaintext S.F --role R
 
-# Migration
-geode migrate encrypt --tenant T --field S.F --batch 1000
+# Migration: not supported in this release (SONNY-6321). `geode fle
+# migrate-encrypt <tenant> <schema> <field>` validates its arguments and is
+# refused with an error; no value is read or encrypted.
 ```
 
 ---
@@ -457,8 +458,15 @@ In-process callers with no principal and no request context (embedders,
 background work) are decided by the role list alone.
 
 An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
-`-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
-`WHERE` (SONNY-6335 item 3, open). While any FLE field is configured the QUIC
+`-[:R {p: '...'}]->`) matches exactly as the `WHERE` equality does (SONNY-6335
+item 3): a role that may read the plaintext matches the plaintext, any other
+role compares `"[REDACTED]"` (no match, nothing revealed), and bytes that do
+not decrypt are the statement's error (58030), never a silent non-match. It
+compared the stored envelope and matched for no one. The engine-direct reads
+(the planned read and the streaming node scan, which compare stored bytes)
+decline such a pattern to the executor. A `WHERE` over a value that does not
+decrypt, counted or not (`RETURN count(r)`), fails with 58030 rather than
+counting the row out (item 4). While any FLE field is configured the QUIC
 write fast paths and the aggregate pushdowns decline to the executor.
 
 `MERGE` whose pattern names a property that is FLE-encrypted in any type
@@ -887,15 +895,11 @@ Run: `python3 extended_test_runner.py`
 
 2. **New writes:** Immediately encrypted
 
-3. **Backfill existing data:**
-
-   ```bash
-   geode migrate encrypt --tenant default --field Person.ssn --batch 1000
-   ```
-
-   - Iterates records in batches
-   - Encrypts plaintext → envelope
-   - Resumable on failure
+3. **Backfill existing data:** not supported in this release (SONNY-6321).
+   `geode fle migrate-encrypt` reported a finished migration ("Migration
+   Complete", exit 0) without reading or encrypting a value; it is now
+   refused with an error. Values stored before the field was configured as
+   encrypted stay as they were stored until they are written again.
 
 4. **Access during migration:**
    - Authorized users: still see values (plaintext or decrypted)

@@ -9,6 +9,7 @@ const write_shape = @import("../execution/write_shape.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const stored_property_equality = @import("../execution/stored_property_equality.zig");
+const pattern_helpers = @import("../execution/pattern_helpers.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
@@ -1398,6 +1399,10 @@ fn eligibleQuery(q: *const ast.Query) ?Eligibility {
     if (q.call_clause != null or q.initial_call_subquery != null) return null;
     if (q.merge_statement != null or q.next_query != null or q.for_statement != null) return null;
     if (q.path_variable != null or q.has_recursive_cte or q.cte_list != null) return null;
+    // SONNY-6335 (3): an inline map on an FLE-encrypted field compares as
+    // WHERE reads it, in the executor (`nodeMatchesPattern` compares stored
+    // bytes, which for an encrypted value matched no one).
+    if (pattern_helpers.patternMapsNameEncryptedField(q.match)) return null;
     if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return null;
     if (q.match.chains.len != 1) return null;
 
