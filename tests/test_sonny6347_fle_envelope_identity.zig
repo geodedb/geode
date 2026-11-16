@@ -197,7 +197,7 @@ test "SONNY-6347 (2): a crafted envelope-shaped edge value reaching setEdgePrope
     defer e.deinit();
     try e.encrypt("R6347", "p");
     try e.run(null, "CREATE (:A6347)-[:R6347 {k: 1}]->(:B6347)");
-    const edges = e.f.st.getEdgesByType(testing.allocator, "R6347", null, graph_store.DEFAULT_GRAPH_NAME);
+    const edges = try e.f.st.getEdgesByType(testing.allocator, "R6347", null, graph_store.DEFAULT_GRAPH_NAME);
     defer testing.allocator.free(edges);
     try testing.expectEqual(@as(usize, 1), edges.len);
 

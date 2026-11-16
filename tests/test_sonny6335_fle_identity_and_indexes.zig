@@ -188,7 +188,7 @@ test "SONNY-6335 (1): an edge value encrypted by the graph-store primitive decry
     try e.encrypt("R6335", "p");
     try e.run("CREATE (:A6335 {k: 1})-[:R6335 {k: 1, p: '" ++ secret ++ "'}]->(:B6335 {k: 1})");
     try e.run("CREATE (:A6335 {k: 2})-[:R6335 {k: 2}]->(:B6335 {k: 2})");
-    const edges = e.f.st.getEdgesByType(testing.allocator, "R6335", null, graph_store.DEFAULT_GRAPH_NAME);
+    const edges = try e.f.st.getEdgesByType(testing.allocator, "R6335", null, graph_store.DEFAULT_GRAPH_NAME);
     defer testing.allocator.free(edges);
     var store_written: ?u64 = null;
     for (edges) |id| {

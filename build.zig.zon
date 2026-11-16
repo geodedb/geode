@@ -723,8 +723,19 @@
             // before a page's new image is on disk. No API change; same
             // dependencies as v0.4.20. Tagged on the MR merge 160046c, same
             // tree as the release commit 3ffeba7.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.21#160046ced08ff09c0da6c4a32949d6c2a49d6763",
-            .hash = "graph_storage-0.4.21-9UyJS1xFNABIc04s56XcQVFmjRKQ1LooloHJbu2v36F7",
+            // v0.4.22 (2026-11-16, SONNY-6599, SONNY-6595 item 5): recovery
+            // fsyncs the directory and truncates the WAL it replayed, and an
+            // open drains a WAL whose contents the pages already cover (a
+            // shard not written after a crash restart kept its tail); a
+            // double delete no longer under-counts; `removeEdgeTxn` also
+            // removes legacy `adj_in` entries; edge-property slab slots are
+            // attributed (GSRVIX2); an overflow replacement is freed at commit
+            // (undoable); iterator wrappers release on OOM. Tagged on
+            // 8271e65. Same dependencies as v0.4.21 (wal v0.1.25,
+            // thread_pool v0.2.11, otel v0.1.28); same wal routing (build.zig
+            // points its "wal" import at geode's v0.1.25).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.22#8271e65a9f91db6b24dd217bb58d58c8fa22e699",
+            .hash = "graph_storage-0.4.22-9UyJS99JNQAXVpnLwCKQgH1mhbdBoF1MsvEFAwzBVPST",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

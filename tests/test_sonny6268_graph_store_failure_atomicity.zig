@@ -181,7 +181,7 @@ fn render(store: *GraphStore, ids: Ids) ![]u8 {
     try writeSortedList(&out, "props(A)", try store.listPropertiesForLabel(a, null, "A"));
     try writeSortedList(&out, "props(C)", try store.listPropertiesForLabel(a, null, "C"));
     try writeSortedList(&out, "edge_types", try store.listEdgeTypes(a, null));
-    const by_type = store.getEdgesByType(a, "R", null, ids.graph);
+    const by_type = try store.getEdgesByType(a, "R", null, ids.graph);
     defer a.free(by_type);
     try out.print(a, "edges R: {d}\n", .{by_type.len});
     try writeNode(&out, store, ids.graph, "a", ids.a);

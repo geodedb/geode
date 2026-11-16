@@ -13,10 +13,9 @@
 // in-memory copy of the node, made after the index entries) is failed (a
 // one-shot fault), for each allocation the insert makes in turn, until an
 // insert needs none of them. After each, every property's posting must
-// hold exactly the nodes that exist: an insert that failed before its
-// commit leaves none. (One that fails after it, copying the properties into
-// the in-memory node, has committed the node and keeps its entries; that it
-// reports failure for a committed node is a separate defect.)
+// hold exactly the nodes that exist: a failed insert leaves none. (The
+// in-memory property copy, which failed after the commit and left a
+// committed node, is made before it since SONNY-6646 (5).)
 //
 // CANARY: REQ=REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6601_bulk_insert_index_abort.zig; OWNER=storage; UPDATED=2026-11-15
 

@@ -3330,6 +3330,73 @@
   seeds with deferred WAL sync (51 minutes on a loaded disk). Regressions:
   `zig build test-sonny6637-query-items`, `zig build
   test-sonny6637-function-arity`.
+- **A graph's WAL drains after a crash restart once the graph is opened;
+  graph-storage v0.4.22 (SONNY-6595 item 5, SONNY-6599).** After a SIGKILL
+  and a restart, a shard nothing made dirty kept its whole replayed WAL
+  through every checkpoint and the clean shutdown. graph-storage v0.4.22
+  fsyncs the directory and truncates the WAL recovery replayed, and an open
+  drains a WAL whose contents the pages already cover (also: a double delete
+  no longer under-counts; `removeEdgeTxn` removes legacy `adj_in` entries;
+  edge-property slab slots are attributed; an overflow replacement is freed
+  at commit, so it is undoable; iterator wrappers release on OOM).
+  **Contract (geode keeps opening graphs lazily, for startup cost):** at
+  startup geode opens only a graph with an IdMap snapshot, and that open
+  drains its WAL; a graph never checkpointed before the crash is opened by
+  the first statement that touches it, and until then its WAL holds exactly
+  the crash's tail. That tail is harmless (every record in it is below the
+  manifest's `last_checkpoint_lsn`) and bounded (one crash's tail). The
+  first statement on the graph drains it to 0, and a clean shutdown leaves
+  0 WAL bytes whether or not a statement ran. Regression: `zig build
+  test-sonny6595-wal-drain` (with and without TDE; now in the aggregate).
+
+- **A failed auto-commit write whose abort graph-storage cannot undo
+  quarantines its graph; a half-done property write inside a statement
+  transaction is proven not to commit (SONNY-6601 items 3 and 1).** The
+  adapter's auto-commit engine writes (label add and remove, relationship
+  create and delete, relationship property remove, outside a statement
+  transaction on the shard) leave the abort to graph-storage, which returns
+  the write's own error; when that abort could not undo the write the shard
+  refuses every later write, commit and checkpoint, and geode kept serving
+  the graph from memory beside it. geode now reads the shard's
+  `abort_not_undone` after such a failure and quarantines the graph (58000
+  `AbortNotUndone` until a restart), as an explicit abort does. Item 1: a
+  test-only seam (`property_write_midpoint_hook`, compiled only under
+  `builtin.is_test`) fails a property write between `putPropertyTxn` and
+  `putNodeTxn`; the statement's undo and the engine's abort leave nothing of
+  it, in memory or after a reopen (no defect found). Regressions: `zig build
+  test-sonny6601-autocommit-abort-quarantine`, `zig build
+  test-sonny6601-half-write-rollback`. **Still open (SONNY-6601 item 7,
+  SONNY-2979):** a transaction is not crash-atomic.
+
+- **Silent failures in the storage readers and writers (SONNY-6646).**
+  `removeNodeLabelNoSave`, which nothing called, freed the removed label
+  before allocating the node's new label array and left the freed slice in
+  the node when that allocation failed (a double free at teardown); it is
+  deleted. The label and relationship-type counts (`countNodesByLabel` with
+  and without a tenant, `countEdgesByTypeForGraph`) answered 0 when the
+  allocation of a key past 512 bytes failed; they look the key up without
+  building it. `getEdgesByType` answered any failure (an allocation, an
+  engine read) as no relationships, or left a graph's out; it returns the
+  error (**API:** `![]u64`). The bulk reserved-id node insert copied the
+  node's properties into memory after its engine commit and reported a
+  failure there for a committed node; the copy is made before the commit,
+  and a failure takes the node back out. A node property write
+  (`setNodeProperty`, `setNodePropertiesBatch`, a removal) moved its exact
+  (label, key, value) index entries after the commit: the old one's remover
+  `catch return`ed an allocation (the node stayed findable by a value it no
+  longer held) and the new one's `try` failed a committed write. The hashes
+  are computed before the write, the new entries added before the commit
+  (taken back on failure), the old ones removed after it without
+  allocating; `GraphStore.setNodePropertiesBatch` prepares its in-memory
+  copy before the storage write, as `setNodeProperty` does (it reported a
+  committed batch failed). A failed FULL engine checkpoint is counted
+  (`adapter_checkpoint_failures_total`) and logged at ERROR once per cause
+  (`full checkpoint failed; ...`), as the light one is; it was a WARN on
+  every call. Regressions: `zig build test-sonny6646-store-silent-failures`,
+  `test-sonny6646-bulk-insert-post-commit`,
+  `test-sonny6646-exact-index-property-write`,
+  `test-sonny6646-full-checkpoint-failure-log`.
+
 - **An aborted bulk node insert leaves no exact-index entry; QUIC runs
   `START TRANSACTION ... ROLLBACK` with mutations in one message, as gRPC
   does (SONNY-6601 items 2 and 6).** The bulk reserved-id insert (the QUIC
@@ -3344,12 +3411,9 @@
   rolls it back, and gRPC already accepted it. **User-visible:** such a
   program now runs on QUIC. Regressions: `zig build
   test-sonny6601-bulk-insert-index-abort`, `zig build
-  test-sonny6601-quic-inline-rollback`. **Still open (SONNY-6601):** item 1
-  (a half-failed adapter property write inside a statement transaction is
-  covered by geode's undo; not yet proven with an injected mid-write
-  failure), item 3 (a failed auto-commit engine write whose undo fails
-  poisons the shard without quarantining the graph), item 7 (multi-shard
-  transactions are not crash-atomic; design work).
+  test-sonny6601-quic-inline-rollback`. Items 1 and 3: see the entry
+  above. **Still open (SONNY-6601):** item 7 (multi-shard transactions are
+  not crash-atomic; design work, SONNY-2979).
 
 - **Label counters stay exact for names past 512 bytes; the label and
   relationship-type index readers find such names; `setEdgeProperty` of a

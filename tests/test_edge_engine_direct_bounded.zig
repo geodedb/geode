@@ -291,15 +291,15 @@ test "P1-edge: getEdgesByType + type-filtered traversal return the complete set 
     // getEdgesByType must return the COMPLETE posting for each type, served via
     // the engine (not a resident posting list capped at the edge cache size).
     {
-        const parent_ids = h.store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
+        const parent_ids = try h.store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
         defer if (parent_ids.len > 0) testing.allocator.free(parent_ids);
         try testing.expectEqual(PARENTS, parent_ids.len);
 
-        const accept_ids = h.store.getEdgesByType(testing.allocator, "ACCEPTED_AS", null, "default");
+        const accept_ids = try h.store.getEdgesByType(testing.allocator, "ACCEPTED_AS", null, "default");
         defer if (accept_ids.len > 0) testing.allocator.free(accept_ids);
         try testing.expectEqual(ACCEPTS, accept_ids.len);
 
-        const none_ids = h.store.getEdgesByType(testing.allocator, "NO_SUCH_TYPE", null, "default");
+        const none_ids = try h.store.getEdgesByType(testing.allocator, "NO_SUCH_TYPE", null, "default");
         defer if (none_ids.len > 0) testing.allocator.free(none_ids);
         try testing.expectEqual(@as(usize, 0), none_ids.len);
     }

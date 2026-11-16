@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T05:50:40.83542299Z",
+  "generated_at": "2026-11-16T06:37:52.281920653Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80105,6 +80105,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6601-AUTOCOMMIT-ABORT-QUARANTINE",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "AutoCommitAbortNotUndone",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_autocommit_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6601_autocommit_abort_quarantine.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_autocommit_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT",
       "features": [
         {
@@ -80130,6 +80163,39 @@
           ],
           "tests": [
             "tests/test_sonny6601_bulk_insert_index_abort.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6601-HALF-WRITE-SEAM",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "PropertyWriteFaultSeam",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_half_write_rollback.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6601_half_write_rollback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_half_write_rollback.zig"
           ],
           "benches": [],
           "owner": "storage",
@@ -82485,6 +82551,152 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6646-BULK-INSERT-POST-COMMIT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ReservedNodeUndo",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_bulk_insert_post_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "InMemoryCopyBeforeCommit",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_bulk_insert_post_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6646_bulk_insert_post_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_bulk_insert_post_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6646-EXACT-INDEX-PROPERTY-WRITE",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "BatchPreparedBeforeStorage",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_exact_index_property_write.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ExactIndexMove",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_exact_index_property_write.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6646_exact_index_property_write.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_exact_index_property_write.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6646-FULL-CHECKPOINT-FAILURE-LOG",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "FullCheckpointFailureLogLimit",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_full_checkpoint_failure_log.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6646_full_checkpoint_failure_log.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_full_checkpoint_failure_log.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6646-STORE-SILENT-FAILURES",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "ReaderErrors",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6646_store_silent_failures.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6646_store_silent_failures.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -87639,7 +87851,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4331
+      "TESTED": 4344
     },
     "by_aspect": {
       "2PC": 3,
@@ -87837,6 +88049,7 @@
       "AuthorizationTests": 1,
       "AuthorizeSnapshotRead": 1,
       "AutoCalibrationLogic": 2,
+      "AutoCommitAbortNotUndone": 1,
       "AutoKeyChecks": 1,
       "Avg": 1,
       "AvgAgg": 1,
@@ -87877,6 +88090,7 @@
       "BatchFileSourceParity": 1,
       "BatchGeneration": 1,
       "BatchParsing": 1,
+      "BatchPreparedBeforeStorage": 1,
       "BatchSealOnce": 1,
       "BatchTxnGate": 1,
       "BatchWritesCountKeys": 1,
@@ -88764,6 +88978,7 @@
       "ExactIndexCandidates": 2,
       "ExactIndexConfigStamp": 1,
       "ExactIndexLateKeyCatchUp": 1,
+      "ExactIndexMove": 1,
       "ExactIndexRollback": 1,
       "ExactIntegerSum": 1,
       "ExactMatchRewrite": 1,
@@ -88965,6 +89180,7 @@
       "FtsApplySymmetry": 1,
       "FtsSnapshotRebuild": 1,
       "FtsStrictTenancyFailClosed": 1,
+      "FullCheckpointFailureLogLimit": 1,
       "FullLengthConstantTimeCompare": 1,
       "FullRecordEventHash": 1,
       "FullResultDecode": 1,
@@ -89260,6 +89476,7 @@
       "ImplicitNoCaDefault": 1,
       "InFlightHandlerDrain": 1,
       "InMemoryCatalog": 1,
+      "InMemoryCopyBeforeCommit": 1,
       "InMemoryPurge": 1,
       "InWorkloadMutationVerifier": 1,
       "InboundConnSnapshot": 1,
@@ -90300,6 +90517,7 @@
       "PropertyMatching": 1,
       "PropertyStorage": 2,
       "PropertyStorageFootprint": 1,
+      "PropertyWriteFaultSeam": 1,
       "ProposeAndReplicate": 1,
       "ProposeFence": 1,
       "ProposeWithTenant": 1,
@@ -90473,6 +90691,7 @@
       "ReadWritePermissiveSingleTenant": 1,
       "ReadWriteRole": 1,
       "ReadWriteStrictTenancyRequiresGrant": 1,
+      "ReaderErrors": 1,
       "ReaderHandleApi": 1,
       "RealFunctionality": 1,
       "RealImplementation": 3,
@@ -90530,7 +90749,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 415,
+      "Regression": 420,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -90596,6 +90815,7 @@
       "Reseal": 1,
       "ResealRefusesUnsignedLegacy": 1,
       "ReserveBeforeBuild": 1,
+      "ReservedNodeUndo": 1,
       "ReservedWordRefusal": 1,
       "ReservedWords": 2,
       "ResetGuardrails": 1,

@@ -1704,6 +1704,88 @@ pub const CompactPropertyMap = struct {
         if (r.entries.len > 0) self.allocator.free(r.entries);
     }
 
+    /// SONNY-6646 (6): one key's change in a batch (`reserveBatch`): its new
+    /// value (the caller's copy, owned by the map once committed), or null
+    /// to remove it.
+    pub const BatchChange = struct {
+        key: []const u8,
+        value: ?PropertyValue,
+    };
+
+    /// SONNY-6646 (6): the map's whole entry slice after a batch, with the
+    /// copies of its new keys, allocated without changing the map. Release
+    /// with `commitBatch` or `cancelBatch`; valid until the map next changes.
+    pub const BatchReservation = struct {
+        entries: []Entry,
+    };
+
+    /// Reserve `changes`: sorted by key (`std.mem.order`), each key once.
+    pub fn reserveBatch(self: *const Self, key_allocator: std.mem.Allocator, changes: []const BatchChange) !BatchReservation {
+        var len: usize = self.entries.len;
+        for (changes) |c| {
+            const had = self.contains(c.key);
+            if (c.value != null and !had) len += 1;
+            if (c.value == null and had) len -= 1;
+        }
+        const entries: []Entry = if (len == 0) &[_]Entry{} else try self.allocator.alloc(Entry, len);
+        var copied: usize = 0;
+        errdefer {
+            // The new keys' copies (an old key is the map's).
+            for (entries[0..copied]) |e| {
+                if (!self.search(e.key).found) key_allocator.free(e.key);
+            }
+            if (len > 0) self.allocator.free(entries);
+        }
+        // Merge the old entries with the changes, both sorted.
+        var oi: usize = 0;
+        var ci: usize = 0;
+        while (oi < self.entries.len or ci < changes.len) {
+            const take_old = ci == changes.len or
+                (oi < self.entries.len and std.mem.order(u8, self.entries[oi].key, changes[ci].key) == .lt);
+            if (take_old) {
+                entries[copied] = self.entries[oi];
+                copied += 1;
+                oi += 1;
+                continue;
+            }
+            const c = changes[ci];
+            ci += 1;
+            const same = oi < self.entries.len and std.mem.eql(u8, self.entries[oi].key, c.key);
+            if (same) {
+                if (c.value) |v| {
+                    entries[copied] = .{ .key = self.entries[oi].key, .value = v };
+                    copied += 1;
+                }
+                oi += 1;
+            } else if (c.value) |v| {
+                entries[copied] = .{ .key = try key_allocator.dupe(u8, c.key), .value = v };
+                copied += 1;
+            }
+        }
+        std.debug.assert(copied == len);
+        return .{ .entries = entries };
+    }
+
+    /// Install the reserved batch. Cannot fail. `replaced[i]` (parallel to
+    /// `changes`) receives the value `changes[i]` replaced or removed (the
+    /// caller frees it); removed keys are freed here.
+    pub fn commitBatch(self: *Self, key_allocator: std.mem.Allocator, r: BatchReservation, changes: []const BatchChange, replaced: []?PropertyValue) void {
+        for (changes, 0..) |c, i| {
+            const at = self.search(c.key);
+            replaced[i] = if (at.found) self.entries[at.index].value else null;
+            if (at.found and c.value == null) key_allocator.free(self.entries[at.index].key);
+        }
+        if (self.entries.len > 0) self.allocator.free(self.entries);
+        self.entries = r.entries;
+    }
+
+    pub fn cancelBatch(self: *const Self, key_allocator: std.mem.Allocator, r: BatchReservation) void {
+        for (r.entries) |e| {
+            if (!self.search(e.key).found) key_allocator.free(e.key);
+        }
+        if (r.entries.len > 0) self.allocator.free(r.entries);
+    }
+
     /// SONNY-6268: `fetchRemove` that fails instead of removing when the
     /// shrunken entry slice cannot be allocated: on error the map is
     /// unchanged. The caller frees the returned key and value.
@@ -2795,7 +2877,7 @@ pub const GraphStore = struct {
     edge_type_count_rwlock: std.Io.RwLock = std.Io.RwLock.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
-    // `removeNodeLabel`, and their `NoSave` variants) against the
+    // `addNodeLabelNoSave` and `removeNodeLabel`) against the
     // snapshot reader in `cloneNodesFrom`.  Held EXCLUSIVE for the brief
     // free+reassign window in the writers; held SHARED across the
     // `source.nodes` walk in `cloneNodesFrom`.  Leaf-level: no other
@@ -5922,6 +6004,44 @@ pub const GraphStore = struct {
         try self.insertReservedNodeInMemory(reserved_id, labels, graph_name, tenant);
     }
 
+    // CANARY: REQ=REQ-SONNY-6646-BULK-INSERT-POST-COMMIT; FEATURE="StorageIntegrity"; ASPECT=ReservedNodeUndo; STATUS=TESTED; TEST=tests/test_sonny6646_bulk_insert_post_commit.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6646 (5): the in-memory undo of
+    /// `createNodeWithReservedIdAndSlotGraphAndTenant` and of the properties
+    /// set on the node since, for a caller whose engine write is aborted
+    /// before it commits. `reserveReservedNodeUndo` (before the create) is
+    /// the one step that can fail; `undoReservedNode` cannot.
+    pub const ReservedNodeUndo = struct {
+        keys: RemoverKeyRoom,
+
+        pub fn deinit(self: *ReservedNodeUndo, store: *GraphStore) void {
+            self.keys.deinit(store.allocator);
+        }
+    };
+
+    /// The removers' key room for a node of these names and property keys.
+    pub fn reserveReservedNodeUndo(
+        self: *GraphStore,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+        longest_property_key: usize,
+    ) !ReservedNodeUndo {
+        var longest = @max(@max(graph_name.len, tenant.len), longest_property_key);
+        for (labels) |label| longest = @max(longest, label.len);
+        return .{ .keys = try RemoverKeyRoom.reserve(self.allocator, longest) };
+    }
+
+    /// Take a node created by `createNodeWithReservedIdAndSlotGraphAndTenant`
+    /// (no edges yet) back out of every in-memory structure and the graph's
+    /// id map. Cannot fail.
+    pub fn undoReservedNode(self: *GraphStore, undo: *ReservedNodeUndo, node_id: u64, graph_name: []const u8) void {
+        undo.keys.install();
+        defer undo.keys.uninstall();
+        self.removeNodeInMemory(node_id, &.{});
+        if (self.getIdMap(graph_name)) |im| _ = im.removeNode(@as(u128, node_id));
+        incrementMutationEpoch();
+    }
+
     pub fn createNodeWithReservedIdAndSlotAndGraph(
         self: *GraphStore,
         reserved_id: u64,
@@ -6479,15 +6599,14 @@ pub const GraphStore = struct {
 
     fn countGraphLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) usize {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
-        var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return 0;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
-
+        // SONNY-6646 (3): the key unbuilt; a long one whose allocation failed
+        // counted 0.
+        const key = GraphNameKey{ .graph = graph_name, .name = label };
         const mutable_self: *GraphStore = @constCast(self);
         const io = std.Io.Threaded.global_single_threaded.io();
         mutable_self.label_count_rwlock.lockSharedUncancelable(io);
         defer mutable_self.label_count_rwlock.unlockShared(io);
-        const count = mutable_self.label_counts_by_graph.getPtr(formatted.key) orelse return 0;
+        const count = mutable_self.label_counts_by_graph.getPtrAdapted(key, GraphNameKeyContext{}) orelse return 0;
         return count.load(.monotonic);
     }
 
@@ -6572,15 +6691,12 @@ pub const GraphStore = struct {
 
     fn countGraphEdgeType(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) usize {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
-        var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return 0;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
-
+        const key = GraphNameKey{ .graph = graph_name, .name = edge_type }; // SONNY-6646 (3)
         const mutable_self: *GraphStore = @constCast(self);
         const io = std.Io.Threaded.global_single_threaded.io();
         mutable_self.edge_type_count_rwlock.lockSharedUncancelable(io);
         defer mutable_self.edge_type_count_rwlock.unlockShared(io);
-        const count = mutable_self.edge_type_counts_by_graph.getPtr(formatted.key) orelse return 0;
+        const count = mutable_self.edge_type_counts_by_graph.getPtrAdapted(key, GraphNameKeyContext{}) orelse return 0;
         return count.load(.monotonic);
     }
 
@@ -8947,6 +9063,20 @@ pub const GraphStore = struct {
             }
         }
 
+        // CANARY: REQ=REQ-SONNY-6646-EXACT-INDEX-PROPERTY-WRITE; FEATURE="GraphStoreFailureAtomicity"; ASPECT=BatchPreparedBeforeStorage; STATUS=TESTED; TEST=tests/test_sonny6646_exact_index_property_write.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6646 (6): failure-atomic, as `setNodeProperty` (SONNY-6268).
+        // Everything that can fail runs before the storage write: the
+        // values' copies, the node's whole new property slice
+        // (`reserveBatch`), the PERF-C counters of new keys and the
+        // merge-index entries of the new values (undone on a later failure);
+        // the in-memory commit after it cannot fail. The in-memory copy was
+        // made after the storage write, and a failure there reported an
+        // error for a batch the engine had committed.
+        var batch = try self.prepareNodeBatch(node_id, &node_meta, sealed);
+        var committed = false;
+        defer batch.deinit(self);
+        errdefer if (!committed) batch.cancel(self, node_id, &node_meta);
+
         const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
         // --- Adapter path: single lock acquisition for all properties ---
         if (global_adapter) |adapter| {
@@ -8966,7 +9096,147 @@ pub const GraphStore = struct {
             }
         }
 
-        try self.applyNodeBatchInMemory(node_id, sealed, .sealed);
+        committed = true;
+        batch.commit(self, node_id, &node_meta);
+    }
+
+    /// SONNY-6646 (6): a node property batch whose fallible part is done
+    /// (`setNodePropertiesBatch`). `changes` is sorted by key, each key once
+    /// (a later entry of a key wins, as when applied in order); internal keys
+    /// are left out (the in-memory copy never holds them).
+    const PreparedNodeBatch = struct {
+        changes: []CompactPropertyMap.BatchChange = &.{},
+        /// The value each change replaces or removes (`node.properties` before).
+        old: []?PropertyValue = &.{},
+        reservation: ?CompactPropertyMap.BatchReservation = null,
+        /// Values copied, counters bumped and merge entries added so far (the
+        /// cancel undoes those).
+        values_copied: usize = 0,
+        counted: usize = 0,
+        indexed: usize = 0,
+        /// The values a commit replaced, to free (parallel to `changes`).
+        replaced: []?PropertyValue = &.{},
+
+        fn deinit(self: *PreparedNodeBatch, store: *GraphStore) void {
+            if (self.changes.len > 0) store.allocator.free(self.changes);
+            if (self.old.len > 0) store.allocator.free(self.old);
+            if (self.replaced.len > 0) store.allocator.free(self.replaced);
+        }
+
+        fn isNewKey(self: *const PreparedNodeBatch, i: usize) bool {
+            return self.old[i] == null and self.changes[i].value != null;
+        }
+
+        /// Undo the preparation (the storage write failed).
+        fn cancel(self: *PreparedNodeBatch, store: *GraphStore, node_id: u64, node: *const Node) void {
+            for (self.changes[0..self.indexed], self.old[0..self.indexed]) |c, old| {
+                if (c.value) |v| store.removeFromMergePropertyIndex(node.graph_name, node.labels, c.key, v, node_id, old);
+            }
+            for (self.changes[0..self.counted], 0..) |c, i| {
+                if (!self.isNewKey(i)) continue;
+                for (node.labels) |label| store.decLabelPropertyCount(node.graph_name, node.tenant_id, label, c.key);
+            }
+            if (self.reservation) |r| node.properties.cancelBatch(store.allocator, r);
+            for (self.changes[0..self.values_copied]) |c| {
+                if (c.value) |v| freePropertyValue(store, v);
+            }
+        }
+
+        /// Install the batch in memory. Cannot fail.
+        fn commit(self: *PreparedNodeBatch, store: *GraphStore, node_id: u64, node_meta: *const Node) void {
+            // ENG-3954 / #874: the property slice is swapped and the old one
+            // freed; exclude readers dereferencing this node.
+            store.nodes.lockShardExclusive(node_id);
+            defer store.nodes.unlockShardExclusive(node_id);
+            const node = store.nodes.getPtrUnlocked(node_id) orelse {
+                // Evicted meanwhile: the engine, written above, is the node's
+                // only copy and the next read hydrates it. The new values'
+                // merge entries and counters stand; the old values' go.
+                for (self.changes, self.old) |c, old| {
+                    if (old) |o| store.removeFromMergePropertyIndex(node_meta.graph_name, node_meta.labels, c.key, o, node_id, c.value);
+                    if (old != null and c.value == null) {
+                        for (node_meta.labels) |label| store.decLabelPropertyCount(node_meta.graph_name, node_meta.tenant_id, label, c.key);
+                    }
+                }
+                if (self.reservation) |r| node_meta.properties.cancelBatch(store.allocator, r);
+                for (self.changes) |c| {
+                    if (c.value) |v| freePropertyValue(store, v);
+                }
+                return;
+            };
+            var composite_component = false;
+            for (self.changes) |c| composite_component = composite_component or isCompositeComponentKey(c.key);
+            if (composite_component) store.removeNodeCompositeMergeEntries(node);
+            node.properties.commitBatch(store.allocator, self.reservation.?, self.changes, self.replaced);
+            for (self.changes, self.replaced) |c, old| {
+                const o = old orelse continue;
+                // The old value's merge-index entries, except those the new
+                // value keys alike; a removed key's counters.
+                store.removeFromMergePropertyIndex(node.graph_name, node.labels, c.key, o, node_id, c.value);
+                if (c.value == null) {
+                    for (node.labels) |label| store.decLabelPropertyCount(node.graph_name, node.tenant_id, label, c.key);
+                }
+                freePropertyValue(store, o);
+            }
+            store.addNodeCompositeMergeEntries(node);
+            store.dirty.store(true, .release);
+            incrementMutationEpoch();
+        }
+    };
+
+    fn prepareNodeBatch(self: *GraphStore, node_id: u64, node: *const Node, entries: []const BatchPropertyEntry) !PreparedNodeBatch {
+        // The changes, sorted by key (stable: a later entry of a key last),
+        // then each key's last.
+        const Order = struct {
+            fn lessThan(_: void, a: BatchPropertyEntry, b: BatchPropertyEntry) bool {
+                return std.mem.order(u8, a.key, b.key) == .lt;
+            }
+        };
+        const sorted = try self.allocator.dupe(BatchPropertyEntry, entries);
+        defer self.allocator.free(sorted);
+        std.sort.insertion(BatchPropertyEntry, sorted, {}, Order.lessThan);
+        var n: usize = 0;
+        for (sorted, 0..) |e, i| {
+            if (isInternalPersistedPropertyKey(e.key)) continue;
+            if (i + 1 < sorted.len and std.mem.eql(u8, sorted[i + 1].key, e.key)) continue;
+            n += 1;
+        }
+
+        var b = PreparedNodeBatch{};
+        errdefer {
+            b.cancel(self, node_id, node);
+            b.deinit(self);
+        }
+        b.changes = try self.allocator.alloc(CompactPropertyMap.BatchChange, n);
+        b.old = try self.allocator.alloc(?PropertyValue, n);
+        b.replaced = try self.allocator.alloc(?PropertyValue, n);
+        var j: usize = 0;
+        for (sorted, 0..) |e, i| {
+            if (isInternalPersistedPropertyKey(e.key)) continue;
+            if (i + 1 < sorted.len and std.mem.eql(u8, sorted[i + 1].key, e.key)) continue;
+            b.changes[j] = .{ .key = e.key, .value = null };
+            b.old[j] = node.properties.get(e.key);
+            if (e.value) |v| b.changes[j].value = try copyPropertyValue(self, v);
+            j += 1;
+            b.values_copied = j;
+        }
+        b.reservation = try node.properties.reserveBatch(self.allocator, b.changes);
+        for (b.changes, 0..) |c, i| {
+            if (b.isNewKey(i)) {
+                var labels_counted: usize = 0;
+                errdefer for (node.labels[0..labels_counted]) |label| self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, c.key);
+                for (node.labels) |label| {
+                    try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, c.key);
+                    labels_counted += 1;
+                }
+            }
+            b.counted = i + 1;
+        }
+        for (b.changes, b.old, 0..) |c, old, i| {
+            if (c.value) |v| try self.addToMergePropertyIndexAtomic(node.graph_name, node.labels, c.key, v, node_id, old);
+            b.indexed = i + 1;
+        }
+        return b;
     }
 
     /// SONNY-6468: whether a batch's values still need FLE sealing
@@ -10241,15 +10511,13 @@ pub const GraphStore = struct {
         }
 
         const mutable_self: *GraphStore = @constCast(self);
-        var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, mutable_self.allocator, graph_name, label) catch return 0;
-        defer if (formatted.owned) |owned| mutable_self.allocator.free(owned);
+        const key = GraphNameKey{ .graph = graph_name, .name = label }; // SONNY-6646 (3)
 
         const io = std.Io.Threaded.global_single_threaded.io();
         mutable_self.label_index_mutex.lockUncancelable(io);
         defer mutable_self.label_index_mutex.unlock(io);
 
-        const posting = mutable_self.label_index.getPtr(formatted.key) orelse return 0;
+        const posting = mutable_self.label_index.getPtrAdapted(key, GraphNameKeyContext{}) orelse return 0;
         posting.lock();
         defer posting.unlock();
 
@@ -11582,7 +11850,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         tenant_id: ?[]const u8,
         graph_name: ?[]const u8,
-    ) []u64 {
+    ) ![]u64 {
         // PHASE 1b chokepoint: hydrate the target graph (or all when admin/null).
         if (graph_name) |gn| self.ensureGraphHydrated(gn) else self.ensureAllGraphsHydrated();
         // PHASE 1 (edge-engine-direct): with a BOUNDED edge cache the resident
@@ -11602,20 +11870,23 @@ pub const GraphStore = struct {
         var id_list = std.ArrayList(u64).empty;
         defer id_list.deinit(allocator);
 
+        // SONNY-6646 (4): a failure (an allocation, an engine read) is the
+        // caller's error. It was answered as no edges, or a graph's edges
+        // were left out, and MATCH returned fewer rows than exist.
         if (graph_name) |gn| {
-            self.collectEdgesByTypeFromEngine(allocator, &id_list, gn, edge_type, tenant_id) catch return &.{};
+            try self.collectEdgesByTypeFromEngine(allocator, &id_list, gn, edge_type, tenant_id);
         } else {
             // SONNY-3233 (round 15, F12): the names copied under
             // `graphs_lock` (`graphNamesCopy`), not iterated while CREATE or
             // DROP GRAPH (or a first write to a graph, `ensureGraphNoDirty`)
             // changes the map. (SONNY-3317: this said `graphs_mutex`.)
-            const names = self.graphNamesCopy(allocator) catch return &.{};
+            const names = try self.graphNamesCopy(allocator);
             defer freeGraphNames(allocator, names);
             for (names) |graph_key| {
-                self.collectEdgesByTypeFromEngine(allocator, &id_list, graph_key, edge_type, tenant_id) catch continue;
+                try self.collectEdgesByTypeFromEngine(allocator, &id_list, graph_key, edge_type, tenant_id);
             }
         }
-        return id_list.toOwnedSlice(allocator) catch &.{};
+        return id_list.toOwnedSlice(allocator);
     }
 
     /// Engine-derived `getEdgesByType` body for the bounded edge cache: iterate
@@ -11709,7 +11980,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         tenant_id: ?[]const u8,
         graph_name: ?[]const u8,
-    ) []u64 {
+    ) error{OutOfMemory}![]u64 {
         var id_list = std.ArrayList(u64).empty;
         defer id_list.deinit(allocator);
 
@@ -11721,23 +11992,23 @@ pub const GraphStore = struct {
             self.edge_type_index_lock.lockSharedUncancelable(eti_io);
             defer self.edge_type_index_lock.unlockShared(eti_io);
             if (self.edge_type_index.getAdapted(probe, GraphNameKeyContext{})) |posting| {
-                id_list.appendSlice(allocator, posting.items) catch return &.{};
+                try id_list.appendSlice(allocator, posting.items); // SONNY-6646 (4)
             }
         } else {
-            const names = self.graphNamesCopy(allocator) catch return &.{};
+            const names = try self.graphNamesCopy(allocator);
             defer freeGraphNames(allocator, names);
             for (names) |graph_key| {
                 const probe = GraphNameKey{ .graph = graph_key, .name = edge_type }; // SONNY-6302
                 self.edge_type_index_lock.lockSharedUncancelable(eti_io);
                 defer self.edge_type_index_lock.unlockShared(eti_io);
                 if (self.edge_type_index.getAdapted(probe, GraphNameKeyContext{})) |posting| {
-                    id_list.appendSlice(allocator, posting.items) catch continue;
+                    try id_list.appendSlice(allocator, posting.items);
                 }
             }
         }
 
         if (tenant_id == null) {
-            return id_list.toOwnedSlice(allocator) catch return &.{};
+            return id_list.toOwnedSlice(allocator);
         }
 
         var count: usize = 0;
@@ -11749,7 +12020,7 @@ pub const GraphStore = struct {
             count += 1;
         }
 
-        const result = allocator.alloc(u64, count) catch return &.{};
+        const result = try allocator.alloc(u64, count);
         var i: usize = 0;
         for (id_list.items) |eid| {
             const edge = self.edges.get(eid) orelse continue;
@@ -14247,31 +14518,21 @@ pub const GraphStore = struct {
             while (j < id_count) : (j += 1) {
                 posting.list.appendAssumeCapacity(try cur.readInt(u64));
             }
-            self.setGraphLabelCountAbsolute(graph_name, label, count);
+            try self.setGraphLabelCountAbsolute(graph_name, label, count);
         }
     }
 
     /// Set the exact (graph,label) count to `count` (snapshot restore only —
-    /// live paths use the bump/dec refcount discipline).
-    fn setGraphLabelCountAbsolute(self: *GraphStore, graph_name: []const u8, label: []const u8, count: usize) void {
-        var key_buf: [512]u8 = undefined;
-        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
-
+    /// live paths use the bump/dec refcount discipline). The entry exists
+    /// (`ensureGraphLabelCount`); SONNY-6646 (3): it is found without
+    /// building the key, so a long one cannot leave the count unset.
+    fn setGraphLabelCountAbsolute(self: *GraphStore, graph_name: []const u8, label: []const u8, count: usize) error{SnapshotCorrupted}!void {
+        const key = GraphNameKey{ .graph = graph_name, .name = label };
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_count_rwlock.lockUncancelable(io);
         defer self.label_count_rwlock.unlock(io);
-        if (self.label_counts_by_graph.getPtr(formatted.key)) |existing| {
-            existing.store(count, .monotonic);
-            return;
-        }
-        const owned_key = if (formatted.owned) |owned| blk: {
-            formatted.owned = null;
-            break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
-        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(count)) catch {
-            self.allocator.free(owned_key);
-        };
+        const existing = self.label_counts_by_graph.getPtrAdapted(key, GraphNameKeyContext{}) orelse return error.SnapshotCorrupted;
+        existing.store(count, .monotonic);
     }
 
     /// Dry-run structural parse of the counters payload (no allocation, no
@@ -17017,65 +17278,6 @@ pub const GraphStore = struct {
             }
             // SONNY-3109: mirror addNodeLabel (the undo of a REMOVE n:L).
             self.addNodeMergeEntriesForLabel(node, label);
-        }
-    }
-
-    /// Remove a label from a node without saving (used during rollback)
-    pub fn removeNodeLabelNoSave(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        if (self.nodes.getPtr(node_id)) |node| {
-            var found_index: ?usize = null;
-            for (node.labels, 0..) |existing_label, i| {
-                if (std.mem.eql(u8, existing_label, label)) {
-                    found_index = i;
-                    break;
-                }
-            }
-
-            if (found_index) |index| {
-                // SONNY-6302: the removers' key room, before any change.
-                var keys = try RemoverKeyRoom.reserve(self.allocator, longestLabelRemovalName(node, label));
-                defer keys.deinit(self.allocator);
-
-                // Free the label being removed
-                self.allocator.free(node.labels[index]);
-
-                const new_labels = try self.allocator.alloc([]const u8, node.labels.len - 1);
-                var new_index: usize = 0;
-                for (node.labels, 0..) |existing_label, i| {
-                    if (i != index) {
-                        new_labels[new_index] = existing_label;
-                        new_index += 1;
-                    }
-                }
-
-                // GAP-825: same free+reassign window as removeNodeLabel —
-                // must be serialised against `cloneNodesFrom` snapshot
-                // readers.
-                {
-                    const io = std.Io.Threaded.global_single_threaded.io();
-                    self.labels_rwlock.lockUncancelable(io);
-                    defer self.labels_rwlock.unlock(io);
-
-                    if (node.labels.len > 0) {
-                        self.allocator.free(node.labels);
-                    }
-
-                    node.labels = new_labels;
-                }
-
-                keys.install(); // SONNY-6302
-                self.removeFromLabelIndex(node.graph_name, label, node_id);
-                // SONNY-3109: mirror removeNodeLabel (the undo of a SET n:L).
-                self.removeNodeMergeEntriesForLabel(node, label);
-                // PERF-C (issue #814): mirror removeNodeLabel.
-                var prop_it_nosave_rm = node.properties.iterator();
-                while (prop_it_nosave_rm.next()) |p| {
-                    const pkey = p.key_ptr.*;
-                    if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
-                }
-                self.decLabelCount(node.graph_name, node.tenant_id, label);
-            }
         }
     }
 };
@@ -20258,14 +20460,14 @@ test "GAP-0509: getNodesByLabels filters by tenant_id" {
     const edge_b = try store.createEdgeWithGraphAndTenant(nb1, na1, "LINKED", "default", "tenant_b");
     _ = edge_b;
 
-    const edges_a = store.getEdgesByType(testing.allocator, "LINKED", "tenant_a", null);
+    const edges_a = try store.getEdgesByType(testing.allocator, "LINKED", "tenant_a", null);
     defer testing.allocator.free(edges_a);
     try testing.expectEqual(@as(usize, 1), edges_a.len);
     // Verify the returned ID resolves to the correct tenant
     const edge_a_ptr = store.edges.getPtr(edges_a[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("tenant_a", edge_a_ptr.tenant_id);
 
-    const edges_all = store.getEdgesByType(testing.allocator, "LINKED", null, null);
+    const edges_all = try store.getEdgesByType(testing.allocator, "LINKED", null, null);
     defer testing.allocator.free(edges_all);
     try testing.expectEqual(@as(usize, 2), edges_all.len);
 }
@@ -20699,23 +20901,23 @@ test "PERF-P0-001: edge-type index provides O(1) lookup for getEdgesByType" {
     try testing.expectEqual(e3, likes_ids.?[0]);
 
     // Verify getEdgesByType uses the index and returns correct edges
-    const knows_edges = store.getEdgesByType(testing.allocator, "KNOWS", null, null);
+    const knows_edges = try store.getEdgesByType(testing.allocator, "KNOWS", null, null);
     defer testing.allocator.free(knows_edges);
     try testing.expectEqual(@as(usize, 2), knows_edges.len);
 
-    const likes_edges = store.getEdgesByType(testing.allocator, "LIKES", null, null);
+    const likes_edges = try store.getEdgesByType(testing.allocator, "LIKES", null, null);
     defer testing.allocator.free(likes_edges);
     try testing.expectEqual(@as(usize, 1), likes_edges.len);
     const likes_ptr = store.edges.getPtr(likes_edges[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("LIKES", likes_ptr.label);
 
     // Nonexistent type returns empty
-    const none_edges = store.getEdgesByType(testing.allocator, "HATES", null, null);
+    const none_edges = try store.getEdgesByType(testing.allocator, "HATES", null, null);
     try testing.expectEqual(@as(usize, 0), none_edges.len);
 
     // Delete an edge and verify index is updated
     store.deleteEdge(e1);
-    const knows_after_delete = store.getEdgesByType(testing.allocator, "KNOWS", null, null);
+    const knows_after_delete = try store.getEdgesByType(testing.allocator, "KNOWS", null, null);
     defer testing.allocator.free(knows_after_delete);
     try testing.expectEqual(@as(usize, 1), knows_after_delete.len);
     try testing.expectEqual(e2, knows_after_delete[0]);
@@ -20739,19 +20941,19 @@ test "PERF-P0-001: edge-type index works with tenant filtering" {
     _ = try store.createEdgeWithGraphAndTenant(n3, n1, "FRIEND", "default", "t2");
 
     // All FRIEND edges across tenants
-    const all = store.getEdgesByType(testing.allocator, "FRIEND", null, null);
+    const all = try store.getEdgesByType(testing.allocator, "FRIEND", null, null);
     defer testing.allocator.free(all);
     try testing.expectEqual(@as(usize, 2), all.len);
 
     // Filtered to tenant t1
-    const t1_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t1", null);
+    const t1_edges = try store.getEdgesByType(testing.allocator, "FRIEND", "t1", null);
     defer testing.allocator.free(t1_edges);
     try testing.expectEqual(@as(usize, 1), t1_edges.len);
     const t1_ptr = store.edges.getPtr(t1_edges[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("t1", t1_ptr.tenant_id);
 
     // Filtered to tenant t2
-    const t2_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t2", null);
+    const t2_edges = try store.getEdgesByType(testing.allocator, "FRIEND", "t2", null);
     defer testing.allocator.free(t2_edges);
     try testing.expectEqual(@as(usize, 1), t2_edges.len);
     const t2_ptr = store.edges.getPtr(t2_edges[0]) orelse return error.TestUnexpectedResult;
@@ -20781,7 +20983,7 @@ test "PERF-P0-001: edge-type index across multiple graphs" {
     try testing.expectEqual(@as(usize, 1), rel_b.?.len);
 
     // Cross-graph getEdgesByType returns both
-    const all_rel = store.getEdgesByType(testing.allocator, "REL", null, null);
+    const all_rel = try store.getEdgesByType(testing.allocator, "REL", null, null);
     defer testing.allocator.free(all_rel);
     try testing.expectEqual(@as(usize, 2), all_rel.len);
 }
@@ -20805,7 +21007,7 @@ test "PERF-P0-001: edge-type index survives clearNodes" {
     try testing.expect(store.getEdgeIdsByType("default", "LINK") == null);
 
     // getEdgesByType should return empty
-    const result = store.getEdgesByType(testing.allocator, "LINK", null, null);
+    const result = try store.getEdgesByType(testing.allocator, "LINK", null, null);
     try testing.expectEqual(@as(usize, 0), result.len);
 }
 

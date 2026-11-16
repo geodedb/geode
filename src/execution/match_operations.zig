@@ -6499,7 +6499,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // to reject cross-graph edges; that works but is wasteful
                 // and any future caller that forgets the post-filter would
                 // leak. The storage layer now enforces isolation directly.
-                const typed_edge_ids = store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
+                const typed_edge_ids = try store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
                 defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
                 for (typed_edge_ids) |edge_id| {
