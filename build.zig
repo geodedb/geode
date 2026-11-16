@@ -11525,6 +11525,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6671_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6671-group-commit-routing", "Run SONNY-6671 regression (relationships from executor-created nodes, whose public id hashes to another shard than their engine slot's, submitted through group commit as bulk insert, bulk MERGE and MATCH ... CREATE: no worker writes another worker's engine shard, and every relationship is created)").dependOn(&run_sonny6671_tests.step);
 
+    // SONNY-6672: a bulk node MERGE that matches an existing node writes its
+    // ON MATCH properties from the worker of that node's engine shard, under
+    // that shard's lock.
+    const sonny6672_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6672_bulk_merge_onmatch_shard.zig"), .target = target, .optimize = optimize });
+    sonny6672_test_mod.link_libc = true;
+    sonny6672_test_mod.addImport("geode", root_mod);
+    sonny6672_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6672_tests = b.addTest(.{ .root_module = sonny6672_test_mod });
+    const run_sonny6672_tests = b.addRunArtifact(sonny6672_tests);
+    shardDep(test_step, &run_sonny6672_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6672-bulk-merge-onmatch-shard", "Run SONNY-6672 regression (single- and multi-key bulk node MERGEs through group commit that match executor-created nodes, whose engine shard differs from their public id's hash, and apply ON MATCH properties: no worker writes another worker's engine shard, every MERGE matches its node and sets its properties)").dependOn(&run_sonny6672_tests.step);
+
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.
     const sonny2979w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_undo_wal_format.zig"), .target = target, .optimize = optimize });
