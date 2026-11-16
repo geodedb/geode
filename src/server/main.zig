@@ -2200,9 +2200,9 @@ pub fn main() !void {
     };
 
     // SONNY-6665: test hook, Debug builds only (see
-    // raft_consensus.armTestDropSnapshotChunks): this node loses the next N
-    // inbound InstallSnapshot chunks that are neither a snapshot's first nor
-    // its last.
+    // raft_consensus.armTestDropSnapshotChunks): this node loses, up to N
+    // times, the inbound InstallSnapshot chunk right after a snapshot's
+    // first one.
     if (comptime geode.distributed.raft_consensus.snapshot_chunk_drop_hook_available) {
         const drops = envUsize(gpa, "GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", 0, 0, 1_000_000);
         if (drops > 0) {

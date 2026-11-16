@@ -387,8 +387,9 @@ pub const Statistics = struct {
     /// and compacted its Raft log at.
     snapshots_taken: u64,
     /// SONNY-6636 (b): the longest snapshot copy (the snapshot thread,
-    /// without `inner_mutex`), and the longest save and log compaction of a
-    /// finished one (under `inner_mutex`), in nanoseconds.
+    /// without `inner_mutex`), and the longest commit and log compaction of
+    /// a finished one (under `inner_mutex`; SONNY-6665: the data was written
+    /// and synced by the snapshot thread), in nanoseconds.
     snapshot_create_max_ns: u64,
     snapshot_install_max_ns: u64,
 };
@@ -478,16 +479,20 @@ pub fn stubConnectWarnedForTesting() bool {
 }
 
 // CANARY: REQ=REQ-SONNY-6665-SNAPSHOT-CHUNK-DROP-HOOK; FEATURE="Raft Snapshot Persistence"; ASPECT=LostChunkHook; STATUS=TESTED; TEST=tests/test_sonny6665_cluster_snapshot_resume.zig; OWNER=distributed; UPDATED=2026-11-16
-/// SONNY-6665: a lost InstallSnapshot chunk for tests, compiled only into
+/// SONNY-6665: lost InstallSnapshot chunks for tests, compiled only into
 /// test and Debug builds (release builds are ReleaseSafe or ReleaseFast and
 /// have none of it). Armed with a count `n` (`armTestDropSnapshotChunks`):
-/// this node drops the next `n` inbound chunks that are neither a
-/// snapshot's first nor its last, as if lost in transit, and logs every
-/// inbound chunk while armed. A spawned Debug `geode serve` arms it from
-/// GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS.
+/// this node drops, up to `n` times, a chunk that directly follows the
+/// first chunk (offset 0) of the same snapshot, as if lost in transit, so
+/// a send from offset 0 never completes and only a send resumed at the
+/// lost chunk does; it logs every inbound chunk while armed. A spawned
+/// Debug `geode serve` arms it from GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS.
 pub const snapshot_chunk_drop_hook_available = builtin.is_test or builtin.mode == .Debug;
 var test_snapshot_chunk_drops = std.atomic.Value(u32).init(0);
 var test_snapshot_chunk_trace = std.atomic.Value(bool).init(false);
+/// The snapshot index (+1) whose offset-0 chunk was the last one received;
+/// 0 otherwise.
+var test_snapshot_after_first = std.atomic.Value(u64).init(0);
 
 pub fn armTestDropSnapshotChunks(n: u32) error{SnapshotChunkDropHookUnavailable}!void {
     if (comptime !snapshot_chunk_drop_hook_available) return error.SnapshotChunkDropHookUnavailable;
@@ -500,8 +505,9 @@ pub fn armTestDropSnapshotChunks(n: u32) error{SnapshotChunkDropHookUnavailable}
 fn testDropsSnapshotChunk(from: u64, is: InstallSnapshot) bool {
     if (comptime !snapshot_chunk_drop_hook_available) return false;
     if (!test_snapshot_chunk_trace.load(.acquire)) return false;
+    const after_first = test_snapshot_after_first.swap(if (is.offset == 0) is.last_included_index + 1 else 0, .acq_rel);
     var left = test_snapshot_chunk_drops.load(.acquire);
-    while (is.offset > 0 and !is.done and left > 0) {
+    while (after_first == is.last_included_index + 1 and is.offset > 0 and left > 0) {
         left = test_snapshot_chunk_drops.cmpxchgWeak(left, left - 1, .acq_rel, .acquire) orelse {
             log.warn("TEST HOOK: InstallSnapshot chunk dropped (Debug build only)", &.{
                 Attr.uint("from", from),
@@ -2337,6 +2343,13 @@ pub const InstallSnapshot = struct {
 pub const InstallSnapshotResponse = struct {
     term: u64,
     success: bool,
+    /// SONNY-6665 (raft v0.2.5): on success the snapshot index the follower
+    /// holds (the one sent, or a newer one it already had); on a chunk lost
+    /// in transit the index of the snapshot being sent, with `next_offset`
+    /// the offset the follower expects next, where the leader resumes. 0
+    /// and 0 from a peer that sends neither.
+    last_index: u64 = 0,
+    next_offset: u64 = 0,
 };
 
 // ---- Wire format (protobuf frames over QUIC) ----
@@ -2587,6 +2600,8 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
             .term = isr.term,
             .failed = !isr.success,
+            .last_index = isr.last_index,
+            .next_offset = isr.next_offset,
         } },
     };
 }
@@ -2710,6 +2725,8 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .install_snapshot_response = .{
                 .term = isr.term,
                 .success = !isr.failed,
+                .last_index = isr.last_index,
+                .next_offset = isr.next_offset,
             },
         },
     };
@@ -3210,8 +3227,22 @@ pub const RaftNode = struct {
     restore_state: std.atomic.Value(u8) = .init(@intFromEnum(RestoreState.idle)),
     /// The restore thread's error, set before `restore_state` turns `failed`.
     restore_error: anyerror = error.Unexpected,
-    /// The stalled Ready's snapshot is restored; only its persist remains.
+    /// The stalled Ready's snapshot is restored into the state machine.
     stalled_restored: bool = false,
+    /// SONNY-6665: the stalled Ready's `advancePersist()` succeeded; only
+    /// the restore of its snapshot remains (raft v0.2.6 commits a staged
+    /// snapshot in `advancePersist()`, and with FileStorage the restore
+    /// reads it from the committed file).
+    stalled_persisted: bool = false,
+    /// SONNY-6665: `drainReady` released inner_mutex between `ready()` and
+    /// `advancePersist()` to sync a received snapshot. Another thread may
+    /// step the inner node meanwhile (raft v0.2.6), but none drains a Ready
+    /// or runs the timers until it is done. Under `inner_mutex`.
+    draining: bool = false,
+    /// SONNY-6665: InstallSnapshot transfers the leader asked for
+    /// (Ready.snapshot_sends), streamed once `inner_mutex` is released
+    /// (`unlockInner`). Under `inner_mutex`.
+    snapshot_sends: std.ArrayList(raft_lib.SnapshotSend) = .empty,
 
     // CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotOffInnerMutex; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
     /// SONNY-6636 (b): encodes the state machine as it is: it reflects Raft
@@ -3226,7 +3257,14 @@ pub const RaftNode = struct {
     /// A `RestoreState` (idle, running, succeeded, failed) of the snapshot
     /// thread: written by it (release), read under `inner_mutex` (acquire).
     snapshot_job_state: std.atomic.Value(u8) = .init(@intFromEnum(RestoreState.idle)),
-    snapshot_job_result: ?[]u8 = null,
+    /// SONNY-6665: where the running snapshot stands (raft
+    /// `snapshotPoint()`, taken under `inner_mutex` when it starts), and the
+    /// snapshot the snapshot thread staged in the Raft storage (written and
+    /// synced off `inner_mutex`; `collectSnapshot` commits it).
+    snapshot_job_point: ?raft_lib.SnapshotPoint = null,
+    snapshot_job_staged: ?raft_lib.StagedSnapshot = null,
+    snapshot_job_bytes: u64 = 0,
+    snapshot_job_stage_ns: u64 = 0,
     snapshot_job_error: anyerror = error.Unexpected,
     snapshot_job_index: u64 = 0,
     snapshot_job_term: u64 = 0,
@@ -3402,13 +3440,27 @@ pub const RaftNode = struct {
         const heartbeat_tick: u32 = 1;
         const election_tick: u32 = @intCast(@max(2, election_timeout_ms / 50));
 
-        const raft_config = raft_lib.Config{
+        var raft_config = raft_lib.Config{
             .id = id,
             .peers = peer_ids,
             .election_tick = election_tick,
             .heartbeat_tick = heartbeat_tick,
             .pre_vote = true,
+            // SONNY-6665 (raft v0.2.5): a leader hands each InstallSnapshot
+            // transfer over in Ready.snapshot_sends and this wrapper streams
+            // it chunk by chunk after releasing inner_mutex
+            // (`unlockInner`), instead of the library reading the whole
+            // snapshot inside tick() / step().
+            .stream_snapshots = true,
+            // SONNY-6665 (raft v0.2.6): a follower writes each chunk it
+            // receives to a staged file and `drainReady` syncs it without
+            // inner_mutex; advancePersist() only renames it into place.
+            .stage_received_snapshots = true,
         };
+        // Staged on disk, a received snapshot is never held in memory whole,
+        // so FileStorage takes any size; the in-memory and TDE storages
+        // stage in memory and keep the library's bound.
+        if (backing == .file) raft_config.max_snapshot_size = 0;
 
         const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage_iface);
 
@@ -3453,8 +3505,11 @@ pub const RaftNode = struct {
         // SONNY-6636 (b): the snapshot thread reads the state machine.
         if (self.snapshot_thread) |t| t.join();
         self.snapshot_thread = null;
-        if (self.snapshot_job_result) |d| self.allocator.free(d);
-        self.snapshot_job_result = null;
+        if (self.snapshot_job_staged) |*st| self.inner.storage.releaseStagedSnapshot(st);
+        self.snapshot_job_staged = null;
+        if (self.snapshot_job_point) |*p| p.deinit();
+        self.snapshot_job_point = null;
+        self.snapshot_sends.deinit(self.allocator);
         for (self.held_entries.items[self.held_start..]) |h| self.allocator.free(h.data);
         self.held_entries.deinit(self.allocator);
         self.inner.deinit();
@@ -3526,7 +3581,7 @@ pub const RaftNode = struct {
         };
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
-        defer self.inner_mutex.unlock(io);
+        defer self.unlockInner();
         if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         try self.inner.step(from, msg);
         self.drainReady();
@@ -3535,7 +3590,10 @@ pub const RaftNode = struct {
     pub fn tick(self: *RaftNode) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
-        defer self.inner_mutex.unlock(io);
+        defer self.unlockInner();
+        // SONNY-6665: no timer runs while another thread's drainReady syncs
+        // a received snapshot (it released inner_mutex to do so).
+        if (self.draining) return;
         // SONNY-6636 (b): a finished snapshot is saved and the log compacted.
         self.collectSnapshot();
         // SONNY-6617: no election or heartbeat timer runs while a persist
@@ -3619,6 +3677,8 @@ pub const RaftNode = struct {
             .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
                 .term = isr.term,
                 .success = isr.success,
+                .last_index = isr.last_index,
+                .next_offset = isr.next_offset,
             } },
         };
 
@@ -3631,7 +3691,7 @@ pub const RaftNode = struct {
         // metadata pointer.
         const io = std.Io.Threaded.global_single_threaded.io();
         self.inner_mutex.lockUncancelable(io);
-        defer self.inner_mutex.unlock(io);
+        defer self.unlockInner();
 
         // SONNY-6617: dropped while a persist failure is pending; the sender
         // retries (Raft tolerates message loss).
@@ -3683,9 +3743,8 @@ pub const RaftNode = struct {
         try validateCommand(cmd);
         const cmd_bytes = try serializeCommand(self.allocator, cmd);
         defer self.allocator.free(cmd_bytes);
-        const io = std.Io.Threaded.global_single_threaded.io();
         if (!self.lockInnerForRequest()) return error.GraphNotFound;
-        defer self.inner_mutex.unlock(io);
+        defer self.unlockInner();
         // SONNY-6617: a node whose Raft storage write failed takes no write.
         if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         if (self.inner.role != .leader) return error.NotLeader;
@@ -3828,11 +3887,21 @@ pub const RaftNode = struct {
     /// durability rules need (raft v0.2.0):
     ///
     /// 1. `ready()`;
-    /// 1b. SONNY-6622: restore the state machine from `Ready.snapshot`, a
-    ///    snapshot this node installed from the leader (raft v0.2.2), before
-    ///    it is persisted and before any entry after it applies;
-    /// 2. `advancePersist()`: the Ready's hard state (term, vote) and its
-    ///    unstable entries reach storage (FileStorage: written and fsynced);
+    /// 1b. SONNY-6665 (raft v0.2.6): a snapshot received from the leader
+    ///    arrives staged in a file (`Ready.staged_snapshot`); its data and
+    ///    metadata are synced with `inner_mutex` RELEASED (the only gap in a
+    ///    Ready's processing; another thread may step the node meanwhile,
+    ///    but none drains a Ready or runs the timers: `draining`);
+    /// 2. `advancePersist()`: the Ready's hard state (term, vote), its
+    ///    unstable entries and its snapshot reach storage (FileStorage:
+    ///    written and fsynced; a staged snapshot is renamed into place);
+    /// 2b. SONNY-6622, SONNY-6665: the state machine is restored from that
+    ///    snapshot (on the restore thread when there is a restore callback,
+    ///    the node paused meanwhile) before any entry after it applies and
+    ///    before its acknowledgement goes out; with FileStorage the data is
+    ///    read from the committed snapshot file. A node that stops between
+    ///    2 and 2b restores it when it starts again (the store's Raft index
+    ///    is behind the snapshot's);
     /// 3. send `Ready.messages` (votes, a candidate's RequestVote, every
     ///    vote / append / snapshot reply), which announce that state
     ///    (SONNY-6563, SONNY-6592);
@@ -3842,14 +3911,18 @@ pub const RaftNode = struct {
     /// 5. `advanceApply()`, which releases the Ready (and the committed
     ///    entries' data).
     ///
-    /// If restoring or persisting fails nothing is sent or applied, and the node pauses
-    /// (SONNY-6617): it keeps the Ready, takes no Raft input, and `tick`
-    /// retries the write with backoff (`retryStalledPersist`). Retrying,
-    /// not stopping the node, because the write is idempotent and the
-    /// usual causes (a full or read-only disk) clear without a restart; a
-    /// paused leader stops heartbeating, so the cluster fails over to a
-    /// node that can write meanwhile.
+    /// If persisting or restoring fails nothing is sent or applied, and the
+    /// node pauses (SONNY-6617): it keeps the Ready, takes no Raft input,
+    /// and `tick` retries what failed with backoff (`retryStalledPersist`).
+    /// Retrying, not stopping the node, because both steps are idempotent
+    /// and the usual causes (a full or read-only disk) clear without a
+    /// restart; a paused leader stops heartbeating, so the cluster fails
+    /// over to a node that can write meanwhile.
     fn drainReady(self: *RaftNode) void {
+        // SONNY-6665: another thread's drain released inner_mutex to sync a
+        // snapshot; its Ready is not advanced yet. What this thread's step
+        // produced goes out with the next Ready.
+        if (self.draining) return;
         const rd = self.inner.ready() catch |err| {
             log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
             return;
@@ -3869,27 +3942,23 @@ pub const RaftNode = struct {
             self.current_term = self.inner.current_term;
         }
 
-        // SONNY-6622: a snapshot this node installed is restored into the
-        // state machine first, so a refused snapshot is never persisted
-        // (a restart would skip it) and no entry applies past it.
-        // SONNY-6636 (3): on the restore thread, the node paused meanwhile.
-        // SONNY-6636 (b): the entries held back that it covers go.
+        // SONNY-6636 (b): the entries held back that a snapshot from the
+        // leader covers go.
         if (rd.snapshot) |snap| self.dropHeldThrough(snap.metadata.index);
-        if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null) {
-            self.stall(rd);
-            self.startRestore(snap);
-            return;
-        };
-        if (rd.snapshot) |snap| self.restoreSnapshot(snap) catch |err| {
-            self.stall(rd);
-            log.err("raft snapshot restore failed: this node sends no vote or reply, applies nothing and takes no Raft input until the restore succeeds (retried every few ticks); applying later entries without the snapshot's contents would diverge from the cluster", &.{
+        // CANARY: REQ=REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX; FEATURE="Raft Snapshot Persistence"; ASPECT=SyncStagedSnapshotUnlocked; STATUS=TESTED; TEST=tests/test_sonny6665_install_lock_hold.zig; OWNER=distributed; UPDATED=2026-11-16
+        if (rd.staged_snapshot) |staged| {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.draining = true;
+            self.inner_mutex.unlock(io);
+            const synced = self.inner.storage.syncStagedSnapshot(staged);
+            self.inner_mutex.lockUncancelable(io);
+            self.draining = false;
+            // advancePersist() syncs it under the lock if this failed.
+            synced catch |err| log.warn("raft: received snapshot not synced off the lock; advancePersist syncs it", &.{
                 Attr.string("error", @errorName(err)),
-                Attr.uint("node_id", self.id),
-                Attr.uint("snapshot_index", snap.metadata.index),
-                Attr.uint("snapshot_term", snap.metadata.term),
+                Attr.uint("snapshot_index", staged.metadata.index),
             });
-            return;
-        };
+        }
         self.inner.advancePersist() catch |err| {
             self.stall(rd);
             log.err("raft storage write failed: this node sends no vote or reply, applies nothing and takes no Raft input until the write succeeds (retried every few ticks); check the Raft data directory (disk full, read-only, permissions)", &.{
@@ -3899,6 +3968,27 @@ pub const RaftNode = struct {
             });
             return;
         };
+        if (rd.snapshot) |snap| {
+            // SONNY-6636 (3): on the restore thread, the node paused meanwhile.
+            if (self.snapshot_restore_callback != null) {
+                self.stall(rd);
+                self.stalled_persisted = true;
+                self.startRestore(snap);
+                return;
+            }
+            self.restoreSnapshot(snap) catch |err| {
+                self.stall(rd);
+                self.stalled_persisted = true;
+                log.err("raft snapshot restore failed: this node sends no vote or reply, applies nothing and takes no Raft input until the restore succeeds (retried every few ticks); applying later entries without the snapshot's contents would diverge from the cluster", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.uint("node_id", self.id),
+                    Attr.uint("snapshot_index", snap.metadata.index),
+                    Attr.uint("snapshot_term", snap.metadata.term),
+                });
+                return;
+            };
+            self.sm_applied = @max(self.sm_applied, snap.metadata.index);
+        }
         self.finishReady(rd);
     }
 
@@ -3907,6 +3997,7 @@ pub const RaftNode = struct {
     fn stall(self: *RaftNode, rd: raft_lib.Ready) void {
         self.stalled_ready = rd;
         self.stalled_restored = false;
+        self.stalled_persisted = false;
         @atomicStore(bool, &self.persist_stalled, true, .release);
         self.persist_failures = 1;
         self.persist_backoff = 1;
@@ -3921,14 +4012,46 @@ pub const RaftNode = struct {
             if (self.apply_callback == null) return;
             return error.RaftSnapshotRestoreUnavailable;
         };
-        try restore(self.allocator, snap.data, snap.metadata.index, snap.metadata.term);
+        const owned = try self.committedSnapshotData(snap);
+        defer if (owned) |d| self.allocator.free(d);
+        const data = owned orelse snap.data;
+        try restore(self.allocator, data, snap.metadata.index, snap.metadata.term);
         self.stats.snapshots_received += 1;
         log.info("raft: state machine restored from the leader's snapshot", &.{
             Attr.uint("node_id", self.id),
             Attr.uint("snapshot_index", snap.metadata.index),
             Attr.uint("snapshot_term", snap.metadata.term),
-            Attr.uint("bytes", snap.data.len),
+            Attr.uint("bytes", data.len),
         });
+    }
+
+    /// SONNY-6665: the data of `snap`, a snapshot `advancePersist()`
+    /// committed, when the Ready does not carry it (raft v0.2.6 staged it in
+    /// FileStorage): read from the committed snapshot file and checked
+    /// against the digest committed with it. Null when the Ready carries
+    /// it. Safe without `inner_mutex` (`FileStorage.openSnapshotReader`).
+    /// The caller frees it.
+    fn committedSnapshotData(self: *RaftNode, snap: raft_lib.Snapshot) !?[]u8 {
+        if (snap.data.len > 0) return null;
+        const fs = switch (self.storage_backing) {
+            .file => |fs| fs,
+            // These stage in memory: the Ready carries the data.
+            .in_memory, .tde_file => return null,
+        };
+        var reader = (try fs.openSnapshotReader()) orelse return error.RaftSnapshotMissing;
+        defer reader.close();
+        // A newer snapshot committed since (this node's own) supersedes it.
+        if (reader.metadata.index != snap.metadata.index or reader.metadata.term != snap.metadata.term) return error.RaftSnapshotChanged;
+        const data = try self.allocator.alloc(u8, @intCast(reader.size));
+        errdefer self.allocator.free(data);
+        if (try reader.readAt(data, 0) != data.len) return error.RaftSnapshotChanged;
+        if (reader.expected_digest) |want| {
+            var got: [32]u8 = undefined;
+            // fips-exempt: non-security — snapshot-data integrity digest (raft's).
+            std.crypto.hash.Blake3.hash(data, &got, .{});
+            if (!std.mem.eql(u8, &got, &want)) return error.RaftSnapshotDigestMismatch;
+        }
+        return data;
     }
 
     /// SONNY-6617: the most ticks between two persist retries.
@@ -3959,7 +4082,12 @@ pub const RaftNode = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.state_machine_io_mutex.lockUncancelable(io);
         defer self.state_machine_io_mutex.unlock(io);
-        if (restore(self.allocator, snap.data, snap.metadata.index, snap.metadata.term)) |_| {
+        const outcome: anyerror!void = blk: {
+            const owned = self.committedSnapshotData(snap) catch |err| break :blk err;
+            defer if (owned) |d| self.allocator.free(d);
+            break :blk restore(self.allocator, owned orelse snap.data, snap.metadata.index, snap.metadata.term);
+        };
+        if (outcome) |_| {
             self.restore_state.store(@intFromEnum(RestoreState.succeeded), .release);
         } else |err| {
             self.restore_error = err;
@@ -3983,17 +4111,19 @@ pub const RaftNode = struct {
         return {};
     }
 
-    /// SONNY-6617: retry the stalled Ready's `advancePersist()`. It is
-    /// idempotent: it re-writes the hard state (still unacknowledged by
-    /// `advanceApply`) and re-appends the unstable entries, truncating the
-    /// storage from their first index. On success the Ready is sent and
-    /// applied as `drainReady` would have; on failure the wait doubles, up
-    /// to `persist_backoff_max_ticks`. Under `inner_mutex`.
+    /// SONNY-6617: retry what failed of the stalled Ready: its
+    /// `advancePersist()` (idempotent: it re-writes the hard state, still
+    /// unacknowledged by `advanceApply`, re-appends the unstable entries,
+    /// truncating the storage from their first index, and re-commits a
+    /// snapshot), then (SONNY-6622, SONNY-6665) the restore of its snapshot.
+    /// On success the Ready is sent and applied as `drainReady` would have;
+    /// on failure the wait doubles, up to `persist_backoff_max_ticks`.
+    /// Under `inner_mutex`.
     fn retryStalledPersist(self: *RaftNode) void {
         const rd = self.stalled_ready orelse return;
         // SONNY-6636 (3): a snapshot restoring on the restore thread: wait
         // for it; a failed one is started again after the backoff.
-        if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null and !self.stalled_restored) {
+        if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null and self.stalled_persisted and !self.stalled_restored) {
             const state: RestoreState = @enumFromInt(self.restore_state.load(.acquire));
             if (state == .idle) {
                 if (self.persist_retry_wait > 0) {
@@ -4031,11 +4161,22 @@ pub const RaftNode = struct {
             self.persist_retry_wait -= 1;
             return;
         }
-        // SONNY-6622: the snapshot restore first, as in `drainReady`; both
-        // steps are idempotent.
         const retried: anyerror!void = blk: {
-            if (rd.snapshot) |snap| if (self.snapshot_restore_callback == null) self.restoreSnapshot(snap) catch |err| break :blk err;
-            break :blk self.inner.advancePersist();
+            if (!self.stalled_persisted) {
+                self.inner.advancePersist() catch |err| break :blk err;
+                self.stalled_persisted = true;
+                // SONNY-6636 (3): the restore runs on the restore thread.
+                if (rd.snapshot) |snap| if (self.snapshot_restore_callback != null) {
+                    self.persist_failures = 0;
+                    self.persist_backoff = 1;
+                    self.startRestore(snap);
+                    return;
+                };
+            }
+            if (rd.snapshot) |snap| if (self.snapshot_restore_callback == null and !self.stalled_restored) {
+                self.restoreSnapshot(snap) catch |err| break :blk err;
+                self.stalled_restored = true;
+            };
         };
         retried catch |err| {
             self.persist_failures += 1;
@@ -4055,6 +4196,7 @@ pub const RaftNode = struct {
         });
         self.stalled_ready = null;
         self.stalled_restored = false;
+        self.stalled_persisted = false;
         @atomicStore(bool, &self.persist_stalled, false, .release);
         self.persist_failures = 0;
         self.persist_backoff = 1;
@@ -4072,6 +4214,14 @@ pub const RaftNode = struct {
 
     /// Steps 3-5 of `drainReady` for a Ready that `advancePersist()` wrote.
     fn finishReady(self: *RaftNode, rd: raft_lib.Ready) void {
+        // CANARY: REQ=REQ-SONNY-6665-SNAPSHOT-STREAM; FEATURE="Raft Snapshot Persistence"; ASPECT=StreamedOffInnerMutex; STATUS=TESTED; TEST=tests/test_sonny6665_snapshot_resume.zig; OWNER=distributed; UPDATED=2026-11-16
+        // SONNY-6665: InstallSnapshot transfers are streamed once
+        // inner_mutex is released (`unlockInner`); the Ready's slice is
+        // released by advanceApply(). One that cannot be kept is sent again
+        // by the leader after its retry interval.
+        self.snapshot_sends.appendSlice(self.allocator, rd.snapshot_sends) catch |err| {
+            log.warn("raft: snapshot send dropped; the leader sends it again after its retry interval", &.{Attr.string("error", @errorName(err))});
+        };
 
         // CANARY: REQ=REQ-DIST-RAFT-DRAINREADY-DISPATCH; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=DrainReadyMessages; STATUS=TESTED; TEST=tests/test_drainready_dispatch.zig; OWNER=distributed; UPDATED=2026-11-15
         for (rd.messages) |out| {
@@ -4227,6 +4377,15 @@ pub const RaftNode = struct {
         return self.inner.log.snapshot_index;
     }
 
+    /// SONNY-6665: the index and term of the snapshot this node's Raft log
+    /// is compacted at (0 and 0: none).
+    pub fn snapshotPoint(self: *RaftNode) struct { index: u64, term: u64 } {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
+        return .{ .index = self.inner.log.snapshot_index, .term = self.inner.log.snapshot_term };
+    }
+
     /// SONNY-6636 (b): the data of the snapshot in this node's Raft
     /// storage, or null. The caller frees it.
     pub fn localSnapshotData(self: *RaftNode, allocator: Allocator) !?[]u8 {
@@ -4252,11 +4411,21 @@ pub const RaftNode = struct {
         if (since == 0) return;
         const p = self.snapshot_policy;
         if (!((p.entries > 0 and since >= p.entries) or (p.bytes > 0 and self.snapshot_bytes_since >= p.bytes))) return;
-        const term = self.inner.log.term(index) catch return;
+        _ = self.inner.log.term(index) catch return;
+        // SONNY-6665: raft's point for a snapshot taken now (the applied
+        // index, its term and the configuration), which the staged snapshot
+        // carries.
+        const point = self.inner.snapshotPoint() catch |err| {
+            self.backOffSnapshot(err, index);
+            return;
+        };
+        self.snapshot_job_point = point;
         self.applies_held = true;
         self.snapshot_job_spoiled = false;
-        self.snapshot_job_index = index;
-        self.snapshot_job_term = term;
+        self.snapshot_job_index = point.index;
+        self.snapshot_job_term = point.term;
+        self.snapshot_job_bytes = 0;
+        self.snapshot_job_stage_ns = 0;
         self.snapshot_job_state.store(@intFromEnum(RestoreState.running), .release);
         self.snapshot_thread = std.Thread.spawn(.{}, snapshotWorker, .{self}) catch |err| {
             self.snapshot_job_error = err;
@@ -4271,39 +4440,60 @@ pub const RaftNode = struct {
         });
     }
 
+    /// SONNY-6636 (b), SONNY-6665: copies the state machine, then writes
+    /// and syncs the copy in the Raft storage as a staged snapshot (raft
+    /// `Storage.stageSnapshot`), both without `inner_mutex`;
+    /// `collectSnapshot` commits it under the lock.
     fn snapshotWorker(self: *RaftNode) void {
         const io = std.Io.Threaded.global_single_threaded.io();
-        // Not while a restore swaps the files.
-        self.state_machine_io_mutex.lockUncancelable(io);
-        defer self.state_machine_io_mutex.unlock(io);
         const start = std.Io.Clock.awake.now(io);
         const create = self.snapshot_create_callback.?;
-        const outcome = create(self.allocator, self.snapshot_job_index, self.snapshot_job_term);
+        const outcome = blk: {
+            // Not while a restore swaps the files.
+            self.state_machine_io_mutex.lockUncancelable(io);
+            defer self.state_machine_io_mutex.unlock(io);
+            break :blk create(self.allocator, self.snapshot_job_index, self.snapshot_job_term);
+        };
         self.snapshot_job_ns = @intCast(@max(0, start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds));
-        if (outcome) |data| {
-            self.snapshot_job_result = data;
-            self.snapshot_job_state.store(@intFromEnum(RestoreState.succeeded), .release);
-        } else |err| {
+        const data = outcome catch |err| {
             self.snapshot_job_error = err;
             self.snapshot_job_state.store(@intFromEnum(RestoreState.failed), .release);
-        }
+            return;
+        };
+        defer self.allocator.free(data);
+        self.snapshot_job_bytes = data.len;
+        const stage_start = std.Io.Clock.awake.now(io);
+        // `inner.storage` is set once at init; the point is this job's.
+        const meta = self.snapshot_job_point.?.metadata();
+        const staged = self.inner.storage.stageSnapshot(self.allocator, .{ .metadata = meta, .data = data }) catch |err| {
+            self.snapshot_job_error = err;
+            self.snapshot_job_state.store(@intFromEnum(RestoreState.failed), .release);
+            return;
+        };
+        self.snapshot_job_stage_ns = @intCast(@max(0, stage_start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds));
+        self.snapshot_job_staged = staged;
+        self.snapshot_job_state.store(@intFromEnum(RestoreState.succeeded), .release);
     }
 
     /// SONNY-6636 (b): once the snapshot thread ended, the held entries are
-    /// released, and the snapshot is saved and the log compacted at its
-    /// index (raft `reportSnapshot`, at the index the copy reflects, which
-    /// `log.applied` has moved past). Dropped when a snapshot from the
-    /// leader was installed meanwhile or a persist is pending. A failure
-    /// backs off. Under `inner_mutex`.
+    /// released, and the snapshot is committed and the log compacted at its
+    /// index (SONNY-6665: raft `commitSnapshot` of the snapshot the thread
+    /// staged, at the index the copy reflects, which `log.applied` has moved
+    /// past; only renames and the compaction happen here). Dropped when a
+    /// snapshot from the leader was installed meanwhile or a persist is
+    /// pending. A failure backs off. Under `inner_mutex`.
     fn collectSnapshot(self: *RaftNode) void {
         const state: RestoreState = @enumFromInt(self.snapshot_job_state.load(.acquire));
         if (state != .succeeded and state != .failed) return;
         if (self.snapshot_thread) |t| t.join();
         self.snapshot_thread = null;
         self.applies_held = false;
-        const data = self.snapshot_job_result;
-        self.snapshot_job_result = null;
-        defer if (data) |d| self.allocator.free(d);
+        var point = self.snapshot_job_point;
+        self.snapshot_job_point = null;
+        defer if (point) |*p| p.deinit();
+        var staged = self.snapshot_job_staged;
+        self.snapshot_job_staged = null;
+        defer if (staged) |*st| self.inner.storage.releaseStagedSnapshot(st);
         if (self.snapshot_job_ns > self.stats.snapshot_create_max_ns) self.stats.snapshot_create_max_ns = self.snapshot_job_ns;
         defer self.snapshot_job_state.store(@intFromEnum(RestoreState.idle), .release);
         const index = self.snapshot_job_index;
@@ -4316,18 +4506,22 @@ pub const RaftNode = struct {
             self.backOffSnapshot(self.snapshot_job_error, index);
             return;
         }
-        if (self.snapshot_job_spoiled or self.stalled_ready != null or index <= self.inner.log.snapshot_index) {
-            log.info("raft: snapshot dropped (an entry was applied during it, or a newer snapshot is installed or pending)", &.{
-                Attr.uint("node_id", self.id),
-                Attr.uint("snapshot_index", index),
-            });
-            return;
-        }
+        const dropped = self.snapshot_job_spoiled or self.stalled_ready != null or index <= self.inner.log.snapshot_index;
         const io = std.Io.Threaded.global_single_threaded.io();
         const start = std.Io.Clock.awake.now(io);
-        self.saveLocalSnapshot(data.?, index, self.snapshot_job_term) catch |err| {
-            self.backOffSnapshot(err, index);
-            return;
+        const committed: anyerror!void = if (dropped) error.SnapshotOutOfDate else self.inner.commitSnapshot(&staged.?);
+        committed catch |err| switch (err) {
+            error.SnapshotOutOfDate => {
+                log.info("raft: snapshot dropped (an entry was applied during it, or a newer snapshot is installed or pending)", &.{
+                    Attr.uint("node_id", self.id),
+                    Attr.uint("snapshot_index", index),
+                });
+                return;
+            },
+            else => {
+                self.backOffSnapshot(err, index);
+                return;
+            },
         };
         const ns: u64 = @intCast(@max(0, start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds));
         if (ns > self.stats.snapshot_install_max_ns) self.stats.snapshot_install_max_ns = ns;
@@ -4337,17 +4531,11 @@ pub const RaftNode = struct {
         log.info("raft: snapshot taken; the Raft log is compacted up to it", &.{
             Attr.uint("node_id", self.id),
             Attr.uint("snapshot_index", index),
-            Attr.uint("bytes", data.?.len),
+            Attr.uint("bytes", self.snapshot_job_bytes),
             Attr.uint("copy_ms", self.snapshot_job_ns / std.time.ns_per_ms),
-            Attr.uint("save_ms", ns / std.time.ns_per_ms),
+            Attr.uint("stage_ms", self.snapshot_job_stage_ns / std.time.ns_per_ms),
+            Attr.uint("commit_ms", ns / std.time.ns_per_ms),
         });
-    }
-
-    /// raft `reportSnapshot` at `index` (not `log.applied`).
-    fn saveLocalSnapshot(self: *RaftNode, data: []const u8, index: u64, term: u64) !void {
-        const snap = self.inner.snapshot_state.createLocalSnapshot(data, index, term, self.inner.membership_state.config());
-        try self.inner.storage.saveSnapshot(snap);
-        try self.inner.log.compact(index);
     }
 
     fn backOffSnapshot(self: *RaftNode, err: anyerror, index: u64) void {
@@ -4358,6 +4546,70 @@ pub const RaftNode = struct {
             Attr.uint("node_id", self.id),
             Attr.uint("snapshot_index", index),
             Attr.uint("next_retry_ticks", self.snapshot_retry_wait),
+        });
+    }
+
+    /// SONNY-6665: release `inner_mutex`, then stream the InstallSnapshot
+    /// transfers the Readys drained under it asked for (raft
+    /// `Config.stream_snapshots`): the snapshot is read chunk by chunk and
+    /// each chunk queued on the peer's outbox, none of it under the lock.
+    /// Every entry point that drains a Ready unlocks with this.
+    fn unlockInner(self: *RaftNode) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (self.snapshot_sends.items.len == 0) {
+            self.inner_mutex.unlock(io);
+            return;
+        }
+        var sends = self.snapshot_sends;
+        self.snapshot_sends = .empty;
+        defer sends.deinit(self.allocator);
+        // The in-memory storage has no reader that is safe without the
+        // lock: its snapshot is copied under it.
+        var mem_snap: ?raft_lib.Snapshot = null;
+        if (self.storage_backing == .in_memory) mem_snap = self.inner.storage.loadSnapshot() catch |err| blk: {
+            log.warn("raft: snapshot to send unreadable; the leader sends it again after its retry interval", &.{Attr.string("error", @errorName(err))});
+            break :blk null;
+        };
+        defer if (mem_snap) |snap| raft_lib.freeSnapshot(self.allocator, snap);
+        self.inner_mutex.unlock(io);
+        for (sends.items) |req| self.streamSnapshotSend(req, mem_snap) catch |err| {
+            log.warn("raft: snapshot send failed; the leader sends it again after its retry interval", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("to", req.to),
+                Attr.uint("snapshot_index", req.index),
+                Attr.uint("offset", req.offset),
+            });
+        };
+    }
+
+    /// SONNY-6665: stream the storage's committed snapshot for `req`
+    /// (raft `streamSnapshot`) through the wrapper transport (or, in
+    /// in-process tests, the inner one). Without `inner_mutex`.
+    fn streamSnapshotSend(self: *RaftNode, req: raft_lib.SnapshotSend, mem_snap: ?raft_lib.Snapshot) !void {
+        var sink = SnapshotStreamSink{ .node = self, .term = req.term };
+        const t: raft_lib.Transport = if (self.transport != null) sink.transport() else self.inner_transport orelse return error.NoTransport;
+        switch (self.storage_backing) {
+            .file => |fs| {
+                var reader = (try fs.openSnapshotReader()) orelse return error.NoSnapshot;
+                defer reader.close();
+                try raft_lib.streamSnapshot(self.allocator, &reader, req, t);
+            },
+            .tde_file => |tde| {
+                const snap = (try tde.loadSnapshotUnlocked()) orelse return error.NoSnapshot;
+                defer raft_lib.freeSnapshot(self.allocator, snap);
+                var reader = raft_lib.MemorySnapshotReader.init(snap);
+                try raft_lib.streamSnapshot(self.allocator, &reader, req, t);
+            },
+            .in_memory => {
+                var reader = raft_lib.MemorySnapshotReader.init(mem_snap orelse return error.NoSnapshot);
+                try raft_lib.streamSnapshot(self.allocator, &reader, req, t);
+            },
+        }
+        log.info("raft: snapshot streamed to a follower", &.{
+            Attr.uint("node_id", self.id),
+            Attr.uint("to", req.to),
+            Attr.uint("snapshot_index", req.index),
+            Attr.uint("offset", req.offset),
         });
     }
 
@@ -4392,10 +4644,16 @@ pub const RaftNode = struct {
     /// mirror is refreshed only in `drainReady`, and the bridge fires while
     /// `inner.step` / `inner.tick` is still running.
     fn dispatchRaftLibMessageWithDest(self: *RaftNode, to: u64, msg: raft_lib.Message) !void {
+        return self.dispatchToPeer(to, self.inner.current_term, msg);
+    }
+
+    /// `dispatchRaftLibMessageWithDest` with the envelope's term given:
+    /// callable without `inner_mutex` (SONNY-6665: a streamed snapshot's
+    /// chunks carry the term the leader asked for the send in).
+    fn dispatchToPeer(self: *RaftNode, to: u64, term: u64, msg: raft_lib.Message) !void {
         const t = self.transport orelse return error.NoTransport;
         const peer = self.findPeerById(to) orelse return error.PeerNotFound;
         const geode_msg = try raftLibMessageToGeode(self.allocator, msg);
-        const term = self.inner.current_term;
         if (t.send_override != null) {
             defer freeOutboundMessage(self.allocator, geode_msg);
             return t.send(peer, self.id, term, geode_msg);
@@ -4413,6 +4671,29 @@ fn prehydrateEntry(hydrate: *const fn (cmd: Command) void, entry: raft_lib.Entry
     const cmd = deserializeCommand(entry.data) catch return;
     hydrate(cmd);
 }
+
+/// SONNY-6665: the raft library Transport a streamed snapshot's chunks go
+/// through (`RaftNode.streamSnapshotSend`): each is converted, with its own
+/// copy of the chunk, and queued on the peer's outbox, with the term the
+/// leader asked for the send in. Used without `inner_mutex`.
+const SnapshotStreamSink = struct {
+    node: *RaftNode,
+    term: u64,
+
+    const vtable = raft_lib.Transport.VTable{ .send = &sendImpl };
+
+    fn transport(self: *SnapshotStreamSink) raft_lib.Transport {
+        return .{ .ptr = @ptrCast(self), .vtable = &vtable };
+    }
+
+    fn sendImpl(ptr: *anyopaque, to: u64, msg: raft_lib.Message) void {
+        const self: *SnapshotStreamSink = @ptrCast(@alignCast(ptr));
+        self.node.dispatchToPeer(to, self.term, msg) catch |err| log.warn("raft: snapshot chunk not queued; the leader sends it again after its retry interval", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.uint("to", to),
+        });
+    }
+};
 
 /// Adapter that implements `raft_lib.Transport` and forwards every send
 /// through the wrapper `Transport` field of the surrounding `RaftNode`.
@@ -4576,6 +4857,8 @@ fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
         .install_snapshot_response => |isr| Message{ .install_snapshot_response = .{
             .term = isr.term,
             .success = isr.success,
+            .last_index = isr.last_index,
+            .next_offset = isr.next_offset,
         } },
     };
 }
@@ -4642,6 +4925,8 @@ pub fn geodeMessageToRaftLib(msg: Message) raft_lib.Message {
         .install_snapshot_response => |isr| raft_lib.Message{ .install_snapshot_response = .{
             .term = isr.term,
             .success = isr.success,
+            .last_index = isr.last_index,
+            .next_offset = isr.next_offset,
         } },
     };
 }

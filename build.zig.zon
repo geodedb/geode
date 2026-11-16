@@ -785,9 +785,17 @@
         // commitSnapshot under it); Config.stream_snapshots hands sends to
         // the consumer (Ready.snapshot_sends, streamSnapshot); FileStorage
         // commits a snapshot's data before its metadata.
+        // 2026-11-16: v0.2.6 (SONNY-6666) -- Config.stage_received_snapshots:
+        // a follower writes each InstallSnapshot chunk to a staged file
+        // (Ready.staged_snapshot; Storage.syncStagedSnapshot off the lock,
+        // advancePersist() commits it with renames; with FileStorage
+        // Ready.snapshot then carries metadata only); stepping the node
+        // between ready() and advancePersist() is safe (every Ready owns
+        // copies of its committed entries); RaftNode.init reads only the
+        // snapshot's metadata.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git#d700b1d3bba64e217a402be9f43ed2e2956f5539",
-            .hash = "raft-0.2.5-PqJyvrMaCwA4GKyaq0egckbtkPu-Dtb96cHAH2t7nCFL",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.6#daf2d8df6ef650a8ee23e21b51ee3b5c926d4c33",
+            .hash = "raft-0.2.6-PqJyvlfYCwDzmyuXk_AUFH_0QshAW2leYO7tyJxqAAbe",
         },
 
         // =======================================================================

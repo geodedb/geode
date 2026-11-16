@@ -440,10 +440,17 @@ pub const InstallSnapshotResponse = struct {
     /// A flag for failure, not success, so an older peer that sends
     /// neither still acknowledges.
     failed: bool = false,
+    /// SONNY-6665 (raft v0.2.5): on success the snapshot index the follower
+    /// holds; on a lost chunk the snapshot's index, with `next_offset` the
+    /// offset it expects next. 0 from a peer that sends neither.
+    last_index: u64 = 0,
+    next_offset: u64 = 0,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
         .failed = fd(2, .{ .scalar = .bool }),
+        .last_index = fd(3, .{ .scalar = .uint64 }),
+        .next_offset = fd(4, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *InstallSnapshotResponse, allocator: std.mem.Allocator) void {

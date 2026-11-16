@@ -365,6 +365,40 @@ pub const TdeRaftStorage = struct {
         return snap;
     }
 
+    /// SONNY-6665: the committed snapshot, decrypted, read WITHOUT the node
+    /// lock (`FileStorage.openSnapshotReader`) for a leader to stream it to
+    /// a follower; `loadSnapshot` may finish an interrupted commit and needs
+    /// the lock. The sealed record is checked against the digest committed
+    /// with it, then opened. Null when there is no snapshot. Free it with
+    /// `raft_lib.freeSnapshot`.
+    pub fn loadSnapshotUnlocked(self: *TdeRaftStorage) !?raft_lib.Snapshot {
+        var reader = (try self.inner.openSnapshotReader()) orelse return null;
+        defer reader.close();
+        const sealed = try self.allocator.alloc(u8, @intCast(reader.size));
+        defer self.allocator.free(sealed);
+        if (try reader.readAt(sealed, 0) != sealed.len) return error.SnapshotChanged;
+        if (reader.expected_digest) |want| {
+            var got: [32]u8 = undefined;
+            // fips-exempt: non-security — raft's snapshot-data integrity digest.
+            std.crypto.hash.Blake3.hash(sealed, &got, .{});
+            if (!std.mem.eql(u8, &got, &want)) return error.SnapshotChanged;
+        }
+        const plaintext = try self.open(sealed, SNAPSHOT_AAD_CONTEXT);
+        errdefer if (plaintext.len > 0) self.allocator.free(plaintext);
+        const cfg = reader.metadata.config;
+        const voters = try self.allocator.dupe(u64, cfg.voters);
+        errdefer self.allocator.free(voters);
+        const outgoing = try self.allocator.dupe(u64, cfg.voters_outgoing);
+        return .{
+            .metadata = .{ .index = reader.metadata.index, .term = reader.metadata.term, .config = .{
+                .voters = voters,
+                .voters_outgoing = outgoing,
+                .is_joint = cfg.is_joint,
+            } },
+            .data = plaintext,
+        };
+    }
+
     fn compact(ptr: *anyopaque, index: u64) anyerror!void {
         return cast(ptr).innerStorage().compact(index);
     }

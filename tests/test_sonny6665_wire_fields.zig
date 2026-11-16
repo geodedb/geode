@@ -77,7 +77,7 @@ test "SONNY-6665: an InstallSnapshotResponse's last_index and next_offset cross 
         try testing.expectEqual(c.success, isr.success);
         try testing.expectEqual(c.last_index, isr.last_index);
         try testing.expectEqual(c.next_offset, isr.next_offset);
-        const lib: raft_lib.InstallSnapshotResponse = raft_consensus.geodeMessageToRaftLib(frame.body).install_snapshot_response;
+        const lib: raft_lib.rpc.InstallSnapshotResponse = raft_consensus.geodeMessageToRaftLib(frame.body).install_snapshot_response;
         try testing.expectEqual(@as(u64, 7), lib.term);
         try testing.expectEqual(c.success, lib.success);
         try testing.expectEqual(c.last_index, lib.last_index);

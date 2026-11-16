@@ -4,17 +4,18 @@
 // A follower SIGKILLed and kept down while the leader compacts its Raft log
 // past everything the follower has must catch up from the leader's snapshot
 // when it restarts. The snapshot (the leader's durable store, several
-// 64 KiB chunks) goes over the QUIC transport chunk by chunk, and one chunk
+// 64 KiB chunks) goes over the QUIC transport chunk by chunk, and a chunk
 // is lost on the way: the restarted follower runs with the Debug-only
-// GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS=1 hook, which drops one inbound
-// chunk that is neither the first nor the last and logs every chunk.
+// GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS hook, which drops the chunk right
+// after a snapshot's first one (every time) and logs every chunk, so a send
+// from offset 0 never completes and only one resumed at the lost chunk can.
 //
 // The follower then reports the gap (raft v0.2.5 InstallSnapshotResponse
 // last_index / next_offset) and the leader must re-send from the lost
-// chunk's offset: the first chunk at or below that offset the follower
-// receives after the loss is the lost one, not offset 0 (geode dropped the
-// two fields, so the leader saw a refusal, backed off and sent the whole
-// snapshot again). Every row arrives exactly once on every node.
+// chunk's offset (its "snapshot streamed to a follower" log line) and never
+// from offset 0 again (geode dropped the two fields, so the leader saw a
+// refusal, backed off and sent the whole snapshot again). Every row arrives
+// exactly once on every node.
 //
 // Same fixture as test-sonny6636-cluster-snapshot (CA-signed peer TLS,
 // 127.0.0.51-53). Skips (never silently passes) when not linux, the geode
@@ -199,7 +200,7 @@ const Cluster = struct {
         try env.put("GEODE_CLUSTER_CA_CERT", self.certs.ca);
         try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
         try env.put("GEODE_RAFT_SNAPSHOT_ENTRIES", SNAPSHOT_ENTRIES);
-        if (drop_chunk) try env.put("GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", "1");
+        if (drop_chunk) try env.put("GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", "1000");
         if (posixGetenv("PATH")) |p| try env.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env.put("HOME", p);
         if (posixGetenv("LD_LIBRARY_PATH")) |p| try env.put("LD_LIBRARY_PATH", p);
@@ -437,32 +438,48 @@ test "SONNY-6665: in a 3-process cluster a follower down past the leader's compa
     const log_f = cluster.captures[f].buf.items[mark..];
     try std.testing.expect(std.mem.indexOf(u8, log_f, "durable store restored from the leader's snapshot") != null);
 
-    // The lost chunk, then every chunk after it, in order.
+    // The chunk the follower lost.
     var lost_index: ?u64 = null;
     var lost_offset: u64 = 0;
-    var resent_from: ?u64 = null;
-    var chunks_after: usize = 0;
     var it = std.mem.splitScalar(u8, log_f, '\n');
     while (it.next()) |line| {
-        if (std.mem.indexOf(u8, line, "TEST HOOK: InstallSnapshot chunk dropped") != null) {
-            lost_index = attrValue(line, "snapshot_index");
-            lost_offset = attrValue(line, "chunk_offset") orelse 0;
-            continue;
-        }
-        const idx = lost_index orelse continue;
-        if (std.mem.indexOf(u8, line, "TEST HOOK: InstallSnapshot chunk received") == null) continue;
-        if (attrValue(line, "snapshot_index") != idx) continue;
-        const off = attrValue(line, "chunk_offset") orelse continue;
-        chunks_after += 1;
-        if (resent_from == null and off <= lost_offset) resent_from = off;
+        if (std.mem.indexOf(u8, line, "TEST HOOK: InstallSnapshot chunk dropped") == null) continue;
+        lost_index = attrValue(line, "snapshot_index");
+        lost_offset = attrValue(line, "chunk_offset") orelse 0;
+        break;
     }
-    std.debug.print("[6665] node {d} lost the chunk at offset {d} of snapshot {any}; {d} chunk(s) of it after that; the re-send started at offset {any}\n", .{ f + 1, lost_offset, lost_index, chunks_after, resent_from });
     if (lost_index == null) {
         std.debug.print("--- node {d} log (restarted) tail ---\n{s}\n", .{ f + 1, log_f[log_f.len -| 4000..] });
         return error.NoChunkLost;
     }
     try std.testing.expect(lost_offset > 0);
-    try std.testing.expectEqual(@as(?u64, lost_offset), resent_from);
+
+    // The leader's sends of that snapshot to the follower. A leader re-sends
+    // a snapshot nobody answered from offset 0 every few heartbeat rounds,
+    // so sends from 0 were already on their way when the chunk was lost;
+    // once the follower reported the gap the leader resumes at the lost
+    // chunk (the only way the follower can install it here), and never
+    // starts over from 0.
+    var from_zero: usize = 0;
+    var resumed: usize = 0;
+    var zero_after_resume: usize = 0;
+    for (0..3) |i| {
+        if (i == f) continue;
+        var lines = std.mem.splitScalar(u8, cluster.captures[i].buf.items, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.indexOf(u8, line, "snapshot streamed to a follower") == null) continue;
+            if (attrValue(line, "to") != f + 1 or attrValue(line, "snapshot_index") != lost_index.?) continue;
+            const off = attrValue(line, "offset") orelse continue;
+            if (off == lost_offset) {
+                resumed += 1;
+            } else if (off == 0) {
+                if (resumed > 0) zero_after_resume += 1 else from_zero += 1;
+            }
+        }
+    }
+    std.debug.print("[6665] node {d} lost the chunk at offset {d} of snapshot {d}; the leader sent it {d} time(s) from 0 before that was reported, {d} time(s) from the lost chunk after, and {d} time(s) from 0 after\n", .{ f + 1, lost_offset, lost_index.?, from_zero, resumed, zero_after_resume });
+    try std.testing.expect(resumed > 0);
+    try std.testing.expectEqual(@as(usize, 0), zero_after_resume);
 
     // Writes go on; every row exactly once, everywhere.
     while (written < WRITES_UP + WRITES_DOWN + WRITES_AFTER) : (written += 1) try cluster.write(written);
