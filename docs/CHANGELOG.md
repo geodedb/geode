@@ -3073,6 +3073,17 @@
 
 ### Fixed
 
+- **The gql CLI reports a parse refusal with its own SQLSTATE
+  (SONNY-6543).** `zig-out/bin/gql` printed every parse refusal as the gql
+  library's `syntaxError` (42601), a parser limit included; it prints the
+  refusal's own code (`geode.parseErrorStatus`): 42000 for a syntax error,
+  54000 / 54001 for a parser limit, as the QUIC and gRPC front ends send.
+  The library side (`SQLSTATE.SYNTAX_ERROR` 42000, `UNDEFINED_OBJECT`
+  42002, `invalidCharacterValueForCast`) is gql v0.1.22, not pinned yet;
+  `tests/conformance_tests.zig` reads the library's constant, so it passes
+  on either pin. Regression: `zig build test-conformance-patch` (a new
+  named step for that file).
+
 - **A function, procedure, parameter, index, constraint or user that does
   not exist answers 42002; a tenant quota answers class 53 (SONNY-6645).**
   **BREAKING:** `UnknownFunction` and `UnknownProcedure` were the
