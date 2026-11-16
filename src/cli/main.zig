@@ -100,8 +100,8 @@ const server_cli_args = @import("../server/cli_args.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
-// `geode query --param` values (JSON) as wire values.
-const param_json = @import("param_json.zig");
+// `geode query --param` values (JSON) as wire values (shared with MCP).
+const param_json = geode.param_json;
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;

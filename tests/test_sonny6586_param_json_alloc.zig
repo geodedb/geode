@@ -1,7 +1,8 @@
 // CANARY: REQ=REQ-SONNY-6586-PARAM-JSON-NO-LEAK; FEATURE="CliOptions"; ASPECT=ParamConversionFreesOnFailure; STATUS=TESTED; TEST=tests/test_sonny6586_param_json_alloc.zig; OWNER=cli; UPDATED=2026-11-15
 //
 // SONNY-6586 follow-up: `geode query --param <name> <json>` converts the
-// JSON to a wire value (src/cli/param_json.zig). A list or map that failed
+// JSON to a wire value (src/client/param_json.zig, which the MCP query
+// tool uses too since SONNY-6647). A list or map that failed
 // part-way (an allocation, or a value nested past PARAM_MAX_DEPTH) leaked
 // the elements, keys and backing arrays built before the failure: there
 // was no errdefer.

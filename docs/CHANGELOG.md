@@ -3073,6 +3073,16 @@
 
 ### Fixed
 
+- **One JSON-to-wire parameter converter; the CDC lifecycle canary runs
+  (SONNY-6647).** `geode query --param` and the MCP query tool share
+  `src/client/param_json.zig` (`geode.param_json`; it was
+  `src/cli/param_json.zig`, and `src/mcp/client.zig` had its own copy).
+  `tests/canary_cdc_lifecycle.zig` is the named step `zig build
+  test-canary-cdc-lifecycle` (no step compiled it).
+  `docs/DOCKER_OVERVIEW.md` no longer lists `GEODE_QUERY_MEM_LIMIT_BYTES`
+  and `GEODE_SPILL_THRESHOLD_BYTES`, which no source reads (SONNY-6596
+  above records their removal).
+
 - **Offline `geode grant` / `geode revoke` are the online `GRANT ... ON
   GRAPH` (SONNY-6586).** They stored a free-form permission record (any
   name, the user in its conditions) that no authorization path reads, and
