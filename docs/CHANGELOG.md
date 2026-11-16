@@ -3477,6 +3477,86 @@
   Regression: `zig build test-sonny6642-wal-corrupted-quarantine` (a real
   server SIGKILLed with its graph logs un-checkpointed, a middle record
   damaged, the restarted server asked).
+- **A replicated write whose payload names no graph writes to the default
+  graph (SONNY-6651).** The Raft apply path maps an entry's empty graph to
+  `default`, but the payload decoders in `cluster_replication.zig` took the
+  payload's own empty graph name as it was: a GNC1/GNC2/GN1K/GN2K create, a
+  GMRG merge, a GUPD update, a GDEL delete or a GBAT batch entry created and
+  wrote a graph named `""`, and `effectOf` / `forEachBatchGraph` reported
+  `""`. Every graph-name decode now reads an empty name as `default`.
+  Regression: `zig build test-sonny6651-empty-graph-payload`.
+
+- **The server takes Raft snapshots of its durable store, so the Raft log
+  is bounded (SONNY-6636).** Nothing called `reportSnapshot`: no node ever
+  compacted its Raft log, and a leader had no snapshot to send a follower
+  that fell behind. Every node, leader or follower, now snapshots its store
+  once `GEODE_RAFT_SNAPSHOT_ENTRIES` entries (default 10000) or
+  `GEODE_RAFT_SNAPSHOT_BYTES` bytes of entry data (default 64 MiB) were
+  applied since its last snapshot (0 turns a criterion off), and compacts
+  its log at that index. The node holds its applies (committed entries
+  queue in order) so the store reflects exactly one index, and a snapshot
+  thread checkpoints the store and archives every user graph's files (GRS3)
+  without `inner_mutex`, each graph under its read lock and
+  `replicated_apply_mutex`; heartbeats, votes, persistence and commits go
+  on, and the held entries are applied afterwards, at most 10 ms per tick.
+  A restarted node takes its idempotency table back from its own snapshot.
+  Measured (`test-sonny6636-server-snapshot`, 4.4 MB store, Debug): the
+  copy took 3.7-4.2 s while no tick or message delivery took more than
+  147 ms (a quarter of the 1000 ms election timeout is the bound). **BREAKING
+  (behaviour):** a cluster node now compacts its Raft log; during a
+  snapshot copy its writes are acknowledged on commit but become visible on
+  that node only after the copy. **Still open:** the raft library writes
+  the snapshot (and a leader re-reads it to send it) under `inner_mutex`,
+  141-167 ms for that store and growing with it (`src/distributed/README.md`).
+  Regressions: `zig build test-sonny6636-server-snapshot`, `zig build
+  test-sonny6636-cluster-snapshot` (three `geode serve` processes: bounded
+  logs, a follower down past the leader's compaction catches up from its
+  snapshot and survives SIGKILL and restart with every row exactly once).
+
+- **A peer's Raft outbox keeps one send of the leader's snapshot (SONNY-6636).**
+  The raft library sends a snapshot as a burst of 64 KiB InstallSnapshot
+  chunks and, while the peer does not answer, the whole burst again every
+  few rounds; the per-peer outbox coalesced only AppendEntries. A follower
+  down for a minute came back to thousands of queued chunks of older
+  snapshots (6410 `UnexpectedOffset` and 609 `StaleSnapshot` refusals in a
+  three-process cluster), restored the oldest first and never caught up
+  with the newest. A chunk at offset 0 now replaces every snapshot chunk
+  still queued for that peer. Regression: `zig build
+  test-sonny6636-outbox-snapshot`.
+
+- **The lossy JSON-lines Raft snapshot (GRS2) and the shard replication
+  loop are removed (SONNY-6636).** `GraphStore.serializeSnapshot`,
+  `raft_snapshot_manager.createSnapshotData` / `installSnapshotData` /
+  `encodeRaftSnapshot` / `installRaftSnapshot` and the fulltext rebuild
+  hook they needed are deleted, and so is
+  `ClusterCoordinator.replicateShardToNode` with the replication loop that
+  sent a JSON-lines copy of the whole store to a hand-populated shard's
+  replicas (nothing in production fills shards). A durable snapshot (GRS3)
+  is the only Raft snapshot. `test-sonny6622-raft-v022-adapt`,
+  `test-sonny6633-snapshot-wire` and `test-sonny6636-snapshot-over-quic`
+  now restore a GRS3 snapshot of a closed leader data directory into a
+  durable follower; the GRS2-only tests (`tests/test_raft_snapshot_manager.zig`,
+  `test-sonny2810-snapshot-float`, `test-sonny6595-fts-snapshot-restart`)
+  and the GRS2 tests in `test-fts-apply-symmetry`,
+  `test-sonny3317-round15-minors` and `test-startup-lazy-hydrate` are
+  removed. **BREAKING:** any Raft snapshot that is not GRS3 is refused
+  (`RaftSnapshotUnknownFormat`), and so is every snapshot for an in-memory
+  store (`RaftSnapshotNeedsDurableStore`): a cluster node runs on a durable
+  store.
+
+- **A replayed Raft entry skips a node or edge endpoint a later entry
+  deleted, and applies the rest (SONNY-6636).** A restarted node replays
+  the entries after its last snapshot onto a store that already reflects
+  some of them. An update or MERGE ON MATCH SET of a node a later entry
+  deleted failed the whole entry (`NodeNotFound`), and so did an edge to
+  one (`NodeSlotMappingMissing`): a statement batch's later writes to a
+  surviving node never landed again, and the node kept the older value an
+  earlier replayed entry had put back. **BREAKING (behaviour):** such an
+  entry applies its remaining writes; a node on an older build still stops
+  it there. Regression: `zig build test-sonny6636-replay-idempotency`
+  (every suffix of a log covering every apply kind, replayed, leaves the
+  store unchanged).
+
 - **DROP GRAPH leaves none of the graph's MERGE entries or lean backfill
   marks (SONNY-6636).** It removed the MERGE entries of the graph's resident
   nodes only: the entries of nodes evicted from the bounded node cache, and

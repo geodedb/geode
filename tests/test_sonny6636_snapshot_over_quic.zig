@@ -11,15 +11,15 @@
 //
 // Three started `ClusterCoordinator`s on 127.0.0.94-96 (free UDP ports)
 // (real QUIC listeners, outboxes, frame reader, `RaftNode.handleMessage`),
-// Raft storage in memory, the process store in memory (no data directory:
-// a snapshot restores into it). Nodes 1 and 2 elect a leader and commit
-// entries; the leader compacts its log behind a snapshot of the store
-// (`raft_snapshot_manager.encodeRaftSnapshot`, `reportSnapshot`). Node 3
-// starts only then: it must install the snapshot, carried by geode's
-// frames over QUIC, restore the store from it and apply the entries after
-// it.
+// Raft storage in memory, the process store durable (a data directory: the
+// snapshot restores into it; the coordinators share it, one process). Nodes
+// 1 and 2 elect a leader and commit entries; the leader compacts its log
+// behind a durable snapshot (GRS3, `encodeDurableSnapshot`, `reportSnapshot`)
+// of a leader store built and closed in a directory of its own. Node 3
+// starts only then: it must install the snapshot, carried by geode's frames
+// over QUIC, restore the store from it and apply the entries after it.
 //
-// CANARY: REQ=REQ-SONNY-6636-SNAPSHOT-OVER-QUIC; FEATURE="Raft Snapshot Persistence"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6636_snapshot_over_quic.zig; OWNER=distributed; UPDATED=2026-11-15
+// CANARY: REQ=REQ-SONNY-6636-SNAPSHOT-OVER-QUIC; FEATURE="Raft Snapshot Persistence"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6636_snapshot_over_quic.zig; OWNER=distributed; UPDATED=2026-11-16
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -29,6 +29,7 @@ const graph_store = geode.graph_store;
 const raft_consensus = geode.distributed.raft_consensus;
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
 const snapshot_manager = geode.distributed.raft_snapshot_manager;
+const graph_store_adapter = geode.graph_storage_adapter;
 const test_ports = @import("test_ports.zig");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -121,13 +122,39 @@ test "SONNY-6636: coordinators in one process elect over real QUIC, and a follow
     // The real QUIC client and listener (the test build's default is a stub).
     raft_consensus.useRealQuicInTests(true);
     defer raft_consensus.useRealQuicInTests(false);
-    // The process store in memory (no data directory).
+    // The leader's store: built in a directory of its own and closed; its
+    // durable snapshot.
     _ = unsetenv("GEODE_DATA_DIR");
     graph_store.deinitGlobalStore();
-    defer graph_store.deinitGlobalStore();
-    const store = graph_store.getGlobalStore(a);
-    try std.testing.expect(graph_store.getGlobalAdapter() == null);
-    for (0..3) |_| _ = try store.createNode(&.{"Snap6636"});
+    defer graph_store.setDataDirOverride(a, null);
+    const leader_dir = try std.fmt.allocPrint(a, "{s}/leader", .{dir});
+    defer a.free(leader_dir);
+    {
+        const leader_store = try graph_store.initGlobalStore(a, leader_dir);
+        defer {
+            geode.execution.cleanupCatalogInstance();
+            graph_store.deinitGlobalStore();
+        }
+        try leader_store.loadFromFile();
+        for (0..3) |_| _ = try leader_store.createNode(&.{"Snap6636"});
+    }
+    const payload = blk: {
+        const ad = try graph_store_adapter.StorageAdapter.init(a, leader_dir, .{ .data_dir = leader_dir });
+        defer ad.deinit();
+        break :blk try snapshot_manager.encodeDurableSnapshot(a, ad, null);
+    };
+    defer a.free(payload);
+    // The process store: durable, without the leader's nodes.
+    const follower_dir = try std.fmt.allocPrint(a, "{s}/follower", .{dir});
+    defer a.free(follower_dir);
+    const store = try graph_store.initGlobalStore(a, follower_dir);
+    defer {
+        geode.execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+    }
+    try store.loadFromFile();
+    try std.testing.expect(graph_store.getGlobalAdapter() != null);
+    try std.testing.expectEqual(@as(usize, 0), store.countNodesByLabel("default", "Snap6636", null));
 
     for (&ports, 0..) |*p, i| p.* = try test_ports.freeUdpPortExcept(ports[0..i]);
 
@@ -155,9 +182,7 @@ test "SONNY-6636: coordinators in one process elect over real QUIC, and a follow
     for (0..10) |_| last = try leader.proposeWrite(.{ .write = "sonny6636" });
     for (two) |c| try waitUntil(nowMillis() + 30_000, Applied{ .c = c, .index = last }, Applied.done);
 
-    // The leader compacts its log behind a snapshot of the store.
-    const payload = try snapshot_manager.encodeRaftSnapshot(a, store, null);
-    defer a.free(payload);
+    // The leader compacts its log behind its durable snapshot.
     const snap_index = blk: {
         leader.raft.inner_mutex.lockUncancelable(io);
         defer leader.raft.inner_mutex.unlock(io);

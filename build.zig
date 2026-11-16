@@ -2704,6 +2704,21 @@ pub fn build(b: *std.Build) void {
     const cluster_replicable_mut_step = b.step("test-cluster-replicable-mutations", "Run 3-node subprocess edge/delete/merge/SET replication regression (2026-06-09 gaps)");
     cluster_replicable_mut_step.dependOn(&run_cluster_replicable_mut_tests.step);
 
+    // SONNY-6636 (c): server-side Raft snapshots in a cluster of three
+    // `geode serve` processes (127.0.0.51-53, GEODE_RAFT_SNAPSHOT_ENTRIES
+    // small): sustained writes keep every node's log bounded, a follower
+    // down past the leader's compaction catches up from its snapshot and
+    // survives SIGKILL and restart with every row exactly once.
+    const sonny6636_cluster_snapshot_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6636_cluster_snapshot.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6636_cluster_snapshot_tests.root_module.link_libc = true;
+    const run_sonny6636_cluster_snapshot_tests = b.addRunArtifact(sonny6636_cluster_snapshot_tests);
+    spawnsBuiltGeode(sonny6636_cluster_snapshot_tests);
+    b.step("test-sonny6636-cluster-snapshot", "Run SONNY-6636 (c) regression (three geode serve processes with GEODE_RAFT_SNAPSHOT_ENTRIES=25: sustained writes make every node snapshot its durable store and compact its Raft log, so the log stays bounded; a follower SIGKILLed and kept down while the leader compacts past it restores the leader's snapshot when it restarts and applies the entries after it; killed again and restarted on its data directory it holds every row exactly once, as every node does)").dependOn(&run_sonny6636_cluster_snapshot_tests.step);
+
     // Task A2 (2026-06-08 raft-transport-stream-starvation plan): per-peer
     // non-blocking outbox drain isolation.  Drives the `send_override` hook
     // with one message per peer {1,2,3} where peer 3's override blocks ~1s,
@@ -4531,6 +4546,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_first_boot_pw_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_sonny6636_cluster_snapshot_tests.step, 1, test_shard_loads, test_shard_index);
     // "committed write -> client Timeout -> retry double-insert" fix (2026-06-12):
     // now GREEN, folded into the shard aggregate (RC-1 commit-aware wait, RC-2
     // distinct cluster-write SQLSTATE outcomes, RC-3 idempotency-key apply dedup).
@@ -4636,17 +4652,6 @@ pub fn build(b: *std.Build) void {
     gap0856_dist_explain_step.dependOn(&run_gap0856_dist_explain_tests.step);
     shardDep(test_step, &run_gap0856_dist_explain_tests.step, 1, test_shard_loads, test_shard_index);
 
-    // GAP-0519: Raft snapshot manager creation + installation round-trip tests
-    const raft_snap_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_raft_snapshot_manager.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raft_snap_test_mod.addImport("geode", root_mod);
-    const raft_snap_tests = b.addTest(.{ .root_module = raft_snap_test_mod });
-    const run_raft_snap_tests = b.addRunArtifact(raft_snap_tests);
-    shardDep(test_step, &run_raft_snap_tests.step, 1, test_shard_loads, test_shard_index);
-
     // GAP-0520: Raft apply callback — routes committed commands to GraphStore
     const raft_apply_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_raft_apply.zig"),
@@ -4659,6 +4664,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_apply_tests.step, 1, test_shard_loads, test_shard_index);
     const raft_apply_step = b.step("test-raft-apply", "Run Raft apply callback command-routing tests (GAP-0520 + slice-A edge create)");
     raft_apply_step.dependOn(&run_raft_apply_tests.step);
+
+    // SONNY-6651: a replicated payload with an empty graph name writes to
+    // the default graph, never to a graph named "".
+    const sonny6651_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6651_empty_graph_payload.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sonny6651_test_mod.addImport("geode", root_mod);
+    const sonny6651_tests = b.addTest(.{ .root_module = sonny6651_test_mod });
+    const run_sonny6651_tests = b.addRunArtifact(sonny6651_tests);
+    shardDep(test_step, &run_sonny6651_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6651-empty-graph-payload", "Run SONNY-6651 regression (a replicated GNC1, GNC2, GN1K, GN2K, GMRG, GUPD, GDEL or GBAT payload whose graph name is empty, applied to a real GraphStore directly and through raft apply, writes to the default graph and creates no graph named \"\"; effectOf and forEachBatchGraph decode the empty name as default)").dependOn(&run_sonny6651_tests.step);
 
     // GAP-0870: Raft command variants (config_change / snapshot_pointer /
     // txn_prepare / txn_decide / alter_graph rejection).
@@ -10755,16 +10773,6 @@ pub fn build(b: *std.Build) void {
     const sonny6595_vec_step = b.step("test-sonny6595-vector-write-paths", "Run SONNY-6595 items 1-2 against a real server with QUIC and plaintext gRPC listeners: after CREATE INDEX ... USING vector, every node write path (index backfill, executor and fast-path MERGE ON CREATE SET and SET, a replaced vector, executor MERGE, /*+BATCH*/ bulk MERGE, MATCH ... SET) leaves knn() answering each node for its own vector, immediately, after a SIGKILL and restart, and after a checkpoint and restart; and every path refuses a wrong-dimension vector with the executor's error");
     sonny6595_vec_step.dependOn(&run_sonny6595_vec_tests.step);
 
-    // SONNY-6595 item 4: a snapshot installed after a restart, before any
-    // write, rebuilds the fulltext indexes (in-process store and catalog).
-    const sonny6595_snap_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_fts_snapshot_restart.zig"), .target = target, .optimize = optimize }) });
-    sonny6595_snap_tests.root_module.addImport("geode", root_mod);
-    sonny6595_snap_tests.root_module.link_libc = true;
-    const run_sonny6595_snap_tests = b.addRunArtifact(sonny6595_snap_tests);
-    shardDep(test_step, &run_sonny6595_snap_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6595_snap_step = b.step("test-sonny6595-fts-snapshot-restart", "Run SONNY-6595 item 4: a raft snapshot installed on a restarted node before any write rebuilds its fulltext indexes from the restored store (a node the snapshot restores under a tombstoned id is found again, one it drops is not)");
-    sonny6595_snap_step.dependOn(&run_sonny6595_snap_tests.step);
-
     // SONNY-6595 item 3: a DELETE with no MATCH is refused, and so is one in a
     // CALL subquery (the context.bindings branch of executeDelete was unreachable).
     const sonny6595_del_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_standalone_delete.zig"), .target = target, .optimize = optimize }) });
@@ -11149,16 +11157,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3377_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3377_step = b.step("test-sonny3377-unlabeled-edge-scan-reload", "Run SONNY-3377 regression (MATCH ()-[e]->() WHERE e.zz = 1 RETURN count(e), and its unfiltered, typed and count(*) forms, answer after a reload, clean or crash-style)");
     sonny3377_step.dependOn(&run_sonny3377_tests.step);
-
-    // SONNY-2810: Float properties of every magnitude, integral, NaN and
-    // infinite, survive a raft snapshot round trip as Floats.
-    const sonny2810_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2810_snapshot_float.zig"), .target = target, .optimize = optimize });
-    sonny2810_test_mod.addImport("geode", root_mod);
-    const sonny2810_tests = b.addTest(.{ .root_module = sonny2810_test_mod });
-    const run_sonny2810_tests = b.addRunArtifact(sonny2810_tests);
-    shardDep(test_step, &run_sonny2810_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny2810_step = b.step("test-sonny2810-snapshot-float", "Run SONNY-2810 regression (node and edge Float properties - 1e40, the f64 extremes, subnormals, 3.0, -0.0, NaN, infinities - survive createSnapshotData + installSnapshotData exactly, as Floats)");
-    sonny2810_step.dependOn(&run_sonny2810_tests.step);
 
     // SONNY-3121: the self-locking bulk MERGE helpers the QUIC handler calls
     // directly with group commit off hold a pin on their graph, and fail
@@ -20108,6 +20106,9 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6636_graph_restore_swap.zig", .step = "test-sonny6636-graph-restore-swap", .desc = "Run SONNY-6636 item 1 regression (StorageAdapter.beginGraphRestore / commitGraphRestore / finishGraphRestore put a graph restored into a new uuid directory in place with one fsynced registry rewrite; stopped where a crash would, after the intent, the staged files, the commit or the old directory's deletion, the reopened data directory holds exactly the old graph or exactly the restored one, no intent and no directory the registry does not name, and the untouched graph; a graph created under the name meanwhile refuses the commit; a damaged intent refuses the open; at-rest encryption refuses the restore)", .weight = 1 },
         .{ .file = "tests/test_sonny6636_resident_reset.zig", .step = "test-sonny6636-resident-reset", .desc = "Run SONNY-6636 item 1 regression (after StorageAdapter.commitGraphRestore swaps a graph's files under a running engine-backed store, GraphStore.resetGraphAfterRestore drops the old graph's resident nodes, edges, label counts, MERGE entries and IdMap: only the restored nodes are visible, a MERGE matches a node only on its restored value, the graph has the restored uuid, and writes after it survive a restart; a graph new here and one restored under its own uuid)", .weight = 1 },
         .{ .file = "tests/test_sonny6636_durable_snapshot_restore.zig", .step = "test-sonny6636-durable-snapshot-restore", .desc = "Run SONNY-6636 items 1, 3, 4 and 6 regression (three Raft nodes in process: a follower behind the leader's compacted log restores the leader's durable snapshot, the engine files of every user graph, into the engine-backed global store on its restore thread while paused, never under inner_mutex: ExtValue properties exact, an empty graph kept, a graph the leader lacks dropped, the default graph restored; the store records the snapshot's Raft index, so covered entries are never applied again, also after a restart; stopped at every step of the swap it reopens on exactly the old or the restored graphs and a second restore completes it; a snapshot naming __geode_security or damaged is refused before anything changes)", .weight = 1 },
+        .{ .file = "tests/test_sonny6636_replay_idempotency.zig", .step = "test-sonny6636-replay-idempotency", .desc = "Run SONNY-6636 (b) regression (a Raft log covering every apply kind - GNC1, keyed GN1K and its retry, GNC2 with positional and absolute edge endpoints, keyed GN2K, GMRG, GUPD, GDEL, a keyed GBAT batch, a GTN1 tenant envelope, CREATE and DROP GRAPH, noop and write - applied once into the engine-backed global store; every suffix of it applied again, with the idempotency table a snapshot at that point carries, leaves every node, edge, label count and graph unchanged)", .weight = 1 },
+        .{ .file = "tests/test_sonny6636_outbox_snapshot.zig", .step = "test-sonny6636-outbox-snapshot", .desc = "Run SONNY-6636 (c) regression (a Raft transport's per-peer outbox keeps one send of the leader's snapshot: a burst starting at offset 0 replaces every snapshot chunk still queued for that peer - a hundred stale sends to a down peer leave only the newest, whole and in order - and leaves other messages and other peers' chunks alone)", .weight = 1 },
+        .{ .file = "tests/test_sonny6636_server_snapshot.zig", .step = "test-sonny6636-server-snapshot", .desc = "Run SONNY-6636 (b) regression (three Raft nodes on FileStorage in process, one applying into the engine-backed global store holding a 1500-node graph: past RaftNode.snapshot_policy's entry threshold the node holds its applies, snapshots the store on its snapshot thread off inner_mutex and compacts its Raft log at that index, so the log stays bounded; the leader and a follower both snapshot; a follower cut off behind the leader's compaction installs its snapshot; no tick or message delivery takes a quarter of the election timeout while the snapshot copy takes longer; nothing held back is lost; after a restart the log starts at the snapshot and the idempotency table comes back from it)", .weight = 2 },
         .{ .file = "tests/test_sonny6636_drop_graph_merge_purge.zig", .step = "test-sonny6636-drop-graph-merge-purge", .desc = "Run SONNY-6636 follow-up regression (lean index mode, a small node cache: DROP GRAPH leaves none of the graph's MERGE entries, evicted holders' included, and none of its lean backfill marks; a graph re-created under the name creates a MERGE value once and then matches it)", .weight = 1 },
         .{ .file = "tests/test_sonny6633_snapshot_wire.zig", .step = "test-sonny6633-snapshot-wire", .desc = "Run SONNY-6633 item 1 regression (three Raft nodes exchanging geode Raft frames, encodeRaftFrame / decodeRaftFrame / RaftNode.handleMessage as the QUIC path does: a follower behind the leader's compacted log installs the snapshot, chunk data, BLAKE3 digest and configuration carried by the frames, restores its store from it and applies the entries after it; a refused snapshot reaches the leader as a refusal; the new fields round-trip and read as absent from an older peer)", .weight = 1 },
         .{ .file = "tests/test_sonny6631_apply_hydration_off_mutex.zig", .step = "test-sonny6631-apply-hydration-off-mutex", .desc = "Run SONNY-6631 regression (under one spinning thread per CPU, a follower applying a statement batch whose entries write a 20,000-node graph not hydrated yet, and a node replaying its committed log after a restart onto such a graph, hold the Raft inner_mutex at most 50 ms, well under the 250 ms election timeout; every entry applies)", .weight = 1 },

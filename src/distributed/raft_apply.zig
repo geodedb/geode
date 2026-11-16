@@ -368,7 +368,7 @@ fn internNamesOf(entry_graph: []const u8, payload: []const u8) void {
     adapter.internNamesForReplicatedApply(if (effect.graph.len > 0) effect.graph else entry_graph, names.items);
 }
 
-// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-16
 /// SONNY-6622: `RaftNode.snapshot_restore_callback`: replace the registered
 /// store's contents with the snapshot `data` the leader passed to
 /// `reportSnapshot`. The Raft node runs it on its restore thread, without
@@ -377,37 +377,61 @@ fn internNamesOf(entry_graph: []const u8, payload: []const u8) void {
 /// SONNY-6636: the durable store takes a durable snapshot (GRS3,
 /// `raft_snapshot_manager.restoreDurableSnapshot`: the leader's engine
 /// files, swapped in crash-safely; the store then reflects Raft `index`).
-/// It refuses a JSON-lines snapshot (GRS2; `RaftSnapshotRestoreNotDurable`):
-/// that one is lossy and rebuilds memory only. An in-memory store (tests)
-/// takes GRS2 under the store's write lock and refuses GRS3
-/// (`RaftSnapshotNeedsDurableStore`). A refusal stops the node instead of
-/// applying past the snapshot.
+/// Anything else is refused (`RaftSnapshotUnknownFormat`; the JSON-lines
+/// GRS2 form was removed), and so is any snapshot for a store that is not
+/// the durable one (`RaftSnapshotNeedsDurableStore`). A refusal stops the
+/// node instead of applying past the snapshot.
 pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: u64, term: u64) anyerror!void {
     const store = g_store orelse return error.StoreNotAvailable;
-    const durable_adapter: ?*graph_storage_adapter.StorageAdapter = if (graph_store_mod.getCurrentGlobalStore() == store) graph_store_mod.getGlobalAdapter() else null;
-    // SONNY-6636: a durable store's snapshot (the engine's files).
-    if (raft_snapshot_manager.isDurableSnapshot(data)) {
-        const adapter = durable_adapter orelse return error.RaftSnapshotNeedsDurableStore;
-        try raft_snapshot_manager.restoreDurableSnapshot(allocator, store, adapter, data, .{ .index = index, .term = term }, g_idempotency_dedup);
-        g_store_raft_index.store(index, .release);
-        log.info("raft apply: durable store restored from the leader's snapshot", &.{
+    if (!raft_snapshot_manager.isDurableSnapshot(data)) {
+        log.err("raft apply: a snapshot that is not a durable (GRS3) one cannot be restored; the node stops", &.{
             Attr.uint("snapshot_index", index),
             Attr.uint("snapshot_term", term),
         });
-        return;
+        return error.RaftSnapshotUnknownFormat;
     }
-    if (durable_adapter != null) {
-        log.err("raft apply: a JSON-lines snapshot cannot be restored into the durable store (it is lossy); the node stops", &.{
-            Attr.uint("snapshot_index", index),
-            Attr.uint("snapshot_term", term),
-        });
-        return error.RaftSnapshotRestoreNotDurable;
-    }
-    graph_storage_adapter.beginReplicatedRestore();
-    defer graph_storage_adapter.endReplicatedRestore();
-    // SONNY-6633 (6): the idempotency table too (it would otherwise lose
-    // every key of the entries the snapshot covers).
-    try raft_snapshot_manager.installRaftSnapshot(allocator, store, data, g_idempotency_dedup);
+    const adapter = (if (graph_store_mod.getCurrentGlobalStore() == store) graph_store_mod.getGlobalAdapter() else null) orelse
+        return error.RaftSnapshotNeedsDurableStore;
+    try raft_snapshot_manager.restoreDurableSnapshot(allocator, store, adapter, data, .{ .index = index, .term = term }, g_idempotency_dedup);
+    g_store_raft_index.store(index, .release);
+    log.info("raft apply: durable store restored from the leader's snapshot", &.{
+        Attr.uint("snapshot_index", index),
+        Attr.uint("snapshot_term", term),
+    });
+}
+
+// CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotDurableStore; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6636 (b): `RaftNode.snapshot_create_callback`: the durable snapshot
+/// (GRS3, `raft_snapshot_manager.encodeDurableSnapshot`) of the registered
+/// store, which reflects Raft `index` exactly (the node holds its applies).
+/// Runs on the node's snapshot thread, without `inner_mutex`. An in-memory
+/// store cannot be snapshotted (`RaftSnapshotNeedsDurableStore`; the node
+/// then stops trying).
+pub fn createSnapshotCallbackFn(allocator: Allocator, index: u64, term: u64) anyerror![]u8 {
+    const store = g_store orelse return error.StoreNotAvailable;
+    if (graph_store_mod.getCurrentGlobalStore() != store) return error.RaftSnapshotNeedsDurableStore;
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return error.RaftSnapshotNeedsDurableStore;
+    const data = try raft_snapshot_manager.encodeDurableSnapshot(allocator, adapter, g_idempotency_dedup);
+    log.info("raft apply: durable store snapshotted", &.{
+        Attr.uint("snapshot_index", index),
+        Attr.uint("snapshot_term", term),
+        Attr.uint("bytes", data.len),
+    });
+    return data;
+}
+
+/// SONNY-6636 (b): a node restarting with a snapshot of its own in its Raft
+/// storage replays only the entries after it, so the keys the entries before
+/// it recorded come back from the snapshot's idempotency table (else a
+/// client's retry of such a statement would be applied a second time).
+/// `data` is the snapshot (`RaftNode.localSnapshotData`). A snapshot that is
+/// not a durable one carries no table here.
+pub fn seedFromLocalSnapshot(data: []const u8) !void {
+    if (!raft_snapshot_manager.isDurableSnapshot(data)) return;
+    const dedup = g_idempotency_dedup orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    try dedup.replaceFrom(try raft_snapshot_manager.durableSnapshotDedupTable(arena.allocator(), data));
 }
 
 // ---------------------------------------------------------------------------

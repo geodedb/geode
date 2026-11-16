@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T07:15:59.787421197Z",
+  "generated_at": "2026-11-16T07:16:39.840690652Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -10340,18 +10340,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-04-01"
-        },
-        {
-          "feature": "ClusterReplication",
-          "aspect": "SnapshotSerialization",
-          "status": "TESTED",
-          "files": [
-            "src/graph_store.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
         }
       ]
     },
@@ -10679,20 +10667,6 @@
           "status": "TESTED",
           "files": [
             "src/distributed/cluster_replication.zig"
-          ],
-          "tests": [
-            "tests/test_fts_apply_symmetry.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "DistributedCluster",
-          "aspect": "FtsSnapshotRebuild",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_snapshot_manager.zig"
           ],
           "tests": [
             "tests/test_fts_apply_symmetry.zig"
@@ -35249,10 +35223,12 @@
           "files": [
             "src/distributed/raft_snapshot_manager.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-04-09"
+          "updated": "2026-11-16"
         },
         {
           "feature": "Raft Snapshot Persistence",
@@ -35261,24 +35237,12 @@
           "files": [
             "src/distributed/raft_snapshot_manager.zig"
           ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-09"
-        },
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "IntegrationTest",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_snapshot_manager.zig"
-          ],
           "tests": [
-            "test_raft_snapshot_manager"
+            "tests/test_sonny6636_durable_snapshot_restore.zig"
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-04-09"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -62557,39 +62521,6 @@
       ]
     },
     {
-      "id": "REQ-SONNY-2810-SNAPSHOT-FLOAT",
-      "features": [
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "FloatEncoding",
-          "status": "TESTED",
-          "files": [
-            "src/graph_store.zig"
-          ],
-          "tests": [
-            "tests/test_sonny2810_snapshot_float.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-13"
-        },
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "Regression",
-          "status": "TESTED",
-          "files": [
-            "tests/test_sonny2810_snapshot_float.zig"
-          ],
-          "tests": [
-            "tests/test_sonny2810_snapshot_float.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-13"
-        }
-      ]
-    },
-    {
       "id": "REQ-SONNY-2812-DISTINCT-LIST-KEYS",
       "features": [
         {
@@ -67295,25 +67226,6 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-09-28"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SONNY-3317-RAFT-INSTALL-LOCKED",
-      "features": [
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "InstallUnderStoreLock",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_snapshot_manager.zig"
-          ],
-          "tests": [
-            "tests/test_sonny3317_round15_minors.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
           "updated": "2026-09-28"
         }
       ]
@@ -79547,26 +79459,6 @@
       ]
     },
     {
-      "id": "REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART",
-      "features": [
-        {
-          "feature": "FullText",
-          "aspect": "SnapshotRebuildArmsRegistry",
-          "status": "TESTED",
-          "files": [
-            "src/execution/fts_index_ops.zig",
-            "tests/test_sonny6595_fts_snapshot_restart.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6595_fts_snapshot_restart.zig"
-          ],
-          "benches": [],
-          "owner": "fts",
-          "updated": "2026-11-15"
-        }
-      ]
-    },
-    {
       "id": "REQ-SONNY-6595-STANDALONE-DELETE",
       "features": [
         {
@@ -81644,7 +81536,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-15"
+          "updated": "2026-11-16"
         },
         {
           "feature": "Raft Snapshot Persistence",
@@ -81652,20 +81544,6 @@
           "status": "TESTED",
           "files": [
             "src/distributed/raft_consensus.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6622_raft_v022_adapt.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-15"
-        },
-        {
-          "feature": "Raft Snapshot Persistence",
-          "aspect": "RaftSnapshotPayload",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_snapshot_manager.zig"
           ],
           "tests": [
             "tests/test_sonny6622_raft_v022_adapt.zig"
@@ -81705,7 +81583,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-15"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -81905,20 +81783,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-15"
-        },
-        {
-          "feature": "DistributedCluster",
-          "aspect": "SnapshotCarriesDedup",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_snapshot_manager.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6633_snapshot_wire.zig"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-11-15"
         }
       ]
     },
@@ -81970,7 +81834,26 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-15"
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-CLUSTER-SNAPSHOT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "MultiProcessRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_cluster_snapshot.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_cluster_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -82093,6 +81976,58 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6636-OUTBOX-SNAPSHOT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "OneSnapshotSendQueued",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_outbox_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_outbox_snapshot.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_outbox_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6636-REPLAY-IDEMPOTENT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_replay_idempotency.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_replay_idempotency.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6636-RESIDENT-RESET",
       "features": [
         {
@@ -82145,6 +82080,81 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6636-SERVER-SNAPSHOT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "SnapshotDurableStore",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_apply.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "SnapshotThreshold",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "SnapshotOffInnerMutex",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "GraphFilesHeldForCopy",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6636_server_snapshot.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6636-SNAPSHOT-OVER-QUIC",
       "features": [
         {
@@ -82159,7 +82169,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-11-15"
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -82756,6 +82766,39 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DecodeEmptyGraphAsDefault",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6651_empty_graph_payload.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "EmptyGraphIsDefault",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6651_empty_graph_payload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6651_empty_graph_payload.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
         }
       ]
     },
@@ -87851,7 +87894,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4344
+      "TESTED": 4346
     },
     "by_aspect": {
       "2PC": 3,
@@ -88640,6 +88683,7 @@
       "DecisionLayer": 1,
       "DecisionLogic": 1,
       "DecisionTypes": 1,
+      "DecodeEmptyGraphAsDefault": 1,
       "DecryptAdminAllowed": 1,
       "DecryptExplicitPolicyGrants": 1,
       "DecryptFastPath": 1,
@@ -88875,6 +88919,7 @@
       "EmbeddedOrderKeyDefault": 1,
       "EmbeddedTcpAuthGate": 1,
       "EmptyArgs": 1,
+      "EmptyGraphIsDefault": 1,
       "EmptyMatchWith": 1,
       "EmptyProvider": 1,
       "EmptyRlsEngineFastPath": 1,
@@ -89154,7 +89199,6 @@
       "FlagsKept": 1,
       "FleLeakRegression": 1,
       "FleRoleBoundToPrincipal": 1,
-      "FloatEncoding": 1,
       "FloatSupport": 1,
       "FlowControl": 1,
       "FollowerRemovedTextRebuild": 1,
@@ -89178,7 +89222,6 @@
       "FromPrincipal": 1,
       "FtsApplyHook": 1,
       "FtsApplySymmetry": 1,
-      "FtsSnapshotRebuild": 1,
       "FtsStrictTenancyFailClosed": 1,
       "FullCheckpointFailureLogLimit": 1,
       "FullLengthConstantTimeCompare": 1,
@@ -89299,6 +89342,7 @@
       "GraphDataModel": 1,
       "GraphDdlAlone": 1,
       "GraphExists": 1,
+      "GraphFilesHeldForCopy": 1,
       "GraphGrantKey": 1,
       "GraphGrantWidening": 1,
       "GraphHelpers": 1,
@@ -89535,7 +89579,6 @@
       "Insert": 1,
       "InsertPrePass": 1,
       "InsertSyntaxRules": 1,
-      "InstallUnderStoreLock": 1,
       "Instrumentation": 1,
       "IntComparison": 1,
       "IntFloatEqualEndpointKeys": 1,
@@ -89546,7 +89589,7 @@
       "Integration1": 1,
       "Integration2": 1,
       "Integration3": 1,
-      "IntegrationTest": 3,
+      "IntegrationTest": 2,
       "IntegrationTesting": 5,
       "IntegrationTests": 4,
       "IntegrityCheck": 1,
@@ -89910,6 +89953,7 @@
       "MultiNodeMatch": 2,
       "MultiPolicy": 1,
       "MultiPollWorkers": 1,
+      "MultiProcessRegression": 1,
       "MultiPropertyMergeCoordinator": 1,
       "MultiPropertyMergeFastPath": 1,
       "MultiPropertyMergeIndexedProbe": 1,
@@ -90123,6 +90167,7 @@
       "OneRowPerPath": 1,
       "OneScanPerBatch": 1,
       "OneSetPath": 1,
+      "OneSnapshotSendQueued": 1,
       "OneStrictParser": 1,
       "OneWriterOneReaderSafeFile": 1,
       "OnlyTrueAdmits": 1,
@@ -90651,7 +90696,6 @@
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
       "RaftSenderReconnectsInProcess": 1,
-      "RaftSnapshotPayload": 1,
       "RaftStorage": 1,
       "RaftStorageSealOpenRefuse": 1,
       "RandAlias": 1,
@@ -90749,7 +90793,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 420,
+      "Regression": 422,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91177,12 +91221,12 @@
       "SmallestPostingPreselect": 1,
       "SmartKernelLoader": 1,
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,
-      "SnapshotCarriesDedup": 1,
       "SnapshotCleanup": 1,
       "SnapshotCompactionVarianceEnvelope": 1,
       "SnapshotCopiesEvictedEdges": 1,
       "SnapshotCreate": 1,
       "SnapshotCreation": 1,
+      "SnapshotDurableStore": 1,
       "SnapshotEncryption": 1,
       "SnapshotEveryGraphRead": 1,
       "SnapshotFlushBatchVarianceEnvelope": 1,
@@ -91190,13 +91234,13 @@
       "SnapshotHydratesSource": 1,
       "SnapshotIOThrottleVarianceEnvelope": 1,
       "SnapshotInstallation": 1,
+      "SnapshotOffInnerMutex": 1,
       "SnapshotOwnsLabels": 1,
       "SnapshotReadView": 1,
-      "SnapshotRebuildArmsRegistry": 1,
       "SnapshotRestore": 1,
       "SnapshotSegmentRecycleLatencyVarianceEnvelope": 1,
       "SnapshotSelection": 1,
-      "SnapshotSerialization": 1,
+      "SnapshotThreshold": 1,
       "SnapshotValidation": 1,
       "SoleHolderEndpoint": 1,
       "SoleHolderEndpointTenantScope": 1,

@@ -613,7 +613,6 @@ REQ-DIST-CLI-001,DistributedClusterCLI,PeersList,TESTED,src/server/cli_args.zig,
 REQ-DIST-CLI-001,DistributedClusterCLI,ArgParsing,TESTED,tests/test_cli_args_cluster.zig,tests/test_cli_args_cluster.zig,,core,2026-05-25
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-01
-REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,TESTED,src/graph_store.zig,,,distributed,2026-04-05
 REQ-DIST-CLUSTER-3NODE-ELECTION,DistributedClusterCoordinator,LeaderElection3Node,TESTED,tests/test_cluster_3node_election.zig,tests/test_cluster_3node_election.zig,,distributed,2026-05-25
 REQ-DIST-CLUSTER-3NODE-SUBPROC,DistributedClusterCoordinator,SubprocessClusterFormation,TESTED,tests/test_cluster_3node_subprocess.zig,tests/test_cluster_3node_subprocess.zig,,distributed,2026-05-26
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommitAwarePostProposeWait,TESTED,src/distributed/cluster.zig,tests/test_cluster_commit_aware_wait.zig,,distributed,2026-06-12
@@ -637,7 +636,6 @@ REQ-DIST-CLUSTER-FORWARD-SHARD,DistributedCluster,ForwardToShard,TESTED,src/dist
 REQ-DIST-CLUSTER-FORWARD-SHARD,DistributedCluster,ForwardToShard,TESTED,tests/test_cluster_forward_to_shard.zig,,,distributed,2026-05-26
 REQ-DIST-CLUSTER-FORWARD-SHARD-TEST-SURFACE,DistributedCluster,TestExposure,EXEMPT,src/distributed/cluster.zig,,,distributed,2026-05-26
 REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY,DistributedCluster,FtsApplyHook,TESTED,src/distributed/cluster_replication.zig,tests/test_fts_apply_symmetry.zig,,distributed,2026-06-10
-REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY,DistributedCluster,FtsSnapshotRebuild,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_fts_apply_symmetry.zig,,distributed,2026-06-10
 REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY,DistributedCluster,ServerInitFtsApplyHook,TESTED,src/server/main.zig,tests/test_fts_apply_symmetry.zig,,distributed,2026-06-10
 REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY,DistributedCluster,FtsApplySymmetry,TESTED,tests/test_fts_apply_symmetry.zig,tests/test_fts_apply_symmetry.zig,,distributed,2026-06-10
 REQ-DIST-CLUSTER-IDEMPOTENT-RETRY,DistributedCluster,IdempotencyKeyDedup,TESTED,src/distributed/cluster_replication.zig,tests/test_cluster_write_idempotency.zig,,distributed,2026-06-12
@@ -2310,9 +2308,8 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,tests/test_prop
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,CommandRouting,TESTED,src/distributed/raft_apply.zig,"""applyCommand: noop returns empty slice""",,distributed,2026-04-10
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,IntegrationTest,TESTED,tests/test_raft_apply.zig,test_raft_apply,,distributed,2026-04-09
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,HardStateDurabilityAcrossRestart,TESTED,tests/test_raft_hardstate_durability.zig,tests/test_raft_hardstate_durability.zig,,distributed,2026-06-09
-REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,src/distributed/raft_snapshot_manager.zig,,,distributed,2026-04-09
-REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotInstallation,TESTED,src/distributed/raft_snapshot_manager.zig,,,distributed,2026-04-09
-REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,IntegrationTest,TESTED,tests/test_raft_snapshot_manager.zig,test_raft_snapshot_manager,,distributed,2026-04-09
+REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotInstallation,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,src/eval/logic_helpers.zig,geodetestlab/specs/test_regex.yml,,eval,2026-01-09
 REQ-GQL-REL-AGG-NO-GROUPBY-001,RelationshipAggregationNoGroupBy,EdgeCollection,TESTED,src/execution/match_operations.zig,geodetestlab/specs/gql_query_comprehensive.yml,,execution,2025-12-28
 REQ-GQL-S3-001,S3 Cloud Backups,Storage,TESTED,src/storage/s3_backup.zig,tests/test_s3_sigv4.zig,,storage,2026-06-10
@@ -3987,8 +3984,6 @@ REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY,ValueOrdering,OneNumericEqualityRule,TESTE
 REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,src/types/datetime.zig,tests/test_sonny2808_temporal_parsing.zig,,datetime,2026-11-13
 REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,tests/test_sonny2808_temporal_parsing.zig,,,datetime,2026-11-13
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
-REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,FloatEncoding,TESTED,src/graph_store.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
-REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny2810_snapshot_float.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
 REQ-SONNY-2812-DISTINCT-LIST-KEYS,AggregateSetQuantifier,ListKeys,TESTED,tests/test_sonny2812_distinct_list_keys.zig,tests/test_sonny2812_distinct_list_keys.zig,,execution,2026-11-12
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny2816_bulk_ingest_txn.zig,,transport,2026-09-27
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,tests/test_sonny2816_bulk_ingest_txn.zig,,,transport,2026-09-27
@@ -4289,7 +4284,6 @@ REQ-SONNY-3315-UNION-ARM-ALLOCATOR,ParallelUnionArms,Regression,TESTED,tests/tes
 REQ-SONNY-3316-LIMIT-RELAY,ParallelUnionArms,ArmLimitRelay,TESTED,src/execution/set_operations.zig,tests/test_sonny3316_limit_relay.zig,,execution,2026-09-28
 REQ-SONNY-3316-LIMIT-RELAY,ExpressionEvaluator,Regression,TESTED,tests/test_sonny3316_limit_relay.zig,tests/test_sonny3316_limit_relay.zig,,eval,2026-09-28
 REQ-SONNY-3317-CACHE-CLEAR-LOCKED,BoundedNodeCache,ClearUnderShardLocks,TESTED,src/storage/node_cache.zig,tests/test_sonny3317_round15_minors.zig,,storage,2026-09-28
-REQ-SONNY-3317-RAFT-INSTALL-LOCKED,Raft Snapshot Persistence,InstallUnderStoreLock,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny3317_round15_minors.zig,,distributed,2026-09-28
 REQ-SONNY-3317-ROUND15-MINORS,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3317_round15_minors.zig,tests/test_sonny3317_round15_minors.zig,,storage,2026-09-28
 REQ-SONNY-3318-MULTI-CHAIN-BINDING,MultiChainRelationshipMatch,ChainJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-28
 REQ-SONNY-3318-MULTI-CHAIN-BINDING,MultiChainRelationshipMatch,Regression,TESTED,tests/test_sonny_write_allowlist_r4b.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-28
@@ -5040,8 +5034,6 @@ REQ-SONNY-6594-WRITE-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_
 REQ-SONNY-6595-FAST-CREATE-DIM-GUARD,VectorIndex,FastPathCreateDimensionGuard,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,IndexNamesCopied,TESTED,src/index/index_manager.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
 REQ-SONNY-6595-FAST-PATH-VECTOR-MAINTENANCE,VectorIndex,FastPathNodeWriteMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
-REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6595_fts_snapshot_restart.zig,,fts,2026-11-15
-REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART,FullText,SnapshotRebuildArmsRegistry,TESTED,tests/test_sonny6595_fts_snapshot_restart.zig,,,fts,2026-11-15
 REQ-SONNY-6595-STANDALONE-DELETE,DeleteStatement,UnboundDeleteDeletesNothing,TESTED,tests/test_sonny6595_standalone_delete.zig,tests/test_sonny6595_standalone_delete.zig,,engine,2026-11-15
 REQ-SONNY-6595-VECTOR-WRITE-PATHS,VectorIndex,WirePathMatrix,TESTED,tests/test_sonny6595_vector_write_paths.zig,tests/test_sonny6595_vector_write_paths.zig,,index,2026-11-15
 REQ-SONNY-6596-APPROXIMATE-ARITHMETIC,NumericValueExpression,ApproximateOperands,TESTED,src/eval.zig,tests/test_sonny6596_approximate_literal.zig,,eval,2026-11-15
@@ -5174,11 +5166,10 @@ REQ-SONNY-6619-SM-FOLLOWS-MFA,MFA authentication,SecurityManagerMfaCurrent,TESTE
 REQ-SONNY-6619-SM-REMOVE-USER,AuthGraphManager Integration,DroppedUserRemoved,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6619-TS-WAL-DIR-RELEASE,Timeseries,WalDirHandleClosed,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6619_offline.zig,,storage,2026-11-15
 REQ-SONNY-6621-HYDRATE-CATCH-NULL,StorageIntegrity,Regression,TESTED,tests/test_sonny6621_hydrate_catch_null.zig,tests/test_sonny6621_hydrate_catch_null.zig,,execution,2026-11-15
-REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreIntoStore,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreIntoStore,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-16
 REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreFromReadySnapshot,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
-REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RaftSnapshotPayload,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
 REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,StoreHolderYieldsToRestore,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
-REQ-SONNY-6622-RAFT-V022,Raft Consensus Persistence,Regression,TESTED,tests/test_sonny6622_raft_v022_adapt.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
+REQ-SONNY-6622-RAFT-V022,Raft Consensus Persistence,Regression,TESTED,tests/test_sonny6622_raft_v022_adapt.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-16
 REQ-SONNY-6623-MFA-ENABLE-LIMIT,MFA authentication,Regression,TESTED,tests/test_sonny6623_mfa_enable_limit.zig,tests/test_sonny6623_mfa_enable_limit.zig,,security,2026-11-15
 REQ-SONNY-6623-OFFLINE-MALFORMED,MFA authentication,Regression,TESTED,tests/test_sonny6623_offline.zig,tests/test_sonny6623_offline.zig,,security,2026-11-15
 REQ-SONNY-6623-SHARED-MFA-LIMITER,MFA authentication,OneLimiterForEveryCodeCheck,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6623_mfa_enable_limit.zig,,security,2026-11-15
@@ -5190,10 +5181,10 @@ REQ-SONNY-6632-HYDRATION-FOLLOWUPS,StorageIntegrity,Regression,TESTED,tests/test
 REQ-SONNY-6632-OPEN-FAILED-REBUILT,StorageIntegrity,FailedClearedOnRebuild,TESTED,src/graph_store.zig,tests/test_sonny6632_hydration_followups.zig,,storage,2026-11-15
 REQ-SONNY-6632-RECLAIM-NOT-BUILT,StorageIntegrity,ReclaimGateRunningBuild,TESTED,src/graph_store.zig,tests/test_sonny6632_hydration_followups.zig,,storage,2026-11-15
 REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,DedupSerialized,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
-REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,SnapshotCarriesDedup,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,PrehydrateInternsNames,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,InternOffRaftMutex,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
-REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6633_snapshot_wire.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-15
+REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6633_snapshot_wire.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-16
+REQ-SONNY-6636-CLUSTER-SNAPSHOT,Raft Snapshot Persistence,MultiProcessRegression,TESTED,tests/test_sonny6636_cluster_snapshot.zig,tests/test_sonny6636_cluster_snapshot.zig,,distributed,2026-11-16
 REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,RegistrySwap,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
 REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_graph_restore_swap.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
 REQ-SONNY-6636-DROP-GRAPH-MERGE-PURGE,MergeIdempotency,DropPurgesMergeEntries,TESTED,src/graph_store.zig,tests/test_sonny6636_drop_graph_merge_purge.zig,,storage,2026-11-16
@@ -5201,10 +5192,18 @@ REQ-SONNY-6636-DROP-GRAPH-MERGE-PURGE,MergeIdempotency,Regression,TESTED,tests/t
 REQ-SONNY-6636-DURABLE-SNAPSHOT,Raft Snapshot Persistence,LosslessEngineFileSnapshot,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
 REQ-SONNY-6636-DURABLE-SNAPSHOT,Raft Snapshot Persistence,DurableRestore,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
 REQ-SONNY-6636-DURABLE-SNAPSHOT-RESTORE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_durable_snapshot_restore.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
+REQ-SONNY-6636-OUTBOX-SNAPSHOT,Raft Snapshot Persistence,OneSnapshotSendQueued,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6636_outbox_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-OUTBOX-SNAPSHOT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_outbox_snapshot.zig,tests/test_sonny6636_outbox_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-REPLAY-IDEMPOTENT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_replay_idempotency.zig,tests/test_sonny6636_replay_idempotency.zig,,distributed,2026-11-16
 REQ-SONNY-6636-RESIDENT-RESET,Raft Snapshot Persistence,ForgetResidentStateAfterSwap,TESTED,src/graph_store.zig,tests/test_sonny6636_resident_reset.zig,,storage,2026-11-16
 REQ-SONNY-6636-RESIDENT-RESET,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_resident_reset.zig,tests/test_sonny6636_resident_reset.zig,,storage,2026-11-16
 REQ-SONNY-6636-RESTORE-OFF-INNER-MUTEX,Raft Snapshot Persistence,RestoreThreadWhilePaused,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
-REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_snapshot_over_quic.zig,tests/test_sonny6636_snapshot_over_quic.zig,,distributed,2026-11-15
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,SnapshotDurableStore,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,SnapshotThreshold,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,SnapshotOffInnerMutex,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,GraphFilesHeldForCopy,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-SERVER-SNAPSHOT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_server_snapshot.zig,tests/test_sonny6636_server_snapshot.zig,,distributed,2026-11-16
+REQ-SONNY-6636-SNAPSHOT-OVER-QUIC,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_snapshot_over_quic.zig,tests/test_sonny6636_snapshot_over_quic.zig,,distributed,2026-11-16
 REQ-SONNY-6636-STORE-RAFT-INDEX,Raft Snapshot Persistence,CoveredEntriesNotReapplied,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,distributed,2026-11-16
 REQ-SONNY-6636-STORE-RAFT-INDEX,Raft Snapshot Persistence,StoreRecordsRaftIndex,TESTED,src/storage/graph_restore_intent.zig,tests/test_sonny6636_durable_snapshot_restore.zig,,storage,2026-11-16
 REQ-SONNY-6636-STUB-QUIC-WARNING,Raft Wrapper Transport Dispatch,StubConnectWarns,TESTED,src/distributed/raft_consensus.zig,"""SONNY-6636 (5): a stub QUIC client asked to connect to a Raft peer warns that it sends nothing""",,distributed,2026-11-15
@@ -5241,6 +5240,8 @@ REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,src/ex
 REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,tests/test_sonny6647_revoke_not_held.zig,,,security,2026-11-15
 REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6647_user_permissions.zig,,security,2026-11-15
 REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,tests/test_sonny6647_user_permissions.zig,,,security,2026-11-15
+REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,DecodeEmptyGraphAsDefault,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
+REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,EmptyGraphIsDefault,TESTED,tests/test_sonny6651_empty_graph_payload.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
