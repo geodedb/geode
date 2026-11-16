@@ -3385,17 +3385,26 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     if (args.len != 4) return error.WrongArgumentCount;
 
     const property_value = try evalExpr(allocator, args[0].*, env);
+    const query_value = try evalExpr(allocator, args[1].*, env);
+    const k_value = try evalExpr(allocator, args[2].*, env);
+    const metric_value = try evalExpr(allocator, args[3].*, env);
+    // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024 20.22
+    // GR 1 b); it was 22G03.
+    if (property_value == .Null or query_value == .Null or k_value == .Null or metric_value == .Null) {
+        // What an operand's expression allocated (a list literal) is freed:
+        // nothing below reads it.
+        for (args, [_]Value{ property_value, query_value, k_value, metric_value }) |arg, value| value_utilities.freeEvaluatedValue(allocator, arg.*, value);
+        return .{ .Null = {} };
+    }
     const property_name = switch (property_value) {
         .Str => |text| text,
         .Text => |text| text,
         else => return error.TypeMismatch,
     };
 
-    const query_value = try evalExpr(allocator, args[1].*, env);
     const query_vec = try valueToVectorF32(allocator, query_value);
     defer if (query_vec.owned) |data| allocator.free(data);
 
-    const k_value = try evalExpr(allocator, args[2].*, env);
     const raw_k: i64 = switch (k_value) {
         .Int => |value| value,
         .SmallInt => |value| value,
@@ -3405,7 +3414,7 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     if (raw_k <= 0) return .{ .List = &.{} };
     const k: usize = @intCast(raw_k);
 
-    const metric = try parseVectorMetric(try evalExpr(allocator, args[3].*, env));
+    const metric = try parseVectorMetric(metric_value);
 
     // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="VectorIndex"; ASPECT=LazyRebuildAfterRestart; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-25
     // ADVANCED-INDEX-RESTART: nothing rebuilds advanced indexes on catalog
@@ -3680,6 +3689,31 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
 // Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
 // Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
 
+// CANARY: REQ=REQ-SONNY-6645-SHORTEST-PATH-ONE; FEATURE="ShortestPath"; ASPECT=OneOperandForm; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=eval; UPDATED=2026-11-16
+/// SONNY-6645 item 2: `shortestPath(x)` / `allShortestPaths(x)` with one
+/// operand, as a value (the pattern form is the `.ShortestPath` expression).
+/// A path is its own shortest path; a node, the path of that node alone;
+/// NULL is NULL. A list built a two-node path from its first and last node,
+/// with no relationships, whether or not they were connected; a list, and
+/// anything else that is no path, is 22G03 (`TypeMismatch`). `all` answers
+/// the list of the one path.
+fn shortestPathOfOne(allocator: std.mem.Allocator, arg: Value, all: bool) EvalError!Value {
+    const path: Value = switch (arg) {
+        .Null => return .{ .Null = {} },
+        .Path => arg,
+        .Node => |node| blk: {
+            const nodes = try allocator.alloc(*const graph_store.Node, 1);
+            nodes[0] = node;
+            break :blk .{ .Path = .{ .nodes = nodes, .edges = &.{} } };
+        },
+        else => return EvalError.TypeMismatch,
+    };
+    if (!all) return path;
+    const paths = try allocator.alloc(Value, 1);
+    paths[0] = path;
+    return .{ .List = paths };
+}
+
 // CANARY: REQ=REQ-SONNY-6637-SHORTEST-PATH-NODES; FEATURE="ShortestPath"; ASPECT=TwoArgumentForm; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=eval; UPDATED=2026-11-15
 /// SONNY-6637 item 1: `shortestPath(a, b)` / `allShortestPaths(a, b)`, two
 /// node operands. The forms built a two-node path with no relationships
@@ -3693,7 +3727,7 @@ fn evalShortestPathBetween(allocator: std.mem.Allocator, args: []*ast.Expr, env:
     const start = try evalExpr(allocator, args[0].*, env);
     const end = try evalExpr(allocator, args[1].*, env);
     const none: Value = if (all) .{ .List = &.{} } else .{ .Null = {} };
-    if (start == .Null or end == .Null) return none;
+    if (start == .Null or end == .Null) return .{ .Null = {} };
     if (start != .Node or end != .Node) return EvalError.TypeMismatch;
     // The two operands, bound to names no query can write (a space), as
     // the pattern's endpoints.
@@ -3845,42 +3879,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // 1. A Path value (from pattern like (a)-[*]-(b))
         // 2. Two node arguments (start, end)
         if (args.len == 1) {
-            // Single argument - should be a path pattern result
-            const arg = try evalExpr(allocator, args[0].*, env);
-            switch (arg) {
-                .Path => {
-                    // Already a path - return it as the shortest path
-                    return arg;
-                },
-                .Node => {
-                    // Single node - return a path containing just that node
-                    var nodes = try allocator.alloc(*const graph_store.Node, 1);
-                    nodes[0] = arg.Node;
-                    return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                },
-                .List => |list| {
-                    // List of nodes - try to construct path
-                    if (list.len >= 2) {
-                        const start_val = list[0];
-                        const end_val = list[list.len - 1];
-                        if (start_val == .Node and end_val == .Node) {
-                            // Return path with start and end nodes
-                            var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                            nodes[0] = start_val.Node;
-                            nodes[1] = end_val.Node;
-                            return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                        }
-                    }
-                    return Value{ .Null = {} };
-                },
-                else => return Value{ .Null = {} },
-            }
+            // SONNY-6645 item 2: one operand, a path or a node.
+            return try shortestPathOfOne(allocator, try evalExpr(allocator, args[0].*, env), false);
         } else if (args.len == 2) {
             // SONNY-6637 item 1: the walk between the two nodes.
             return try evalShortestPathBetween(allocator, args, env, false);
         }
-        // Invalid arguments
-        return Value{ .Null = {} };
+        // The arity table refuses any other count first.
+        return EvalError.WrongArgumentCount;
     }
 
     // CANARY: REQ=REQ-GQL-PATH-003; FEATURE="AllShortestPaths"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
@@ -3889,44 +3895,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     if (std.ascii.eqlIgnoreCase(function_name, "allshortestpaths") or std.ascii.eqlIgnoreCase(function_name, "all_shortest_paths")) {
         // allShortestPaths returns a list of all shortest paths
         if (args.len == 1) {
-            const arg = try evalExpr(allocator, args[0].*, env);
-            switch (arg) {
-                .Path => {
-                    // Return list containing this single path
-                    var paths = try allocator.alloc(Value, 1);
-                    paths[0] = arg;
-                    return Value{ .List = paths };
-                },
-                .Node => {
-                    // Single node - return list with one path containing just that node
-                    var nodes = try allocator.alloc(*const graph_store.Node, 1);
-                    nodes[0] = arg.Node;
-                    var paths = try allocator.alloc(Value, 1);
-                    paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                    return Value{ .List = paths };
-                },
-                .List => |list| {
-                    if (list.len >= 2) {
-                        const start_val = list[0];
-                        const end_val = list[list.len - 1];
-                        if (start_val == .Node and end_val == .Node) {
-                            var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                            nodes[0] = start_val.Node;
-                            nodes[1] = end_val.Node;
-                            var paths = try allocator.alloc(Value, 1);
-                            paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                            return Value{ .List = paths };
-                        }
-                    }
-                    return Value{ .List = &.{} };
-                },
-                else => return Value{ .List = &.{} },
-            }
+            // SONNY-6645 item 2: one operand, a path or a node.
+            return try shortestPathOfOne(allocator, try evalExpr(allocator, args[0].*, env), true);
         } else if (args.len == 2) {
             // SONNY-6637 item 1: every shortest walk between the two nodes.
             return try evalShortestPathBetween(allocator, args, env, true);
         }
-        return Value{ .List = &.{} };
+        // The arity table refuses any other count first.
+        return EvalError.WrongArgumentCount;
     }
 
     // Handle algo.asNode function - converts nodeId to node reference
@@ -4158,6 +4134,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
+                // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+                .Null => return Value{ .Null = {} },
                 // A non-string argument is a data exception on a resolved
                 // function, not "no such function" — `return null` here would
                 // fall through to EvalError.UnknownFunction (42883).
@@ -4503,7 +4481,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     if (std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return error.WrongArgumentCount;
-        const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
+        const second_arg = try evalExpr(allocator, args[1].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+        if (first_arg == .Null or second_arg == .Null) return Value{ .Null = {} };
+        const heap_second_arg = evalValueToHeapValue(second_arg);
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "log10")) {
@@ -4533,6 +4514,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             else => return EvalError.TypeMismatch,
         }
     } else if (std.ascii.eqlIgnoreCase(function_name, "toreal")) {
+        // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+        if (first_arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.toReal_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,

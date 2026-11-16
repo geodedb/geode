@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T05:20:21.815807493Z",
+  "generated_at": "2026-11-16T05:20:53.271242325Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77265,6 +77265,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6543-PARSE-REFUSAL-STATUS",
+      "features": [
+        {
+          "feature": "GQLStatus",
+          "aspect": "CliParseRefusalCode",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "tests/conformance_tests.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6544-DSN-USERINFO",
       "features": [
         {
@@ -82183,6 +82202,63 @@
           ],
           "benches": [],
           "owner": "mcp",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6645-CHAINED-INITIAL-WITH",
+      "features": [
+        {
+          "feature": "ChainedWithClauseExecution",
+          "aspect": "InitialWithInChainedPart",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6645-QUERY-FOLLOWUPS",
+      "features": [
+        {
+          "feature": "ChainedWithClauseExecution",
+          "aspect": "InitialWithInChainedPart",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6645-SHORTEST-PATH-ONE",
+      "features": [
+        {
+          "feature": "ShortestPath",
+          "aspect": "OneOperandForm",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
           "updated": "2026-11-16"
         }
       ]
@@ -87338,7 +87414,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4315
+      "TESTED": 4319
     },
     "by_aspect": {
       "2PC": 3,
@@ -87810,6 +87886,7 @@
       "CliForwardPrincipalFlag": 1,
       "CliOption": 1,
       "CliParityStatusCommand": 1,
+      "CliParseRefusalCode": 1,
       "CliPlaintextDiagnostic": 1,
       "CliRlsPolicyCreate": 1,
       "ClientCaScope": 1,
@@ -88995,6 +89072,7 @@
       "InitContext": 3,
       "InitEmpty": 1,
       "InitialWithBinding": 1,
+      "InitialWithInChainedPart": 2,
       "InlineCert": 1,
       "InlineKey": 1,
       "InlineNodeProps": 1,
@@ -89589,6 +89667,7 @@
       "OneImplementation": 1,
       "OneLimiterForEveryCodeCheck": 1,
       "OneNumericEqualityRule": 1,
+      "OneOperandForm": 1,
       "OneReadPolicyForNodesAndEdges": 1,
       "OneRequestContextForQuicAndGrpc": 1,
       "OneResolver": 1,

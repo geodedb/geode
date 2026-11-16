@@ -737,6 +737,19 @@ pub fn parseErrorCode(err: anyerror) []const u8 {
 }
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
+// CANARY: REQ=REQ-SONNY-6543-PARSE-REFUSAL-STATUS; FEATURE="GQLStatus"; ASPECT=CliParseRefusalCode; STATUS=TESTED; TEST=tests/conformance_tests.zig; OWNER=parser; UPDATED=2026-11-16
+/// SONNY-6543: the GQL status a parse refusal is reported with outside the
+/// wire (the gql CLI's JSON diagnostic): the refusal's own SQLSTATE (`code`:
+/// 42000 for a syntax error, 54000 / 54001 for a parser limit), the code the
+/// QUIC and gRPC front ends send, with its message, position and token. The
+/// CLI reported every refusal with the gql library's `syntaxError` code,
+/// 42601 before gql v0.1.22.
+pub fn parseErrorStatus(pe: @FieldType(ParseOutcome, "Err")) gql.status.GqlStatus {
+    var st = gql.status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
+    if (pe.code.len == st.sqlstate.len) @memcpy(&st.sqlstate, pe.code);
+    return st;
+}
+
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };

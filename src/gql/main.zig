@@ -203,7 +203,8 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
             const gql_io = std.Io.Threaded.global_single_threaded.io();
             var stderr_wbuf: [4096]u8 = undefined;
             var stderr_fw = stderr_file.writerStreaming(gql_io, &stderr_wbuf);
-            const gql_status = status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
+            // SONNY-6543: the refusal's own SQLSTATE, as the server sends it.
+            const gql_status = gql.parseErrorStatus(pe);
             try status.writeJson(&stderr_fw.interface, gql_status);
             try stderr_fw.interface.writeByte('\n');
             try stderr_fw.flush();

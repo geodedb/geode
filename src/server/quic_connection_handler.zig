@@ -6131,7 +6131,9 @@ pub fn handleQuicConnection(
                     log.warn("Connection quota exceeded for tenant — closing connection", &.{
                         Attr.string("tenant", tid),
                     });
-                    sendExecuteError(gpa, stream, "42000", "Connection quota exceeded for tenant", &.{}, &.{}) catch {};
+                    // SONNY-6645: a resource limit, 53300 (it was 42000).
+                    const quota = proto_util.mapError(error.TenantConnectionQuotaExceeded);
+                    sendExecuteError(gpa, stream, quota.code, quota.message, &.{}, &.{}) catch {};
                     pre_hello_exit = .tenant_quota_exceeded;
                     return;
                 };
@@ -7863,7 +7865,9 @@ fn handleClientMessage(
             if (query_tenant) |tid| {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireQuery(tid) catch {
-                        try sendExecuteError(gpa, stream, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        // SONNY-6645: a resource limit, 53400 (it was 42000).
+                        const quota = proto_util.mapError(error.TenantQueryQuotaExceeded);
+                        try sendExecuteError(gpa, stream, quota.code, quota.message, &.{}, &.{});
                         return;
                     };
                     query_quota_acquired = true;

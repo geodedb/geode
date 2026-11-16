@@ -92,7 +92,7 @@ DROP INDEX [IF EXISTS] index_name
 - **Resolution:** the session graph's index of that name, else an
   engine-wide one (written by an older, engine-global catalog), else a
   fulltext index of the default graph. Another graph's index is not found.
-- **Missing name:** refused with 42704 (`IndexNotFound`); with `IF EXISTS`
+- **Missing name:** refused with 42002 (`IndexNotFound`); with `IF EXISTS`
   the statement does nothing and succeeds.
 - **One name on several labels** (only in a catalog written before index
   names were unique per graph): every row of the name in the resolved scope
@@ -229,7 +229,7 @@ DROP CONSTRAINT [IF EXISTS] name
   constraint of another graph is not found. Constraints of one name on
   several labels of the graph (only in a catalog written before constraint
   names were unique per graph, SONNY-6294) are all dropped.
-- **Missing name:** refused with 42704 (`ConstraintNotFound`), as DROP
+- **Missing name:** refused with 42002 (`ConstraintNotFound`), as DROP
   INDEX refuses a missing index (`IndexNotFound`); with `IF EXISTS` the
   statement does nothing and succeeds.
 - **Engine-wide row:** dropped from any graph, it is gone for every graph.

@@ -10,7 +10,7 @@
 //    not initialized" with 00000 "error:" rows; they are GQLSTATUS errors.
 // 4. geode.auth.user_set_attribute / user_remove_attribute results did not own
 //    their rows (a caller freeing them leaked), and removing an attribute that
-//    is not set answered 00000; it is an error (42704).
+//    is not set answered 00000; it is an error (42002 since SONNY-6645).
 // 5. docs/GQL_AUTH_DDL.md said a CREATE USER whose save failed answered a
 //    status row; ENTERPRISE_GAPS.md and KNOWN_TEST_ISSUES.md gave the
 //    gql_conformance suite as 20/20.
@@ -393,7 +393,7 @@ test "SONNY-6369: geode.rls add / remove procedures answer missing arguments and
     try w.expectCode("CALL geode.rls.remove_attribute_policy('g1', 'Doc', 'dept', 'dept')", "55000");
 }
 
-test "SONNY-6369: user_set_attribute / user_remove_attribute results own their rows; removing an attribute that is not set is 42704" {
+test "SONNY-6369: user_set_attribute / user_remove_attribute results own their rows; removing an attribute that is not set is 42002" {
     var w: StrictWorld = undefined;
     try w.init();
     defer w.deinit();
@@ -401,12 +401,12 @@ test "SONNY-6369: user_set_attribute / user_remove_attribute results own their r
     try w.run("CALL geode.auth.user_set_attribute('alice6369', 'dept', 'eng')");
     try w.run("CALL geode.auth.user_remove_attribute('alice6369', 'dept')");
     // Not set (any more): an error, not a status row.
-    try w.expectCode("CALL geode.auth.user_remove_attribute('alice6369', 'dept')", "42704");
-    try w.expectCode("CALL geode.auth.user_remove_attribute('alice6369', 'never6369')", "42704");
+    try w.expectCode("CALL geode.auth.user_remove_attribute('alice6369', 'dept')", "42002");
+    try w.expectCode("CALL geode.auth.user_remove_attribute('alice6369', 'never6369')", "42002");
     // Missing arguments, a user that does not exist.
     try w.expectCode("CALL geode.auth.user_remove_attribute('', 'dept')", "22023");
     try w.expectCode("CALL geode.auth.user_remove_attribute('alice6369', '')", "22023");
-    try w.expectCode("CALL geode.auth.user_remove_attribute('nobody6369', 'dept')", "42704");
+    try w.expectCode("CALL geode.auth.user_remove_attribute('nobody6369', 'dept')", "42002");
 }
 
 // ---------------------------------------------------------------------------

@@ -454,10 +454,10 @@ test "SONNY-6367: user_enable / user_disable / user_set_attribute / role_create 
     const ga = w.arena.allocator();
     try fx.expectRuns(ga, w.admin, "CREATE USER carol6367 SET PASSWORD '" ++ carol_pw ++ "'");
 
-    // A user that does not exist: 42704 for an Admin.
-    try expectCode(ga, w.admin, "CALL geode.auth.user_enable('nobody6367')", "42704");
-    try expectCode(ga, w.admin, "CALL geode.auth.user_disable('nobody6367')", "42704");
-    try expectCode(ga, w.admin, "CALL geode.auth.user_set_attribute('nobody6367', 'dept', 'eng')", "42704");
+    // A user that does not exist: 42002 for an Admin.
+    try expectCode(ga, w.admin, "CALL geode.auth.user_enable('nobody6367')", "42002");
+    try expectCode(ga, w.admin, "CALL geode.auth.user_disable('nobody6367')", "42002");
+    try expectCode(ga, w.admin, "CALL geode.auth.user_set_attribute('nobody6367', 'dept', 'eng')", "42002");
     // Missing arguments: 22023.
     try expectCode(ga, w.admin, "CALL geode.auth.user_set_attribute('', 'dept', 'eng')", "22023");
     try expectCode(ga, w.admin, "CALL geode.auth.role_create('', 'no name')", "22023");
@@ -480,10 +480,10 @@ test "SONNY-6367: mfa_setup / mfa_verify / mfa_enable / mfa_disable failures are
     try fx.expectRuns(ga, w.admin, "CREATE USER mfb6367 SET PASSWORD '" ++ bob_pw ++ "'");
 
     // A user that does not exist.
-    try expectCode(ga, w.admin, "CALL geode.auth.mfa_setup('nobody6367')", "42704");
-    try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('nobody6367', '123456')", "42704");
-    try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('nobody6367', '123456')", "42704");
-    try expectCode(ga, w.admin, "CALL geode.auth.mfa_disable('nobody6367')", "42704");
+    try expectCode(ga, w.admin, "CALL geode.auth.mfa_setup('nobody6367')", "42002");
+    try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('nobody6367', '123456')", "42002");
+    try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('nobody6367', '123456')", "42002");
+    try expectCode(ga, w.admin, "CALL geode.auth.mfa_disable('nobody6367')", "42002");
 
     // Not enrolled: 55000.
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_verify('mfb6367', '123456')", "55000");

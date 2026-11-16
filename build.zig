@@ -3800,6 +3800,9 @@ pub fn build(b: *std.Build) void {
     const conformance_patch_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/conformance_tests.zig"), .target = target, .optimize = optimize }) });
     conformance_patch_tests.root_module.addImport("geode", root_mod);
     const run_conformance_patch_tests = b.addRunArtifact(conformance_patch_tests);
+    // SONNY-6543: a named step for tests/conformance_tests.zig (it ran only in
+    // the sharded aggregate).
+    b.step("test-conformance-patch", "Run tests/conformance_tests.zig (parser conformance patches, the GQL status JSON format, and the SQLSTATE a parse refusal is reported with)").dependOn(&run_conformance_patch_tests.step);
 
     // GAP-0257: Comprehensive ISO 39075:2024 conformance test suite
     const iso_conformance_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/gql_iso_conformance.zig"), .target = target, .optimize = optimize }) });
@@ -14710,6 +14713,15 @@ pub fn build(b: *std.Build) void {
     const run_sonny6543_sc_tests = b.addRunArtifact(sonny6543_sc_tests);
     shardDep(test_step, &run_sonny6543_sc_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6543-iso-status-codes", "Run SONNY-6543 regression (ISO/IEC 39075 Table 8: an invalid reference - a GROUP BY key, a HAVING name, knn()'s property - is 42002, not 42703; a UNION column-count mismatch is the Syntax Rule refusal 42000, not 42601; the CDC Admin refusal is 42501 on both transports; no mapping sends 42703 or 42601)").dependOn(&run_sonny6543_sc_tests.step);
+    // SONNY-6645 items 1-4. See tests/test_sonny6645_query_followups.zig.
+    const sonny6645_qf_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6645_query_followups.zig"), .target = target, .optimize = optimize });
+    sonny6645_qf_mod.addImport("geode", root_mod);
+    sonny6645_qf_mod.addImport("logging", logging_mod);
+    sonny6645_qf_mod.addImport("rls_types", rls_types_mod);
+    const sonny6645_qf_tests = b.addTest(.{ .root_module = sonny6645_qf_mod });
+    const run_sonny6645_qf_tests = b.addRunArtifact(sonny6645_qf_tests);
+    shardDep(test_step, &run_sonny6645_qf_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6645-query-followups", "Run SONNY-6645 items 1-4 regression (a chained part's initial WITH is bound for its MATCH, so its MATCH variables and WHERE see the right values; shortest_path / all_shortest_paths of a list or another non-path value are 22G03, not a fabricated path; a leading LET definition naming a later or its own definition is 42000; a NULL operand of bigint, smallint, real, double, toReal, datetime, power and knn is NULL; in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6645_qf_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);

@@ -11,7 +11,7 @@
 //   secret is never overwritten.
 // - I2 (SONNY-3242): a SET swap swaps, with or without a RETURN.
 // - I11 (SONNY-3247): a statement naming a parameter the request does not
-//   supply is refused (42P02) before any path runs it, the QUIC MERGE fast
+//   supply is refused (42002 since SONNY-6645) before any path runs it, the QUIC MERGE fast
 //   path too.
 // - I8 (SONNY-3244): the parser's limits answer 54000 / 54001.
 // - Round 4b-1 (SONNY-759): a comma pattern binds its node-only chain
@@ -169,13 +169,13 @@ const cases = [_]Case{
     } },
     // I11: the QUIC key-resolved MERGE fast path evaluated $nosuch as null.
     .{ .name = "I11", .steps = &.{
-        .{ .query = "MERGE (m:LM {g: $nosuch})", .code = "42P02" },
-        .{ .query = "MERGE (m:LM {g: $nosuch}) ON CREATE SET m.k = 1", .code = "42P02" },
+        .{ .query = "MERGE (m:LM {g: $nosuch})", .code = "42002" },
+        .{ .query = "MERGE (m:LM {g: $nosuch}) ON CREATE SET m.k = 1", .code = "42002" },
         .{ .query = "MATCH (m:LM) RETURN count(m) AS c", .want = "0" },
-        .{ .query = "MATCH (q:LQ {i: 1}) SET q.name = $nosuch", .code = "42P02" },
-        .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $nosuch", .code = "42P02" },
-        .{ .query = "MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42P02" },
-        .{ .query = "PROFILE MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42P02" },
+        .{ .query = "MATCH (q:LQ {i: 1}) SET q.name = $nosuch", .code = "42002" },
+        .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $nosuch", .code = "42002" },
+        .{ .query = "MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42002" },
+        .{ .query = "PROFILE MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42002" },
         .{ .query = "MATCH (q:LQ) WHERE q.name = 'q' RETURN count(q) AS c", .want = "4" },
         nothing_written,
         .{ .query = "MERGE (m:LM {g: $g})", .params = &.{.{ .name = "g", .value = "a" }} },
@@ -265,7 +265,7 @@ const cases = [_]Case{
         .steps = &.{
             .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G0M" },
             .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G0M" },
-            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42P02" },
+            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42002" },
             nothing_written_q,
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i", .want = "1" },
             // Round 4b-1b (review I-E): an IN subquery reads an outer LET, as
@@ -330,7 +330,7 @@ const cases = [_]Case{
     .{ .name = "3248 LET chain", .steps = &.{
         .{ .query = "LET $a = 2, $b = $a + 1 MATCH (n:L) WHERE n.i = $b RETURN n.i", .want = "3" },
         .{ .query = "LET $x = 2 CALL { MATCH (n:L) WHERE n.i = $x RETURN n.i AS k } RETURN k", .want = "2" },
-        .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42P02" },
+        .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42002" },
     } },
     // Round 4b-1c (the round 4b-1b re-review).
     // SONNY-3367 (I-A): `WITH *` carries each variable's kind; a value is no

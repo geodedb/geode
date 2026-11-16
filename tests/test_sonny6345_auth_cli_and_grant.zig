@@ -13,7 +13,7 @@
 //     and reported "0 records, integrity OK" with exit 0. It now changes
 //     nothing and reports that there is no auth state, exit 1.
 // (3) GRANT / REVOKE for a user that does not exist answered SQLSTATE 00000
-//     with a row "error: user not found: X". It is now an error: 42704 for
+//     with a row "error: user not found: X". It is now an error: 42002 for
 //     an Admin (the only role that may GRANT), as SONNY-6291's rule.
 // (4) The auth procedures' status rows (CREATE / ALTER / DROP USER, GRANT,
 //     REVOKE) were allocated with the request's allocator but not owned by
@@ -220,7 +220,7 @@ const World = struct {
     }
 };
 
-test "SONNY-6345: GRANT / REVOKE for a user that does not exist is an error (42704 for an Admin), not a status row" {
+test "SONNY-6345: GRANT / REVOKE for a user that does not exist is an error (42002 for an Admin), not a status row" {
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -228,7 +228,7 @@ test "SONNY-6345: GRANT / REVOKE for a user that does not exist is an error (427
     try testing.expectError(error.UserNotFound, w.run("GRANT READ ON GRAPH g1 TO ghost6345"));
     try testing.expectError(error.UserNotFound, w.run("REVOKE READ ON GRAPH g1 FROM ghost6345"));
     try testing.expectError(error.UserNotFound, w.run("CALL geode.auth.grant('READ', 'ghost6345', 'g1')"));
-    try testing.expectEqualStrings("42704", geode.proto_util.mapError(error.UserNotFound).code);
+    try testing.expectEqualStrings("42002", geode.proto_util.mapError(error.UserNotFound).code);
     // The user that exists is granted.
     try w.run("GRANT READ ON GRAPH g1 TO alice");
 }
