@@ -1273,8 +1273,8 @@ pub fn build(b: *std.Build) void {
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
     // SONNY-6622, SONNY-6628, SONNY-738: exactly one wal is compiled,
-    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.3 and
-    // timeseries-storage v0.2.22 still pin v0.1.24. Two wal packages cannot share one
+    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.5 pins
+    // v0.1.26 and timeseries-storage v0.2.22 v0.1.24. Two wal packages cannot share one
     // compilation (Zig 0.16: "file exists in modules 'build_optionsN' and
     // 'build_optionsM'"), so every library that imports "wal" (graph-storage
     // here, raft below, timeseries-storage further down) has that import
@@ -1290,8 +1290,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const raft_ext_mod = raft_dep.module("raft");
-    // SONNY-6628: raft v0.2.3 pins wal v0.1.24, geode v0.1.25 (truncateAfter
-    // fails closed); one wal per compilation (see graph_storage_mod above).
+    // SONNY-6628: raft pins its own wal (v0.2.5: v0.1.26, which only moves
+    // otel), geode v0.1.25 (truncateAfter fails closed); one wal per
+    // compilation (see graph_storage_mod above).
     // raft's root module is the only one of its modules that imports "wal".
     raft_ext_mod.addImport("wal", wal_ext_mod);
 

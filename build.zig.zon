@@ -776,9 +776,18 @@
         // re-sent after 16, 32, 64 ... rounds (at most 256,
         // SNAPSHOT_RESEND_MAX_TICKS), not at the next round, and a
         // successful install resets the backoff.
+        // 2026-11-16: v0.2.5 (SONNY-6652, SONNY-6653; v0.2.4 only moved wal to
+        // v0.1.26 and otel to v0.1.29, routed to geode's wal in build.zig) --
+        // InstallSnapshotResponse gains last_index / next_offset: a follower
+        // acknowledges a snapshot it already holds, and reports the offset to
+        // resume at after a lost chunk instead of refusing the rest; staged
+        // snapshot save (snapshotPoint / Storage.stageSnapshot off the lock,
+        // commitSnapshot under it); Config.stream_snapshots hands sends to
+        // the consumer (Ready.snapshot_sends, streamSnapshot); FileStorage
+        // commits a snapshot's data before its metadata.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.3#27b2b22dfb29cde087f419741592658d243868c2",
-            .hash = "raft-0.2.3-PqJyvo_wCQC0iRuXBMl6JlTHp2vqdr7E8w-ohPOFRazg",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git#d700b1d3bba64e217a402be9f43ed2e2956f5539",
+            .hash = "raft-0.2.5-PqJyvrMaCwA4GKyaq0egckbtkPu-Dtb96cHAH2t7nCFL",
         },
 
         // =======================================================================
