@@ -3073,6 +3073,26 @@
 
 ### Fixed
 
+- **Label counters stay exact for names past 512 bytes; the label and
+  relationship-type index readers find such names; `setEdgeProperty` of a
+  missing edge fails (SONNY-6302 items 4 and 5).** Adding a node to a
+  label posting bumped the (graph, label) count with a key that, past its
+  512-byte stack buffer, was allocated after the insert and `catch
+  return`ed (the count stayed low); removing a label built the keys of its
+  counter decrements (graph and label, graph and tenant, label and
+  property) after the label was gone, with the same `catch return` (the
+  counts stayed high, and the tenant's label listing kept the label). The
+  key and the counter entry are now made before the insert, and
+  `removeNodeLabel`, `removeNodeLabelNoSave` and the create-path rollback
+  reserve the removers' key room first (`RemoverKeyRoom`, as the deletes
+  do). `getNodesByLabel`, `snapshotNodesByLabel`, `getEdgeIdsByType` and
+  the edge-type scan built their key on the stack only and answered "no
+  such label / type" past 512 bytes (`MATCH (n:L)` found nothing for such
+  a label); they look the key up without building it now.
+  **User-visible:** `setEdgeProperty` of an edge that does not exist is
+  `EdgeNotFound` (it returned success), as `setEdgePropertiesBatch` was.
+  Regression: `zig build test-sonny6302-label-count-and-missing-edge`.
+
 - **The storage adapter's engine-direct property reads report a read error
   instead of an absent property (SONNY-6640).** The bulk relationship-MERGE
   endpoint resolvers (`lookupNodeIdByLabelAndAllProps`,

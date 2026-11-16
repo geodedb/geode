@@ -5895,6 +5895,14 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
         // A failed `addToLabelIndex` may have made the label's (empty)
         // posting, so the label it failed on is undone too.
+        // SONNY-6302: the rollback's key room for long names, reserved and
+        // installed before its first step (only the removers below use it),
+        // so none misses a key past 512 bytes.
+        var longest = @max(graph_name.len, tenant.len);
+        for (labels) |label| longest = @max(longest, label.len);
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longest);
+        defer keys.deinit(self.allocator);
+        keys.install();
         var labels_touched: usize = 0;
         errdefer for (labels[0..labels_touched]) |label| self.removeFromLabelIndex(graph_name, label, reserved_id);
         for (labels) |label| {
@@ -6167,6 +6175,35 @@ pub const GraphStore = struct {
         return result.value_ptr;
     }
 
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=LongNameKeyLookup; STATUS=TESTED; TEST=tests/test_sonny6302_label_count_and_missing_edge.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6302: a "graph\x00name" key of `label_index` / `edge_type_index`
+    /// looked up without building it (`getAdapted`): no allocation and no
+    /// length limit. The readers built it in a 512-byte stack buffer and
+    /// answered "no such label" (or type) past it, so `MATCH (n:L)` found
+    /// nothing for a label whose key is longer.
+    const GraphNameKey = struct {
+        graph: []const u8,
+        name: []const u8,
+    };
+
+    const GraphNameKeyContext = struct {
+        /// The hash `std.StringHashMap` takes of the joined key.
+        pub fn hash(_: GraphNameKeyContext, k: GraphNameKey) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(k.graph);
+            h.update("\x00");
+            h.update(k.name);
+            return h.final();
+        }
+
+        pub fn eql(_: GraphNameKeyContext, k: GraphNameKey, key: []const u8) bool {
+            return key.len == k.graph.len + 1 + k.name.len and
+                std.mem.eql(u8, key[0..k.graph.len], k.graph) and
+                key[k.graph.len] == 0 and
+                std.mem.eql(u8, key[k.graph.len + 1 ..], k.name);
+        }
+    };
+
     fn formatGraphLabelKey(
         scratch: []u8,
         allocator: std.mem.Allocator,
@@ -6250,6 +6287,15 @@ pub const GraphStore = struct {
         return n;
     }
 
+    /// SONNY-6302: the longest name removing `label` from `node` builds a
+    /// remover key from: its graph, tenant, the label and its property keys.
+    fn longestLabelRemovalName(node: *const Node, label: []const u8) usize {
+        var n = @max(@max(node.graph_name.len, node.tenant_id.len), label.len);
+        var it = node.properties.iterator();
+        while (it.next()) |p| n = @max(n, p.key_ptr.*.len);
+        return n;
+    }
+
     fn longestEdgeRemovalName(edge: *const Edge) usize {
         return @max(@max(edge.graph_name.len, edge.tenant_id.len), edge.label.len);
     }
@@ -6273,71 +6319,30 @@ pub const GraphStore = struct {
         try self.label_counts_by_graph.put(owned_key, LabelCountValue.init(0));
     }
 
-    fn bumpGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=LongNameLabelCounter; STATUS=TESTED; TEST=tests/test_sonny6302_label_count_and_missing_edge.zig; OWNER=storage; UPDATED=2026-11-15
+    /// Count one more node under (graph, label). SONNY-6302: fails with
+    /// OutOfMemory when the counter's key (past its 512-byte stack buffer)
+    /// or entry cannot be allocated; it returned, leaving the count low.
+    fn bumpGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) error{OutOfMemory}!void {
         var key_buf: [512]u8 = undefined;
-        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
+        const formatted = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, label);
         defer if (formatted.owned) |owned| self.allocator.free(owned);
-
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.label_count_rwlock.lockSharedUncancelable(io);
-        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
-            _ = count.fetchAdd(1, .monotonic);
-            self.label_count_rwlock.unlockShared(io);
-            return;
-        }
-        self.label_count_rwlock.unlockShared(io);
-
-        self.label_count_rwlock.lockUncancelable(io);
-        defer self.label_count_rwlock.unlock(io);
-        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
-            _ = count.fetchAdd(1, .monotonic);
-            return;
-        }
-
-        const owned_key = if (formatted.owned) |owned| blk: {
-            formatted.owned = null;
-            break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
-        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(1)) catch {
-            self.allocator.free(owned_key);
-            return;
-        };
+        try self.ensureGraphLabelCount(graph_name, label);
+        self.addToEnsuredGraphLabelCount(formatted.key, 1);
     }
 
-    /// T2b (hydration merge, label family): bulk variant of
-    /// `bumpGraphLabelCount` — one refcount add for `n` freshly inserted
-    /// posting ids. Final counter value is identical to calling the
-    /// single-bump version `n` times (atomic adds commute).
-    fn bumpGraphLabelCountBy(self: *GraphStore, graph_name: []const u8, label: []const u8, n: usize) void {
+    /// SONNY-6302: add `n` to the (graph, label) counter at `key` (built by
+    /// `formatGraphLabelKey`), which `ensureGraphLabelCount` made. Allocates
+    /// nothing, so a posting insert it follows cannot leave the count low:
+    /// `addToLabelIndex` and `mergeIntoLabelPosting` build the key and the
+    /// entry before they insert. An entry gone since then went with its
+    /// graph (a reset or DROP GRAPH), and its count with it.
+    fn addToEnsuredGraphLabelCount(self: *GraphStore, key: []const u8, n: usize) void {
         if (n == 0) return;
-        var key_buf: [512]u8 = undefined;
-        var formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
-
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_count_rwlock.lockSharedUncancelable(io);
-        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
-            _ = count.fetchAdd(n, .monotonic);
-            self.label_count_rwlock.unlockShared(io);
-            return;
-        }
-        self.label_count_rwlock.unlockShared(io);
-
-        self.label_count_rwlock.lockUncancelable(io);
-        defer self.label_count_rwlock.unlock(io);
-        if (self.label_counts_by_graph.getPtr(formatted.key)) |count| {
-            _ = count.fetchAdd(n, .monotonic);
-            return;
-        }
-
-        const owned_key = if (formatted.owned) |owned| blk: {
-            formatted.owned = null;
-            break :blk owned;
-        } else std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ graph_name, label }) catch return;
-        self.label_counts_by_graph.put(owned_key, LabelCountValue.init(n)) catch {
-            self.allocator.free(owned_key);
-            return;
-        };
+        defer self.label_count_rwlock.unlockShared(io);
+        if (self.label_counts_by_graph.getPtr(key)) |count| _ = count.fetchAdd(n, .monotonic);
     }
 
     fn decGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
@@ -7012,6 +7017,10 @@ pub const GraphStore = struct {
     // `ArrayList(u64)` via `LabelPosting.mutex`.
     // CANARY: REQ=REQ-QUIC-HC-135; FEATURE="HighConcurrencyMutations"; ASPECT=AppendOrderedLabelPosting; STATUS=TESTED; TEST=tests/perf/test_label_posting_concurrent_insert.zig; OWNER=storage; UPDATED=2026-05-28
     pub fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
+        // SONNY-6302: the counter's key and entry before the insert.
+        var key_buf: [512]u8 = undefined;
+        const count_key = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, label);
+        defer if (count_key.owned) |owned| self.allocator.free(owned);
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
         defer self.label_index_mutex.unlock(io);
@@ -7021,7 +7030,7 @@ pub const GraphStore = struct {
         posting.lock();
         defer posting.unlock();
         const inserted = try insertIntoPostingLocked(posting, self.allocator, node_id);
-        if (inserted) self.bumpGraphLabelCount(graph_name, label);
+        if (inserted) self.addToEnsuredGraphLabelCount(count_key.key, 1);
     }
 
     /// Binary-search insert into a sorted ArrayList(u64), maintaining
@@ -7106,6 +7115,10 @@ pub const GraphStore = struct {
     /// postings until the build completes.
     fn mergeIntoLabelPosting(self: *GraphStore, graph_name: []const u8, label: []const u8, sorted_ids: []const u64) !void {
         if (sorted_ids.len == 0) return;
+        // SONNY-6302: the counter's key and entry before the swap.
+        var key_buf: [512]u8 = undefined;
+        const count_key = try formatGraphLabelKey(&key_buf, self.allocator, graph_name, label);
+        defer if (count_key.owned) |owned| self.allocator.free(owned);
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
         defer self.label_index_mutex.unlock(io);
@@ -7157,7 +7170,7 @@ pub const GraphStore = struct {
         }
         posting.list.deinit(self.allocator);
         posting.list = merged;
-        self.bumpGraphLabelCountBy(graph_name, label, inserted);
+        self.addToEnsuredGraphLabelCount(count_key.key, inserted);
     }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
@@ -8256,9 +8269,8 @@ pub const GraphStore = struct {
         // src/storage/graph_storage_adapter.zig:2237 and
         // tests/test_bsp_race_regression.zig.
 
-        // Create composite key "graph_name:label"
-        var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, label }) catch return null;
+        // The composite key "graph_name\x00label", unbuilt (SONNY-6302).
+        const key = GraphNameKey{ .graph = graph_name, .name = label };
 
         // PHASE 1b concurrency fix: the `label_index` writer (`addToLabelIndex`,
         // reached by hydration) already rehashes the outer map under
@@ -8271,7 +8283,7 @@ pub const GraphStore = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         @constCast(self).label_index_mutex.lockUncancelable(io);
         defer @constCast(self).label_index_mutex.unlock(io);
-        if (self.label_index.get(key)) |posting| {
+        if (self.label_index.getAdapted(key, GraphNameKeyContext{})) |posting| {
             return posting.list.items;
         }
         return null;
@@ -8295,8 +8307,7 @@ pub const GraphStore = struct {
         label: []const u8,
     ) !?[]u64 {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
-        var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, label }) catch return null;
+        const key = GraphNameKey{ .graph = graph_name, .name = label }; // SONNY-6302
 
         // PHASE 1b concurrency fix: guard the outer getPtr with `label_index_mutex`
         // (same ordering as the writer: outer mutex -> posting leaf mutex) so a
@@ -8306,7 +8317,7 @@ pub const GraphStore = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
         defer self.label_index_mutex.unlock(io);
-        const posting = self.label_index.getPtr(key) orelse return null;
+        const posting = self.label_index.getPtrAdapted(key, GraphNameKeyContext{}) orelse return null;
         posting.lock();
         defer posting.unlock();
         const copy = try allocator.dupe(u64, posting.list.items);
@@ -9277,6 +9288,12 @@ pub const GraphStore = struct {
             if (new_labels) |nl| self.allocator.free(nl);
         };
 
+        // SONNY-6302: the removers' key room, before the engine write; a
+        // remover whose key past 512 bytes could not be allocated left the
+        // label's counters high.
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestLabelRemovalName(&node_meta, label));
+        defer keys.deinit(self.allocator);
+
         if (adapter_remove) |vt| {
             const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
             try vt.removeNodeLabelFn.?(vt.ctx, node_meta.graph_name, slot_id, label);
@@ -9309,6 +9326,7 @@ pub const GraphStore = struct {
         node.labels = new_labels.?;
         taken = true;
 
+        keys.install(); // SONNY-6302
         // Remove label from index and free label memory
         self.removeFromLabelIndex(node.graph_name, label, node_id);
         // PERF-C (issue #814): mirror the bump done by `addNodeLabel`
@@ -11044,8 +11062,7 @@ pub const GraphStore = struct {
     /// Returns null if no edges of this type exist in the graph.
     pub fn getEdgeIdsByType(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) ?[]const u64 {
         @constCast(self).ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
-        var key_buf: [512]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_name, edge_type }) catch return null;
+        const key = GraphNameKey{ .graph = graph_name, .name = edge_type }; // SONNY-6302
 
         // SONNY-3233 (round 15, F5): the lookup under the index's lock. The
         // list it returns belongs to `graph_name`, whose writers the caller's
@@ -11053,7 +11070,7 @@ pub const GraphStore = struct {
         const eti_io = std.Io.Threaded.global_single_threaded.io();
         @constCast(&self.edge_type_index_lock).lockSharedUncancelable(eti_io);
         defer @constCast(&self.edge_type_index_lock).unlockShared(eti_io);
-        if (self.edge_type_index.get(key)) |list| {
+        if (self.edge_type_index.getAdapted(key, GraphNameKeyContext{})) |list| {
             return list.items;
         }
         return null;
@@ -11097,6 +11114,10 @@ pub const GraphStore = struct {
         try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
+        // SONNY-6302 (5): a missing edge is `EdgeNotFound`, as in
+        // setEdgePropertiesBatch, checked before the undo records anything;
+        // it was a successful no-op, so a SET on it reported success.
+        if ((try self.getEdgeHydratedChecked(edge_id)) == null) return error.EdgeNotFound;
         try self.undoRecordEdgeProperty(edge_id, key, false); // SONNY-3348 (round 18)
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
@@ -11140,11 +11161,11 @@ pub const GraphStore = struct {
         // SONNY-6268: the value's copy and, for a new key, the map slot are
         // made before the adapter write, so the in-memory write after it
         // cannot fail (a failed key copy left a slot with an undefined key).
-        const edge_meta = (try self.getEdgeHydratedChecked(edge_id));
-        const prep: ?PreparedPropertyPut = if (edge_meta) |e| try self.preparePropertyPut(&e.properties, key, effective_value) else null;
+        const edge_meta = (try self.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFound;
+        const prep = try self.preparePropertyPut(&edge_meta.properties, key, effective_value);
         var committed = false;
         errdefer if (!committed) {
-            if (prep) |p| self.cancelPropertyPut(&edge_meta.?.properties, p);
+            self.cancelPropertyPut(&edge_meta.properties, prep);
         };
 
         // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertySet; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
@@ -11155,15 +11176,15 @@ pub const GraphStore = struct {
         // success and a restart lost the value.
         if (global_vtable) |vt| {
             if (vt.setEdgePropertyFn) |f| {
-                if (edge_meta) |edge| {
-                    const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
-                    const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
-                    const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
-                    try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
-                }
+                const edge = edge_meta;
+                const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+                const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+                const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+                try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
             }
         }
-        if (prep) |p| {
+        {
+            const p = prep;
             {
                 // ENG-3954 / #874: edge parity with setNodeProperty — exclude
                 // concurrent readers across the realloc-and-free.
@@ -11175,7 +11196,7 @@ pub const GraphStore = struct {
                 if (self.edges.getPtrUnlocked(edge_id)) |edge| {
                     if (commitPropertyPut(&edge.properties, key, p)) |old| freePropertyValue(self, old);
                 } else {
-                    self.cancelPropertyPut(&edge_meta.?.properties, p);
+                    self.cancelPropertyPut(&edge_meta.properties, p);
                 }
                 committed = true;
             }
@@ -11562,22 +11583,20 @@ pub const GraphStore = struct {
         // `graphs_mutex`, and each posting copied under the index's lock.
         const eti_io = std.Io.Threaded.global_single_threaded.io();
         if (graph_name) |gn| {
-            var key_buf: [512]u8 = undefined;
-            const probe = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ gn, edge_type }) catch return &.{};
+            const probe = GraphNameKey{ .graph = gn, .name = edge_type }; // SONNY-6302
             self.edge_type_index_lock.lockSharedUncancelable(eti_io);
             defer self.edge_type_index_lock.unlockShared(eti_io);
-            if (self.edge_type_index.get(probe)) |posting| {
+            if (self.edge_type_index.getAdapted(probe, GraphNameKeyContext{})) |posting| {
                 id_list.appendSlice(allocator, posting.items) catch return &.{};
             }
         } else {
             const names = self.graphNamesCopy(allocator) catch return &.{};
             defer freeGraphNames(allocator, names);
             for (names) |graph_key| {
-                var key_buf: [512]u8 = undefined;
-                const probe = std.fmt.bufPrint(&key_buf, "{s}\x00{s}", .{ graph_key, edge_type }) catch continue;
+                const probe = GraphNameKey{ .graph = graph_key, .name = edge_type }; // SONNY-6302
                 self.edge_type_index_lock.lockSharedUncancelable(eti_io);
                 defer self.edge_type_index_lock.unlockShared(eti_io);
-                if (self.edge_type_index.get(probe)) |posting| {
+                if (self.edge_type_index.getAdapted(probe, GraphNameKeyContext{})) |posting| {
                     id_list.appendSlice(allocator, posting.items) catch continue;
                 }
             }
@@ -16879,6 +16898,10 @@ pub const GraphStore = struct {
             }
 
             if (found_index) |index| {
+                // SONNY-6302: the removers' key room, before any change.
+                var keys = try RemoverKeyRoom.reserve(self.allocator, longestLabelRemovalName(node, label));
+                defer keys.deinit(self.allocator);
+
                 // Free the label being removed
                 self.allocator.free(node.labels[index]);
 
@@ -16906,6 +16929,7 @@ pub const GraphStore = struct {
                     node.labels = new_labels;
                 }
 
+                keys.install(); // SONNY-6302
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
                 // SONNY-3109: mirror removeNodeLabel (the undo of a SET n:L).
                 self.removeNodeMergeEntriesForLabel(node, label);
@@ -20325,7 +20349,10 @@ test "REQ-QUIC-HC-163: label count refcounts allow concurrent hot-label reads an
         fn run(ctx: *@This()) void {
             while (!ctx.start.load(.acquire)) std.Thread.yield() catch {};
             for (0..iterations) |_| {
-                ctx.store.bumpGraphLabelCount("default", "HotLabel");
+                ctx.store.bumpGraphLabelCount("default", "HotLabel") catch {
+                    _ = ctx.errors.fetchAdd(1, .monotonic);
+                    continue;
+                };
                 if (ctx.store.countGraphLabel("default", "HotLabel") == 0) {
                     _ = ctx.errors.fetchAdd(1, .monotonic);
                 }
