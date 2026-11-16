@@ -16,7 +16,7 @@ Geode passes **120/120 cases of its ISO/IEC 39075:2024 GQL conformance suite** (
 
 All ISO GQL reserved keywords are recognized and functional:
 
-```gql
+```text
 -- Query keywords
 MATCH, OPTIONAL, WHERE, RETURN, WITH, ORDER, BY, LIMIT, OFFSET, DISTINCT
 
@@ -102,10 +102,15 @@ aliases (also on `YIELD` items), parameters (`$name`, session parameters),
 `VALUES` column names, CTE names and list-comprehension variables:
 
 ```gql
-MATCH (type:T) SET type.x = 1 REMOVE type.y RETURN type   -- TYPE is non-reserved: OK
+MATCH (type:T) SET type.x = 1 REMOVE type.y RETURN type;  -- TYPE is non-reserved: OK
+MATCH (`match`:X) RETURN `match`;                         -- OK: a delimited identifier
+RETURN count(*) AS c, upper('a');                         -- OK: a call is the built-in
+```
+
+Refused:
+
+```text
 MATCH (match:X) RETURN match                               -- 42000: `match` is a reserved word
-MATCH (`match`:X) RETURN `match`                           -- OK: a delimited identifier
-RETURN count(*) AS c, upper('a')                           -- OK: a call is the built-in
 ```
 
 A refusal is `42000`, naming the word and its delimited form ("`` `sum` `` is a
@@ -172,50 +177,50 @@ and 97 in 39 integration-harness specs.
 
 ```gql
 -- Primitive types
-RETURN true, false, null
-RETURN 42, -123, 3.14, 'hello world'
+RETURN true, false, null;
+RETURN 42, -123, 3.14, 'hello world';
 
 -- Numeric literals (21.2): exact without an exponent, approximate with one
-RETURN 3.14      -- DECIMAL (exact numeric literal)
-RETURN 1.5E0     -- DOUBLE  (approximate numeric literal, SONNY-6596)
+RETURN 3.14;     -- DECIMAL (exact numeric literal)
+RETURN 1.5E0;    -- DOUBLE  (approximate numeric literal, SONNY-6596)
 
 -- Temporal types
-RETURN date('2024-01-15')
-RETURN datetime('2024-01-15T14:30:00')
-RETURN time('14:30:00')
+RETURN date('2024-01-15');
+RETURN datetime('2024-01-15T14:30:00');
+RETURN time('14:30:00');
 
 -- Collections
-RETURN [1, 2, 3]
-RETURN {name: 'Alice', age: 30}
+RETURN [1, 2, 3];
+RETURN {name: 'Alice', age: 30};
 ```
 
 ### Graph Pattern Matching
 
 ```gql
 -- Basic patterns
-MATCH (person:Person) RETURN person
+MATCH (person:Person) RETURN person;
 
 -- Relationship patterns
-MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b
+MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b;
 
 -- Variable-length paths
-MATCH (a)-[*1..3]->(b) RETURN a, b
-MATCH (a)-[*..5]->(b) RETURN a, b
-MATCH (a)-[*2..]->(b) RETURN a, b
+MATCH (a)-[*1..3]->(b) RETURN a, b;
+MATCH (a)-[*..5]->(b) RETURN a, b;
+MATCH (a)-[*2..]->(b) RETURN a, b;
 
 -- Path variables
-MATCH path = (a)-[:KNOWS]->(b) RETURN path
+MATCH path = (a)-[:KNOWS]->(b) RETURN path;
 
 -- Multiple patterns
-MATCH (a)-[]->(b), (b)-[]->(c) RETURN a, b, c
+MATCH (a)-[]->(b), (b)-[]->(c) RETURN a, b, c;
 
 -- Optional matching
-OPTIONAL MATCH (n)-[]->(m) RETURN n, m
+OPTIONAL MATCH (n)-[]->(m) RETURN n, m;
 
 -- Abbreviated edge patterns (16.7)
-MATCH (a)-(b) RETURN a, b      -- any direction
-MATCH (a)<-(b) RETURN a, b     -- pointing left
-MATCH (a)<->(b) RETURN a, b    -- left or right
+MATCH (a)-(b) RETURN a, b;     -- any direction
+MATCH (a)<-(b) RETURN a, b;    -- pointing left
+MATCH (a)<->(b) RETURN a, b;   -- left or right
 ```
 
 **Abbreviated edge patterns (ISO/IEC 39075:2024 16.7, SONNY-6267).** The
@@ -235,26 +240,26 @@ test-sonny6267-abbreviated-edge-patterns`.
 
 ```gql
 -- Comparison operators
-RETURN 1 = 1, 2 <> 2, 3 < 4, 5 >= 5
+RETURN 1 = 1, 2 <> 2, 3 < 4, 5 >= 5;
 
 -- Logical operators  
-RETURN true AND false, true OR false, NOT true
+RETURN true AND false, true OR false, NOT true;
 
 -- Arithmetic operators
-RETURN 1 + 2 - 3 * 4 / 5
+RETURN 1 + 2 - 3 * 4 / 5;
 
 -- String operators
-RETURN 'hello' || ' world'
-RETURN 'hello' STARTS WITH 'he'
-RETURN 'world' ENDS WITH 'ld'
-RETURN 'hello world' CONTAINS 'lo wo'
+RETURN 'hello' || ' world';
+RETURN 'hello' STARTS WITH 'he';
+RETURN 'world' ENDS WITH 'ld';
+RETURN 'hello world' CONTAINS 'lo wo';
 
 -- Pattern matching
-RETURN text =~ 'pattern.*'
+RETURN text =~ 'pattern.*';
 
 -- Set operations
-RETURN 1 IN [1, 2, 3]
-RETURN x IS NULL
+RETURN 1 IN [1, 2, 3];
+RETURN x IS NULL;
 ```
 
 ### Built-in Functions
@@ -262,31 +267,31 @@ RETURN x IS NULL
 #### Aggregation Functions
 
 ```gql
-RETURN COUNT(*), COUNT(DISTINCT n.id)
-RETURN SUM(n.value), AVG(n.age)
-RETURN MIN(n.score), MAX(n.score)
+RETURN COUNT(*), COUNT(DISTINCT n.id);
+RETURN SUM(n.value), AVG(n.age);
+RETURN MIN(n.score), MAX(n.score);
 ```
 
 #### String Functions
 
 ```gql
-RETURN length('hello'), upper('world'), lower('HELLO')
-RETURN substring('hello', 1, 3), replace('hello world', 'world', 'universe')
-RETURN trim(' text '), reverse('hello'), split('a,b,c', ',')
+RETURN length('hello'), upper('world'), lower('HELLO');
+RETURN substring('hello', 1, 3), replace('hello world', 'world', 'universe');
+RETURN trim(' text '), reverse('hello'), split('a,b,c', ',');
 ```
 
 #### Math Functions
 
 ```gql
-RETURN abs(-5), sqrt(16), ceil(3.2), floor(3.8), round(3.5)
-RETURN sign(-5), log(10), exp(2), rand()
+RETURN abs(-5), sqrt(16), ceil(3.2), floor(3.8), round(3.5);
+RETURN sign(-5), log(10), exp(2), rand();
 ```
 
 #### List Functions
 
 ```gql
-RETURN size([1,2,3]), head([1,2,3]), tail([1,2,3]), last([1,2,3])
-RETURN range(1, 10)
+RETURN size([1,2,3]), head([1,2,3]), tail([1,2,3]), last([1,2,3]);
+RETURN range(1, 10);
 ```
 
 `range(start, end[, step])` is a Geode extension: ISO/IEC 39075:2024 defines
@@ -299,38 +304,38 @@ step) to the end. See [TYPES_AND_FUNCTIONS.md](TYPES_AND_FUNCTIONS.md#list-funct
 #### Type Functions
 
 ```gql
-RETURN type(value), exists(n.property)
-RETURN toString(123), toInteger('456')
+RETURN type(value), exists(n.property);
+RETURN toString(123), toInteger('456');
 ```
 
 #### Utility Functions
 
 ```gql
-RETURN now(), rand()
+RETURN current_timestamp(), rand();
 ```
 
 ### Data Manipulation Language (DML)
 
 ```gql
 -- Creating nodes and relationships
-CREATE (alice:Person {name: 'Alice', age: 30})
-CREATE (alice)-[:KNOWS]->(bob)
+CREATE (alice:Person {name: 'Alice', age: 30});
+CREATE (alice)-[:KNOWS]->(bob);
 
 -- Setting properties
-MATCH (n:Person) SET n.updated = now()
-MATCH (n) SET n.property = value
+MATCH (n:Person) SET n.updated = current_timestamp();
+MATCH (n) SET n.property = value;
 
 -- Removing properties
-MATCH (n) REMOVE n.temporary_field
+MATCH (n) REMOVE n.temporary_field;
 
 -- Deleting elements
-MATCH (n:Person) DELETE n
-MATCH (n) DETACH DELETE n
+MATCH (n:Person) DELETE n;
+MATCH (n) DETACH DELETE n;
 
 -- Merge (upsert) operations
 MERGE (person:Person {email: 'alice@example.com'})
 ON CREATE SET person.created = datetime()
-ON MATCH SET person.last_seen = now()
+ON MATCH SET person.last_seen = current_timestamp()
 ```
 
 ### Query Composition
@@ -450,35 +455,35 @@ Residual limits (not yet supported / not covered):
 
 ```gql
 -- Session management
-USE GRAPH social_network
-SET SESSION GRAPH = 'production'
+USE GRAPH social_network;
+SESSION SET GRAPH production;
 
 -- Transaction control
-START TRANSACTION
-MATCH (n:Person) SET n.processed = true
-COMMIT
+START TRANSACTION;
+MATCH (n:Person) SET n.processed = true;
+COMMIT;
 
 -- Alternative rollback
-START TRANSACTION
-CREATE (n:Test)
-ROLLBACK
+START TRANSACTION;
+CREATE (n:Test);
+ROLLBACK;
 ```
 
 ### Procedure Calls
 
 ```gql
 -- Basic procedure calls
-CALL db.labels()
-CALL db.propertyKeys()
+CALL db.labels();
+CALL db.propertyKeys();
 
 -- With YIELD clause
 CALL db.labels() YIELD label
 RETURN label ORDER BY label
 
--- With RETURN clause
-CALL db.schema.nodeTypeProperties()
-YIELD nodeType, propertyName, propertyTypes
-RETURN nodeType, collect(propertyName) AS properties
+-- With RETURN clause (an aggregate over the yielded rows)
+CALL db.propertyKeys()
+YIELD propertyKey
+RETURN count(propertyKey) AS key_count, collect(propertyKey) AS names
 
 -- Filtering a procedure's rows: the FILTER statement (14.6)
 CALL db.labels() YIELD label
@@ -520,8 +525,8 @@ the condition sees the yielded columns by the names the `YIELD` gives them
 (aliases included); after `MATCH ... CALL` it also sees the MATCH variables.
 
 ```gql
-MATCH (n:Person) FILTER n.age >= 18 FILTER WHERE n.active RETURN n.name
-MATCH (p:Person) CALL db.labels() YIELD label FILTER label <> 'Person' RETURN p.name, label
+MATCH (n:Person) FILTER n.age >= 18 FILTER WHERE n.active RETURN n.name;
+MATCH (p:Person) CALL db.labels() YIELD label FILTER label <> 'Person' RETURN p.name, label;
 ```
 
 A `WHERE` directly after `YIELD` (the Cypher form) is not ISO GQL (16.14
@@ -544,20 +549,20 @@ variable-length expansion (SONNY-6564):
 
 ```gql
 -- ISO 16.11 <graph pattern quantifier> after the edge pattern
-MATCH (a)-[:R]->{1,2}(b) RETURN b      -- 1 to 2 hops
-MATCH (a)-[:R]->{2}(b) RETURN b        -- exactly 2 (fixed quantifier)
-MATCH (a)-[:R]->{1,}(b) RETURN b       -- at least 1
-MATCH (a)-[:R]->{,3}(b) RETURN b       -- 0 to 3 (16.11 SR 2 d: lower bound 0)
-MATCH (a)-[:R]->+(b) RETURN b          -- {1,}
-MATCH (a)-[:R]->*(b) RETURN b          -- {0,}
-MATCH (a)->{1,2}(b) RETURN b           -- an abbreviated edge, quantified
+MATCH (a)-[:R]->{1,2}(b) RETURN b;     -- 1 to 2 hops
+MATCH (a)-[:R]->{2}(b) RETURN b;       -- exactly 2 (fixed quantifier)
+MATCH (a)-[:R]->{1,}(b) RETURN b;      -- at least 1
+MATCH (a)-[:R]->{,3}(b) RETURN b;      -- 0 to 3 (16.11 SR 2 d: lower bound 0)
+MATCH (a)-[:R]->+(b) RETURN b;         -- {1,}
+MATCH (a)-[:R]->*(b) RETURN b;         -- {0,}
+MATCH (a)->{1,2}(b) RETURN b;          -- an abbreviated edge, quantified
 
 -- Cypher form, inside the brackets
-MATCH (a)-[*]->(b) RETURN a, b         -- 1 or more (not ISO `*`, which is {0,})
-MATCH (a)-[*3]->(b) RETURN a, b        -- exactly 3
-MATCH (a)-[*2..5]->(b) RETURN a, b     -- 2 to 5
-MATCH (a)-[*3..]->(b) RETURN a, b      -- at least 3
-MATCH (a)-[*..4]->(b) RETURN a, b      -- 1 to 4
+MATCH (a)-[*]->(b) RETURN a, b;        -- 1 or more (not ISO `*`, which is {0,})
+MATCH (a)-[*3]->(b) RETURN a, b;       -- exactly 3
+MATCH (a)-[*2..5]->(b) RETURN a, b;    -- 2 to 5
+MATCH (a)-[*3..]->(b) RETURN a, b;     -- at least 3
+MATCH (a)-[*..4]->(b) RETURN a, b;     -- 1 to 4
 ```
 
 16.11 SR 3 is enforced: an upper bound must be above 0 and not below the
@@ -569,7 +574,7 @@ path pattern, `((a)-[:R]->(b)){1,3}` (Feature G035, quantified paths).
 
 Comprehensive syntax validation with clear error messages:
 
-```gql
+```text
 -- Invalid syntax examples (will fail with clear errors)
 MATCH (n:) RETURN n           -- Missing label name
 RETURN (1 + 2                 -- Unclosed parenthesis
@@ -586,8 +591,8 @@ MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person)
 RETURN a.name, b.name, length(path)
 
 -- All variations work correctly:
-MATCH path = (a)-[*2..4]->(b) RETURN path
-MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN path
+MATCH path = (a)-[*2..4]->(b) RETURN path;
+MATCH path = (a:Person)-[:KNOWS]->(b:Person) RETURN path;
 MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN length(path) AS hops, b.name AS reachable
 ```
 
@@ -599,16 +604,23 @@ MATCH path = (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN length(path) AS hops, b
 
 ### Path Mode Specifiers
 
-**Fully implemented as of January 2026** per ISO/IEC 39075:2024:
+The four path modes of ISO/IEC 39075:2024 16.6 are parsed and executed:
 
 ```gql
--- All path modes parsed AND executed with correct semantics
-MATCH SHORTEST (a)-[*]->(b) RETURN a, b      -- Shortest path (Dijkstra-based)
-MATCH ANY SHORTEST (a)-[*]->(b) RETURN a, b  -- Any shortest path
-MATCH WALK (a)-[*]->(b) RETURN a, b          -- No restrictions (can revisit nodes/edges)
-MATCH TRAIL (a)-[*]->(b) RETURN a, b         -- Edges cannot repeat
-MATCH ACYCLIC (a)-[*]->(b) RETURN a, b       -- No repeated nodes (no cycles)
-MATCH SIMPLE (a)-[*]->(b) RETURN a, b        -- No repeated nodes except start=end allowed
+MATCH WALK (a)-[*]->(b) RETURN a, b;         -- No restrictions (can revisit nodes/edges)
+MATCH TRAIL (a)-[*]->(b) RETURN a, b;        -- Edges cannot repeat
+MATCH ACYCLIC (a)-[*]->(b) RETURN a, b;      -- No repeated nodes (no cycles)
+MATCH SIMPLE (a)-[*]->(b) RETURN a, b;       -- No repeated nodes except start=end allowed
+```
+
+Not supported: the ISO path search prefixes (`ALL SHORTEST`, `ANY SHORTEST`,
+`SHORTEST k`, `ANY`; 16.6) are syntax errors. Use `shortestPath(...)` /
+`allShortestPaths(...)` in a pattern instead
+(`MATCH p = shortestPath((a)-[*]->(b)) RETURN p`).
+
+```text
+MATCH SHORTEST (a)-[*]->(b) RETURN a, b
+MATCH ANY SHORTEST (a)-[*]->(b) RETURN a, b
 ```
 
 **Implementation Details**:

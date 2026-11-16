@@ -69,7 +69,12 @@ pub const RefreshMethod = enum {
 
 ### View Lifecycle Management
 
-```gql
+Not supported as GQL: Geode has no `CREATE MATERIALIZED VIEW` statement (it
+is a syntax error). The manager is reached through its Zig API
+(`MaterializedViewManager`, see the scope note above); the block below
+sketches the view definitions it models.
+
+```text
 -- Create materialized view with auto-scheduled refresh
 CREATE MATERIALIZED VIEW user_activity_summary AS
 MATCH (u:User)-[a:ACTION]->(t:Target)

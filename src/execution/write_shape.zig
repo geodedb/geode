@@ -1011,6 +1011,12 @@ fn allowQuery(q: ast.Query, ctx: PartCtx, params: *const Names) Error!void {
         try allowWithFor(q, fr.*, ctx, params);
         return;
     }
+    // `MATCH ... WITH ... FOR x IN ... <body>`: the first part is a read.
+    if (matchWithFor(q)) |fr| {
+        if (ctx.union_part) return error.WriteClauseNotApplied;
+        try allowMatchWithFor(q, fr.*, ctx, params);
+        return;
+    }
     var part = q;
     if (q.next_query) |next| {
         // A GROUP BY or HAVING on the RETURN after a chained CREATE or MERGE
@@ -1042,6 +1048,61 @@ fn allowWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const
         if (inner.outer.has(name) or (params.has(name) and !same_param)) return error.WriteClauseNotApplied;
         inner.outer.add(name);
     }
+    const body = fr.body orelse return error.WriteClauseNotApplied;
+    try allowForHeader(fr, &inner, params);
+    try allowQuery(body.*, inner, params);
+}
+
+// CANARY: REQ=REQ-SONNY-6613-MATCH-WITH-FOR-WRITE; FEATURE="ForStatement"; ASPECT=WriteBodyAfterMatchWith; STATUS=TESTED; TEST=tests/test_sonny6613_match_with_for_write.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6613 item 3b: the FOR of `MATCH ... WITH ... FOR x IN <list>
+/// <body>` whose body writes (ISO/IEC 39075:2024 14.8: the FOR extends the
+/// WITH's working table): `q`'s next part holds the FOR alone (the parser's
+/// `parseForContinuation`, after a WITH or, as `WITH <its variables>`, after
+/// the MATCH). The dispatcher runs `q` without it as the read it is, then
+/// the body over every row of that read (`executeForWithBindings`). Null for
+/// any other shape.
+pub fn matchWithFor(q: ast.Query) ?*ast.ForStatement {
+    const next = q.next_query orelse return null;
+    if (q.match.chains.len == 0 or q.with_clause == null or q.is_initial_with) return null;
+    const fr = next.for_statement orelse return null;
+    const body = fr.body orelse return null;
+    if (!queryWrites(body.*)) return null;
+    // The next part is the FOR and nothing else.
+    if (next.next_query != null or next.match.chains.len != 0 or next.with_clause != null or
+        next.where_clause != null or next.filter_clause != null or next.unwind_clause != null or
+        next.call_clause != null or next.initial_call_subquery != null or next.cte_list != null or
+        next.let_bindings.len != 0 or next.inline_let_bindings.len != 0 or next.initial_with != null or
+        next.create_pattern != null or next.merge_statement != null or next.set_clauses.len != 0 or
+        next.remove_clauses.len != 0 or next.delete_items.len != 0 or next.ret.items.len != 0 or
+        next.group_by != null or next.having != null or next.order_by != null or next.limit != null or
+        next.offset != null or next.limit_param != null or next.offset_param != null) return null;
+    return fr;
+}
+
+/// `MATCH ... WITH <items> FOR x IN <list> <body>` (`matchWithFor`): the first
+/// part reads (its WHERE, DISTINCT, grouping, ORDER BY and window are a
+/// read's, run as one), and nothing else; the body sees the WITH's names as
+/// parameters, as after a WITH of values (`allowWithFor`), so a pattern
+/// variable the WITH does not pass on is out of scope there, and a WITH name
+/// is a value, never a pattern endpoint (`checkScope`).
+fn allowMatchWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const Names) Error!void {
+    var first = q;
+    first.next_query = null;
+    if (partWrites(first) or q.unwind_clause != null or q.call_clause != null or q.initial_call_subquery != null or
+        q.initial_with != null or q.cte_list != null or q.let_bindings.len != 0 or q.for_statement != null or
+        q.optional_match or q.select_projection) return error.WriteClauseNotApplied;
+    for (q.match.chains) |chain| if (chain.is_optional) return error.WriteClauseNotApplied;
+    const wc = q.with_clause.?;
+    var inner = ctx;
+    for (wc.items) |item| {
+        const name = itemName(item) orelse return error.WriteClauseNotApplied;
+        // `WITH *`: no name to bind.
+        if (std.mem.eql(u8, name, "*")) return error.WriteClauseNotApplied;
+        const same_param = item.expr == .Param and std.mem.eql(u8, item.expr.Param, name);
+        if (inner.outer.has(name) or (params.has(name) and !same_param)) return error.WriteClauseNotApplied;
+        inner.outer.add(name);
+    }
+    if (inner.outer.overflow) return error.WriteClauseNotApplied;
     const body = fr.body orelse return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
     try allowQuery(body.*, inner, params);

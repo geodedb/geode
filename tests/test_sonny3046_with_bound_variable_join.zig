@@ -188,12 +188,6 @@ const Case = struct {
     /// Two hops or more: not run after a reload (SONNY-3377 makes a
     /// persisted multi-hop read after a reload no oracle).
     multi_hop: bool = false,
-    /// The statement keeps a path value in a row. A path's node and
-    /// relationship arrays are never freed with the result, on any session
-    /// and without any chain (`MATCH p = (g:Q {k: 1})-[:R]->(:X) RETURN p`
-    /// leaks them too): a separate, pre-existing defect. Its answer is still
-    /// checked, on an arena.
-    path_leak: bool = false,
 };
 
 const Failures = struct {
@@ -218,12 +212,10 @@ const Failures = struct {
 
 fn runCase(s: *Session, f: *Failures, c: Case) !void {
     const aa = s.arena.allocator();
+    // SONNY-6613: a statement that keeps a path runs on the leak-checked
+    // allocator too (its arrays leaked; it ran on an arena).
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    // A `path_leak` statement runs on an arena (its known leak is not this
-    // test's subject); every other on the leak-checked allocator.
-    var leak_arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer leak_arena.deinit();
-    const result_allocator = if (c.path_leak) leak_arena.allocator() else gpa.allocator();
+    const result_allocator = gpa.allocator();
     var scratch = std.heap.ArenaAllocator.init(testing.allocator);
     defer scratch.deinit();
     const got: ?[]const []const u8 = blk: {
@@ -332,9 +324,9 @@ const relationship = [_]Case{
 
 // SONNY-3388: a path variable bound again is the same path.
 const path = [_]Case{
-    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)-[:R]->(b) RETURN count(*) AS c", .want = &.{"1"}, .path_leak = true },
-    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)-[:R]->(b) RETURN a.k AS a, b.k AS b", .want = &.{"1, 1"}, .path_leak = true },
-    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)<-[:R]-(b) RETURN count(*) AS c", .want = &.{"0"}, .path_leak = true },
+    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)-[:R]->(b) RETURN count(*) AS c", .want = &.{"1"} },
+    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)-[:R]->(b) RETURN a.k AS a, b.k AS b", .want = &.{"1, 1"} },
+    .{ .q = "MATCH p = (g:Q {k: 1})-[:R]->(:X) WITH p MATCH p = (a)<-[:R]-(b) RETURN count(*) AS c", .want = &.{"0"} },
 };
 
 // Several variables joined at once: only the pairs actually connected.

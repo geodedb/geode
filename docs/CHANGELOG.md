@@ -3178,6 +3178,139 @@
   the hard state (SONNY-6563). Docs that described distributed modules
   deleted in SONNY-6279 and SONNY-6563 as delivered now say they were
   removed. Regression: `zig build test-sonny6592-start-election-lock`.
+- **Every GQL example under docs/ parses, and none shows a feature Geode
+  does not have (SONNY-6613).** `zig build test-sonny6596-doc-examples-parse`
+  now reads every Markdown doc under `docs/` (it read one), and the examples
+  that did not parse are fixed: one-line statements that ran together end in
+  `;`, and syntax templates (`[...]`, `<...>`, signature listings such as
+  docs/TYPE_QUICK_REFERENCE.md's) are ```text blocks. Examples of features
+  Geode does not have are marked so in the prose and kept as ```text, or
+  rewritten to the supported form: GQL `BACKUP`/`RESTORE`, `ANALYZE INDEX`,
+  `REBUILD INDEX`, `SAVEPOINT`/`ROLLBACK TO`, `db.info()`/`db.stats()`,
+  `score()`, `point()`/`within()`/`bbox()`/`intersects()` (the spatial
+  functions are `st_*`), `CREATE MATERIALIZED VIEW`, `CREATE`/`ALTER NODE TYPE`
+  with FLE annotations, `PLAINTEXT()`/`CIPHERTEXT()`, a SQL RLS example,
+  `vector.search`, the ML design sketch, the VALUES-then-MATCH chaining spec,
+  `USE GRAPH $param`, `MATCH ... INSERT` (written as `MATCH ... CREATE`), and
+  the ISO path search prefixes `SHORTEST` / `ANY SHORTEST`, which
+  docs/GQL_COMPLIANCE.md claimed were parsed and executed (they are syntax
+  errors; use `shortestPath(...)`). `now()` is `current_timestamp()`,
+  `db.indexes()`/`db.constraints()` are procedures (`CALL`), `pageRank(n)` is
+  `CALL algo.pageRank.stream(...)`, `db.schema.nodeTypeProperties()` is
+  `db.propertyKeys()`, `SET SESSION GRAPH = ...` is `SESSION SET GRAPH ...`,
+  and aliases named with the reserved words `start` and `end` are renamed.
+
+- **The function catalogue lists `st_point`, `ipaddr` and `url_host`
+  (SONNY-6613).** They are evaluated but were missing from
+  `src/gql/language_metadata.zig`, which SHOW FUNCTIONS, the LSP and the MCP
+  server read (no completion, hover or signature help for them). `url_host`
+  takes a URL value (`url_host(url('https://example.com/a'))`; a string is
+  refused 22G03). The `nullIf` entry's example now binds the
+  variable it reads. Regression: `zig build test-sonny6613-function-catalogue`.
+
+- **A result keeps a part's entity tracker that frees differently
+  (SONNY-6613).** Adopting a chained or OPTIONAL MATCH part's tracker into
+  the result's dropped it when the two free their nodes differently (a
+  node-scan page's tracker frees them in full), leaking the tracker and its
+  nodes. `OwnedGraphEntities.adopt`, used by both adopters, links such a
+  tracker instead. Regression: `zig build test-sonny6613-entity-adopt`.
+
+- **A DISTINCT or grouping key that cannot be allocated is OutOfMemory
+  (SONNY-6613).** The keys are built in an allocating writer, which reports
+  its allocator's failure as `WriteFailed`; `RETURN DISTINCT`, `WITH
+  DISTINCT`, a WITH's grouping and its GROUP BY, and the group-by fast
+  paths passed that on, so the client got 58000 instead of 53200
+  (`distinct_set.appendGroupKeyPart` now maps it). On a persisted graph
+  the group-by fast paths also leaked their key strings when an allocation
+  after them failed; their results now own the strings they copied.
+  Regression: `zig build test-sonny6613-group-key-oom` (every allocation
+  failed in turn, every session kind).
+
+- **`MATCH ... WITH ... FOR x IN <list>` may write (SONNY-6613).** ISO/IEC
+  39075:2024 14.8: a FOR extends the working table before it, and a
+  data-modifying statement may follow it. `MATCH (z:L) WITH z FOR x IN z.l
+  CREATE (:M {k: z.k, x: x})` (and `MATCH ... FOR ...`, and a `MATCH ... SET`
+  body) was refused with 0A000; it now runs the body for every row of the
+  WITH and every element of that row's list. The WITH's rows are read as a
+  write step reads them: the WHERE before and after it, DISTINCT, grouping
+  (`WITH n.g AS g, collect(n.i) AS l FOR x IN l ...`), ORDER BY and
+  SKIP/LIMIT, in the session's tenant scope and under its row policies. The
+  whole statement is undone if an element fails. A body that uses a WITH
+  node as a pattern endpoint (`CREATE (z)-[:T]->(...)`: the body sees it as
+  a value) is still refused, as is a variable the WITH dropped (42000).
+  Regression: `zig build test-sonny6613-match-with-for-write`;
+  `test-sonny6587-for-write-after-with` and `test-sonny3040-chained-writes`
+  now assert the writes they used to assert refused.
+
+- **A statement-leading UNWIND that writes is its FOR (SONNY-6613).**
+  `UNWIND [0] AS i CREATE (...)` was a syntax error (42000) only because a
+  statement could not begin with UNWIND; it is now read as `FOR i IN [0]
+  CREATE (...)` and writes exactly what that FOR writes: one CREATE, MERGE or
+  `MATCH ... SET` per element, no rows without a RETURN, nothing for an
+  empty list, nothing at all when an element fails or the write budget trips
+  (53200), and inside a transaction ROLLBACK undoes it, over QUIC and gRPC
+  alike. Regression: `zig build test-sonny6613-leading-unwind-write`;
+  `test-sonny3139-write-shapes` and `test-sonny-write-allowlist-r4-transport`
+  now assert the writes and the transaction behaviour instead of the 42000.
+
+- **A path value a result keeps no longer leaks (SONNY-6613).** Every
+  statement that kept a path in a row (`MATCH p = ... RETURN p`, a
+  variable-length path, `WITH p`, `ORDER BY length(p)`, `DISTINCT`,
+  `collect(p)`, `[p]`, a multi-hop pattern, `shortestPath`) leaked the path's
+  node and relationship arrays on every session kind. The result's entity
+  tracker now owns the arrays its rows keep and frees them with the result;
+  a copied path (`duplicateValue`, so a gRPC stored result and a result
+  copied out of the statement's scratch arena) owns copies of its arrays,
+  which `freeValue` frees. A UNION keeps each arm's tracker, since its rows
+  are the arm's (reading a UNION's path rows otherwise read freed memory once
+  the arrays were freed). Also fixed on the way, each found by an
+  allocation-failure sweep over path statements: a windowed result
+  (`SKIP`/`LIMIT`) whose kept-row list could not be made freed its rows twice;
+  the shortest-path search and the multi-pattern executor leaked what they
+  had built. Regression: `zig build test-sonny6613-path-ownership` (now in the
+  aggregate `test`), and `zig build test-sonny3046-with-bound-variable-join`
+  runs its path statements on the leak-checked allocator.
+
+- **A writing FOR with no RETURN answers no rows (SONNY-6613).** `FOR x IN
+  [1, 2] CREATE ...` answered one empty row (no columns) per element, as did
+  an UNWIND before a write; ISO/IEC 39075:2024 14.1: a statement with no
+  RETURN has no result rows. **BREAKING** for a client that counted those
+  rows. A body with a RETURN still answers its rows. Regression:
+  `zig build test-sonny6613-for-write-result`.
+
+- **CANARY markers in src/canary.zig no longer claim tests that do not
+  exist (SONNY-6613).** 31 TESTED markers (34 `TestCANARY_*` names, REQ-GQL-
+  001 through REQ-GQL-101) named tests no source defines; they are IMPL until
+  a test that checks the requirement exists. Regression:
+  `zig build test-sonny6587-canary-markers` now checks every TESTED marker
+  in the file.
+
+- **A version-2 PROFILE reports no unmeasured CPU time (SONNY-6613).** Each
+  operator's `cpu_time_ns` was a copy of its wall-clock `time_ns`; CPU time
+  is not measured per operator, so it is 0. Regression:
+  `zig build test-sonny6613-profile-cpu-time`.
+
+- **A statement may begin with LET or UNWIND (SONNY-6613).** ISO/IEC
+  39075:2024 14.4 / 14.7: a `<let statement>` is a `<primitive query
+  statement>`, so `LET x = 4 RETURN x` and `LET v = 4 MATCH (n) WHERE n.k = v
+  RETURN n` are queries; Geode refused them (it took only its `LET $p = ...`
+  parameter form at the start, which keeps working). A leading LET is read
+  over the unit table as the projection `WITH 4 AS x`; its definitions do not
+  see each other yet (`LET a = 1, b = a + 1` refers to an outer `a`), and a
+  leading LET followed by WITH or another LET is refused 0A000. A leading
+  `UNWIND <list> AS x` (a Geode extension; ISO iterates with FOR) was a
+  syntax error; it is read as `FOR x IN <list>`, so `UNWIND [3, 4] AS u
+  RETURN sum(u)` aggregates every row. Regression:
+  `zig build test-sonny6613-leading-let-unwind`.
+
+- **A single-quoted sequence is no alias (SONNY-6613).** `RETURN 1 AS 'x'`
+  named the column x; ISO/IEC 39075:2024 14.11 takes an `<identifier>` after
+  AS, and a single-quoted sequence is only a character string literal
+  (21.2). **BREAKING:** it is now a syntax error (42000) in RETURN, WITH and
+  YIELD; write `AS x`, ``AS `x` `` or `AS "x"`. No query in Geode's tests,
+  docs or the integration-harness specs used the form. Regression:
+  `zig build test-sonny6613-quoted-alias`.
+
 - **A PROFILE'd point write names the index its seek used (SONNY-6587).**
   `MATCH (n:L) WHERE n.k = 'v' SET ...` on a persisted graph is served by an
   exact-property seek (`pointWriteFastPath`); its version-1 PROFILE named no

@@ -1186,7 +1186,38 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .iso_gql,
         .doc = "Return NULL if values are equal",
-        .example = "RETURN nullIf(n.status, 'inactive')",
+        .example = "MATCH (n) RETURN nullIf(n.status, 'inactive')",
+    },
+    // SONNY-6613: functions the evaluator answers to that were not listed.
+    .{
+        .name = "st_point",
+        .category = .conversion,
+        .return_type = "GEOMETRY",
+        .params = &[_]FunctionParam{
+            .{ .name = "x", .type_name = "NUMERIC" },
+            .{ .name = "y", .type_name = "NUMERIC" },
+        },
+        .compliance = .geode_extension,
+        .doc = "A Point geometry at (x, y)",
+        .example = "RETURN st_x(st_point(1, 2))",
+    },
+    .{
+        .name = "ipaddr",
+        .category = .conversion,
+        .return_type = "IPADDR",
+        .params = &[_]FunctionParam{.{ .name = "text", .type_name = "STRING" }},
+        .compliance = .geode_extension,
+        .doc = "An IPv4 or IPv6 address parsed from text",
+        .example = "RETURN ipaddr('192.168.1.1')",
+    },
+    .{
+        .name = "url_host",
+        .category = .scalar_string,
+        .return_type = "STRING",
+        .params = &[_]FunctionParam{.{ .name = "url", .type_name = "URL" }},
+        .compliance = .geode_extension,
+        .doc = "The host of a URL value (made with url(text))",
+        .example = "RETURN url_host(url('https://example.com/path'))",
     },
     // Graph degree functions (to be exposed)
     .{

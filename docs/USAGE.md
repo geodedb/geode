@@ -140,15 +140,14 @@ MATCH (p1:Person)-[:KNOWS*1..3]->(p2:Person)
 WHERE p1.name = 'Alice'
 RETURN p2.name
 
--- Graph algorithms
-MATCH (start:City {name: 'Seattle'})
-MATCH (end:City {name: 'Boston'})
-RETURN shortestPath(start, end) AS route
+-- Shortest path
+MATCH route = shortestPath((s:City {name: 'Seattle'})-[*]-(t:City {name: 'Boston'}))
+RETURN route
 
--- PageRank
-MATCH (n:Page)
-RETURN n.url, pageRank(n) AS rank
-ORDER BY rank DESC
+-- PageRank (a procedure; there is no pageRank() function)
+CALL algo.pageRank.stream({iterations: 20}) YIELD nodeId, score
+RETURN nodeId, score
+ORDER BY score DESC
 LIMIT 10
 ```
 
@@ -158,10 +157,11 @@ LIMIT 10
 -- Insert node
 INSERT (p:Person {name: 'Alice', age: 30})
 
--- Insert edge
+-- Insert edge (MATCH ... INSERT, ISO/IEC 39075 13.2, is not supported yet:
+-- after a MATCH, write the edge with Geode's CREATE)
 MATCH (p1:Person {name: 'Alice'})
 MATCH (p2:Person {name: 'Bob'})
-INSERT (p1)-[:KNOWS {since: 2024}]->(p2)
+CREATE (p1)-[:KNOWS {since: 2024}]->(p2)
 
 -- Update properties
 MATCH (p:Person {name: 'Alice'})

@@ -189,9 +189,31 @@ const cases = [_]Case{
             .{ .query = "MATCH (u:LU) RETURN u.i", .want = "0;1;2;3" },
             .{ .query = "WITH 1 AS one UNWIND [4, 5] AS i CREATE (a:LU {i: i}), (b:LU {i: a.i + 10})" },
             .{ .query = "MATCH (u:LU) WHERE u.i >= 4 RETURN u.i", .want = "14;15;4;5" },
-            // A statement cannot begin with UNWIND: a syntax error, nothing written.
-            .{ .query = "UNWIND [0] AS i CREATE (:LV {i: i})", .code = "42000" },
-            .{ .query = "MATCH (v:LV) RETURN count(v) AS c", .want = "0" },
+            // SONNY-6613: a statement may begin with UNWIND, read as `FOR i IN
+            // [0]` (it was a syntax error, 42000, for that alone): it writes
+            // what the FOR writes, once per element, and answers no rows.
+            .{ .query = "UNWIND [0] AS i CREATE (:LV {i: i})", .want = "" },
+            .{ .query = "MATCH (v:LV) RETURN v.i", .want = "0" },
+            .{ .query = "FOR i IN [0] CREATE (:LV {i: i + 100})", .want = "" },
+            .{ .query = "UNWIND [1, 2] AS i CREATE (:LV {i: i})", .want = "" },
+            .{ .query = "FOR i IN [1, 2] CREATE (:LV {i: i + 100})", .want = "" },
+            .{ .query = "MATCH (v:LV) RETURN v.i", .want = "0;1;100;101;102;2" },
+            // All or nothing: the element that fails leaves no node behind.
+            .{ .query = "UNWIND [3, 0] AS i CREATE (:LV {i: 10 / i})", .code = "22012" },
+            .{ .query = "FOR i IN [3, 0] CREATE (:LV {i: 10 / i})", .code = "22012" },
+            // A write its body does not apply is refused before anything runs.
+            .{ .query = "UNWIND [3] AS i CREATE (v:LV {i: i}) DELETE v", .code = "0A000" },
+            .{ .query = "MATCH (v:LV) RETURN count(v) AS c", .want = "6" },
+            // Inside a transaction: ROLLBACK undoes it, COMMIT keeps it.
+            .{ .query = "START TRANSACTION" },
+            .{ .query = "UNWIND [7, 8] AS i CREATE (:LV {i: i})" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN v.i", .want = "7;8" },
+            .{ .query = "ROLLBACK" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN count(v) AS c", .want = "0" },
+            .{ .query = "START TRANSACTION" },
+            .{ .query = "UNWIND [9] AS i CREATE (:LV {i: i})" },
+            .{ .query = "COMMIT" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN v.i", .want = "9" },
         },
     },
     // Round 4b-1 (SONNY-759).

@@ -14400,6 +14400,33 @@ pub fn build(b: *std.Build) void {
     const run_sonny6587_fww_tests = b.addRunArtifact(sonny6587_fww_tests);
     shardDep(test_step, &run_sonny6587_fww_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6587-for-write-after-with", "Run SONNY-6587 item 5 regression (ISO/IEC 39075 14.8: a FOR whose body writes - CREATE, MATCH ... SET - after a WITH runs for every row of the WITH, not the first only: in-memory, persisted, tenant-scoped and RLS-policy sessions)").dependOn(&run_sonny6587_fww_tests.step);
+    // SONNY-6613 item 3: a writing FOR with no RETURN answers no rows. See tests/test_sonny6613_for_write_result.zig.
+    const sonny6613_fwr_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6613_for_write_result.zig"), .target = target, .optimize = optimize });
+    sonny6613_fwr_mod.addImport("geode", root_mod);
+    sonny6613_fwr_mod.addImport("logging", logging_mod);
+    sonny6613_fwr_mod.addImport("rls_types", rls_types_mod);
+    const sonny6613_fwr_tests = b.addTest(.{ .root_module = sonny6613_fwr_mod });
+    const run_sonny6613_fwr_tests = b.addRunArtifact(sonny6613_fwr_tests);
+    shardDep(test_step, &run_sonny6613_fwr_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-for-write-result", "Run SONNY-6613 item 3 regression (ISO/IEC 39075 14.1: a FOR whose body writes and has no RETURN answers no rows, not one empty row per element; with a RETURN it answers its rows: every session kind)").dependOn(&run_sonny6613_fwr_tests.step);
+    // SONNY-6613 item 1: a path a result keeps is the result's to free. See tests/test_sonny6613_path_ownership.zig.
+    const sonny6613_po_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6613_path_ownership.zig"), .target = target, .optimize = optimize });
+    sonny6613_po_mod.addImport("geode", root_mod);
+    sonny6613_po_mod.addImport("logging", logging_mod);
+    sonny6613_po_mod.addImport("rls_types", rls_types_mod);
+    const sonny6613_po_tests = b.addTest(.{ .root_module = sonny6613_po_mod });
+    const run_sonny6613_po_tests = b.addRunArtifact(sonny6613_po_tests);
+    shardDep(test_step, &run_sonny6613_po_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-path-ownership", "Run SONNY-6613 item 1 regression (a path value a result keeps - a named path, a variable-length one, through WITH, ORDER BY, DISTINCT, collect(), a list or map, a UNION, shortestPath, nodes()/relationships()/length() - is freed with the result and read whole: every session kind; an allocation failure at every point leaks and double-frees nothing)").dependOn(&run_sonny6613_po_tests.step);
+    // SONNY-6613 item 5a: a DISTINCT or grouping key that cannot be allocated is OutOfMemory. See tests/test_sonny6613_group_key_oom.zig.
+    const sonny6613_gko_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6613_group_key_oom.zig"), .target = target, .optimize = optimize });
+    sonny6613_gko_mod.addImport("geode", root_mod);
+    sonny6613_gko_mod.addImport("logging", logging_mod);
+    sonny6613_gko_mod.addImport("rls_types", rls_types_mod);
+    const sonny6613_gko_tests = b.addTest(.{ .root_module = sonny6613_gko_mod });
+    const run_sonny6613_gko_tests = b.addRunArtifact(sonny6613_gko_tests);
+    shardDep(test_step, &run_sonny6613_gko_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6613-group-key-oom", "Run SONNY-6613 item 5a regression (an allocation failure while a DISTINCT or grouping key is built - RETURN DISTINCT, WITH DISTINCT, a WITH's implicit grouping and its GROUP BY - answers OutOfMemory (53200), not WriteFailed, and leaks nothing: every allocation failed in turn, every session kind)").dependOn(&run_sonny6613_gko_tests.step);
     // SONNY-6555 item 5: a wrong number of arguments is 42000 for every function. See tests/test_sonny6555_function_arity.zig.
     const sonny6555_arity_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_function_arity.zig"), .target = target, .optimize = optimize });
     sonny6555_arity_mod.addImport("geode", root_mod);
@@ -14554,6 +14581,10 @@ pub fn build(b: *std.Build) void {
         // SONNY-738 Task W fix round 2: the pre-dispatch write-shape validator.
         .{ .name = "test-sonny3139-write-shapes", .path = "tests/test_sonny3139_write_shapes.zig", .desc = "Run SONNY-3139..3146 regression (an initial WITH, a WHERE before a WITH, WITH DISTINCT, a WITH's GROUP BY and HAVING, UNWIND and a DELETE of a path or variable-length relationship write the rows they name; a WITH after MATCH ... CREATE, a write an executor does not apply, an unbound target and a split CREATE are refused with 0A000 before any part of the statement writes)" },
         // SONNY-738 Task W fix round 3: the write-shape ALLOWLIST.
+        // SONNY-6613 task 1: a statement-leading UNWIND that writes is its FOR.
+        .{ .name = "test-sonny6613-leading-unwind-write", .path = "tests/test_sonny6613_leading_unwind_write.zig", .desc = "Run SONNY-6613 task 1 regression (a statement-leading UNWIND is parsed as the ISO/IEC 39075 14.8 FOR it stands for and writes what that FOR writes: one CREATE, MERGE or MATCH ... SET per element, no rows without a RETURN, nothing for an empty list, nothing when an element fails or the write budget trips (53200), a write the FOR body does not apply refused; in-memory, plain persisted, tenant-scoped and RLS-policy sessions)" },
+        // SONNY-6613 item 3b: MATCH ... WITH ... FOR x IN <list> <write>.
+        .{ .name = "test-sonny6613-match-with-for-write", .path = "tests/test_sonny6613_match_with_for_write.zig", .desc = "Run SONNY-6613 item 3b regression (ISO/IEC 39075 14.8: MATCH ... WITH ... FOR x IN <list> followed by CREATE or MATCH ... SET runs the body for every row of the WITH - its WHERE, DISTINCT, grouping, ORDER BY and LIMIT applied - and every element; a WITH node as a pattern endpoint, a dropped variable or a first part that writes is refused before anything is written; in-memory, plain persisted, tenant-scoped and RLS-policy sessions)" },
         .{ .name = "test-sonny-write-allowlist", .path = "tests/test_sonny_write_allowlist.zig", .desc = "Run the Task W round 3 write-shape allowlist regression (SONNY-3139, 3146, 3166, 3182, 3183, 3184, 3190): every allowlisted write shape writes and returns what it names in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions; every other shape, and every refused case of the round-2 review, is refused with nothing written; a statement boundary needs a ';'; a write inside an expression is refused and classified as a write; a 50,000-clause statement is refused quickly" },
     };
     for (sonny738_steps) |spec| {
@@ -19661,8 +19692,13 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6596_doc_examples_parse.zig", .step = "test-sonny6596-doc-examples-parse", .desc = "Run SONNY-6596 item 6 regression (every ```gql example in the listed docs - docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md and the others fixed with it - goes through the real parser and parses, so a doc example cannot rot)", .weight = 1 },
         .{ .file = "tests/test_sonny6596_grpc_client_reuse.zig", .step = "test-sonny6596-grpc-client-reuse", .desc = "Run SONNY-6596 item 7 regression (against a real geode serve: the test helper's GrpcProtoClient runs HELLO and four parameterized queries on one HTTP/2 connection, each RPC on its own stream id)", .weight = 1 },
         .{ .file = "tests/test_sonny6587_list_functions.zig", .step = "test-sonny6587-list-functions", .desc = "Run SONNY-6587 items 3 and 4 regression (head() and last() of a value that is no list are 22G03 as tail() is; range() keeps its documented exclusive end, answers NULL for a NULL argument, 22G03 for a non-integer one and 22023 for a zero step)", .weight = 1 },
-        .{ .file = "tests/test_sonny6587_canary_markers.zig", .step = "test-sonny6587-canary-markers", .desc = "Run SONNY-6587 item 6 regression (a TESTED CANARY marker for REQ-GQL-016 in src/canary.zig names a test some source under src/ or tests/ defines)", .weight = 1 },
+        .{ .file = "tests/test_sonny6587_canary_markers.zig", .step = "test-sonny6587-canary-markers", .desc = "Run SONNY-6587 item 6 regression (and SONNY-6613 item 7: every TESTED CANARY marker in src/canary.zig names a test some source under src/ or tests/ defines)", .weight = 1 },
         .{ .file = "tests/test_sonny6587_profile_point_write_seek.zig", .step = "test-sonny6587-profile-point-write-seek", .desc = "Run SONNY-6587 item 2 regression (over QUIC and gRPC against a real geode serve: a PROFILE of a point write served by the exact-index seek names the catalog index covering the label and key, with the nodes the seek returned; with no catalog index it claims none)", .weight = 1 },
+        .{ .file = "tests/test_sonny6613_quoted_alias.zig", .step = "test-sonny6613-quoted-alias", .desc = "Run SONNY-6613 item 4 regression (ISO/IEC 39075 14.11 / 21.3: an alias is an identifier, so a single-quoted alias is a syntax error in RETURN, WITH and YIELD; a double-quoted or backquoted alias names the column)", .weight = 1 },
+        .{ .file = "tests/test_sonny6613_leading_let_unwind.zig", .step = "test-sonny6613-leading-let-unwind", .desc = "Run SONNY-6613 item 2 regression (ISO/IEC 39075 14.4 / 14.7: a statement may begin with LET, read over the unit table as a projection, and with Geode's UNWIND; the LET $p parameter form keeps working)", .weight = 1 },
+        .{ .file = "tests/test_sonny6613_function_catalogue.zig", .step = "test-sonny6613-function-catalogue", .desc = "Run SONNY-6613 item 5 catalogue regression (st_point, ipaddr, url_host and nullif - evaluated by the built-ins and the extension registry - are in src/gql/language_metadata.zig with as many parameters as they take; each evaluates, its example too, and one argument too many is 42000)", .weight = 1 },
+        .{ .file = "tests/test_sonny6613_entity_adopt.zig", .step = "test-sonny6613-entity-adopt", .desc = "Run SONNY-6613 item 5e regression (a part's entity tracker adopted into a result's that frees its nodes differently is linked, not dropped: no tracker or node leaks; one that frees them the same way is absorbed; adopting one already held changes nothing)", .weight = 1 },
+        .{ .file = "tests/test_sonny6613_profile_cpu_time.zig", .step = "test-sonny6613-profile-cpu-time", .desc = "Run SONNY-6613 item 6 regression (against a real geode serve: a version-2 PROFILE reports cpu_time_ns 0, not measured, rather than a copy of each operator's wall time)", .weight = 1 },
     };
     for (sonny656x_regressions) |reg| {
         const reg_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(reg.file), .target = target, .optimize = optimize }) });

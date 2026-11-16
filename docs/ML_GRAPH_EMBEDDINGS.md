@@ -243,7 +243,7 @@ try embeddings_manager.generateEmbedding(node_id, MLAlgorithm.node2vec);
 > NOT IMPLEMENTED: there is no `ml.similarity` / `ml.knn` GQL surface today.
 > The examples below are a design sketch only (kept for future reference).
 
-```gql
+```text
 -- Example GQL queries with ML embeddings (DESIGN SKETCH — not implemented)
 MATCH (n:Person)
 WHERE ml.similarity(n.embedding, $target_embedding, 'cosine') > 0.8

@@ -479,7 +479,7 @@ posts in this plan, not just this one."
 `blog-posts/building-social-network/FINDINGS.md` section 7, the affected
 query shape (from the post's `get_recommendations`):
 
-```gql
+```text
 MATCH (me:User {username: $my_username})-[:FRIENDS_WITH]-(friend)
 MATCH (friend)-[:FRIENDS_WITH]-(suggestion)
 WHERE NOT (me)-[:FRIENDS_WITH]-(suggestion) AND me <> suggestion
@@ -731,7 +731,7 @@ The affected blog-post pattern this was found validating (Tip 6's
 "Solution", intended to demonstrate computing an expensive expression
 once via `WITH`):
 
-```gql
+```text
 WITH p, friend, length(path) AS path_length WHERE path_length > 2
 RETURN p.name, path_length
 ```
@@ -812,11 +812,11 @@ literal-only call.
 The affected blog-post pattern (bonus tip "Use Vector Indexes for
 Similarity Search"):
 
-```gql
+```text
 WHERE distance(d.embedding, $query_vector, 'l2') < 0.5
 ```
 
-```gql
+```text
 knn(d.embedding, $query_vector, 10)
 ```
 

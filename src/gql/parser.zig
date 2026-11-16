@@ -1406,6 +1406,13 @@ pub const Parser = struct {
                 const first = try self.parseQuery();
                 break :blk_let self.handleQueryResult(first);
             },
+            // SONNY-6613: UNWIND (a Geode extension; ISO/IEC 39075 iterates
+            // with FOR, 14.8) may begin a statement, read as that FOR.
+            .UNWIND => blk_unwind: {
+                var unwind_stmt: ast.Statement = undefined;
+                try self.parseLeadingUnwindInto(&unwind_stmt);
+                break :blk_unwind unwind_stmt;
+            },
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
             .DETACH => self.parseDeleteStatement(),
@@ -2599,6 +2606,26 @@ pub const Parser = struct {
         var write_clauses: usize = 0;
         // Parse LET bindings first (LET $var = expr, ...)
         var let_bindings = std.ArrayList(ast.LetBinding).empty;
+        // CANARY: REQ=REQ-SONNY-6613-LEADING-LET; FEATURE="LetStatement"; ASPECT=StatementLeading; STATUS=TESTED; TEST=tests/test_sonny6613_leading_let_unwind.zig; OWNER=parser; UPDATED=2026-11-15
+        // SONNY-6613: ISO/IEC 39075:2024 14.7 <let statement> is a <primitive
+        // query statement> (14.4), so a linear query may begin with one:
+        // `LET x = 4 RETURN x`. Over the incoming unit table it is the
+        // projection `WITH 4 AS x` (each definition adds a column, GR 2), and
+        // is parsed as that initial WITH. It was a syntax error ("expected $").
+        var leading_let_items: ?[]ast.ReturnItem = null;
+        if (self.cur.kind == .LET and self.peekKind() != .dollar) {
+            self.advance();
+            var items = std.ArrayList(ast.ReturnItem).empty;
+            while (true) {
+                const var_name = try self.expectBindingName("a variable");
+                _ = try self.expect(.eq);
+                try items.append(self.arena.allocator(), .{ .expr = try self.parseOrExpr(), .alias = var_name });
+                if (self.cur.kind != .comma) break;
+                self.advance();
+            }
+            if (self.cur.kind == .WITH or self.cur.kind == .LET) return self.refuseShape("a statement-leading LET followed by WITH or another LET is not supported: write the definitions in one LET, or as a WITH");
+            leading_let_items = try items.toOwnedSlice(self.arena.allocator());
+        }
         if (self.cur.kind == .LET) {
             self.advance();
             while (true) {
@@ -2627,9 +2654,17 @@ pub const Parser = struct {
 
         // Check for WITH at the beginning (for queries like: WITH 5 AS x RETURN x)
         // Parse WITH clause first if present, before MATCH/CREATE
-        var initial_with_clause: ?ast.WithClause = null;
+        var initial_with_clause: ?ast.WithClause = if (leading_let_items) |items| .{
+            .items = items,
+            .distinct = false,
+            .order_by = null,
+            .limit = null,
+            .offset = null,
+            .limit_param = null,
+            .offset_param = null,
+        } else null;
         var initial_where_expr: ?ast.Expr = null; // WHERE clause after initial WITH
-        if (self.cur.kind == .WITH) {
+        if (leading_let_items == null and self.cur.kind == .WITH) {
             self.advance();
             // Support WITH DISTINCT for initial WITH clause
             const with_distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -4092,13 +4127,12 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                // A quoted string literal, or a binding name (SONNY-6564:
-                // a reserved word is refused, ISO/IEC 39075:2024 21.3).
-                alias = if (self.cur.kind == .string_lit and !self.isDoubleQuoted(self.cur)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token.lexeme;
-                } else try self.expectBindingName("an alias");
+                // A binding name (SONNY-6564: a reserved word is refused,
+                // ISO/IEC 39075:2024 21.3), delimited by accents or (SONNY-6596)
+                // double quotes. SONNY-6613: a single-quoted sequence is a
+                // character string literal only (21.2), never an <identifier>
+                // (14.11 <return item alias>); `AS 'x'` named the column.
+                alias = try self.expectBindingName("an alias");
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
             if (self.cur.kind != .comma) break;
@@ -7168,7 +7202,24 @@ pub const Parser = struct {
     }
 
     fn parseForStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
-        const header = try self.parseForHeader();
+        return self.parseForRestInto(try self.parseForHeader(), out);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6613-LEADING-UNWIND; FEATURE="Unwind"; ASPECT=StatementLeading; STATUS=TESTED; TEST=tests/test_sonny6613_leading_let_unwind.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6613: a statement-leading `UNWIND <list> AS x <rest>` (a Geode
+    /// extension) is the ISO/IEC 39075:2024 14.8 `FOR x IN <list> <rest>`:
+    /// the same working table, a row per element, and the same RETURN (its
+    /// aggregates over every row) or write body.
+    fn parseLeadingUnwindInto(self: *Parser, out: *ast.Statement) ParserError!void {
+        _ = try self.expect(.UNWIND);
+        self.has_unwind = true;
+        const collection = try self.parseOrExpr();
+        _ = try self.expect(.AS);
+        const variable = try self.expectBindingName("a variable");
+        return self.parseForRestInto(.{ .variable = variable, .collection = collection, .ordinality_var = null, .offset_var = null }, out);
+    }
+
+    fn parseForRestInto(self: *Parser, header: ast.ForLoop, out: *ast.Statement) ParserError!void {
         const variable = header.variable;
         const collection = header.collection;
         const ordinality_var = header.ordinality_var;

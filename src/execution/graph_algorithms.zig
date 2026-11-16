@@ -831,10 +831,13 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     if (!tenant_visibility.nodeIdVisible(store, start_id.?, filter_tenant)) return Value{ .Null = {} };
     if (end_id) |eid| if (!tenant_visibility.nodeIdVisible(store, eid, filter_tenant)) return Value{ .Null = {} };
 
-    // Start BFS from start_id
+    // Start BFS from start_id. SONNY-6613: `all_nodes` has room for each
+    // node before it is made, so a node that cannot be tracked is never made
+    // (it leaked).
+    try all_nodes.ensureUnusedCapacity(allocator, 1);
     const start_path_node = try allocator.create(PathNode);
     start_path_node.* = .{ .node_id = start_id.?, .parent = null, .depth = 0 };
-    try all_nodes.append(allocator, start_path_node);
+    all_nodes.appendAssumeCapacity(start_path_node);
     try queue.append(allocator, start_path_node);
     try visited.put(start_id.?, true);
 
@@ -875,9 +878,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                 // denied by RLS.
                 if (!scope.stepVisible(store, edge, neighbor_id)) continue;
                 if (!visited.contains(neighbor_id)) {
+                    try all_nodes.ensureUnusedCapacity(allocator, 1);
                     const neighbor_node = try allocator.create(PathNode);
                     neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
-                    try all_nodes.append(allocator, neighbor_node);
+                    all_nodes.appendAssumeCapacity(neighbor_node);
                     try queue.append(allocator, neighbor_node);
                     try visited.put(neighbor_id, true);
                 }
@@ -892,9 +896,10 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
                     const neighbor_id = edge.from_id;
                     if (!scope.stepVisible(store, edge, neighbor_id)) continue;
                     if (!visited.contains(neighbor_id)) {
+                        try all_nodes.ensureUnusedCapacity(allocator, 1);
                         const neighbor_node = try allocator.create(PathNode);
                         neighbor_node.* = .{ .node_id = neighbor_id, .parent = current, .depth = current.depth + 1 };
-                        try all_nodes.append(allocator, neighbor_node);
+                        all_nodes.appendAssumeCapacity(neighbor_node);
                         try queue.append(allocator, neighbor_node);
                         try visited.put(neighbor_id, true);
                     }
@@ -917,6 +922,11 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // the materializer rather than of the traversal that happened to feed it.
     var reconstructed = std.ArrayList(Value).empty;
     defer reconstructed.deinit(allocator);
+    // SONNY-6613: an error frees the paths made so far (they leaked).
+    errdefer for (reconstructed.items) |made| {
+        allocator.free(made.Path.nodes);
+        allocator.free(made.Path.edges);
+    };
 
     const path_limit: usize = if (all) found_paths.items.len else 1;
     for (found_paths.items[0..path_limit]) |end_node| {
@@ -931,8 +941,9 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
         std.mem.reverse(u64, node_ids.items);
 
+        try reconstructed.ensureUnusedCapacity(allocator, 1);
         if (try materializePath(allocator, store, node_ids.items, hop.rel.types, &scope)) |path_value| {
-            try reconstructed.append(allocator, path_value);
+            reconstructed.appendAssumeCapacity(path_value);
         }
     }
 
@@ -992,8 +1003,11 @@ fn materializePath(
         }
     }
 
+    // SONNY-6613: the node array, when the edge array cannot be made.
+    const nodes = try path_nodes.toOwnedSlice(allocator);
+    errdefer allocator.free(nodes);
     return Value{ .Path = .{
-        .nodes = try path_nodes.toOwnedSlice(allocator),
+        .nodes = nodes,
         .edges = try path_edges.toOwnedSlice(allocator),
     } };
 }

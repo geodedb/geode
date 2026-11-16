@@ -298,7 +298,17 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
             }
             break :blk .{ .Map = new_map };
         },
-        .Node, .Edge, .Path => value, // These contain pointers but we'll shallow copy for now
+        // CANARY: REQ=REQ-SONNY-6613-PATH-OWNERSHIP; FEATURE="PathValues"; ASPECT=OwnedPathCopies; STATUS=TESTED; TEST=tests/test_sonny6613_path_ownership.zig; OWNER=engine; UPDATED=2026-11-15
+        // SONNY-6613: a path's node and relationship arrays are copied (the
+        // nodes and relationships they point at are not), so the copy is
+        // the holder's to free (`freeValue`). A copy by reference dangled
+        // once the result the path came from freed its arrays.
+        .Path => |path| blk: {
+            const nodes = try allocator.dupe(*const graph_store.Node, path.nodes);
+            errdefer allocator.free(nodes);
+            break :blk .{ .Path = .{ .nodes = nodes, .edges = try allocator.dupe(*const graph_store.Edge, path.edges) } };
+        },
+        .Node, .Edge => value, // These contain pointers but we'll shallow copy for now
         else => value, // Fallback for any other types
     };
 }
@@ -626,10 +636,17 @@ pub fn repointValueAllocators(val: *Value, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Helper function to free a Value's allocated memory
+/// Helper function to free a Value's allocated memory. SONNY-6613: a path's
+/// node and relationship arrays are the value's (as `duplicateValue` copies
+/// them); the nodes and relationships are not. A row of a result that does
+/// not own its values keeps its path arrays in the result's entity tracker.
 pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
     switch (value) {
         .Str => |s| allocator.free(s),
+        .Path => |path| {
+            allocator.free(path.nodes);
+            allocator.free(path.edges);
+        },
         .List => |list| {
             for (list) |item| {
                 freeValue(allocator, item);

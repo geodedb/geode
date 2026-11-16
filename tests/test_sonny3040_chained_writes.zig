@@ -86,10 +86,13 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (q:Q) WITH q MATCH (q) DELETE q", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G) WITH n MATCH (n)-[:R]->(x:X) SET x.x = 1 RETURN count(*) AS c", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G) WITH n MATCH (n)-[:R]->(x:X) CREATE (x)-[:T]->(:Z)", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    // A write after a second WITH, or a FOR.
+    // A write after a second WITH. (A FOR after the WITH writes since
+    // SONNY-6613: `for_cases` below.)
     .{ .write = "MATCH (n:G) WITH n WITH n SET n.x = 1", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "MATCH (n:G) WITH n WITH n CREATE (n)-[:T]->(:Z)", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
-    .{ .write = "MATCH (n:G) WITH n FOR k IN [1, 2] CREATE (:Z {k: k})", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
+    // A FOR body that names the WITH's node as a pattern endpoint (the body
+    // binds it as a value).
+    .{ .write = "MATCH (n:G) WITH n FOR k IN [1, 2] CREATE (n)-[:T]->(:Z {k: k})", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     // A chain whose first part writes, and a write after it.
     .{ .write = "CREATE (a:A {k: 1}) WITH a CREATE (b:Z {k: 2})", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
     .{ .write = "CREATE (a:A {k: 1}) WITH a MATCH (g:G) WHERE g.i < 2 CREATE (a)-[:T]->(g)", .refused = error.WriteClauseNotApplied, .checks = &unchanged },
@@ -97,6 +100,22 @@ const refused_cases = [_]Case{
 
 test "SONNY-3040: every other chained part that writes is refused before anything runs" {
     try h.runCases("chained writes refused", &refused_cases);
+}
+
+// SONNY-6613 item 3b: MATCH ... WITH ... FOR x IN <list> <write> (ISO/IEC
+// 39075:2024 14.8) runs the body for every row of the WITH and every
+// element; it was refused here. tests/test_sonny6613_match_with_for_write.zig
+// has the rest.
+const for_cases = [_]Case{
+    .{ .write = "MATCH (n:G) WITH n FOR k IN [1, 2] CREATE (:Z {k: k})", .want = &.{}, .checks = &.{
+        .{ .query = "MATCH (z:Z) WHERE z.k = 1 RETURN count(*) AS c", .want = &.{"10"} },
+        .{ .query = "MATCH (z:Z) WHERE z.k = 2 RETURN count(*) AS c", .want = &.{"10"} },
+        .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"20"} },
+    } },
+};
+
+test "SONNY-6613: a FOR after MATCH ... WITH writes for every row and element" {
+    try h.runCases("chained FOR write", &for_cases);
 }
 
 const read_cases = [_]Case{

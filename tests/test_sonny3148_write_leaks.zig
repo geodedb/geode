@@ -25,11 +25,10 @@
 // tenant-scoped (persisted) and RLS-policy (persisted) sessions
 // (tests/sonny738_write_harness.zig).
 //
-// A path a result row returns (`RETURN p`, and the target rows `DETACH DELETE
-// p` reads) keeps its two arrays: a path is copied by reference everywhere
-// (`duplicateValue`, `duplicateResult`, which the gRPC server keeps past the
-// request), so nothing can free them safely. Those shapes run on a private
-// allocator, and the arrays are the only allocation allowed to remain.
+// A path a result row returns (`RETURN p`) keeps its two arrays until the
+// result is released: SONNY-6613 made the result's entity tracker own them
+// (they were the one allocation allowed to remain), so every shape runs on
+// the leak-checked allocator.
 //
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
 
@@ -51,9 +50,6 @@ const Shape = struct {
     checks: []const Check = &.{},
     /// Bind `$rows`, a list of three maps `{id, name}`.
     rows_param: bool = false,
-    /// A returned path's arrays: the bytes allowed to remain (see above);
-    /// the statement then runs on a private allocator.
-    residual_bytes: usize = 0,
 };
 
 fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -132,23 +128,10 @@ fn runShape(mode: h.Mode, shape: Shape, f: *h.Failures) !void {
         s.ctx.query_param_values = &values;
     }
 
-    var rows: ?[]const []const u8 = null;
-    if (shape.residual_bytes == 0) {
-        rows = runStatement(&s, testing.allocator, shape) catch |err| blk: {
-            try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
-            break :blk null;
-        };
-    } else {
-        var dbg: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-        defer dbg.deinitWithoutLeakChecks();
-        rows = runStatement(&s, dbg.allocator(), shape) catch |err| blk: {
-            try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
-            break :blk null;
-        };
-        if (rows != null and dbg.total_requested_bytes != shape.residual_bytes) {
-            try f.add("[{s}] {s}: {d} bytes remain after the result was released, expected the path arrays' {d}", .{ @tagName(mode), shape.query, dbg.total_requested_bytes, shape.residual_bytes });
-        }
-    }
+    const rows: ?[]const []const u8 = runStatement(&s, testing.allocator, shape) catch |err| blk: {
+        try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
+        break :blk null;
+    };
     if (rows) |got| if (shape.want) |want| {
         const exp = try aa.dupe([]const u8, want);
         std.mem.sort([]const u8, exp, {}, lessThan);
@@ -188,9 +171,6 @@ fn gx(comptime want: []const []const u8) [1]Check {
 fn xx(comptime want: []const []const u8) [1]Check {
     return .{.{ .query = "MATCH (x:X) WHERE x.x = 1 RETURN x.j", .want = want }};
 }
-
-/// One single-hop path's arrays: two node pointers and one edge pointer.
-const path_bytes = 3 * @sizeOf(usize);
 
 // ---------------------------------------------------------------------------
 // 1. An initial WITH.
@@ -282,12 +262,13 @@ test "SONNY-3148: a WITH stage before a write frees the items it computed, and a
 // Task W round 3: a statement that writes with a path variable (a SET beside
 // one, a path DELETE) is not an allowlisted write shape (SONNY-3146), so
 // only reads reach these arrays.
-test "SONNY-3148: a single-hop path variable frees its node and edge arrays unless a row returns the path, which keeps them" {
+test "SONNY-3148: a single-hop path variable frees its node and edge arrays, with the result when a row returns the path" {
     try runShapes("single-hop path", &.{
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i >= 5 RETURN length(p) AS len", .want = &.{ "1", "1", "1", "1", "1" } },
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN x.j AS j, length(p) AS len", .want = &.{"5|1"} },
-        // The residual: a row that returns the path keeps its arrays.
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"}, .residual_bytes = path_bytes },
+        // SONNY-6613: a row that returns the path keeps its arrays until
+        // the result is released (they remained after it).
+        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"} },
     });
 }
 

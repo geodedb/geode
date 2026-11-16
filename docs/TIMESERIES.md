@@ -78,7 +78,7 @@ Note the integer literals: `value` is `72`, **not** `72.0` (see
 A read-only user **cannot** run these — they are classified as mutating, so they
 require write privilege.
 
-```gql
+```text
 -- One point → YIELD inserted (count of points written)
 CALL geode.ts.insert(device_id, metric, ts, value) YIELD inserted;
 
@@ -97,7 +97,7 @@ CALL geode.ts.insert_many(1, 'cpu.load', [[1010, 73], [1020, 71], [1030, 75]]);
 
 These classify read-only — a read-only user can query but not ingest.
 
-```gql
+```text
 -- All points in [start_ts, end_ts] (inclusive) → rows of (ts, value)
 CALL geode.ts.range(device_id, metric, start_ts, end_ts) YIELD ts, value;
 

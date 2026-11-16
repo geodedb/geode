@@ -8,7 +8,7 @@ Creates an index on node properties for improved query performance.
 
 #### Syntax
 
-```gql
+```text
 CREATE INDEX [IF NOT EXISTS] index_name
 ON label(property[, ...])
 [USING {btree | hash | fulltext | spatial | vector}]
@@ -78,7 +78,7 @@ Removes an existing index.
 
 #### Syntax
 
-```gql
+```text
 DROP INDEX [IF EXISTS] index_name
 ```
 
@@ -119,7 +119,7 @@ name the graph already uses, on any label, is refused with 42710
 
 #### Syntax
 
-```gql
+```text
 CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS UNIQUE
 CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE (n.a, n.b) IS NODE KEY
 CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT prop IS UNIQUE
@@ -218,7 +218,7 @@ Removes a constraint from the session graph's catalog (SONNY-6270).
 
 #### Syntax
 
-```gql
+```text
 DROP CONSTRAINT [IF EXISTS] name
 ```
 
@@ -409,7 +409,7 @@ Creates a backup of the database.
 
 #### Syntax
 
-```gql
+```text
 BACKUP TO 'file_path' [OPTIONS]
 ```
 
@@ -426,7 +426,11 @@ BACKUP TO 'file_path' [OPTIONS]
 
 #### Examples
 
-```gql
+Not executed (see the status note above): these statements answer 0A000,
+and the `INCREMENTAL`, `TIMESTAMP` and `VERIFY ONLY` forms do not parse. Use
+the `geode backup` / `geode restore` CLI.
+
+```text
 -- Full backup
 BACKUP TO '/backups/full_backup.bak';
 
@@ -443,7 +447,7 @@ Restores database from a backup file.
 
 #### Syntax
 
-```gql
+```text
 RESTORE FROM 'file_path' [TIMESTAMP timestamp] [VERIFY ONLY]
 ```
 
@@ -455,7 +459,11 @@ RESTORE FROM 'file_path' [TIMESTAMP timestamp] [VERIFY ONLY]
 
 #### Examples
 
-```gql
+Not executed (see the status note above): these statements answer 0A000,
+and the `INCREMENTAL`, `TIMESTAMP` and `VERIFY ONLY` forms do not parse. Use
+the `geode backup` / `geode restore` CLI.
+
+```text
 -- Basic restore
 RESTORE FROM '/backups/full_backup.bak';
 
@@ -470,7 +478,7 @@ RESTORE FROM '/backups/full_backup.bak' VERIFY ONLY;
 
 ### Syntax
 
-```gql
+```text
 (start)-[relationship*min..max]->(end)
 ```
 
@@ -619,11 +627,19 @@ RETURN knn('embedding', [0.1, 0.2, 0.3], 10, 'cosine') AS neighbor_ids;
 
 ### Spatial Functions
 
+> **Not supported under these names.** Geode has no `point()`, `within()`,
+> `bbox()`, `polygon()` or `intersects()` function, and `distance()` is the
+> vector distance (`distance(v1, v2, 'l2')`), not a point distance. The
+> spatial functions Geode evaluates are `st_point(x, y)`, `st_x`, `st_y`,
+> `st_distance`, `st_contains`, `st_within`, `st_intersects`, `st_buffer`,
+> `st_area`, `st_centroid`, `st_astext`, `st_asgeojson` and
+> `distance_haversine`. The examples below show the intended shapes only.
+
 #### point(x, y)
 
 Creates a 2D point.
 
-```gql
+```text
 CREATE (l:Location {coordinates: point(40.7128, -74.0060)});
 ```
 
@@ -631,7 +647,7 @@ CREATE (l:Location {coordinates: point(40.7128, -74.0060)});
 
 Calculates distance between two points.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE distance(l.coordinates, point(40.0, -74.0)) < 100
 RETURN l;
@@ -641,7 +657,7 @@ RETURN l;
 
 Tests if geometry is within boundary.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE within(l.coordinates, polygon(...))
 RETURN l;
@@ -651,7 +667,7 @@ RETURN l;
 
 Creates a bounding box for spatial queries.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE intersects(l.area, bbox(40.0, -75.0, 41.0, -73.0))
 RETURN l;
@@ -703,9 +719,11 @@ RETURN p;
 
 #### score()
 
-Returns relevance score for full-text search results.
+Not supported: Geode has no `score()` function (calling it is an unknown
+function). A relevance score comes from the BM25 procedure below, which
+yields `node` and `score` rows.
 
-```gql
+```text
 MATCH (a:Article)
 WHERE a.content CONTAINS 'machine learning'
 RETURN a, score() AS relevance
@@ -763,17 +781,18 @@ Returns:
 
 ### ANALYZE INDEX
 
-Updates index statistics for query optimization.
+Not supported: Geode has no `ANALYZE INDEX` statement (a syntax error).
 
-```gql
+```text
 ANALYZE INDEX index_name;
 ```
 
 ### REBUILD INDEX
 
-Rebuilds an index from scratch.
+Not supported as a statement (a syntax error). A fulltext index is rebuilt
+with `CALL geode.fts.rebuild('<index>')`.
 
-```gql
+```text
 REBUILD INDEX index_name;
 ```
 
@@ -805,17 +824,18 @@ ROLLBACK;
 
 ### SAVEPOINT
 
-Creates a savepoint within a transaction.
+Not supported as a GQL statement (a syntax error). The gRPC transport has
+savepoint messages; the statement text below is not accepted.
 
-```gql
+```text
 SAVEPOINT my_savepoint;
 ```
 
 ### ROLLBACK TO
 
-Rolls back to a specific savepoint.
+Not supported as a GQL statement (see SAVEPOINT).
 
-```gql
+```text
 ROLLBACK TO my_savepoint;
 ```
 
@@ -823,34 +843,35 @@ ROLLBACK TO my_savepoint;
 
 ### db.info()
 
-Returns database information.
+Not supported: there is no `db.info` function or procedure.
 
-```gql
+```text
 RETURN db.info();
 ```
 
-### db.indexes()
+### db.indexes
 
-Returns index information.
+Returns index information. It is a procedure: call it, do not use it as an
+expression.
 
 ```gql
-RETURN db.indexes();
+CALL db.indexes();
 ```
 
 ### db.stats()
 
-Returns database statistics.
+Not supported: there is no `db.stats` function or procedure.
 
-```gql
+```text
 RETURN db.stats();
 ```
 
-### db.constraints()
+### db.constraints
 
-Returns constraint information.
+Returns constraint information (a procedure, as `db.indexes`).
 
 ```gql
-RETURN db.constraints();
+CALL db.constraints();
 ```
 
 ## Error Codes

@@ -205,7 +205,10 @@ pub fn buildProfilePayloadFromTrace(
             .input_rows = op.input_rows,
             .rows = op.rows,
             .time_ns = op.time_ns,
-            .cpu_time_ns = op.time_ns,
+            // CANARY: REQ=REQ-SONNY-6613-PROFILE-CPU-TIME; FEATURE="PROFILE"; ASPECT=NoCopiedCpuTime; STATUS=TESTED; TEST=tests/test_sonny6613_profile_cpu_time.zig; OWNER=engine; UPDATED=2026-11-15
+            // SONNY-6613: not measured (the trace times operators by the
+            // wall clock only); it was a copy of `time_ns`.
+            .cpu_time_ns = 0,
             .bytes_out = 0,
             .bytes_alloc = 0,
             .estimate_bytes = 0,
