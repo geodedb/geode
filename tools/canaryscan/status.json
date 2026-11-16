@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T01:00:09.91084073Z",
+  "generated_at": "2026-11-16T01:26:07.119385255Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -42956,63 +42956,6 @@
       ]
     },
     {
-      "id": "REQ-ML-EMBEDDINGS-TEST-001",
-      "features": [
-        {
-          "feature": "ML Embeddings Unit Tests",
-          "aspect": "CoreFunctionality",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_001"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-EMBEDDINGS-TEST-002",
-      "features": [
-        {
-          "feature": "Node2Vec Algorithm Tests",
-          "aspect": "Training",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_002"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-ML-EMBEDDINGS-TEST-003",
-      "features": [
-        {
-          "feature": "GraphSAGE Algorithm Tests",
-          "aspect": "NeighborAggregation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_ml_graph_embeddings.zig"
-          ],
-          "tests": [
-            "TestCANARY_ML_EMBEDDINGS_TEST_003"
-          ],
-          "benches": [],
-          "owner": "ml",
-          "updated": "2026-11-14"
-        }
-      ]
-    },
-    {
       "id": "REQ-MULTI-GRAPH-003",
       "features": [
         {
@@ -80519,6 +80462,82 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6612-AUTH-FIELD-READS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_auth_field_reads.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_auth_field_reads.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6612-ERROR-MESSAGES",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_error_messages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_error_messages.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6612-TENANT-REFUSAL",
+      "features": [
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_tenant_refusal.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_tenant_refusal.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6612-UNREADABLE-NODE-WRITE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6612_unreadable_node_write.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6612_unreadable_node_write.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6613-ENTITY-ADOPT",
       "features": [
         {
@@ -81003,6 +81022,25 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6621-HYDRATE-CATCH-NULL",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6621_hydrate_catch_null.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6621_hydrate_catch_null.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
           "updated": "2026-11-15"
         }
       ]
@@ -86411,7 +86449,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4263
+      "TESTED": 4265
     },
     "by_aspect": {
       "2PC": 3,
@@ -87048,7 +87086,7 @@
       "CoordinatorPhaseMetrics": 1,
       "Core": 21,
       "CoreEngine": 1,
-      "CoreFunctionality": 2,
+      "CoreFunctionality": 1,
       "CoreImplementation": 1,
       "CoreInterface": 1,
       "CoreSystem": 1,
@@ -88467,7 +88505,6 @@
       "NeedsRowFlag": 1,
       "Negated": 1,
       "NegativeAuthMatrix": 1,
-      "NeighborAggregation": 1,
       "NestedAggregateAnywhere": 1,
       "NestedAggregateReject": 1,
       "NestedAggregates": 1,
@@ -89269,7 +89306,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 398,
+      "Regression": 403,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -89961,7 +89998,6 @@
       "TopKHeapSharesFullSortOrder": 1,
       "TopLevelAgg": 1,
       "Topology": 1,
-      "Training": 1,
       "Transaction": 1,
       "TransactionBodyProjection": 1,
       "TransactionCoordination": 1,

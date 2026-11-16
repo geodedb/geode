@@ -197,7 +197,7 @@ fn plantAdditionalHasRoleEdge(
     const user_nodes = user_nodes_opt orelse return error.UserNodeNotFound;
     var user_node_id: ?u64 = null;
     for (user_nodes) |nid| {
-        const name_prop = store.getNodeProperty(nid, "username") orelse continue;
+        const name_prop = (try store.getNodePropertyOrError(nid, "username")) orelse continue;
         const name_str = switch (name_prop) {
             .String => |s| s,
             else => continue,

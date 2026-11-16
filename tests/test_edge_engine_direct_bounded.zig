@@ -187,7 +187,7 @@ test "P1-edge: edges.residentCount plateaus at/below cap for a high-edge-count g
 
     // CRUX 4 — getOutDegree (adjacency) == K; the parent's out-edge bodies all
     // resolve (hydrate-on-miss) so getOutgoingEdges returns K complete edges.
-    try testing.expectEqual(K, h.store.getOutDegree(parent));
+    try testing.expectEqual(K, try h.store.getOutDegree(parent));
     {
         const out_edges = try h.store.getOutgoingEdges(testing.allocator, parent);
         defer testing.allocator.free(out_edges);
@@ -240,13 +240,13 @@ test "P1-edge: edge body hydrates correctly after eviction; idempotent across re
     // the body must be identical and complete every time.
     var round: usize = 0;
     while (round < 50) : (round += 1) {
-        const e = h.store.getEdgePtrHydrated(known_edge) orelse return error.EdgeBodyLost;
+        const e = (try h.store.getEdgePtrHydratedChecked(known_edge)) orelse return error.EdgeBodyLost;
         try testing.expectEqual(known_from, e.from_id);
         try testing.expectEqual(known_to, e.to_id);
         try testing.expect(std.mem.eql(u8, e.label, "ACCEPTED_AS"));
         try testing.expect(std.mem.eql(u8, e.graph_name, "default"));
         // Touch a different node's adjacency to force more evictions between reads.
-        _ = h.store.getOutgoingEdgeIds(known_to);
+        _ = (try h.store.getOutgoingEdgeIdsOrError(known_to));
         try testing.expect(h.store.edges.residentCount() <= CAP);
     }
 
@@ -356,7 +356,7 @@ test "P1-edge: eviction + hydrate + delete are leak-free under the testing alloc
     // the retire/reclaim free path) — the property must survive rehydrate.
     var r: usize = 0;
     while (r < ids.items.len) : (r += 1) {
-        const e = h.store.getEdgePtrHydrated(ids.items[r]) orelse return error.EdgeBodyLost;
+        const e = (try h.store.getEdgePtrHydratedChecked(ids.items[r])) orelse return error.EdgeBodyLost;
         // The persisted property hydrates back.
         if (e.properties.get("rank")) |pv| {
             try testing.expectEqual(@as(i64, @intCast(r)), pv.Int);
@@ -434,7 +434,7 @@ test "co-location: cross-endpoint deleteEdge clears reverse traversal (no CrossS
         try testing.expectEqual(@as(usize, 1), inc.len);
     }
     {
-        const inc_ids = h.store.getIncomingEdgeIds(to) orelse &[_]u64{};
+        const inc_ids = (try h.store.getIncomingEdgeIdsOrError(to)) orelse &[_]u64{};
         try testing.expectEqual(@as(usize, 1), inc_ids.len);
         try testing.expectEqual(ids.items[N - 1], inc_ids[0]);
     }

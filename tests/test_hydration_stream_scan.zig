@@ -206,7 +206,7 @@ fn captureFingerprint(
 
     // Edge bodies.
     for (spec.edge_ids) |id| {
-        const edge = store.getEdgePtr(id) orelse {
+        const edge = (try store.getEdgePtrHydratedChecked(id)) orelse {
             try fp.print(allocator, "edge {d} absent\n", .{id});
             continue;
         };
@@ -1844,7 +1844,7 @@ test "overflow values: stream scan resolves node and edge overflow stubs (no qua
     const node = store.getNodePtr(big_id) orelse return error.NodeNotResident;
     const nv = node.properties.get("blob") orelse return error.MissingProperty;
     try testing.expectEqualStrings(big_node, nv.String);
-    const edge = store.getEdgePtr(eid) orelse return error.EdgeNotResident;
+    const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse return error.EdgeNotResident;
     const ev = edge.properties.get("payload") orelse return error.MissingProperty;
     try testing.expectEqualStrings(big_edge, ev.String);
 

@@ -2869,7 +2869,7 @@ fn scanVectorKnnBatched(
         // ENG-3954/#874 race discipline. Only enabled for the node cache — the
         // edge scan stays resident-only (documented Phase-1 asymmetry below).
         if (comptime hydrate) {
-            _ = cache.getOrHydratePtr(id) catch null;
+            _ = cache.getOrHydratePtr(id) catch |err| return value_types.storageReadFailed(err); // SONNY-6621
         }
 
         // EVERYTHING that touches the entry's interior stays inside the guard:

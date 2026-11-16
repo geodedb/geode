@@ -77,7 +77,7 @@ fn makeNode(adapter: *adapter_mod.StorageAdapter, store: *graph_store.GraphStore
 
 // Count outgoing edges from `src` to `dst` of type REL in GRAPH.
 fn countEdges(store: *graph_store.GraphStore, src: u64, dst: u64) usize {
-    const outgoing = store.getOutgoingEdgeIds(src) orelse return 0;
+    const outgoing = (store.getOutgoingEdgeIdsOrError(src) catch @panic("SONNY-6621: unexpected read failure")) orelse return 0;
     var n: usize = 0;
     for (outgoing) |eid| {
         const e = store.edges.getPtr(eid) orelse continue;

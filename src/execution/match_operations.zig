@@ -1878,10 +1878,10 @@ pub fn propertyAggregateFastPath(
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 if (where_pred) |p| {
-                    const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                    const w_val = (try prop_store.getNodePropertyOrError(node_id, p.key)) orelse continue;
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
-                const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+                const t_val = (try prop_store.getNodePropertyOrError(node_id, target_key)) orelse continue;
                 // SONNY-2675: min and max fold the value itself, in the value
                 // order; one they cannot (a string) declines.
                 if (min_or_max) {
@@ -2248,7 +2248,7 @@ pub fn pointWriteFastPath(
     // Hydrate the node body (P3-C3 discipline; write path — the per-graph
     // EXCLUSIVE lock is held on the server path, same as the store APIs
     // require). Unresolvable -> legacy, still before any write.
-    const node_ptr = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+    const node_ptr = (try store.nodes.getOrHydratePtr(node_id)) orelse return null;
 
     // Statement-atomicity pre-pass: the clause list is all-or-nothing, so no
     // assignment lands unless every assignment can. Values here are literals
@@ -2504,7 +2504,7 @@ pub fn countFilteredFastPath(
                 try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
-                const w_val = prop_store.getNodeProperty(node_id, where_pred.key) orelse continue;
+                const w_val = (try prop_store.getNodePropertyOrError(node_id, where_pred.key)) orelse continue;
                 if (!comparePvLit(w_val, where_pred.op, where_pred.lit)) continue;
                 matched += 1;
             }
@@ -3039,7 +3039,7 @@ pub fn groupByAggregateFastPath(
         else blk: {
             var graph_ids = std.ArrayList(u64).empty;
             var graph_iter = read_store.iterateNodesInGraph(filter_graph);
-            while (graph_iter.next()) |node_ptr| try graph_ids.append(ga, node_ptr.id);
+            while (try graph_iter.next()) |node_ptr| try graph_ids.append(ga, node_ptr.id);
             break :blk try graph_ids.toOwnedSlice(ga);
         };
         if (posting) |slots| {
@@ -3049,7 +3049,7 @@ pub fn groupByAggregateFastPath(
                 if (!passesTenantFilter(node, filter_tenant)) continue;
 
                 if (where_pred) |p| {
-                    const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                    const w_val = (try prop_store.getNodePropertyOrError(node_id, p.key)) orelse continue;
                     if (!comparePvLit(w_val, p.op, p.lit)) continue;
                 }
 
@@ -3059,7 +3059,7 @@ pub fn groupByAggregateFastPath(
                 var key_val_captures: [MAX_KEYS]Value = undefined;
                 var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ga, 64);
                 for (gb_key_props[0..n_gb_keys], 0..) |kprop, ki| {
-                    const pv: graph_store.PropertyValue = prop_store.getNodeProperty(node_id, kprop) orelse .Null;
+                    const pv: graph_store.PropertyValue = (try prop_store.getNodePropertyOrError(node_id, kprop)) orelse .Null;
                     const key_val = fastPathKeyValue(pv) orelse return null;
                     try distinct_set.appendGroupKeyPart(&key_aw, ga, key_val);
                     key_val_captures[ki] = if (key_val == .Str) Value{ .Str = try ga.dupe(u8, key_val.Str) } else key_val;
@@ -3085,12 +3085,12 @@ pub fn groupByAggregateFastPath(
                         .group_key => {},
                         .count_star => group.accs[item_acc_idx[i]].count += 1,
                         .count_prop => {
-                            if (prop_store.getNodeProperty(node_id, item_agg_prop[i].?) != null) {
+                            if ((try prop_store.getNodePropertyOrError(node_id, item_agg_prop[i].?)) != null) {
                                 group.accs[item_acc_idx[i]].count += 1;
                             }
                         },
                         .sum, .avg, .min, .max => {
-                            const t_val = prop_store.getNodeProperty(node_id, item_agg_prop[i].?) orelse continue;
+                            const t_val = (try prop_store.getNodePropertyOrError(node_id, item_agg_prop[i].?)) orelse continue;
                             if (t_val == .Null) continue;
                             // SONNY-2675: min and max fold the value itself, in
                             // the value order. A value this path cannot fold
@@ -3555,7 +3555,7 @@ pub fn topKOrderedFastPath(
                 try read_budget.check(); // T5: budget/cancel poll at the row boundary (no-op when uninstalled)
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
-                const pv = prop_store.getNodeProperty(node_id, ret_key) orelse {
+                const pv = (try prop_store.getNodePropertyOrError(node_id, ret_key)) orelse {
                     nulls += 1;
                     continue;
                 };
@@ -4235,7 +4235,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
             // row's CREATE moves the map entries.
             for (created_names.items, out_row[row.len..]) |name, *cell| {
                 cell.* = if (result.created_nodes.get(name)) |id|
-                    Value{ .Node = store.getNodePtrForScan(id) orelse return error.NodeNotFound }
+                    Value{ .Node = (try store.getNodePtrForScan(id)) orelse return error.NodeNotFound }
                 else if (result.created_relationships.get(name)) |rel|
                     rel
                 else
@@ -4692,7 +4692,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             };
 
             for (candidate_ids) |node_id| {
-                const node = store.getNodePtrForScan(node_id) orelse continue;
+                const node = (try store.getNodePtrForScan(node_id)) orelse continue;
                 // GAP-0846 follow-up: storageTenantFilter() relaxes to a full-tenant
                 // scan under an active hierarchy; per-row hierarchy-aware check is the
                 // fail-closed compensator. WITHOUT this, `MATCH (a:P),(b:Q)` as a
@@ -4756,7 +4756,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
             match_log.warn("multi-node MATCH graph-scoped scan: no labels specified on node pattern", .{});
             var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node| {
+            while (try node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
@@ -5268,7 +5268,7 @@ const NodeCache = struct {
 
     fn get(self: *NodeCache, id: u64) !?*graph_store.Node {
         if (self.map.get(id)) |node| return node;
-        const node = self.store.getNodePtrForScan(id) orelse return null;
+        const node = (try self.store.getNodePtrForScan(id)) orelse return null;
         try self.map.put(self.allocator, id, node);
         return node;
     }
@@ -5551,13 +5551,13 @@ const MultiChainJoin = struct {
                     try poll();
                     _ = scratch.reset(.retain_capacity);
                 }
-                const node = self.store.getNodePtrForScan(id) orelse continue;
+                const node = (try self.store.getNodePtrForScan(id)) orelse continue;
                 if (try self.nodeFits(scratch.allocator(), node, pattern)) try out.append(self.allocator, node);
             }
         } else {
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
             var it = self.store.iterateNodesInGraph(self.filter_graph);
-            while (it.next()) |node| {
+            while (try it.next()) |node| {
                 seen += 1;
                 if (seen % poll_every == 0) {
                     try poll();
@@ -6307,7 +6307,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels, storageTenantFilter(filter_tenant));
                 defer label_node_ids.deinit(allocator);
                 for (label_node_ids.items) |node_id| {
-                    const left_node = store.getNodePtrForScan(node_id) orelse continue;
+                    const left_node = (try store.getNodePtrForScan(node_id)) orelse continue;
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                     if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
@@ -6315,7 +6315,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 }
             } else {
                 var node_iter = store.iterateNodesInGraph(filter_graph);
-                while (node_iter.next()) |left_node| {
+                while (try node_iter.next()) |left_node| {
                     if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                     if (!try nodeMatchesProps(allocator, left_node, left_props, prop_env)) continue;
@@ -6346,7 +6346,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const left_node = store.getNodePtrForScan(node_id) orelse continue;
+                const left_node = (try store.getNodePtrForScan(node_id)) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -6367,7 +6367,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
+                    if ((try store.getNodePtrForScan(edge.to_id))) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -6391,7 +6391,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // anchor was checked above and the far node is checked below.
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
+                    if ((try store.getNodePtrForScan(edge.from_id))) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -6414,7 +6414,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const right_node = store.getNodePtrForScan(node_id) orelse continue;
+                const right_node = (try store.getNodePtrForScan(node_id)) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan (anchor node).
                 if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -6435,7 +6435,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // ~2813/2834). Fail-closed, cheap string compare.
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.from_id)) |left_node| {
+                    if ((try store.getNodePtrForScan(edge.from_id))) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -6458,7 +6458,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     // (symmetry with the left-anchor branch). Fail-closed.
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.to_id)) |left_node| {
+                    if ((try store.getNodePtrForScan(edge.to_id))) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
@@ -6496,8 +6496,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 for (typed_edge_ids) |edge_id| {
                     const edge_ptr = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!try matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
-                    const from_node = store.getNodePtrForScan(edge_ptr.from_id) orelse continue;
-                    const to_node = store.getNodePtrForScan(edge_ptr.to_id) orelse continue;
+                    const from_node = (try store.getNodePtrForScan(edge_ptr.from_id)) orelse continue;
+                    const to_node = (try store.getNodePtrForScan(edge_ptr.to_id)) orelse continue;
 
                     if (rel_dir == .right or rel_dir == .undirected) {
                         // rls_row_local aliasing: each passesRLSFilter call
@@ -6548,7 +6548,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
             match_log.warn("relationship MATCH graph-scoped scan: no labels or relationship type specified", .{});
             var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |left_node| {
+            while (try node_iter.next()) |left_node| {
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
                 // BUG-731: honor the anchor's inline property predicate.
@@ -6561,7 +6561,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.to_id)) |right_node| {
+                    if ((try store.getNodePtrForScan(edge.to_id))) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -6581,7 +6581,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                     const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                     if (!hop_scope.edgeVisible(edge)) continue;
                     if (!try matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
-                    if (store.getNodePtrForScan(edge.from_id)) |right_node| {
+                    if ((try store.getNodePtrForScan(edge.from_id))) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, right_node.*)) continue;
@@ -6610,7 +6610,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
-                const node = store.getNodePtrForScan(node_id) orelse continue;
+                const node = (try store.getNodePtrForScan(node_id)) orelse continue;
                 // GAP-0846 follow-up: per-row hierarchy-aware tenant compensator for
                 // the relaxed storageTenantFilter() label scan; also restores the
                 // RLS denied-labels check missing on this index fast path.
@@ -6628,7 +6628,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
             match_log.warn("simple node-pattern MATCH graph-scoped scan: no labels specified", .{});
             var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node| {
+            while (try node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                 if (!try nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
@@ -7207,7 +7207,7 @@ fn executeVariableLengthPathTraversal(
 
         // Get the last node in the path as the right node
         const right_node_id = path.nodes.items[path.nodes.items.len - 1];
-        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+        const right_node_ptr = (try store.getNodePtrForScan(right_node_id)) orelse continue;
         // SONNY-2679: the end node passes the session's graph, tenant and RLS
         // scope (every earlier step already did, in the PathIterator).
         if (!scope.nodeVisibleCached(right_node_ptr)) continue;
@@ -7317,7 +7317,7 @@ fn executeVariableLengthPathTraversal(
             defer path_edges_list.deinit(allocator);
 
             for (path.nodes.items) |node_id| {
-                if (store.getNodePtrForScan(node_id)) |node_ptr| {
+                if ((try store.getNodePtrForScan(node_id))) |node_ptr| {
                     path_nodes_list.appendAssumeCapacity(node_ptr);
                 }
             }
@@ -7609,8 +7609,8 @@ fn applyPathEndWrites(
     // so each path must read what the paths before it wrote. The start node
     // is the scan's copy, reused for every path from it, so a write to it
     // counted one path: read both ends again, and evaluate on them.
-    const left = store.getNodePtrForScan(scan_left.id) orelse scan_left;
-    const right = if (scan_right.id == scan_left.id) left else (store.getNodePtrForScan(scan_right.id) orelse scan_right);
+    const left = (try store.getNodePtrForScan(scan_left.id)) orelse scan_left;
+    const right = if (scan_right.id == scan_left.id) left else ((try store.getNodePtrForScan(scan_right.id)) orelse scan_right);
     // The traversal's env is at most start, relationship, end and path.
     var fresh_values: [4]Value = undefined;
     std.debug.assert(env.values.len <= fresh_values.len);
@@ -7752,7 +7752,7 @@ fn executeSingleHopEdgeTraversal(
 
             // Get the target node
             const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
-            const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+            const right_node_ptr = (try store.getNodePtrForScan(right_node_id)) orelse continue;
 
             // GAP-0846 hardening: tenant-filter the RIGHT (target) node too. The
             // left node was already tenant-checked by the caller and the edge by
@@ -7970,11 +7970,11 @@ fn executeSingleHopEdgeTraversal(
                             const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse continue;
                             property_mutation.removeEdgeProperty(store, edge_ptr, prop.property);
                         } else if (left_node_var != null and std.mem.eql(u8, prop.object, left_node_var.?)) {
-                            if (store.nodes.getOrHydratePtr(left_node.id) catch null) |node_ptr| {
+                            if (try store.nodes.getOrHydratePtr(left_node.id)) |node_ptr| {
                                 property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                             }
                         } else if (right_node_var != null and std.mem.eql(u8, prop.object, right_node_var.?)) {
-                            if (store.nodes.getOrHydratePtr(right_node_ptr.id) catch null) |node_ptr| {
+                            if (try store.nodes.getOrHydratePtr(right_node_ptr.id)) |node_ptr| {
                                 property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                             }
                         }
@@ -8711,7 +8711,7 @@ pub fn applySetRemoveOverRows(
                         .Property => |prop| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value),
                         .Labels => |ls| for (ls.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                         .AllProperties => {
-                            const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                            const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                             try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
                         },
                     },
@@ -8735,7 +8735,7 @@ pub fn applySetRemoveOverRows(
             switch (cell.*) {
                 .Node => |node| switch (rc) {
                     .Property => |prop| {
-                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                         property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                     },
                     .Labels => |lr| for (lr.labels) |label| try property_mutation.removeNodeLabel(store, node.id, label),
@@ -8800,7 +8800,7 @@ const WrittenElements = struct {
     fn freshNode(self: *WrittenElements, allocator: std.mem.Allocator, store: *graph_store.GraphStore, id: u64) !*graph_store.Node {
         if (self.fresh_nodes.get(id)) |node| return node;
         try self.fresh_nodes.ensureUnusedCapacity(allocator, 1);
-        const node = store.getNodePtrForScan(id) orelse return error.NodeNotFound;
+        const node = (try store.getNodePtrForScan(id)) orelse return error.NodeNotFound;
         self.fresh_nodes.putAssumeCapacity(id, node);
         return node;
     }
@@ -8869,7 +8869,7 @@ pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, valu
         // the grace boundary; boxing it again was one more copy per written
         // row (the SONNY-3148 remainder).
         .Node => |node| if (!store.isScanBox(node)) {
-            value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+            value.* = .{ .Node = (try store.getNodePtrForScan(node.id)) orelse return error.NodeNotFound };
         },
         .Edge => |edge| value.* = .{ .Edge = try boxEdge(allocator, rows, edge) },
         .List => |items| for (items) |*item| try stabilizeValue(allocator, rows, item),
@@ -8880,7 +8880,7 @@ pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, valu
         .Path => |path| {
             // The executors allocate a path's arrays for the row.
             for (@constCast(path.nodes)) |*node| {
-                if (!store.isScanBox(node.*)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+                if (!store.isScanBox(node.*)) node.* = (try store.getNodePtrForScan(node.*.id)) orelse return error.NodeNotFound;
             }
             for (@constCast(path.edges)) |*edge| edge.* = try boxEdge(allocator, rows, edge.*);
         },
@@ -9577,7 +9577,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // — `store.nodes.iterator()` visits only the RESIDENT subset
                 // (silently drops evicted/cold rows on a bounded cache).
                 var left_iter = store.iterateNodesInGraph(filter_graph);
-                while (left_iter.next()) |left_node| {
+                while (try left_iter.next()) |left_node| {
                     // GAP (write-path OOM): abort a write-carrying scan cleanly
                     // once the working-set budget is exceeded (no-op otherwise).
                     try write_budget.check();
@@ -9625,7 +9625,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        const right_node_ptr = (try store.getNodePtrForScan(right_node_id)) orelse continue;
                         // SONNY-2679: the target's graph, tenant and RLS. This
                         // loop checked none of them, so `count(h)` counted a
                         // denied or foreign node and `collect(h)` returned it.
@@ -9723,7 +9723,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
+                        const right_node_ptr = (try store.getNodePtrForScan(right_node_id)) orelse continue;
                         // SONNY-2679: the target's graph, tenant and RLS. This
                         // loop checked none of them, so `count(h)` counted a
                         // denied or foreign node and `collect(h)` returned it.
@@ -9855,7 +9855,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
                 // — resident-only iteration dropped evicted/cold rows.
                 var start_node_iter = store.iterateNodesInGraph(filter_graph);
-                while (start_node_iter.next()) |start_node| {
+                while (try start_node_iter.next()) |start_node| {
                     // CANARY: REQ=REQ-MULTI-GRAPH-021; FEATURE="MultiGraphIsolation"; ASPECT=VarLengthPathFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                     // Filter by graph - only include nodes from the current graph
                     if (!std.mem.eql(u8, start_node.graph_name, filter_graph)) continue;
@@ -9926,7 +9926,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
-                        const target_node_ptr = store.getNodePtrForScan(target_node_id) orelse continue;
+                        const target_node_ptr = (try store.getNodePtrForScan(target_node_id)) orelse continue;
                         // SONNY-2679: the end node's graph, tenant and RLS
                         // (nothing on this path was checked, so `count(h)`
                         // counted, and `collect(h)` returned, every node
@@ -10024,7 +10024,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (q.path_variable) |vn| {
                                 var pn = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
                                 for (path.nodes.items) |nid| {
-                                    if (store.getNodePtrForScan(nid)) |np| pn.append(allocator, np) catch {};
+                                    if ((try store.getNodePtrForScan(nid))) |np| pn.append(allocator, np) catch {};
                                 }
                                 var pe = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
                                 for (path.edges.items) |eid2| {
@@ -10111,7 +10111,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
             // resident-only iteration dropped evicted/cold rows silently.
             var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node| {
+            while (try node_iter.next()) |node| {
                 // GAP (write-path OOM): budget poll (no-op without a scope).
                 try write_budget.check();
                 try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
@@ -10244,7 +10244,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .AllProperties => |all_props| {
                             if (std.mem.eql(u8, all_props.node, match_variable orelse "")) {
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                if (try store.nodes.getOrHydratePtr(node.id)) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -10259,7 +10259,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     switch (remove_clause) {
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.object, match_variable orelse "")) {
-                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                if (try store.nodes.getOrHydratePtr(node.id)) |node_ptr| {
                                     property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                                 }
                             }
@@ -10348,7 +10348,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
                 // — resident-only iteration dropped evicted/cold rows.
                 var left_iter = store.iterateNodesInGraph(filter_graph);
-                while (left_iter.next()) |left_node_ptr| {
+                while (try left_iter.next()) |left_node_ptr| {
                     // GAP (write-path OOM): the collection pass itself
                     // materializes detached boxes per cold node — poll the
                     // budget here too (no-op without a scope).
@@ -10550,9 +10550,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     if (cand_idx >= simple_node_candidates.items.len) break;
                     const nid = simple_node_candidates.items[cand_idx];
                     cand_idx += 1;
-                    break :blk store.getNodePtrForScan(nid) orelse continue;
+                    break :blk (try store.getNodePtrForScan(nid)) orelse continue;
                 } else blk: {
-                    break :blk full_iter.next() orelse break;
+                    break :blk (try full_iter.next()) orelse break;
                 };
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -10738,7 +10738,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // is detached (never resident), so a resident-only getPtr
                                 // silently dropped `SET n = {…}` after every warm reopen.
                                 // Safe: SET runs on the write path (per-graph EXCLUSIVE).
-                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                if (try store.nodes.getOrHydratePtr(node.id)) |node_ptr| {
                                     try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
@@ -10755,7 +10755,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // getPtr silently dropped `REMOVE n.prop` for cold
                                 // (post-warm-reopen) nodes. Safe: REMOVE runs on the
                                 // write path (per-graph EXCLUSIVE lock).
-                                if (store.nodes.getOrHydratePtr(node.id) catch null) |node_ptr| {
+                                if (try store.nodes.getOrHydratePtr(node.id)) |node_ptr| {
                                     property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                                 }
                             }

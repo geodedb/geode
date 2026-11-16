@@ -216,12 +216,12 @@ test "SONNY-6619 (2): the server's MFA lockout is stored and survives a restart;
     _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_verify('lo6619', '000000')", "28000");
     _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_verify('lo6619', '000000')", "28000");
     // Below the limit: counted in memory, not stored (no chain seal per guess).
-    try testing.expect(w.agm.mfaAttempts(uid) == null);
+    try testing.expect((try w.agm.mfaAttempts(uid)) == null);
     _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_verify('lo6619', '000000')", "28000");
     _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_verify('lo6619', '000000')", "28000");
     _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.mfa_verify('lo6619', '000000')", "28000");
     try requireAttempts();
-    const st = w.agm.mfaAttempts(uid) orelse {
+    const st = (try w.agm.mfaAttempts(uid)) orelse {
         std.debug.print("SONNY-6619 (2): the fifth failure locked the user out in memory only (no stored record)\n", .{});
         return error.ServerLockoutNotStored;
     };
@@ -240,7 +240,7 @@ test "SONNY-6619 (2): the server's MFA lockout is stored and survives a restart;
     try w.agm.sealChain(&HMAC_KEY);
     try restart(&w.agm);
     try fx.expectRuns(ga, w.admin, try std.fmt.allocPrint(ga, "CALL geode.auth.mfa_verify('lo6619', '{s}')", .{try codeFor(ga, issued.secret)}));
-    const after = w.agm.mfaAttempts(uid) orelse return error.RecordGone;
+    const after = (try w.agm.mfaAttempts(uid)) orelse return error.RecordGone;
     try testing.expectEqual(@as(u32, 0), after.fail_count);
     try testing.expectEqual(@as(i64, 0), after.lockout_until_ms);
     try w.agm.verifyChain(&HMAC_KEY);

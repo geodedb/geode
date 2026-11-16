@@ -89,7 +89,7 @@ fn collectWalkStats(
                 stats.total += 1;
                 if (next == prev) {
                     stats.returns += 1;
-                } else if (store.hasEdge(prev, next)) {
+                } else if (try store.hasEdge(prev, next)) {
                     stats.dist1 += 1;
                 } else {
                     stats.dist2 += 1;

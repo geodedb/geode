@@ -142,7 +142,7 @@ test "RC-3 retry: same idempotency key at different raft indices yields exactly 
         var ids = try store.getNodesByLabels(a, "default", &labels, null);
         defer ids.deinit(a);
         try std.testing.expectEqual(@as(usize, 1), ids.items.len);
-        const v = store.getNodeProperty(ids.items[0], "v") orelse return error.MissingProperty;
+        const v = (try store.getNodePropertyOrError(ids.items[0], "v")) orelse return error.MissingProperty;
         try std.testing.expectEqual(@as(i64, 1), v.Int);
     } else {
         return error.IdempotencyKeyDedupNotImplemented;
@@ -296,7 +296,7 @@ test "RC-3 compat: a legacy keyless payload decodes and applies through the keye
         _ = try cluster_replication.applyNodeCreatePayloadKeyed(a, &store, legacy, 4, &dedup);
         try std.testing.expectEqual(@as(usize, 1), countLabel(&store, "default", "Legacy1"));
 
-        const v = store.getNodeProperty(4, "v") orelse return error.MissingProperty;
+        const v = (try store.getNodePropertyOrError(4, "v")) orelse return error.MissingProperty;
         try std.testing.expectEqual(@as(i64, 99), v.Int);
     } else {
         return error.IdempotencyKeyDedupNotImplemented;

@@ -7860,6 +7860,15 @@ fn handleClientMessage(
                 // not supply one (the leader then generates a per-request key).
                 .idempotency_key = exec_req.idempotency_key,
             };
+            // SONNY-6612 (2): a tenant being dropped, or unregistered once
+            // tenants are administered, is refused before the fast paths
+            // below (bulk MERGE, the count fast paths), which bypass the
+            // executor's own check.
+            geode.tenancy.refuseDroppingTenant(exec_context.tenant_id) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
 
             var pending_index_rebuilds = std.StringHashMap(void).init(gpa);
             defer {

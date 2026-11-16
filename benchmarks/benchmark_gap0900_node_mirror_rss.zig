@@ -112,7 +112,7 @@ pub fn main() !void {
     // mirror (proves the compact store round-trips under the same path A/B uses).
     const probe_id = try store.createNodeWithGraph(&[_][]const u8{"Taxon"}, "divelife");
     try store.setNodeProperty(probe_id, "scientific_name", .{ .String = "Probe testus" });
-    const got = store.getNodeProperty(probe_id, "scientific_name");
+    const got = (try store.getNodePropertyOrError(probe_id, "scientific_name"));
     if (got == null or got.? != .String or !std.mem.eql(u8, got.?.String, "Probe testus")) {
         out("GAP0900_NODE_MIRROR_RSS CORRECTNESS_FAIL\n");
         return error.CorrectnessCheckFailed;

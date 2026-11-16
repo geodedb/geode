@@ -121,7 +121,7 @@ const AdjHarness = struct {
     /// Reads via the public `getOutgoingEdgeIds` API (whose residency the cache
     /// bounds) — a miss hydrates from the engine.
     fn outIdsSorted(self: *AdjHarness, node_id: u64) ![]u64 {
-        const ids = self.store.getOutgoingEdgeIds(node_id) orelse return self.allocator.alloc(u64, 0);
+        const ids = (try self.store.getOutgoingEdgeIdsOrError(node_id)) orelse return self.allocator.alloc(u64, 0);
         const copy = try self.allocator.dupe(u64, ids);
         std.mem.sort(u64, copy, {}, std.sort.asc(u64));
         return copy;
@@ -185,7 +185,7 @@ test "P0-adj: residentCount plateaus at/below cap for a high-degree parent; read
     while (j < got.len) : (j += 1) try testing.expect(got[j] != got[j - 1]);
 
     // CRUX 3 — degree is exact (== K) regardless of residency.
-    try testing.expectEqual(K, h.store.getOutDegree(source));
+    try testing.expectEqual(K, try h.store.getOutDegree(source));
 
     // CRUX 4 — hydrate-on-miss on the MANY-entry (incoming) side: read a sample
     // of targets' incoming adjacency; each must resolve back to `source` even
@@ -200,8 +200,8 @@ test "P0-adj: residentCount plateaus at/below cap for a high-degree parent; read
         // We don't track target ids individually to keep the K-loop lean, so use
         // the edge bodies: pick the i-th edge id from `got` and resolve its to_id.
         const eid = got[i];
-        const to_id = h.store.getEdgePtr(eid).?.to_id;
-        const in_ids = h.store.getIncomingEdgeIds(to_id) orelse return error.MissingIncoming;
+        const to_id = (try h.store.getEdgePtrHydratedChecked(eid)).?.to_id;
+        const in_ids = (try h.store.getIncomingEdgeIdsOrError(to_id)) orelse return error.MissingIncoming;
         try testing.expectEqual(@as(usize, 1), in_ids.len);
         try testing.expectEqual(eid, in_ids[0]);
         try testing.expect(h.store.incoming_edges.residentCount() <= CAP);
@@ -343,7 +343,7 @@ test "P0-adj: creating edges on an evicted node, then reading, reflects ALL edge
     var j: usize = 1;
     while (j < got.len) : (j += 1) try testing.expect(got[j] != got[j - 1]);
 
-    try testing.expectEqual(@as(usize, 5), h.store.getOutDegree(subject));
+    try testing.expectEqual(@as(usize, 5), try h.store.getOutDegree(subject));
 
     // Residency still bounded.
     try testing.expect(h.store.outgoing_edges.residentCount() <= CAP);
@@ -431,7 +431,7 @@ test "P0-adj: deep-chain + high-fanout taxonomy graph traverses correctly under 
     try testing.expectEqual(two_hop, try h.runCount(aa, "MATCH (a:Taxon)-[:PARENT_OF]->(b:Taxon)-[:PARENT_OF]->(c:Taxon) RETURN count(c) AS c"));
 
     // --- Degree of the high-fanout root is exact, hydrated from the engine. ---
-    try testing.expectEqual(FANOUT, h.store.getOutDegree(star_root));
+    try testing.expectEqual(FANOUT, try h.store.getOutDegree(star_root));
 
     // --- Variable-length traversal through the executor: the chain head reaches
     // exactly one node at each depth d (1..several). Exercises repeated

@@ -164,7 +164,7 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
 
     // Setup assertion (NOT the red): the node + property landed in the store.
     const nid = cr.deriveMultiNodeId(9001, 0);
-    const body = store.getNodeProperty(nid, "body") orelse return error.AppliedNodeMissingBody;
+    const body = (try store.getNodePropertyOrError(nid, "body")) orelse return error.AppliedNodeMissingBody;
     try testing.expectEqualStrings("replicated zraven doc", body.String);
 
     // 4. SYMMETRY CONTRACT (red before Task 13): the applied node must be
@@ -211,7 +211,7 @@ test "raft GUPD update apply maintains the fulltext index (new term indexed, old
     _ = try cr.applyUpdatePayload(a, store, payload);
 
     // Setup assertion (NOT the red): the store property WAS overwritten.
-    const body = store.getNodeProperty(nid, "body") orelse return error.UpdatedNodeMissingBody;
+    const body = (try store.getNodePropertyOrError(nid, "body")) orelse return error.UpdatedNodeMissingBody;
     try testing.expectEqualStrings("fresh zosprey token", body.String);
 
     // SYMMETRY CONTRACT (red before Task 13): the NEW term must be searchable,

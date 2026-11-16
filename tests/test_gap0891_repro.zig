@@ -275,9 +275,9 @@ test "GAP-0891 RC-2: a clean restart keeps tenant tags on by-id reads" {
     // The reopen took the snapshot route this test is about.
     try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
 
-    const node = store.getNodePtrHydrated(a1) orelse return error.NodeNotFoundAfterRestart;
+    const node = (try store.getNodePtrHydratedChecked(a1)) orelse return error.NodeNotFoundAfterRestart;
     try testing.expectEqualStrings(T_DEMO, node.tenant_id);
-    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeNotFoundAfterRestart;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeNotFoundAfterRestart;
     try testing.expectEqualStrings(T_DEMO, edge.tenant_id);
     try testing.expectEqual(@as(usize, 2), try store.countNodesForGraph(GRAPH, T_DEMO));
 }
@@ -309,7 +309,7 @@ test "GAP-0891 / SONNY-2693: a legacy default-tagged edge between t_DEMO nodes i
         GRAPH,
         graph_store.DEFAULT_TENANT_ID,
     );
-    const legacy_edge = store.getEdgeHydrated(legacy_edge_id) orelse return error.EdgeNotFound;
+    const legacy_edge = (try store.getEdgeHydratedChecked(legacy_edge_id)) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, legacy_edge.tenant_id);
 
     // Hidden from t_DEMO, visible to an unscoped (admin) read.
@@ -323,7 +323,7 @@ test "GAP-0891 / SONNY-2693: a legacy default-tagged edge between t_DEMO nodes i
     try testing.expectEqual(legacy_edge_id, report[0].edge_id);
     try testing.expectEqualStrings(graph_store.DEFAULT_TENANT_ID, report[0].edge_tenant orelse return error.MissingEdgeTenant);
 
-    const retagged = store.getEdgeHydrated(legacy_edge_id) orelse return error.EdgeNotFound;
+    const retagged = (try store.getEdgeHydratedChecked(legacy_edge_id)) orelse return error.EdgeNotFound;
     try testing.expectEqualStrings(T_DEMO, retagged.tenant_id);
     try testing.expect(tenant_visibility.edgeTraversable(&store, retagged, T_DEMO));
 

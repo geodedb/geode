@@ -55,7 +55,8 @@ pub fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_s
     const username = record.getUsername();
     var user_node_id: ?u64 = null;
     for (user_nodes) |nid| {
-        const name_prop = store.getNodeProperty(nid, "username") orelse continue;
+        // SONNY-6612 (1): a user node that cannot be read fails closed.
+        const name_prop = (store.getNodePropertyOrError(nid, "username") catch return .None) orelse continue;
         const name_str = switch (name_prop) {
             .String => |s| s,
             else => continue,

@@ -151,6 +151,8 @@ test "SONNY-6607 (4): a statement whose session tenant is being dropped is refus
     const after = try w.store.getAllNodes(testing.allocator);
     defer testing.allocator.free(after);
     try testing.expectEqual(before.len, after.len);
-    // Another tenant is unaffected.
+    // Another (registered) tenant is unaffected. SONNY-6612 (2): an
+    // unregistered one is refused once tenants are administered.
+    try w.run(null, "CALL geode.tenant.create('other7')");
     try w.run("other7", "CREATE (:L6607 {k: 3})");
 }

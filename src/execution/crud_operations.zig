@@ -542,7 +542,7 @@ fn findMergeMatch(
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
     visibility: *MergeVisibility,
-) MergeMatch {
+) !MergeMatch {
     // A node that matches the pattern but that the session may not see.
     var saw_hidden = false;
 
@@ -590,7 +590,7 @@ fn findMergeMatch(
                         switch (read_store.lookupMergeCandidate(graph_name, label, probe_prop.key, pv, &out_id)) {
                             .found => {
                                 // Verify the candidate matches ALL labels, ALL properties, and tenant
-                                if ((read_store.nodes.getOrHydratePtr(out_id) catch null)) |node| {
+                                if ((try read_store.nodes.getOrHydratePtr(out_id))) |node| {
                                     if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
                                         if (visibility.allows(node)) return .{ .visible = out_id };
                                         // SONNY-2686: the bucket holds a node
@@ -628,7 +628,7 @@ fn findMergeMatch(
         const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse
             return if (saw_hidden) .hidden else .none;
         for (first_label_nodes) |node_id| {
-            if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node| {
+            if ((try read_store.nodes.getOrHydratePtr(node_id))) |node| {
                 if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
                     if (visibility.allows(node)) return .{ .visible = node_id };
                     saw_hidden = true;
@@ -1793,7 +1793,7 @@ pub fn executeCreateQuery(
             if (item.expr == .Ident) {
                 const var_name = item.expr.Ident.orig;
                 if (created_nodes.get(var_name)) |node_id| {
-                    const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+                    const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
                     row[i] = Value{ .Node = node };
                 } else {
                     row[i] = Value{ .Null = {} };
@@ -1807,7 +1807,7 @@ pub fn executeCreateQuery(
                 while (iter.next()) |entry| {
                     try names.append(allocator, entry.key_ptr.*);
                     const entry_node_id = entry.value_ptr.*;
-                    const entry_node = (store.nodes.getOrHydratePtr(entry_node_id) catch null) orelse return error.NodeNotFound;
+                    const entry_node = (try store.nodes.getOrHydratePtr(entry_node_id)) orelse return error.NodeNotFound;
                     try values.append(allocator, Value{ .Node = entry_node });
                 }
 
@@ -1874,7 +1874,7 @@ pub fn executeCreateQuery(
         } else {
             var pc_iter = created_nodes.iterator();
             while (pc_iter.next()) |entry| {
-                if ((store.nodes.getOrHydratePtr(entry.value_ptr.*) catch null)) |n| {
+                if ((try store.nodes.getOrHydratePtr(entry.value_ptr.*))) |n| {
                     try pc_names.append(allocator, entry.key_ptr.*);
                     try pc_values.append(allocator, Value{ .Node = n });
                 }
@@ -1922,7 +1922,7 @@ pub fn executeCreateQuery(
         switch (remove_clause) {
             .Property => |prop| {
                 if (created_nodes.get(prop.object)) |node_id| {
-                    if ((store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+                    if ((try store.nodes.getOrHydratePtr(node_id))) |node_ptr| {
                         property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                     }
                 }
@@ -2081,7 +2081,7 @@ pub fn executeReturnClauseWithNodes(
     while (node_iter.next()) |entry| {
         try names.append(allocator, entry.key_ptr.*);
         const node_id = entry.value_ptr.*;
-        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+        const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
         try values.append(allocator, Value{ .Node = node });
     }
 
@@ -2941,7 +2941,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+            const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }
@@ -3212,7 +3212,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             names[idx] = entry.key_ptr.*;
             // Look up node by ID from store
             const node_id = entry.value_ptr.*;
-            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+            const node = (try store.nodes.getOrHydratePtr(node_id)) orelse return error.NodeNotFound;
             values[idx] = Value{ .Node = node };
             idx += 1;
         }
@@ -3380,7 +3380,7 @@ fn clusterReplicateMerge(
     // proposes an ON MATCH SET for a node the session may not see.
     var visibility = MergeVisibility.init(allocator, filter_tenant, target_graph, context);
     defer visibility.deinit();
-    const matched_id = try visibility.bindNode(findMergeMatch(
+    const matched_id = try visibility.bindNode(try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
@@ -3432,7 +3432,7 @@ fn clusterReplicateMerge(
         // payload applied idempotently by the leader-resolved stable id.
         var set_props = std.ArrayList(cluster_replication.Prop).empty;
         defer set_props.deinit(allocator);
-        const matched_node = read_store.getNodePtrForScan(node_id) orelse return error.NodeNotFound;
+        const matched_node = (try read_store.getNodePtrForScan(node_id)) orelse return error.NodeNotFound;
         const overlay = try clusterMergeOverlay(prop_arena.allocator(), matched_node, node_pattern.labels, null);
         try resolveMergeSetProps(prop_arena.allocator(), m.on_match, m.on_match_ends, node_pattern.name, overlay, context, &set_props);
         if (set_props.items.len == 0) return empty_result;
@@ -3546,7 +3546,7 @@ fn mergeNodeChain(
     // SONNY-2686: a node the session may not see is never bound, so none of
     // the ON MATCH clauses can reach it; a pattern that only such a node
     // matches refuses the statement here, before anything is written.
-    if (try visibility.bindNode(findMergeMatch(
+    if (try visibility.bindNode(try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
@@ -3554,7 +3554,7 @@ fn mergeNodeChain(
         evaluated_props,
         visibility,
     ), node_pattern.labels, evaluated_props)) |found_id| {
-        if ((read_store.nodes.getOrHydratePtr(found_id) catch null) != null) {
+        if ((try read_store.nodes.getOrHydratePtr(found_id)) != null) {
             return .{ .pattern = node_pattern, .node_id = found_id, .created = false };
         }
     }
@@ -3712,7 +3712,7 @@ fn preResolveMergeNode(
     var prop_arena = std.heap.ArenaAllocator.init(allocator);
     defer prop_arena.deinit();
     const evaluated_props = try evaluatePatternPropsIn(prop_arena.allocator(), node_pattern.props, (try scope.env(prop_arena.allocator())));
-    return try visibility.bindNode(findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
+    return try visibility.bindNode(try findMergeMatch(read_store, target_graph, filter_tenant, node_pattern.labels, evaluated_props, visibility), node_pattern.labels, evaluated_props);
 }
 
 /// `resolveMergeEndpoint`'s answer, without creating anything: a variable an
@@ -3790,7 +3790,7 @@ fn resolveMergeEndpoint(
     // SONNY-3240: in the scope of the chains before this one.
     const evaluated_props = try evaluateMergeKeyIn(prop_arena.allocator(), node_pattern.props, (try scope.env(prop_arena.allocator())));
 
-    if (try visibility.bindNode(findMergeMatch(
+    if (try visibility.bindNode(try findMergeMatch(
         read_store,
         target_graph,
         filter_tenant,
@@ -4412,7 +4412,7 @@ fn clusterReplicateMatchSet(
         // distributed write executor) can iterate a large match set — poll
         // cancellation here so an abandoned mutation aborts before proposing.
         try write_budget.check();
-        const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+        const node = (try read_store.nodes.getOrHydratePtr(node_id)) orelse continue;
         if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
         // SONNY-3246: only a node the session's MATCH can see, as on a single
         // node, where the MATCH reads through the RLS row filters. The leader
@@ -4668,7 +4668,7 @@ fn clusterReplicateMatchCreate(
 
         var resolved: ?u64 = null;
         for (candidate_ids) |node_id| {
-            const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+            const node = (try read_store.nodes.getOrHydratePtr(node_id)) orelse continue;
             if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_props)) continue;
             // Ambiguous (>1 match) → a Cartesian-product CREATE is out of this
             // slice; fail closed BEFORE touching Raft.
@@ -4684,7 +4684,7 @@ fn clusterReplicateMatchCreate(
         // out of this slice, fail closed.
         if (var_ids.contains(match_var)) return error.ClusterWriteNotReplicable;
         try var_names.append(allocator, match_var);
-        try var_nodes.append(allocator, Value{ .Node = ((read_store.nodes.getOrHydratePtr(rid) catch null).?) });
+        try var_nodes.append(allocator, Value{ .Node = ((try read_store.nodes.getOrHydratePtr(rid)).?) });
         try var_ids.put(match_var, rid);
     }
 
@@ -4881,7 +4881,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
         // (executeDelete is never invoked from bulkMergeNode / worker
         // threads — verified). Cheap-exits when no FTS index covers the
         // labels. Graph passed explicitly from current_graph.
-        if ((read_store.nodes.getOrHydratePtr(node_id) catch null)) |node_ptr| {
+        if ((try read_store.nodes.getOrHydratePtr(node_id))) |node_ptr| {
             fts_index_ops.maintainFulltextOnWrite(allocator, current_graph, node_id, node_ptr.labels, .delete) catch |err| {
                 log.warn("fts maintain (DELETE) failed", &.{
                     Attr.uint("node_id", node_id),

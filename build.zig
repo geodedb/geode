@@ -10953,6 +10953,66 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6607_fs_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6607_fs_step = b.step("test-sonny6607-grpc-frame-size", "Run SONNY-6607 item 5 regression (the real gRPC client functions over two socket pairs: after one connection learns a 64 KiB SETTINGS_MAX_FRAME_SIZE, a 40,000-byte request on the other, which negotiated nothing, arrives in DATA frames of at most 16384)");
     sonny6607_fs_step.dependOn(&run_sonny6607_fs_tests.step);
+    // SONNY-6612 (3): StorageReadFailed / StorageWriteFailed / TenantDropping /
+    // TenantRegistryOrphanParent carry a SQLSTATE and an operator message.
+    const sonny6612_em_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_error_messages.zig"), .target = target, .optimize = optimize });
+    sonny6612_em_test_mod.addImport("geode", root_mod);
+    const sonny6612_em_tests = b.addTest(.{ .root_module = sonny6612_em_test_mod });
+    const run_sonny6612_em_tests = b.addRunArtifact(sonny6612_em_tests);
+    shardDep(test_step, &run_sonny6612_em_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_em_step = b.step("test-sonny6612-error-messages", "Run SONNY-6612 item 3 regression (StorageReadFailed and StorageWriteFailed map to 58000, TenantDropping to 42501, TenantRegistryOrphanParent to 58000, each with an operator-facing message that starts with the error name and names no file path)");
+    sonny6612_em_step.dependOn(&run_sonny6612_em_tests.step);
+    // SONNY-6612 (4): a write to an unreadable node reports the read error.
+    const sonny6612_unw_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_unreadable_node_write.zig"), .target = target, .optimize = optimize });
+    sonny6612_unw_test_mod.link_libc = true;
+    sonny6612_unw_test_mod.addImport("geode", root_mod);
+    sonny6612_unw_test_mod.addImport("schema", schema_mod);
+    sonny6612_unw_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6612_unw_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6612_unw_test_mod.addImport("logging", logging_mod);
+    sonny6612_unw_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6612_unw_tests = b.addTest(.{ .root_module = sonny6612_unw_test_mod });
+    const run_sonny6612_unw_tests = b.addRunArtifact(sonny6612_unw_tests);
+    shardDep(test_step, &run_sonny6612_unw_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_unw_step = b.step("test-sonny6612-unreadable-node-write", "Run SONNY-6612 item 4 regression (a durable store, gRPC in process, every body rebuild failing with an engine read error: REMOVE, SET and SET label on the node fail with neither NodeNotFound nor EdgeNotFound and change nothing)");
+    sonny6612_unw_step.dependOn(&run_sonny6612_unw_tests.step);
+    // SONNY-6612 (2): an unregistered tenant's statements are refused.
+    const sonny6612_tr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_tenant_refusal.zig"), .target = target, .optimize = optimize });
+    sonny6612_tr_test_mod.link_libc = true;
+    sonny6612_tr_test_mod.addImport("geode", root_mod);
+    sonny6612_tr_test_mod.addImport("logging", logging_mod);
+    sonny6612_tr_test_mod.addImport("rls", rls_mod);
+    sonny6612_tr_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6612_tr_tests = b.addTest(.{ .root_module = sonny6612_tr_test_mod });
+    const run_sonny6612_tr_tests = b.addRunArtifact(sonny6612_tr_tests);
+    shardDep(test_step, &run_sonny6612_tr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_tr_step = b.step("test-sonny6612-tenant-refusal", "Run SONNY-6612 item 2 regression (a durable tenant registry holding a tenant: a statement scoped to an unregistered tenant is refused with TenantNotRegistered and writes nothing; a registered tenant and an unscoped session run)");
+    sonny6612_tr_step.dependOn(&run_sonny6612_tr_tests.step);
+    // SONNY-6612 (1): an auth record field that cannot be read is the read
+    // error, never a tamper verdict.
+    const sonny6612_af_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6612_auth_field_reads.zig"), .target = target, .optimize = optimize });
+    sonny6612_af_test_mod.link_libc = true;
+    sonny6612_af_test_mod.addImport("geode", root_mod);
+    sonny6612_af_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6612_af_tests = b.addTest(.{ .root_module = sonny6612_af_test_mod });
+    const run_sonny6612_af_tests = b.addRunArtifact(sonny6612_af_tests);
+    shardDep(test_step, &run_sonny6612_af_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6612_af_step = b.step("test-sonny6612-auth-field-reads", "Run SONNY-6612 item 1 regression (a durable store, a real AuthGraphManager, the k-th body rebuild on failing with an engine read error for every k: verifyChain succeeds or fails with the read error, never a tamper verdict)");
+    sonny6612_af_step.dependOn(&run_sonny6612_af_tests.step);
+    // SONNY-6621 (1): a write whose node body cannot be read fails.
+    const sonny6621_hc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6621_hydrate_catch_null.zig"), .target = target, .optimize = optimize });
+    sonny6621_hc_test_mod.link_libc = true;
+    sonny6621_hc_test_mod.addImport("geode", root_mod);
+    sonny6621_hc_test_mod.addImport("schema", schema_mod);
+    sonny6621_hc_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6621_hc_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6621_hc_test_mod.addImport("logging", logging_mod);
+    sonny6621_hc_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6621_hc_tests = b.addTest(.{ .root_module = sonny6621_hc_test_mod });
+    const run_sonny6621_hc_tests = b.addRunArtifact(sonny6621_hc_tests);
+    shardDep(test_step, &run_sonny6621_hc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6621_hc_step = b.step("test-sonny6621-hydrate-catch-null", "Run SONNY-6621 item 1 regression (a durable store, gRPC in process, the k-th body rebuild on failing with an engine read error: MERGE of an existing node, MATCH ... CREATE and DETACH DELETE fail or leave exactly the healthy state)");
+    sonny6621_hc_step.dependOn(&run_sonny6621_hc_tests.step);
     // SONNY-6594 (4): a read that cannot read an edge body fails instead of
     // answering short (MATCH, var-length, COUNT { }, shortest path, BFS,
     // centrality). gRPC in process.

@@ -5695,7 +5695,7 @@ pub const StorageAdapter = struct {
                 // already guarantees (from,rel,to) and the engine identity covers
                 // graph_name, but we keep the full check as defense-in-depth and
                 // for the tenant disambiguation that the engine key cannot carry.
-                const edge = store.getEdgePtrHydrated(public_id) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(public_id)) orelse continue;
                 if (edge.to_id != target_id) continue;
                 if (!std.mem.eql(u8, edge.graph_name, graph_name)) continue;
                 if (!std.mem.eql(u8, edge.label, rel_type)) continue;
@@ -8815,7 +8815,7 @@ pub const StorageAdapter = struct {
             for (filters) |f| {
                 // Engine-direct single-property verify by slot — NO full-node
                 // hydration (Phase 2). Same de-hydration as the merge-seek verify.
-                if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) {
+                if (!try self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) {
                     all_match = false;
                     break;
                 }
@@ -8854,7 +8854,7 @@ pub const StorageAdapter = struct {
         store: *graph_store.GraphStore,
         node_id: u64,
         f: PropKV,
-    ) bool {
+    ) !bool {
         if (store.getIdMap(graph_name)) |id_map| {
             if (id_map.nodeSlot(@as(u128, node_id))) |slot| {
                 // Engine-direct single-property read (no cache insert).
@@ -8868,7 +8868,7 @@ pub const StorageAdapter = struct {
             }
         }
         // No engine/IdMap: resident read (unbounded cache in this mode).
-        const actual = store.getNodeProperty(node_id, f.key) orelse return false;
+        const actual = (try store.getNodePropertyOrError(node_id, f.key)) orelse return false;
         return propertyValuesEqual(actual, f.value);
     }
 
@@ -8911,7 +8911,7 @@ pub const StorageAdapter = struct {
         filters: []const PropKV,
     ) !bool {
         for (filters) |f| {
-            if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
+            if (!try self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
         }
         return true;
     }
@@ -13394,7 +13394,7 @@ fn findNodeMatchingMergeProps(
         // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
         // deferred reopen) the matching node need not be resident; a plain
         // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
-        const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
+        const node = (try store.nodes.getOrHydratePtr(public_id)) orelse continue;
         if (nodeMatchesMergeProps(node, graph_name, label, props, tenant)) lowest = public_id;
     }
     return lowest;

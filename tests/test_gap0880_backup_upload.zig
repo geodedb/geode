@@ -163,11 +163,11 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
     try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
     try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
-    const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
+    const name = (try restored.getNodePropertyOrError(seed.alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
-    const title = restored.getNodeProperty(seed.post, "title") orelse return error.NodePropertyMissing;
+    const title = (try restored.getNodePropertyOrError(seed.post, "title")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Hello World", title.String);
-    const edge_ptr = restored.getEdgePtr(seed.edge) orelse return error.EdgeMissing;
+    const edge_ptr = (try restored.getEdgePtrHydratedChecked(seed.edge)) orelse return error.EdgeMissing;
     const since = edge_ptr.properties.get("since") orelse return error.EdgePropertyMissing;
     try testing.expectEqual(@as(i64, 2026), since.Int);
 }
@@ -274,7 +274,7 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
     // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
     try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
     try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
-    const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
+    const name = (try restored.getNodePropertyOrError(seed.alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
 }
 

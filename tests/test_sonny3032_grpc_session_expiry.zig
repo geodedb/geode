@@ -78,7 +78,7 @@ test "SONNY-3032: over gRPC a client that begins, writes and walks away: after t
     try testing.expectEqual(@as(usize, 1), fx.countLabel(f.st, "g5", "K"));
     try testing.expect(std.mem.eql(u8, &uuid, &(try ad.lookupManagedGraph("g5")).uuid));
     // The SET is undone as far as the undo log reaches (SONNY-3059).
-    if (f.st.getNodesByLabel("g5", "K")) |ids| std.debug.print("K.v after the timeout: {any}\n", .{f.st.getNodeProperty(ids[0], "v")});
+    if (f.st.getNodesByLabel("g5", "K")) |ids| std.debug.print("K.v after the timeout: {any}\n", .{(try f.st.getNodePropertyOrError(ids[0], "v"))});
 
     // The closed session is gone: its COMMIT fails, a request is refused.
     try testing.expect(!(try fx.commit(ga, b)));

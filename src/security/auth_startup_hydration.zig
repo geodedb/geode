@@ -83,7 +83,7 @@ pub fn hydrateMfaEnrollments(allocator: std.mem.Allocator, agm: *AuthGraphManage
         defer if (digests) |d| allocator.free(d);
         try auth_dispatch.loadMfaEnrollment(rec.getUsername(), secret, digests orelse &.{});
         // SONNY-6619: a stored lockout (or offline count) survives a restart.
-        if (agm.mfaAttempts(id)) |a| try auth_dispatch.loadMfaAttempts(rec.getUsername(), a.fail_count, a.lockout_until_ms);
+        if ((try agm.mfaAttempts(id))) |a| try auth_dispatch.loadMfaAttempts(rec.getUsername(), a.fail_count, a.lockout_until_ms);
         loaded += 1;
     }
     return loaded;

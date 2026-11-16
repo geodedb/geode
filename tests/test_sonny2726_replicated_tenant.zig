@@ -51,7 +51,7 @@ fn taggedEdges(st: *GraphStore, edge_type: []const u8, tenant: []const u8) !stru
     var total: usize = 0;
     var n: usize = 0;
     for (ids) |id| {
-        const e = st.getEdgePtrHydrated(id) orelse continue;
+        const e = (try st.getEdgePtrHydratedChecked(id)) orelse continue;
         if (!std.mem.eql(u8, e.label, edge_type)) continue;
         total += 1;
         if (std.mem.eql(u8, e.tenant_id, tenant)) n += 1;

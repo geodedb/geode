@@ -128,7 +128,7 @@ fn countKeyed(st: *graph_store.GraphStore, graph: []const u8, label: []const u8,
     const ids = st.getNodesByLabel(graph, label) orelse return 0;
     var n: usize = 0;
     for (ids) |id| {
-        const node = st.getNodePtrHydrated(id) orelse continue;
+        const node = (try st.getNodePtrHydratedChecked(id)) orelse continue;
         const v = node.properties.get("id") orelse continue;
         if (v == .Int and v.Int == key) n += 1;
     }

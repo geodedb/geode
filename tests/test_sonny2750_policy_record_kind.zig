@@ -378,7 +378,7 @@ test "SONNY-2750: a GPS record stored before records had a kind is hashed as bef
     const expected = try preKindPolicyHmac(record);
     try store.setNodeProperty(node, "hmac", .{ .String = &expected });
     try agm.sealChain(&HMAC_KEY);
-    try testing.expectEqualStrings(&expected, store.getNodeProperty(node, "hmac").?.String);
+    try testing.expectEqualStrings(&expected, (try store.getNodePropertyOrError(node, "hmac")).?.String);
     try agm.verifyChain(&HMAC_KEY);
 
     var cat = PolicyCatalog.init(allocator);
@@ -390,8 +390,8 @@ test "SONNY-2750: a GPS record stored before records had a kind is hashed as bef
     // ALTER POLICY rewrites it as a GPS record, kind and USING text stored,
     // and it still loads after the next restart.
     try policy_persistence.alterPolicy(&agm, &HMAC_KEY, "allow-write", false, null);
-    try testing.expectEqualStrings("gps", store.getNodeProperty(node, "kind").?.String);
-    try testing.expectEqualStrings("true", store.getNodeProperty(node, "using_clause").?.String);
+    try testing.expectEqualStrings("gps", (try store.getNodePropertyOrError(node, "kind")).?.String);
+    try testing.expectEqualStrings("true", (try store.getNodePropertyOrError(node, "using_clause")).?.String);
     var agm2 = try AuthGraphManager.init(allocator, &store);
     defer agm2.deinit();
     try agm2.verifyChain(&HMAC_KEY);
@@ -420,7 +420,7 @@ test "SONNY-2750: ALTER POLICY does not rewrite a record with a missing property
     // the missing property.
     try testing.expectError(error.PolicyNotFound, policy_persistence.alterPolicy(&agm, &HMAC_KEY, "allow-write", null, "renamed"));
     var nodes = agm.storage.policy_nodes.valueIterator();
-    try testing.expect(store.getNodeProperty(nodes.next().?.*, "enabled") == null);
+    try testing.expect((try store.getNodePropertyOrError(nodes.next().?.*, "enabled")) == null);
     try policy_persistence.dropPolicy(&agm, &HMAC_KEY, "allow-write");
     try testing.expectEqual(@as(u32, 0), agm.storage.policy_nodes.count());
     try agm.verifyChain(&HMAC_KEY);

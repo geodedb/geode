@@ -516,9 +516,9 @@ fn intProp(s: []const u8, key: []const u8) !?i64 {
 fn hasEdge(from: []const u8, to: []const u8, rel: []const u8) !bool {
     const store = graph_store.getGlobalStore(testing.allocator);
     const to_id = try idOf(to);
-    const ids = store.getOutgoingEdgeIds(try idOf(from)) orelse return false;
+    const ids = (store.getOutgoingEdgeIdsOrError(try idOf(from)) catch @panic("SONNY-6621: unexpected read failure")) orelse return false;
     for (ids) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (e.to_id == to_id and std.mem.eql(u8, e.label, rel)) return true;
     }
     return false;
@@ -618,8 +618,8 @@ test "SONNY-2679: while a traversal's label-deny snapshot is current, the checks
 
     const store = graph_store.getGlobalStore(testing.allocator);
     const g1 = try idOf("g1");
-    const secret = for (store.getOutgoingEdgeIds(g1) orelse &.{}) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+    const secret = for ((try store.getOutgoingEdgeIdsOrError(g1)) orelse &.{}) |eid| {
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (std.mem.eql(u8, e.label, "SECRET")) break e;
     } else return error.SecretEdgeMissing;
 

@@ -170,7 +170,7 @@ fn storedAttempts(dir: []const u8, user: []const u8) !?Attempts {
         std.debug.print("SONNY-6619: the security graph keeps no MFA attempt record\n", .{});
         return error.NoStoredMfaAttempts;
     } else {
-        const a = mgr.mfaAttempts(rec.id) orelse return null;
+        const a = (try mgr.mfaAttempts(rec.id)) orelse return null;
         return .{ .fail_count = a.fail_count, .lockout_until_ms = a.lockout_until_ms };
     }
 }

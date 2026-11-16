@@ -1622,7 +1622,7 @@ pub const IndexManager = struct {
             const meta = entry.value_ptr;
             if (!matchesLabelProperty(meta, labels, property)) continue;
             indexed = true;
-            if (meta.dim == 0 and !meta.seed_attempted) self.seedVectorDim(meta);
+            if (meta.dim == 0 and !meta.seed_attempted) try self.seedVectorDim(meta);
             if (meta.dim == 0) continue;
             if (meta.dim != dim) return error.VectorDimensionMismatch;
         }
@@ -1639,7 +1639,7 @@ pub const IndexManager = struct {
             // stored data, never the candidate, and a live pin of 0 is NOT
             // written back (a refused statement downstream must leave the
             // conservative cached value in place — ENG-3912(a)).
-            const live = self.scanCommittedVectorDimExcluding(graph_name, label, property, exclude_node_id);
+            const live = try self.scanCommittedVectorDimExcluding(graph_name, label, property, exclude_node_id);
             if (live != 0) self.repinUnindexedVectorDim(graph_name, label, property, live);
             if (live == 0) continue;
             if (live != dim) return error.VectorDimensionMismatch;
@@ -1682,7 +1682,7 @@ pub const IndexManager = struct {
         }
         self.vector_dim_mutex.unlock(io);
 
-        const seeded_dim = self.scanCommittedVectorDim(graph, label, property);
+        const seeded_dim = try self.scanCommittedVectorDim(graph, label, property);
 
         self.vector_dim_mutex.lockUncancelable(io);
         defer self.vector_dim_mutex.unlock(io);
@@ -1735,8 +1735,8 @@ pub const IndexManager = struct {
         graph: []const u8,
         label: []const u8,
         property: []const u8,
-    ) u16 {
-        return self.scanCommittedVectorDimExcluding(graph, label, property, null);
+    ) !u16 {
+        return try self.scanCommittedVectorDimExcluding(graph, label, property, null);
     }
 
     /// `scanCommittedVectorDim`, skipping `exclude_node_id` — the row a
@@ -1748,14 +1748,14 @@ pub const IndexManager = struct {
         label: []const u8,
         property: []const u8,
         exclude_node_id: ?u64,
-    ) u16 {
+    ) !u16 {
         const store = graph_store.getGlobalStore(self.allocator);
         const ids = store.getNodesByLabel(graph, label) orelse return 0;
         for (ids) |node_id| {
             if (exclude_node_id) |ex| {
                 if (node_id == ex) continue;
             }
-            const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+            const node = (try store.nodes.getOrHydratePtr(node_id)) orelse continue;
             const prop = node.properties.get(property) orelse continue;
             if (vectorDimOfPropertyValue(prop)) |stored_dim| return stored_dim;
         }
@@ -1922,7 +1922,7 @@ pub const IndexManager = struct {
     /// would happily accept a dimension that disagrees with every stored
     /// vector. One shot per entry per process: a miss (no vectors stored yet)
     /// marks the entry seeded so this is not re-run on every write.
-    fn seedVectorDim(self: *IndexManager, meta: *VectorDimEntry) void {
+    fn seedVectorDim(self: *IndexManager, meta: *VectorDimEntry) !void {
         meta.seed_attempted = true;
         const store = graph_store.getGlobalStore(self.allocator);
         const graph_names = store.listGraphNames(self.allocator) catch return;
@@ -1937,7 +1937,7 @@ pub const IndexManager = struct {
         for (graph_names) |graph_name| {
             const ids = store.getNodesByLabel(graph_name, meta.label) orelse continue;
             for (ids) |node_id| {
-                const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
+                const node = (try store.nodes.getOrHydratePtr(node_id)) orelse continue;
                 const prop = node.properties.get(meta.property) orelse continue;
                 if (vectorDimOfPropertyValue(prop)) |stored_dim| {
                     meta.dim = stored_dim;

@@ -2789,9 +2789,6 @@ REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,src/ml/grap
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,src/ml/graph_embeddings.zig,tests/test_ml_graph_embeddings_integration.zig,,ml,2026-06-11
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Regression,TESTED,tests/test_ml_graph_embeddings_integration.zig,tests/test_ml_graph_embeddings_integration.zig,,ml,2026-06-11
 REQ-ML-EMBEDDINGS-003,Graph Neural Networks,GraphSAGE,IMPL,src/ml/graph_embeddings.zig,,,ml,2026-06-11
-REQ-ML-EMBEDDINGS-TEST-001,ML Embeddings Unit Tests,CoreFunctionality,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_001,,ml,2026-11-14
-REQ-ML-EMBEDDINGS-TEST-002,Node2Vec Algorithm Tests,Training,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_002,,ml,2026-11-14
-REQ-ML-EMBEDDINGS-TEST-003,GraphSAGE Algorithm Tests,NeighborAggregation,TESTED,tests/test_ml_graph_embeddings.zig,TestCANARY_ML_EMBEDDINGS_TEST_003,,ml,2026-11-14
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,src/graph_store.zig,geodetestlab/specs/multi_graph.yml,,engine,2025-12-22
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
@@ -5096,6 +5093,10 @@ REQ-SONNY-6609-USER-DELETE-ERRORS,GQL Auth DDL,DropUserReportsErrors,TESTED,src/
 REQ-SONNY-6609-USER-SHOW-MFA,MFA authentication,UserShowMfaState,TESTED,src/cli/user_mgmt_cli.zig,tests/test_sonny6609_mfa_at_rest_scan.zig,,security,2026-11-15
 REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY,Raft Consensus Persistence,ApplyAfterAdvancePersist,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6611_raft_persist_before_apply.zig,,distributed,2026-11-15
 REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY,Raft Consensus Persistence,EntriesDurableBeforeApplyAndReply,TESTED,tests/test_sonny6611_raft_persist_before_apply.zig,tests/test_sonny6611_raft_persist_before_apply.zig,,distributed,2026-11-15
+REQ-SONNY-6612-AUTH-FIELD-READS,StorageIntegrity,Regression,TESTED,tests/test_sonny6612_auth_field_reads.zig,tests/test_sonny6612_auth_field_reads.zig,,security,2026-11-15
+REQ-SONNY-6612-ERROR-MESSAGES,StorageIntegrity,Regression,TESTED,tests/test_sonny6612_error_messages.zig,tests/test_sonny6612_error_messages.zig,,transport,2026-11-15
+REQ-SONNY-6612-TENANT-REFUSAL,TenantLifecycle,Regression,TESTED,tests/test_sonny6612_tenant_refusal.zig,tests/test_sonny6612_tenant_refusal.zig,,security,2026-11-15
+REQ-SONNY-6612-UNREADABLE-NODE-WRITE,StorageIntegrity,Regression,TESTED,tests/test_sonny6612_unreadable_node_write.zig,tests/test_sonny6612_unreadable_node_write.zig,,execution,2026-11-15
 REQ-SONNY-6613-ENTITY-ADOPT,ExecutionResultOwnership,MismatchedTrackerLinked,TESTED,src/execution.zig,tests/test_sonny6613_entity_adopt.zig,,execution,2026-11-15
 REQ-SONNY-6613-ENTITY-ADOPT,ExecutionResultOwnership,MismatchedTrackerLinked,TESTED,tests/test_sonny6613_entity_adopt.zig,,,execution,2026-11-15
 REQ-SONNY-6613-FOR-WRITE-RESULT,ForStatement,NoRowsWithoutReturn,TESTED,src/execution/statement_handlers.zig,tests/test_sonny6613_for_write_result.zig,,engine,2026-11-15
@@ -5132,6 +5133,7 @@ REQ-SONNY-6619-SERVER-LOCKOUT-STORED,MFA authentication,LockoutSurvivesRestart,T
 REQ-SONNY-6619-SM-FOLLOWS-MFA,MFA authentication,SecurityManagerMfaCurrent,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig,,security,2026-11-15
 REQ-SONNY-6619-SM-REMOVE-USER,AuthGraphManager Integration,DroppedUserRemoved,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig,,security,2026-11-15
 REQ-SONNY-6619-TS-WAL-DIR-RELEASE,Timeseries,WalDirHandleClosed,TESTED,src/timeseries/timeseries.zig,tests/test_sonny6619_offline.zig,,storage,2026-11-15
+REQ-SONNY-6621-HYDRATE-CATCH-NULL,StorageIntegrity,Regression,TESTED,tests/test_sonny6621_hydrate_catch_null.zig,tests/test_sonny6621_hydrate_catch_null.zig,,execution,2026-11-15
 REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreIntoStore,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
 REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RestoreFromReadySnapshot,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15
 REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE,Raft Snapshot Persistence,RaftSnapshotPayload,TESTED,src/distributed/raft_snapshot_manager.zig,tests/test_sonny6622_raft_v022_adapt.zig,,distributed,2026-11-15

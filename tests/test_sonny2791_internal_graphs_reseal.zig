@@ -314,7 +314,7 @@ test "SONNY-2791: no seal signs a planted record without a kind: probe R7-K2's s
     defer agm.deinit();
     // Probe R7-K2's step, sealChain: it refuses and signs nothing.
     try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.sealChain(&HMAC_KEY));
-    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    try testing.expect((try store.getNodePropertyOrError(plant, "hmac")) == null);
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
 
     // Every auth change seals after it. CREATE POLICY, and a new user (as
@@ -325,7 +325,7 @@ test "SONNY-2791: no seal signs a planted record without a kind: probe R7-K2's s
     spec.name = "hr-readers-2";
     try testing.expectError(error.UnsignedLegacyPolicyRecord, policy_persistence.persistPolicy(&agm, &HMAC_KEY, spec));
     try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.createUser(&HMAC_KEY, "carol", "carol@example.com", "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", false));
-    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    try testing.expect((try store.getNodePropertyOrError(plant, "hmac")) == null);
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
 }
 

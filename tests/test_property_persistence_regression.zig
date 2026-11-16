@@ -34,7 +34,7 @@ test "Property storage with deep copy memory management" {
     arena = std.heap.ArenaAllocator.init(allocator);
 
     // Verify that properties are still accessible after AST memory is freed
-    const retrieved_property = graph.getNodeProperty(node_id, "name") orelse return error.PropertyNotFound;
+    const retrieved_property = (try graph.getNodePropertyOrError(node_id, "name")) orelse return error.PropertyNotFound;
 
     try testing.expect(retrieved_property == .String);
     try testing.expectEqualStrings("Alice", retrieved_property.String);
@@ -54,11 +54,11 @@ test "UNION property access with persisted data simulation" {
     try graph.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
     try graph.setNodeProperty(bob_id, "age", .{ .Int = 25 });
 
-    const alice_name = graph.getNodeProperty(alice_id, "name") orelse return error.PropertyNotFound;
-    const alice_age = graph.getNodeProperty(alice_id, "age") orelse return error.PropertyNotFound;
+    const alice_name = (try graph.getNodePropertyOrError(alice_id, "name")) orelse return error.PropertyNotFound;
+    const alice_age = (try graph.getNodePropertyOrError(alice_id, "age")) orelse return error.PropertyNotFound;
 
-    const bob_name = graph.getNodeProperty(bob_id, "name") orelse return error.PropertyNotFound;
-    const bob_age = graph.getNodeProperty(bob_id, "age") orelse return error.PropertyNotFound;
+    const bob_name = (try graph.getNodePropertyOrError(bob_id, "name")) orelse return error.PropertyNotFound;
+    const bob_age = (try graph.getNodePropertyOrError(bob_id, "age")) orelse return error.PropertyNotFound;
 
     try testing.expectEqualStrings("Alice", alice_name.String);
     try testing.expectEqual(@as(i64, 30), alice_age.Int);
@@ -93,8 +93,8 @@ test "TestCANARY_REQ_GQL_PROPERTY_001_MemoryManagement" {
     }
 
     // Phase 2: Simulate MATCH query
-    const name_prop = graph.getNodeProperty(node_id, "name") orelse return error.PropertyNotFound;
-    const age_prop = graph.getNodeProperty(node_id, "age") orelse return error.PropertyNotFound;
+    const name_prop = (try graph.getNodePropertyOrError(node_id, "name")) orelse return error.PropertyNotFound;
+    const age_prop = (try graph.getNodePropertyOrError(node_id, "age")) orelse return error.PropertyNotFound;
 
     try testing.expectEqualStrings("Alice", name_prop.String);
     try testing.expectEqual(@as(i64, 30), age_prop.Int);
